@@ -67,6 +67,14 @@ distills the project's purpose/expertise from `CLAUDE.md` (or `AGENTS.md` /
 `README.md` / `package.json`). Setting them in `.mcp.json` is just a way to
 pin the values.
 
+> **Keep the server key as `bobnet-mcp`.** The `scripts/replicant` wrapper
+> launches Claude with `--dangerously-load-development-channels server:bobnet-mcp`,
+> and channel events are filtered by that exact name. If you register under a
+> different key (e.g. `claude mcp add bobnet ...`), `register` will succeed but
+> `peer_joined` / `message` / `broadcast` events will be silently dropped — peers
+> appear to register but cannot talk. Either keep the name or edit the
+> `server:` arg in the script to match.
+
 The MCP `instructions` field tells the connecting Claude session about the
 Bobiverse metaphor and prompts it to call the `register` tool on first use.
 
