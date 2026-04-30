@@ -1,0 +1,61 @@
+{
+  "name": "bobnet-mcp",
+  "version": "0.1.0",
+  "description": "Local message bus that lets multiple Claude Code sessions on the same machine discover each other and exchange messages — the BobNet for Claude replicants.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Casper Thomsen",
+  "homepage": "https://github.com/cath42/bobnet-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cath42/bobnet-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cath42/bobnet-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "claude",
+    "claude-code",
+    "model-context-protocol",
+    "ipc",
+    "message-bus",
+    "bobiverse"
+  ],
+  "bin": {
+    "bobnet-mcp": "./dist/bin/bobnet-mcp.js",
+    "bobnet-mcp-daemon": "./dist/bin/bobnet-mcp-daemon.js"
+  },
+  "exports": {
+    ".": "./dist/client/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev:client": "tsx src/client/index.ts",
+    "dev:daemon": "tsx src/daemon/index.ts",
+    "test": "node --test --import tsx ./test/unit/*.test.ts ./test/integration/*.test.ts",
+    "test:unit": "node --test --import tsx ./test/unit/*.test.ts",
+    "test:integration": "node --test --import tsx ./test/integration/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "nanoid": "^5.0.0",
+    "proper-lockfile": "^4.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "tsx": "^4.0.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20.10.0"
+  }
+}

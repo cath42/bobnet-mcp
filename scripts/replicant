@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#
+# replicant — launch Claude Code as a Bobiverse replicant.
+#
+# Wraps `claude` with the channels flag so bobnet-mcp's
+# notifications/claude/channel events (peer_joined, message,
+# broadcast, status_changed, peer_left) actually reach Claude's
+# context instead of being silently dropped.
+#
+# All extra arguments pass through to `claude` unchanged, so:
+#   replicant                  # fresh session
+#   replicant --continue       # resume the most recent session
+#   replicant --resume <id>    # resume a specific session
+#   replicant --help           # see all claude flags
+#
+set -euo pipefail
+
+if ! command -v claude >/dev/null 2>&1; then
+  echo "replicant: 'claude' CLI not found on PATH" >&2
+  exit 127
+fi
+
+exec claude --dangerously-load-development-channels server:bobnet-mcp "$@"
