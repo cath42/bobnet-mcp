@@ -641,16 +641,20 @@ export class Supervisor {
       const r = await runCommand(land.command, worktree, env, land.timeoutMinutes * 60_000);
       const output = r.output.length > LAND_OUTPUT_MAX ? `…${r.output.slice(-LAND_OUTPUT_MAX)}` : r.output;
       const ok = r.code === 0;
-      if (ok) this.refusedHeads.delete(worktree);
+      const held = !ok && !r.timedOut && land.heldExit !== undefined && r.code === land.heldExit;
+      if (ok || held) this.refusedHeads.delete(worktree);
       else this.refusedHeads.set(worktree, head);
-      this.store.audit("supervisor", ok ? "land:ok" : "land:failed", workerId, { code: r.code, head });
+      this.store.audit("supervisor", ok ? "land:ok" : held ? "land:held" : "land:failed", workerId, { code: r.code, head });
       const last = r.output.trim().split("\n").at(-1)?.slice(0, 300) ?? "";
       this.notify(
         ok
           ? `${role.name} (${workerId}) landed: ${last}`
-          : `${role.name} (${workerId}) could not land (${r.timedOut ? "timed out" : `exit ${r.code}`}): ${last}`,
+          : held
+            ? `${role.name} (${workerId}) is held: its tip waits and lands after the hold. ${last}`
+            : `${role.name} (${workerId}) could not land (${r.timedOut ? "timed out" : `exit ${r.code}`}): ${last}`,
         project.key,
       );
+      if (held) return { ok: true, output: `Held, not refused: your tip waits and lands when the hold is released; don't land again.\n\n${output}` };
       return { ok, output: `${land.command.join(" ")} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
     } finally {
       release();

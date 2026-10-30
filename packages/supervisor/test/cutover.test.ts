@@ -290,6 +290,21 @@ projects:
     await expect(sup.land(w.id)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(/Nothing has changed since your last land/) });
   });
 
+  it("reports a held tip as held, not refused, and lets it land again", async () => {
+    const { worktree, script } = repo();
+    const config = landConfig(worktree, script);
+    config.projects.get("helix")!.land!.heldExit = 3;
+    const { sup, broker, sessions } = await setup("", config);
+    const w = sup.spawn({ project: "helix", role: "homer", task: "t" });
+    await until(() => sessions.length === 1);
+    writeFileSync(join(worktree, "FAIL"), "");
+    execFileSync("git", ["-C", worktree, "add", "."]);
+    execFileSync("git", ["-C", worktree, "-c", "user.name=Homer", "-c", "user.email=h@x", "commit", "-qm", "f"]);
+    await expect(sup.land(w.id)).resolves.toMatchObject({ ok: true, output: expect.stringMatching(/^Held, not refused/) });
+    expect(broker.toOrchestrator().at(-1)).toMatch(/is held/);
+    await expect(sup.land(w.id)).resolves.toMatchObject({ output: expect.not.stringMatching(/Nothing has changed/) });
+  });
+
   it("refuses, naming it, when the Postgres environment can't be had", async () => {
     const { worktree, script } = repo();
     const { sup, sessions } = await setup("", landConfig(worktree, script));

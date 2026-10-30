@@ -66,6 +66,8 @@ const Project = z.object({
       env_command: z.array(z.string()).min(1).optional(),
       /** Variables the land refuses to run without, naming the one missing. */
       requires_env: z.array(z.string()).default([]),
+      /** The exit code meaning "held": the tip waits and lands after the hold, so it isn't a refusal. */
+      held_exit: z.number().int().optional(),
     })
     .optional(),
   /** A hold file (for helix, `pnpm integrate hold`'s): while it exists, no slot and no new worker. */
@@ -116,7 +118,7 @@ export interface ProjectConfig {
   priority: number;
   team: string | undefined;
   orchestrator: string;
-  land: { command: string[]; timeoutMinutes: number; envCommand: string[] | undefined; requiresEnv: string[] } | undefined;
+  land: { command: string[]; timeoutMinutes: number; envCommand: string[] | undefined; requiresEnv: string[]; heldExit: number | undefined } | undefined;
   holdFile: string | undefined;
   consult: string[];
   roles: Map<string, RoleConfig>;
@@ -205,7 +207,7 @@ export function parseSupervisorConfig(
       team: p.team,
       orchestrator: p.orchestrator ?? file.orchestrator,
       land: p.land
-        ? { command: p.land.command, timeoutMinutes: p.land.timeout_minutes, envCommand: p.land.env_command, requiresEnv: p.land.requires_env }
+        ? { command: p.land.command, timeoutMinutes: p.land.timeout_minutes, envCommand: p.land.env_command, requiresEnv: p.land.requires_env, heldExit: p.land.held_exit }
         : undefined,
       holdFile: p.hold_file,
       consult: p.consult,
