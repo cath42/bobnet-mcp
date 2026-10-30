@@ -3,9 +3,9 @@
   "name": "bobnet-broker",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
-  // Reachable only through the custom domain behind Cloudflare Access.
-  // Set the route in an uncommitted wrangler.local.jsonc or via the dashboard.
-  "workers_dev": false,
+  // Served on the account's workers.dev hostname behind Cloudflare Access;
+  // the Worker also verifies the Access JWT, so it fails closed without it.
+  "workers_dev": true,
   "preview_urls": false,
   "durable_objects": {
     "bindings": [{ "name": "BROKER", "class_name": "Broker" }]
