@@ -6,9 +6,11 @@ export { Broker } from "./broker.ts";
 // no cross-object routing for messages that cross teams.
 const NETWORK = "network";
 
+/** connect-src names the socket explicitly: Safari doesn't count wss:// as 'self'. */
+const csp = (host: string) =>
+  `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' wss://${host}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+
 const SECURITY_HEADERS: Record<string, string> = {
-  "content-security-policy":
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
   "cache-control": "no-store",
@@ -42,6 +44,7 @@ export default {
     const asset = await env.ASSETS.fetch(req);
     const res = new Response(asset.body, asset);
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.headers.set(k, v);
+    res.headers.set("content-security-policy", csp(url.host));
     return res;
   },
 } satisfies ExportedHandler<Env>;

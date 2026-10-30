@@ -15,6 +15,7 @@ describe("Worker auth", () => {
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("<title>BobNet</title>");
     expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(page.headers.get("content-security-policy")).toContain("connect-src 'self' wss://bobnet.test;");
     const laptop = await exports.default.fetch(`${ORIGIN}/`, { headers: { "cf-access-jwt-assertion": await laptopToken(1) } });
     expect(laptop.status).toBe(404);
     const ws = await exports.default.fetch(`${ORIGIN}/v1/ws`, { headers: { "cf-access-jwt-assertion": await laptopToken(1) } });
