@@ -11,7 +11,7 @@ const publicJwk = { ...(await exportJWK(publicKey)), kid: "test", alg: "RS256", 
 const privateJwk = { ...(await exportJWK(privateKey)), kid: "test", alg: "RS256" };
 
 export default defineConfig({
-  test: { setupFiles: ["./test/setup.ts"] },
+  test: { setupFiles: ["./test/setup.ts"], include: ["test/**/*.test.ts"] },
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },

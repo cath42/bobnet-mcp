@@ -9,9 +9,9 @@ let backoff = 1000;
 const $ = (id) => document.getElementById(id);
 
 /** Builds an element; string children become text nodes, never HTML. */
-function h(tag, attrs = {}, ...children) {
+function h(tag, attrs, ...children) {
   const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
+  for (const [k, v] of Object.entries(attrs ?? {})) {
     if (v === undefined || v === null || v === false) continue;
     if (k === "class") el.className = v;
     else if (k === "dataset") Object.assign(el.dataset, v);
@@ -223,8 +223,8 @@ function connect() {
           state.laptops = new Map(f.result.laptops.map((l) => [l.laptop, l]));
           state.updates = f.result.updates;
           state.traffic = f.result.traffic;
-          setConn("live");
           renderAll();
+          setConn("live");
         }
         break;
       case "presence": {
