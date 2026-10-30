@@ -77,6 +77,9 @@ CREATE TABLE IF NOT EXISTS inbox (
   id TEXT PRIMARY KEY, project TEXT NOT NULL, role TEXT NOT NULL, envelope TEXT NOT NULL,
   received_at TEXT NOT NULL, consumed_by TEXT
 );
+CREATE TABLE IF NOT EXISTS outbox (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, to_name TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL,
   worker_id TEXT, detail TEXT NOT NULL
@@ -229,6 +232,21 @@ export class Store {
 
   consumeInbox(ids: string[], workerId: string): void {
     for (const id of ids) this.run("UPDATE inbox SET consumed_by = ? WHERE id = ?", workerId, id);
+  }
+
+  // ---------- Outbox ----------
+
+  /** A notification the broker couldn't take (e.g. the orchestrator never registered). */
+  addOutbox(to: string, body: string): void {
+    this.run("INSERT INTO outbox (to_name, body, created_at) VALUES (?, ?, ?)", to, body, now());
+  }
+
+  outbox(): Array<{ seq: number; to_name: string; body: string; created_at: string }> {
+    return this.all("SELECT * FROM outbox ORDER BY seq");
+  }
+
+  removeOutbox(seq: number): void {
+    this.run("DELETE FROM outbox WHERE seq = ?", seq);
   }
 
   // ---------- Audit ----------

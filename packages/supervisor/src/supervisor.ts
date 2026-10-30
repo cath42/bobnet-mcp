@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync, renameSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import type { Envelope, PeerInfo } from "@bobnet/protocol";
 import type { Identity } from "@bobnet/client/config";
@@ -23,6 +23,9 @@ export interface BrokerLink {
 export class SupervisorError extends Error {}
 
 const STALL_CHECK_MS = 60_000;
+const REGISTER_RETRY_MS = 5_000;
+/** Longer than the broker's silence window, so a stale holder of our names has been replaced. */
+const REGISTER_GIVE_UP_MS = 120_000;
 
 export class Supervisor {
   private readonly config: SupervisorConfig;
@@ -74,14 +77,15 @@ export class Supervisor {
       this.store.markOrphaned(r.id);
     }
 
-    await this.broker.register({ name: this.config.name, ...(this.config.team ? { team: this.config.team } : {}), purpose: "BobNet supervisor: runs role agents headless on this laptop" });
+    await this.registerWithRetry({ name: this.config.name, ...(this.config.team ? { team: this.config.team } : {}), purpose: "BobNet supervisor: runs role agents headless on this laptop" });
     for (const role of this.roles()) {
-      await this.broker.register({
+      await this.registerWithRetry({
         name: role.name,
         ...(role.team ? { team: role.team } : {}),
         purpose: role.purpose ?? `${role.project} ${role.key} (headless, started by the supervisor)`,
       });
     }
+    this.flushOutbox();
 
     if (orphaned.length > 0 || orphanedRequests.length > 0) {
       this.notify(
@@ -89,7 +93,10 @@ export class Supervisor {
           `Requests still answerable (answering resumes the worker): ${orphanedRequests.map((r) => r.id).join(", ") || "none"}.`,
       );
     }
-    this.stallTimer = setInterval(() => this.checkStalls(), STALL_CHECK_MS);
+    this.stallTimer = setInterval(() => {
+      this.checkStalls();
+      this.flushOutbox();
+    }, STALL_CHECK_MS);
     this.stallTimer.unref();
     this.schedule();
     this.writeStatus();
@@ -218,7 +225,10 @@ export class Supervisor {
   // ---------- Broker events ----------
 
   onPush(frame: PushFrame): void {
-    if (frame.t !== "deliver") return;
+    if (frame.t === "presence") {
+      if (frame.event === "joined" && frame.peer.name.toLowerCase() === this.config.orchestrator.toLowerCase()) this.flushOutbox();
+      return;
+    }
     const msg = frame.msg;
     const toName = frame.to.split("@")[0]!.toLowerCase();
     const ack = () => this.broker.sendRaw({ t: "ack", as: frame.to.split("@")[0]!, ids: [msg.id] });
@@ -281,7 +291,7 @@ export class Supervisor {
       resumeSession: w.resume_session,
       logPath: this.logPath(w),
       queryFn: this.queryFn,
-      canUseTool: this.withPreapprovals(w.id, this.router.forWorker(w.id, role)),
+      canUseTool: this.withPreapprovals(w.id, handoff, role.dir, this.router.forWorker(w.id, role)),
       mcpServers: {
         [WORKER_SERVER]: workerTools({
           name: role.name,
@@ -313,8 +323,13 @@ export class Supervisor {
     }
   }
 
-  private withPreapprovals(workerId: string, inner: CanUseTool): CanUseTool {
+  /** Allows the worker's own handoff file and any one-shot approvals, then defers to the router. */
+  private withPreapprovals(workerId: string, handoff: string, cwd: string, inner: CanUseTool): CanUseTool {
     return async (tool, input, opts) => {
+      const fp = input["file_path"];
+      if ((tool === "Write" || tool === "Edit") && typeof fp === "string" && resolve(cwd, fp) === resolve(handoff)) {
+        return { behavior: "allow", updatedInput: input };
+      }
       const list = this.preapproved.get(workerId);
       const i = list?.findIndex((p) => p.tool === tool && p.input === JSON.stringify(input)) ?? -1;
       if (list && i !== -1) {
@@ -377,10 +392,51 @@ export class Supervisor {
     this.writeStatus();
   }
 
+  /** Messages the orchestrator; what the broker can't take waits in the outbox. */
   private notify(body: string): void {
     this.broker
       .request({ t: "send", as: this.config.name, to: [this.config.orchestrator], body })
-      .catch((err: Error) => this.log.warn("could not notify the orchestrator", { err: err.message }));
+      .catch((err: Error) => {
+        this.log.warn("orchestrator unreachable; kept in the outbox", { err: err.message });
+        this.store.addOutbox(this.config.orchestrator, body);
+      });
+  }
+
+  private flushing = false;
+
+  private flushOutbox(): void {
+    if (this.flushing) return;
+    const pending = this.store.outbox();
+    if (pending.length === 0) return;
+    this.flushing = true;
+    void (async () => {
+      try {
+        for (const item of pending) {
+          await this.broker.request({ t: "send", as: this.config.name, to: [item.to_name], body: `(sent ${item.created_at}) ${item.body}` });
+          this.store.removeOutbox(item.seq);
+        }
+      } catch {
+        // Still unreachable; the next flush retries.
+      } finally {
+        this.flushing = false;
+      }
+    })();
+  }
+
+  private async registerWithRetry(identity: Identity): Promise<void> {
+    const deadline = Date.now() + REGISTER_GIVE_UP_MS;
+    for (;;) {
+      try {
+        await this.broker.register(identity);
+        return;
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (code !== "name_in_use" && code !== "disconnected" && code !== "timeout") throw err;
+        if (Date.now() > deadline) throw err;
+        this.log.warn("register failed; retrying", { name: identity.name, code });
+        await new Promise((r) => setTimeout(r, REGISTER_RETRY_MS));
+      }
+    }
   }
 
   private setState(id: string, state: WorkerState): void {

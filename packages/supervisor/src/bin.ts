@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { loadConfig } from "@bobnet/client/config";
@@ -20,6 +21,23 @@ if (process.argv[2] === "install-launchd") {
 }
 
 const config = loadSupervisorConfig(dir);
+
+// One supervisor per laptop: a second would fight the first for every role name.
+const pidFile = join(config.stateDir, "supervisor.pid");
+if (existsSync(pidFile)) {
+  const pid = Number(readFileSync(pidFile, "utf8"));
+  let alive = false;
+  try {
+    process.kill(pid, 0);
+    alive = true;
+  } catch {
+    // Stale pid file from a crash.
+  }
+  if (alive && pid !== process.pid) {
+    log.error("another supervisor is running", { pid });
+    process.exit(1);
+  }
+}
 const policy = Policy.load(dir);
 const brokerConfig = loadConfig();
 const store = new Store(join(config.stateDir, "supervisor.db"));
@@ -34,7 +52,14 @@ const connection = new BrokerConnection({
 connection.start();
 
 supervisor = new Supervisor({ config, policy, store, broker: connection, queryFn: query, log });
-await supervisor.start();
+writeFileSync(pidFile, String(process.pid));
+try {
+  await supervisor.start();
+} catch (err) {
+  log.error("supervisor failed to start", { err: (err as Error).message });
+  rmSync(pidFile, { force: true });
+  process.exit(1);
+}
 
 const token = ensureToken(join(dir, "supervisor.token"));
 const http = await serveMcp(supervisor, { port: config.mcpPort, token, log });
@@ -46,6 +71,7 @@ const shutdown = async () => {
   await supervisor?.shutdown();
   connection.stop();
   store.close();
+  rmSync(pidFile, { force: true });
   process.exit(0);
 };
 process.on("SIGTERM", () => void shutdown());

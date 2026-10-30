@@ -1,4 +1,5 @@
 import type { CanUseTool, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
+import { WORKER_SERVER } from "./worker-tools.ts";
 import type { RoleConfig } from "./config.ts";
 import type { Policy, Tier } from "./policy.ts";
 import type { RequestRow, Store, WorkerState } from "./store.ts";
@@ -44,8 +45,11 @@ export class Router {
 
   /** The canUseTool callback for one worker. */
   forWorker(workerId: string, role: RoleConfig): CanUseTool {
-    return async (toolName, input, { signal }) => {
+    return async (toolName, input, { signal, mcpServer }) => {
       const { store, policy } = this.deps;
+
+      // The supervisor's own BobNet tools, served in-process: always allowed.
+      if (mcpServer?.source === "sdk" && mcpServer.name === WORKER_SERVER) return { behavior: "allow", updatedInput: input };
 
       if (toolName === "AskUserQuestion") {
         return this.escalate(workerId, role, toolName, input, "question", "orchestrator", "ask-user-question", "The worker asked a question", signal);

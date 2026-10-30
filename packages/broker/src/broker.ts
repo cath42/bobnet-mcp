@@ -19,12 +19,15 @@ import { DurableObject } from "cloudflare:workers";
 import { migrate } from "./schema.ts";
 
 const SWEEP_INTERVAL_MS = 3600_000;
+/** Clients ping every 30 s; a socket silent for longer than this is presumed dead. */
+const SILENT_AFTER_MS = 90_000;
 const PEER_RETENTION_MS = 30 * 24 * 3600_000;
 const AUDIT_RETENTION_MS = 90 * 24 * 3600_000;
 
 interface Conn {
   connId: string;
   identity: Identity;
+  connectedAt: number;
 }
 
 interface PeerRow {
@@ -76,7 +79,7 @@ export class Broker extends DurableObject<Env> {
     if (!identity) return new Response("Missing identity", { status: 400 });
 
     const { 0: client, 1: server } = new WebSocketPair();
-    const conn: Conn = { connId: crypto.randomUUID(), identity };
+    const conn: Conn = { connId: crypto.randomUUID(), identity, connectedAt: Date.now() };
     this.ctx.acceptWebSocket(server, [conn.connId]);
     server.serializeAttachment(conn);
     this.send(server, { t: "welcome", v: PROTOCOL_VERSION, identity });
@@ -160,7 +163,17 @@ export class Broker extends DurableObject<Env> {
     const key = addressKey({ name: frame.name, laptop });
     const existing = this.peer(key);
     if (existing?.conn_id && existing.conn_id !== conn.connId && this.isLive(existing.conn_id)) {
-      throw new FrameError("name_in_use", `${frame.name} is already online on ${laptop}`);
+      const holder = this.socket(existing.conn_id)!;
+      if (!this.isSilent(holder)) throw new FrameError("name_in_use", `${frame.name} is already online on ${laptop}`);
+      // The holder stopped answering pings (a sleeping laptop, a dropped
+      // network): close it so the name, and anything else it hosted, frees up.
+      this.audit(conn, "takeover", { peer: key, from: existing.conn_id });
+      try {
+        holder.close(4001, "silent; replaced by a new connection");
+      } catch {
+        // Already closing.
+      }
+      this.disconnect(holder.deserializeAttachment() as Conn);
     }
 
     const peer = this.sql
@@ -395,6 +408,13 @@ export class Broker extends DurableObject<Env> {
 
   private isLive(connId: string): boolean {
     return this.socket(connId) !== undefined;
+  }
+
+  /** No keepalive answered recently, and not just connected. */
+  private isSilent(ws: WebSocket): boolean {
+    const conn = ws.deserializeAttachment() as Conn;
+    const lastPing = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0;
+    return Date.now() - Math.max(lastPing, conn.connectedAt) > SILENT_AFTER_MS;
   }
 
   private send(ws: WebSocket, frame: ServerFrame): boolean {

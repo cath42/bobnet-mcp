@@ -75,6 +75,7 @@ describe("lifecycle", () => {
     const { sup, sessions } = await setup();
     const w = sup.spawn({ project: "helix", role: "bill", task: "Write ADR 0093" });
     await until(() => sessions.length === 1);
+    expect(sup.status(w.id).state).toBe("running");
     const o = sessions[0]!.options;
     expect(o.cwd).toBe("/work/helix-bill/architecture");
     expect(o.settingSources).toEqual(["user", "project", "local"]);
@@ -83,12 +84,19 @@ describe("lifecycle", () => {
     expect(o.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false });
     expect(o.sandbox!.filesystem!.allowWrite).toContain("/work/helix-bill");
     expect(o.disallowedTools).toContain("mcp__bobnet-mcp");
-    expect(o.allowedTools).toContain("mcp__bobnet");
+    expect(o.allowedTools).toBeUndefined();
+    await expect(
+      o.canUseTool!("mcp__bobnet__send_message", { to: "Bob", body: "x" }, { signal: new AbortController().signal, mcpServer: { name: "bobnet", source: "sdk" } } as never),
+    ).resolves.toMatchObject({ behavior: "allow" });
+    // A configured server that merely calls itself "bobnet" gets no such pass.
+    void o.canUseTool!("mcp__bobnet__send_message", {}, { signal: new AbortController().signal, mcpServer: { name: "bobnet", source: "project" } } as never);
+    await until(() => sup.pending().length === 1);
     expect(o.env).toMatchObject({ BOBNET_SUPERVISED: "1", BOBNET_WORKER_ID: w.id });
     await until(() => sessions[0]!.inputs.length === 1);
     expect(sessions[0]!.inputs[0]).toContain("Write ADR 0093");
     expect(sessions[0]!.inputs[0]).toContain(`handoffs/helix/${w.id}.md`);
-    expect(sup.status(w.id).state).toBe("running");
+    // The impostor "bobnet" call above is waiting on an answer.
+    expect(sup.status(w.id).state).toBe("waiting-approval");
   });
 
   it("reports completion with the checkpoint to the orchestrator and frees the slot", async () => {
@@ -180,6 +188,18 @@ describe("approvals and questions", () => {
     expect(broker.toOrchestrator()).toEqual([]);
   });
 
+  it("always lets a worker write its own handoff file, and no other file there", async () => {
+    const { sup, sessions } = await setup();
+    const w = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const handoff = sup.status(w.id).handoff!;
+    await expect(sessions[0]!.ask("Write", { file_path: handoff, content: "x" })).resolves.toMatchObject({ behavior: "allow" });
+    // Another worker's handoff is outside this role's write roots: denied, not even escalated.
+    await expect(sessions[0]!.ask("Write", { file_path: handoff.replace(w.id, "w_other"), content: "x" })).resolves.toMatchObject({
+      behavior: "deny",
+    });
+  });
+
   it("escalates, holds the worker, and releases it on the orchestrator's answer", async () => {
     const { sup, broker, sessions } = await setup();
     const w = sup.spawn({ project: "helix", role: "bill", task: "t" });
@@ -264,6 +284,42 @@ describe("restart", () => {
     void s.ask("WebFetch", { url: "https://x" });
     await until(() => second.sup.pending().length === 1);
   });
+});
+
+describe("notifications", () => {
+  it("keeps what the broker refuses and sends it when the orchestrator joins", async () => {
+    const { sup, broker, sessions } = await setup();
+    const realRequest = broker.request.bind(broker);
+    let reachable = false;
+    broker.request = (async (frame: Parameters<typeof broker.request>[0]) => {
+      if (frame.t === "send" && !reachable) throw Object.assign(new Error("No such peer: Bob"), { code: "unknown_peer" });
+      return realRequest(frame);
+    }) as typeof broker.request;
+    const w = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    sessions[0]!.finish();
+    await until(() => sup.status(w.id).state === "done");
+    await until(() => store.outbox().length === 1);
+    reachable = true;
+    sup.onPush({ t: "presence", event: "joined", peer: { address: "Bob@mbp-1", name: "Bob", laptop: "mbp-1", team: null, purpose: null, expertise: [], status: null, online: true, last_seen: "" } });
+    await until(() => store.outbox().length === 0);
+    expect(broker.toOrchestrator().at(-1)).toMatch(/^\(sent .+\) Bill \(w_\w+, helix\/bill\) done/);
+  });
+
+  it("retries registration while an old connection still holds the names", async () => {
+    const broker = new FakeBroker();
+    let refusals = 1;
+    const realRegister = broker.register.bind(broker);
+    broker.register = async (id) => {
+      if (refusals-- > 0) throw Object.assign(new Error("in use"), { code: "name_in_use" });
+      return realRegister(id);
+    };
+    const { queryFn } = fakeQuery();
+    const sup = new Supervisor({ config: testConfig(dir), policy: POLICY, store, broker, queryFn, log: quiet });
+    running.push(sup);
+    await sup.start();
+    expect(broker.registered.map((r) => r.name)).toContain("supervisor");
+  }, 15_000);
 });
 
 describe("BobNet messages", () => {

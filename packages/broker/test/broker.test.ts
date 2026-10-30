@@ -34,6 +34,22 @@ describe("registration", () => {
     await expect(second.request({ t: "register", name: "Riker" })).resolves.toMatchObject({ address: "Riker@mbp-1" });
   });
 
+  it("lets a name be taken over from a connection that has gone silent", async () => {
+    const stale = await agent(1, "Riker");
+    const closed = new Promise<number>((r) => stale.ws.addEventListener("close", (e) => r(e.code)));
+    const fresh = await Client.open(await laptopToken(1));
+    expect(await errorCode(fresh.request({ t: "register", name: "Riker" }))).toBe("name_in_use");
+    // Age the holder past the silence window, as if its laptop went to sleep.
+    await runInDurableObject(env.BROKER.getByName("network"), (_obj, state) => {
+      for (const ws of state.getWebSockets()) {
+        const a = ws.deserializeAttachment() as { connectedAt: number };
+        ws.serializeAttachment({ ...a, connectedAt: Date.now() - 120_000 });
+      }
+    });
+    await expect(fresh.request({ t: "register", name: "Riker" })).resolves.toMatchObject({ address: "Riker@mbp-1" });
+    expect(await closed).toBe(4001);
+  });
+
   it("lets the same name exist on two laptops", async () => {
     await agent(1, "Homer");
     await expect(agent(2, "Homer")).resolves.toBeInstanceOf(Client);

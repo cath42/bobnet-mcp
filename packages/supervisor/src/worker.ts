@@ -108,8 +108,7 @@ export class WorkerRun {
       abortController: this.abort,
       stderr: (data) => this.write({ type: "stderr", data }),
       ...(role.model ? { model: role.model } : {}),
-      // The supervisor's own BobNet tools need no approval.
-      allowedTools: ["mcp__bobnet", ...(role.allowedTools ?? [])],
+      ...(role.allowedTools ? { allowedTools: role.allowedTools } : {}),
       ...(this.opts.resumeSession ? { resume: this.opts.resumeSession } : {}),
       ...(role.sandbox
         ? {

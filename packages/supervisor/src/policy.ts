@@ -63,8 +63,13 @@ export interface PolicyContext {
 
 const FILE_WRITE_TOOLS = new Set(["Edit", "Write", "NotebookEdit", "MultiEdit"]);
 const FILE_TOOLS = new Set([...FILE_WRITE_TOOLS, "Read", "Glob", "Grep"]);
-/** Chaining, substitution or redirection: an allow rule can't vouch for what follows. */
-const COMPOUND = /[;&|`\n<>]|\$\(/;
+/** Chaining: an allow rule on the first command can't vouch for what follows. */
+const COMPOUND = /[;&|\n]/;
+/** Substitution or redirection (other than 2>&1): never allowed by a rule. */
+const OPAQUE = /`|\$\(|<|>(?!&1)|(?<!2)>&1/;
+/** Splits on && || ; | and newlines; quoting is ignored, which only ever splits too much. */
+const SEGMENTS = /&&|\|\||[;|\n]/;
+const SEVERITY: Record<Decision, number> = { allow: 0, escalate: 1, deny: 2 };
 
 export function filePath(tool: string, input: Record<string, unknown>): string | undefined {
   if (!FILE_TOOLS.has(tool)) return undefined;
@@ -76,6 +81,8 @@ function inside(root: string, p: string): boolean {
   const rel = relative(root, p);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
+
+const clip = (s: string) => (s.length > 60 ? `${s.slice(0, 59)}…` : s);
 
 const globMatch = (pattern: string, value: string) =>
   pattern === "*" ||
@@ -115,6 +122,19 @@ export class Policy {
       };
     }
 
+    // A chained Bash command is decided segment by segment: allowed only if
+    // every segment is allowed alone, denied if any segment is denied.
+    const cmd = tool === "Bash" && typeof input["command"] === "string" ? input["command"].trim() : null;
+    if (cmd !== null && COMPOUND.test(cmd.replace(/2>&1/g, ""))) {
+      const segments = cmd.split(SEGMENTS).map((s) => s.trim()).filter(Boolean);
+      if (segments.length > 1) {
+        const verdicts = segments.map((s) => this.evaluate(tool, { ...input, command: s }, ctx));
+        const worst = verdicts.reduce((a, b) => (SEVERITY[b.decision] > SEVERITY[a.decision] ? b : a));
+        if (worst.decision !== "allow") return { ...worst, reason: `${worst.reason} (in "${clip(segments[verdicts.indexOf(worst)]!)}")` };
+        return { decision: "allow", rule: verdicts.map((v) => v.rule).join("+"), tier: "human", reason: "every segment allowed" };
+      }
+    }
+
     for (const { rule, command, path } of this.compiled) {
       if (!rule.roles.some((r) => globMatch(r, ctx.role))) continue;
       if (!rule.projects.some((p) => globMatch(p, ctx.project))) continue;
@@ -122,7 +142,8 @@ export class Policy {
       if (command) {
         const cmd = typeof input["command"] === "string" ? input["command"].trim() : null;
         if (cmd === null || !command.test(cmd)) continue;
-        if (rule.decision === "allow" && !rule.allow_compound && COMPOUND.test(cmd)) continue;
+        const chained = COMPOUND.test(cmd.replace(/2>&1/g, ""));
+        if (rule.decision === "allow" && !rule.allow_compound && (chained || OPAQUE.test(cmd))) continue;
       }
       if (path) {
         if (absPath === undefined) continue;
