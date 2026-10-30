@@ -28,6 +28,7 @@ const AnswerArgs = z.object({
   message: z.string().optional(),
   answers: z.record(z.string(), z.string()).optional(),
   user_decided: z.boolean().default(false),
+  resume: z.boolean().default(true),
 });
 const AuditArgs = z.object({ limit: z.number().int().positive().max(500).default(50) });
 
@@ -64,7 +65,7 @@ const TOOLS = [
   {
     name: "answer_request",
     description:
-      "Allow or deny an approval, or answer a question (answers: question text → answer). Requests with tier \"human\" need the user's own decision: set user_decided only when the user gave this exact decision in this conversation, never on your own judgement. Answering an orphaned request resumes its worker.",
+      "Allow or deny an approval, or answer a question (answers: question text → answer). Requests with tier \"human\" need the user's own decision: set user_decided only when the user gave this exact decision in this conversation, never on your own judgement. Answering an orphaned request resumes its worker; to just close one without resuming anything, deny it with resume: false.",
     inputSchema: obj(
       {
         id: { type: "string" },
@@ -72,6 +73,7 @@ const TOOLS = [
         message: { type: "string" },
         answers: { type: "object", additionalProperties: { type: "string" } },
         user_decided: { type: "boolean" },
+        resume: { type: "boolean", description: "Orphaned requests only: false closes it without resuming the worker." },
       },
       ["id", "decision"],
     ),
@@ -109,7 +111,7 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
         x.decision === "answer"
           ? { decision: "answer" as const, answers: x.answers!, ...(x.message ? { message: x.message } : {}) }
           : { decision: x.decision, ...(x.message ? { message: x.message } : {}) };
-      return sup.answer(x.id, answer, x.user_decided ? "human" : "orchestrator");
+      return sup.answer(x.id, answer, x.user_decided ? "human" : "orchestrator", x.resume);
     },
     list_projects: () => sup.projects(),
     audit_log: (a) => sup.audit(AuditArgs.parse(a).limit),

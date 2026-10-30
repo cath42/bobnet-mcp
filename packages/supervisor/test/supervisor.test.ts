@@ -374,6 +374,24 @@ describe("notifications", () => {
   }, 15_000);
 });
 
+describe("dismissing", () => {
+  it("closes an orphaned request without resuming anything", async () => {
+    const first = await setup();
+    first.sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => first.sessions.length === 1);
+    void first.sessions[0]!.ask("WebFetch", { url: "https://x" });
+    await until(() => first.sup.pending().length === 1);
+    const id = first.sup.pending()[0]!.id;
+    const second = await setup();
+    expect(() => second.sup.answer(id, { decision: "allow" }, "orchestrator", false)).toThrow(/Dismiss/);
+    const { resumed } = second.sup.answer(id, { decision: "deny" }, "orchestrator", false);
+    expect(resumed).toBeUndefined();
+    expect(second.sup.pending()).toEqual([]);
+    await tick(30);
+    expect(second.sessions).toHaveLength(0);
+  });
+});
+
 describe("BobNet messages", () => {
   it("hands a directed message to the role's running worker and acks it", async () => {
     const { sup, broker, sessions } = await setup();

@@ -202,9 +202,19 @@ export class Supervisor {
     });
   }
 
-  /** Answers a request; an orphaned one resumes its worker's session with the answer. */
-  answer(id: string, answer: Answer, decidedBy: "orchestrator" | "human"): { request: RequestRow; resumed?: WorkerRow } {
+  /**
+   * Answers a request. An orphaned one resumes its worker's session with the
+   * answer, unless `resume` is false: then the request is simply closed.
+   */
+  answer(id: string, answer: Answer, decidedBy: "orchestrator" | "human", resume = true): { request: RequestRow; resumed?: WorkerRow } {
     const before = this.store.request(id);
+    if (before?.state === "orphaned" && !resume) {
+      if (answer.decision !== "deny") throw new SupervisorError(`Dismiss ${id} with decision "deny"; nothing will run`);
+      this.store.settleRequest(id, { state: "answered", decision: "deny", message: answer.message ?? "dismissed", answers: null, decided_by: decidedBy });
+      this.store.audit(decidedBy, "dismiss", before.worker_id, { request: id });
+      this.writeStatus();
+      return { request: this.store.request(id)! };
+    }
     const request = this.router.answer(id, answer, decidedBy);
     if (before?.state !== "orphaned") return { request };
 
