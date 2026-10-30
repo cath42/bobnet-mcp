@@ -9,6 +9,8 @@ import {
   LIMITS,
   type PeerInfo,
   parseRecipient,
+  PING,
+  PONG,
   PROTOCOL_VERSION,
   type Results,
   type ServerFrame,
@@ -61,6 +63,7 @@ export class Broker extends DurableObject<Env> {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     ctx.storage.transactionSync(() => migrate(this.sql));
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PING, PONG));
     void ctx.blockConcurrencyWhile(async () => {
       if ((await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS);
     });

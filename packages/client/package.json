@@ -1,0 +1,27 @@
+{
+  "name": "@bobnet/client",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "BobNet MCP server for interactive Claude Code sessions: joins the broker and pushes inbound messages as channel events.",
+  "bin": {
+    "bobnet": "./src/bin.ts"
+  },
+  "scripts": {
+    "start": "node src/bin.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@bobnet/protocol": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.12",
+    "ws": "^8.18.0",
+    "@types/ws": "^8.5.0"
+  }
+}

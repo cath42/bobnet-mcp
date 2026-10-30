@@ -7,6 +7,13 @@ import { z } from "zod";
 
 export const PROTOCOL_VERSION = 1;
 
+/**
+ * Keepalive. The broker registers this pair as its WebSocket auto-response,
+ * so the edge answers without waking the Durable Object.
+ */
+export const PING = '{"t":"ping"}';
+export const PONG = '{"t":"pong"}';
+
 export const LIMITS = {
   frameBytes: 64 * 1024,
   bodyChars: 16 * 1024,

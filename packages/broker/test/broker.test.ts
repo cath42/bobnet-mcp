@@ -196,6 +196,17 @@ describe("frames", () => {
   });
 });
 
+describe("keepalive", () => {
+  it("answers ping with pong", async () => {
+    const c = await agent(1, "Bob");
+    const pong = new Promise<string>((r) =>
+      c.ws.addEventListener("message", (e) => e.data === '{"t":"pong"}' && r(e.data as string)),
+    );
+    c.raw('{"t":"ping"}');
+    expect(await pong).toBe('{"t":"pong"}');
+  });
+});
+
 describe("retention", () => {
   it("sweeps expired messages and their deliveries", async () => {
     const bob = await agent(1, "Bob");
