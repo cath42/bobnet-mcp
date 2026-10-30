@@ -120,4 +120,51 @@ describe("Registry", () => {
     r.register("conn1", { name: "alpha" });
     assert.deepEqual(events, ["joined"]);
   });
+
+  it("stores team when provided", () => {
+    const r = new Registry();
+    const peer = r.register("conn1", { name: "alpha", team: "frontend" });
+    assert.equal(peer.team, "frontend");
+    const pub = r.toPublicInfo(peer);
+    assert.equal(pub.team, "frontend");
+  });
+
+  it("rejects invalid team", () => {
+    const r = new Registry();
+    assert.throws(
+      () => r.register("c", { name: "alpha", team: "" }),
+      (err) => err instanceof RpcError && err.code === ErrorCode.InvalidParams,
+    );
+  });
+
+  it("sameTeam returns true for matching teams", () => {
+    const r = new Registry();
+    const a = r.register("conn1", { name: "alpha", team: "frontend" });
+    const b = r.register("conn2", { name: "beta", team: "frontend" });
+    assert.equal(r.sameTeam(a, b), true);
+  });
+
+  it("sameTeam returns false for different teams", () => {
+    const r = new Registry();
+    const a = r.register("conn1", { name: "alpha", team: "frontend" });
+    const b = r.register("conn2", { name: "beta", team: "backend" });
+    assert.equal(r.sameTeam(a, b), false);
+  });
+
+  it("sameTeam returns false when either has no team", () => {
+    const r = new Registry();
+    const a = r.register("conn1", { name: "alpha", team: "frontend" });
+    const b = r.register("conn2", { name: "beta" });
+    assert.equal(r.sameTeam(a, b), false);
+  });
+
+  it("teamMembers returns only members of the given team", () => {
+    const r = new Registry();
+    r.register("conn1", { name: "alpha", team: "frontend" });
+    r.register("conn2", { name: "beta", team: "frontend" });
+    r.register("conn3", { name: "gamma", team: "backend" });
+    const members = r.teamMembers("frontend");
+    assert.equal(members.length, 2);
+    assert.deepEqual(members.map((m) => m.name).sort(), ["alpha", "beta"]);
+  });
 });

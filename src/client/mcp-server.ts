@@ -6,7 +6,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { PACKAGE_VERSION } from "../shared/version.js";
 import type { Logger } from "../shared/logger.js";
-import { renderChannelEvent } from "./channel-forward.js";
+import { ChannelForwarder } from "./channel-forward.js";
 import { DaemonLink } from "./daemon-link.js";
 import { dispatchTool, toolDefinitions } from "./tools.js";
 import { buildInstructions } from "./instructions.js";
@@ -23,6 +23,7 @@ export function createMcpServer(opts: McpServerOptions): {
 } {
   const { link, log } = opts;
   const state = new SessionStateBox();
+  const forwarder = new ChannelForwarder();
 
   const server = new Server(
     { name: "bobnet-mcp", version: PACKAGE_VERSION },
@@ -43,11 +44,20 @@ export function createMcpServer(opts: McpServerOptions): {
     const { name, arguments: args } = req.params;
     log.debug("tool call", { tool: name });
     const result = await dispatchTool({ link, state }, name, args);
+    // The session is already awake, so hand over anything queued for it.
+    const digest = forwarder.drainDigest();
+    if (digest !== null) {
+      result.content.push({ type: "text", text: digest });
+    }
     return result as CallToolResult;
   });
 
   link.onChannelEvent((evt) => {
-    const payload = renderChannelEvent(evt);
+    const payload = forwarder.handle(evt);
+    if (payload === null) {
+      log.debug("channel event queued", { event: evt.event_type });
+      return;
+    }
     server
       .notification({
         method: "notifications/claude/channel",

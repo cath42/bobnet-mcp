@@ -7,11 +7,18 @@
 # broadcast, status_changed, peer_left) actually reach Claude's
 # context instead of being silently dropped.
 #
-# All extra arguments pass through to `claude` unchanged, so:
-#   replicant                  # fresh session
-#   replicant --continue       # resume the most recent session
-#   replicant --resume <id>    # resume a specific session
-#   replicant --help           # see all claude flags
+# With --name (and optionally --team / --purpose), the replicant
+# auto-registers on BobNet as its very first action — no need to
+# tell the session "register yourself" by hand.
+#
+#   replicant                                  # fresh session, register by hand
+#   replicant --name bob --team helix          # auto-register as bob on team helix
+#   replicant --name garfield --team helix --purpose "QA / agentic tests"
+#   replicant --name bob --team helix --continue   # extra flags pass through to claude
+#   replicant --help                           # see all claude flags
+#
+# --name / --team / --purpose are consumed by this wrapper; everything
+# else passes through to `claude` unchanged.
 #
 set -euo pipefail
 
@@ -20,4 +27,45 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 127
 fi
 
-exec claude --dangerously-load-development-channels server:bobnet-mcp "$@"
+NAME=""
+TEAM=""
+PURPOSE=""
+PASSTHRU=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --name)      NAME="$2"; shift 2 ;;
+    --name=*)    NAME="${1#*=}"; shift ;;
+    --team)      TEAM="$2"; shift 2 ;;
+    --team=*)    TEAM="${1#*=}"; shift ;;
+    --purpose)   PURPOSE="$2"; shift 2 ;;
+    --purpose=*) PURPOSE="${1#*=}"; shift ;;
+    *)           PASSTHRU+=("$1"); shift ;;
+  esac
+done
+
+# NOTE: --dangerously-load-development-channels is VARIADIC — it greedily
+# consumes every following non-flag arg as another channel entry. So it must
+# come LAST, after the positional prompt, or it eats the prompt.
+CHANNELS=(--dangerously-load-development-channels server:bobnet-mcp)
+
+if [[ -n "$NAME" ]]; then
+  # Seed the interactive session with a registration instruction. Claude runs
+  # this as its first message, calls the bobnet-mcp `register` tool, then waits.
+  PROMPT="Join the Bobiverse now, before doing anything else. Call the bobnet-mcp \`register\` tool with name=\"$NAME\""
+  [[ -n "$TEAM" ]] && PROMPT="$PROMPT, team=\"$TEAM\""
+  if [[ -n "$PURPOSE" ]]; then
+    PROMPT="$PROMPT, purpose=\"$PURPOSE\""
+  else
+    PROMPT="$PROMPT. For purpose and expertise, read ./CLAUDE.md (fall back to AGENTS.md/README.md) and distill one short purpose line plus 3-6 expertise tags"
+  fi
+  PROMPT="$PROMPT. If a roster memory says I'm already registered, call \`list_peers\` first and skip re-registering. After registering, call \`list_peers\` to see who's online, then stop and await instructions — do not start any other work."
+
+  # NOTE: the terminal tab title can't be reliably pinned to the replicant name —
+  # Claude Code continuously rewrites the title and offers no off-switch
+  # (github.com/anthropics/claude-code/issues/21677). --name still sets claude's
+  # session display name (shown in /resume and the prompt bar).
+  exec claude --name "$NAME" ${PASSTHRU[@]+"${PASSTHRU[@]}"} "$PROMPT" "${CHANNELS[@]}"
+fi
+
+exec claude ${PASSTHRU[@]+"${PASSTHRU[@]}"} "${CHANNELS[@]}"

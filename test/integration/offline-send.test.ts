@@ -23,8 +23,25 @@ describe("offline / error scenarios", () => {
       body: "hi",
     });
     assert.equal(result.delivered, false);
+    assert.ok(!("results" in result));
     assert.match(result.error ?? "", /no peer named 'ghost'/);
     assert.ok(result.message_id.length > 0);
+    a.link.close();
+  });
+
+  it("send to a list returns per-recipient results", async () => {
+    const a = await connectClient(daemon.socketPath);
+    await a.link.call(Method.Register, { name: "lister" });
+    const result = await a.link.call(Method.SendMessage, {
+      to: ["ghost1", "ghost2"],
+      body: "hi",
+    });
+    assert.ok("results" in result);
+    assert.equal(result.delivered, false);
+    assert.deepEqual(
+      result.results.map((r) => r.to),
+      ["ghost1", "ghost2"],
+    );
     a.link.close();
   });
 

@@ -106,6 +106,7 @@ export interface HelloResult {
 
 export interface RegisterParams {
   name: string;
+  team?: string;
   cwd?: string;
   purpose?: string;
   expertise?: string[];
@@ -114,6 +115,7 @@ export interface RegisterParams {
 export interface RegisterResult {
   peer_id: string;
   name: string;
+  team?: string;
   registered_at: string;
 }
 
@@ -128,7 +130,8 @@ export interface ListPeersResult {
 }
 
 export interface SendMessageParams {
-  to: string;
+  /** One peer name, or a list of names for a multi-recipient message. */
+  to: string | string[];
   body: string;
   in_reply_to?: string;
 }
@@ -137,10 +140,30 @@ export interface SendMessageResult {
   delivered: boolean;
   message_id: string;
   error?: string;
+  cross_team_warning?: string;
 }
+
+export interface MultiSendRecipientResult {
+  to: string;
+  delivered: boolean;
+  error?: string;
+}
+
+export interface MultiSendMessageResult {
+  message_id: string;
+  /** True only if every recipient received the message. */
+  delivered: boolean;
+  results: MultiSendRecipientResult[];
+  cross_team_warning?: string;
+}
+
+export type BroadcastScope = "team" | "all";
 
 export interface BroadcastParams {
   body: string;
+  scope?: BroadcastScope;
+  /** Wake every recipient immediately. Reserve for holds and stop-work notices. */
+  urgent?: boolean;
 }
 
 export interface BroadcastResult {
@@ -169,6 +192,7 @@ export interface PingResult {
 export interface PeerInfo {
   peer_id: string;
   name: string;
+  team?: string;
   cwd?: string;
   purpose?: string;
   expertise?: string[];
@@ -203,6 +227,9 @@ export interface MessageEvent {
   message_id: string;
   body: string;
   in_reply_to?: string;
+  cross_team?: boolean;
+  /** Other recipients of the same multi-recipient message. */
+  cc?: string[];
   sent_at: string;
 }
 
@@ -211,6 +238,8 @@ export interface BroadcastEvent {
   from: string;
   message_id: string;
   body: string;
+  scope: BroadcastScope;
+  urgent?: boolean;
   sent_at: string;
 }
 
@@ -236,7 +265,10 @@ export interface MethodMap {
   register: { params: RegisterParams; result: RegisterResult };
   deregister: { params: DeregisterParams; result: DeregisterResult };
   list_peers: { params: ListPeersParams; result: ListPeersResult };
-  send_message: { params: SendMessageParams; result: SendMessageResult };
+  send_message: {
+    params: SendMessageParams;
+    result: SendMessageResult | MultiSendMessageResult;
+  };
   broadcast: { params: BroadcastParams; result: BroadcastResult };
   update_status: { params: UpdateStatusParams; result: UpdateStatusResult };
   ping: { params: PingParams; result: PingResult };
@@ -260,3 +292,9 @@ export function isValidExpertise(value: unknown): value is string[] {
 export const STATUS_MAX_LEN = 200;
 export const PURPOSE_MAX_LEN = 500;
 export const BODY_MAX_LEN = 64 * 1024;
+export const TEAM_MAX_LEN = 64;
+export const MAX_RECIPIENTS = 32;
+
+export function isValidTeam(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= TEAM_MAX_LEN;
+}

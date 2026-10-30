@@ -77,7 +77,25 @@ describe("buildInstructions", () => {
   it("documents coordination norms", () => {
     const txt = buildInstructions({ env: {}, cwd: "/tmp" });
     assert.match(txt, /list_peers/);
-    assert.match(txt, /broadcast.*heads-up/i);
-    assert.match(txt, /status.*busy/i);
+    assert.match(txt, /Direct by default/);
+    assert.match(txt, /Status needs no announcement/);
+    assert.match(txt, /urgent: true only for holds/);
+    assert.doesNotMatch(txt, /broadcast.*heads-up/i);
+  });
+
+  it("env BOBNET_TEAM overrides the team suggestion", () => {
+    const txt = buildInstructions({
+      env: { BOBNET_TEAM: "backend" },
+      cwd: "/tmp",
+    });
+    assert.match(txt, /Use "backend"/);
+    assert.match(txt, /BOBNET_TEAM/);
+  });
+
+  it("documents team concept and info-only norms", () => {
+    const txt = buildInstructions({ env: {}, cwd: "/tmp" });
+    assert.match(txt, /team/i);
+    assert.match(txt, /info only, no response needed/i);
+    assert.match(txt, /cross-team/i);
   });
 });

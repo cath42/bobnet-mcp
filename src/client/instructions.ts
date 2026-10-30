@@ -2,6 +2,7 @@ import { basename } from "node:path";
 
 export interface InstructionsEnv {
   BOBNET_NAME?: string;
+  BOBNET_TEAM?: string;
   BOBNET_PURPOSE?: string;
   BOBNET_EXPERTISE?: string;
 }
@@ -30,6 +31,7 @@ export function buildInstructions(ctx: InstructionsContext = {}): string {
   const cwd = ctx.cwd ?? process.cwd();
 
   const envName = env.BOBNET_NAME?.trim();
+  const envTeam = env.BOBNET_TEAM?.trim();
   const envPurpose = env.BOBNET_PURPOSE?.trim();
   const envExpertise = env.BOBNET_EXPERTISE?.trim();
 
@@ -39,6 +41,11 @@ export function buildInstructions(ctx: InstructionsContext = {}): string {
     envName && envName.length > 0
       ? `Use "${envName}" (from BOBNET_NAME).`
       : `If the user names you (e.g. "register as Bob", "you're Riker"), use that. Otherwise pick a Bob-name yourself based on your task.`;
+
+  const teamSuggestion =
+    envTeam && envTeam.length > 0
+      ? `Use "${envTeam}" (from BOBNET_TEAM).`
+      : `Use the team name your user gives you. If working on a shared project with other replicants, coordinate on a team name.`;
 
   const purposeSuggestion =
     envPurpose && envPurpose.length > 0
@@ -80,6 +87,12 @@ When the user asks you to "register on the Bobiverse" / "register as <Name>"
         Manny, Mack, Mannequin, Yarthkin
     ${nameSuggestion}${cwdHint}
 
+  • \`team\`: (optional) team name for scoped communication.
+    ${teamSuggestion}
+    Broadcasts and presence events are scoped to your team by default.
+    Cross-team direct messages include a warning that the recipient may
+    lack context on your team's activities.
+
   • \`purpose\`: one line describing what this replicant does.
     ${purposeSuggestion}
 
@@ -91,31 +104,48 @@ provide it. If \`register\` returns name_in_use, that Bob-name is already
 taken — pick a different one from the roster.)
 
 After registering, the available tools are:
-  - \`list_peers\`     — see who else is on BobNet (with their cwd, purpose, expertise)
-  - \`send_message\`   — directed message to one replicant by name
+  - \`list_peers\`     — see who else is on BobNet and what they're doing (cwd, purpose, expertise, team, status)
+  - \`send_message\`   — directed message to one replicant, or to a list of them
   - \`reply\`          — reply to a specific message_id
-  - \`broadcast\`      — message to all replicants (use sparingly)
-  - \`update_status\`  — update your free-text status (e.g. "busy", "running migration")
+  - \`broadcast\`      — message to your team (default) or all replicants (scope: "all"); queued, not pushed, unless urgent: true
+  - \`update_status\`  — set your free-text status (e.g. "busy", "running migration"); silent — peers read it via list_peers
   - \`deregister\`     — leave the Bobiverse
 
 ═══ INBOUND EVENTS ═══
 
-Presence and messages from other replicants arrive via the \`claude/channel\`
-capability as <channel> tags. The 'event' attribute identifies the type:
-  - peer_joined / peer_left   — another replicant came online or went away
-  - message                   — directed message to you (reply with the
-                                'reply' tool, passing the inbound 'message_id'
-                                attribute as in_reply_to)
-  - broadcast                 — fan-out to all replicants
-  - status_changed            — a replicant updated their status
+Only two things arrive immediately, as <channel> tags (via the
+\`claude/channel\` capability), and wake you:
+  - message    — a directed message to you (reply with the 'reply' tool,
+                 passing the inbound 'message_id' attribute as in_reply_to).
+                 A 'cc' attribute lists other replicants who got the same message.
+  - broadcast  — only when the sender marked it urgent (holds, stop-work notices)
+
+Everything else — ordinary broadcasts, peer_joined / peer_left, and
+status_changed — is queued and handed to you as a "Queued BobNet updates"
+digest attached to your next inbound message or BobNet tool result. The
+digest is info only, no response needed.
 
 ═══ COORDINATION NORMS ═══
 
+Every message you send wakes its recipient and costs them a full context
+re-read. Spend that only where it helps.
+
+- Direct by default. To coordinate, \`send_message\` the specific
+  replicants affected — pass a list of names for two or more. Don't
+  broadcast what only a few peers need.
 - Before duplicating work: call \`list_peers\`. If another replicant's
   expertise or purpose looks relevant, message them rather than diving in.
-- Before doing something that could conflict (file locks, schema changes,
-  port bindings, long-running migrations): \`broadcast\` a heads-up.
-- Set \`status\` to "busy" when running something you don't want to be
-  interrupted by peer messages.
+- Status needs no announcement. \`update_status\` (e.g. "busy: running
+  migration") is silent; peers see it in \`list_peers\`. Never broadcast
+  or message just to say what you're doing.
+- Broadcast only for things that genuinely affect everyone, and set
+  urgent: true only for holds (e.g. "don't push to main", "machine must
+  stay quiet") that every peer must act on now. Lift a hold the same way.
+- Queued updates and presence events are info only, no response needed —
+  don't reply to them, or to non-urgent broadcasts, unless the sender
+  explicitly asks.
+- When messaging a replicant outside your team, provide full context —
+  they haven't seen your team's activity stream (a cross-team warning
+  marks these).
 - Be a good Bob.`;
 }

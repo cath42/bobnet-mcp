@@ -26,6 +26,11 @@ export const toolDefinitions: ToolDef[] = [
           description:
             "Unique short identifier for this session (e.g. 'backend', 'frontend'). Must match /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.",
         },
+        team: {
+          type: "string",
+          description:
+            "Team name for this session. Broadcasts and presence events are scoped to the team by default. Max 64 chars.",
+        },
         purpose: {
           type: "string",
           description:
@@ -51,17 +56,23 @@ export const toolDefinitions: ToolDef[] = [
   {
     name: "list_peers",
     description:
-      "Return the current roster of connected peers (excluding yourself), each with name, purpose, expertise, status.",
+      "Return the current roster of connected peers (excluding yourself), each with name, team, purpose, expertise, and current status. This is where to check who is online and what they are doing — joins, leaves and status changes do not wake you.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "send_message",
     description:
-      "Send a directed message to one peer by name. Returns delivered:true on success, or delivered:false with an error string if the peer is not connected.",
+      "Send a directed message to one peer, or to several by passing a list of names (each recipient sees who else got it). This is the default way to coordinate: prefer a short list of the peers actually affected over a broadcast. Returns delivered:true on success, or delivered:false with an error per recipient that is not connected.",
     inputSchema: {
       type: "object",
       properties: {
-        to: { type: "string", description: "Target peer name." },
+        to: {
+          anyOf: [
+            { type: "string" },
+            { type: "array", items: { type: "string" }, minItems: 1, maxItems: 32 },
+          ],
+          description: "Target peer name, or a list of peer names.",
+        },
         body: { type: "string", description: "Message content (markdown allowed)." },
         in_reply_to: {
           type: "string",
@@ -93,10 +104,23 @@ export const toolDefinitions: ToolDef[] = [
   {
     name: "broadcast",
     description:
-      "Send a message to all connected peers. Use sparingly — only for announcements that affect everyone.",
+      "Send a message to your team (default) or all connected peers. Broadcasts do NOT wake recipients: they are queued and delivered with each peer's next direct message or BobNet tool call. Set urgent:true only for holds and stop-work notices that every peer must see right now. If only a few peers are affected, use send_message with a list of names instead.",
     inputSchema: {
       type: "object",
-      properties: { body: { type: "string" } },
+      properties: {
+        body: { type: "string" },
+        urgent: {
+          type: "boolean",
+          description:
+            "Wake every recipient immediately. Reserve for holds (e.g. 'don't push to main') and stop-work notices. Default false.",
+        },
+        scope: {
+          type: "string",
+          enum: ["team", "all"],
+          description:
+            "Who receives the broadcast: 'team' (default) sends only to your team; 'all' sends to every peer on the network.",
+        },
+      },
       required: ["body"],
       additionalProperties: false,
     },
@@ -104,7 +128,7 @@ export const toolDefinitions: ToolDef[] = [
   {
     name: "update_status",
     description:
-      "Set this session's free-text status visible to peers (e.g. 'busy', 'running migration'). Triggers a status_changed event.",
+      "Set this session's free-text status (e.g. 'busy', 'running migration'). Peers see it in list_peers and in their next queued-updates digest; it does not wake or interrupt anyone, and needs no announcement.",
     inputSchema: {
       type: "object",
       properties: { status: { type: "string", maxLength: 200 } },
@@ -148,6 +172,30 @@ async function callDaemon(
   }
 }
 
+/**
+ * Models sometimes pass a list as a JSON string or a comma-separated string.
+ * Peer names can't contain commas or brackets, so both are unambiguous.
+ */
+export function normalizeRecipients(to: unknown): unknown {
+  if (typeof to !== "string") return to;
+  const trimmed = to.trim();
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      /* fall through: let the daemon reject it */
+    }
+  }
+  if (trimmed.includes(",")) {
+    return trimmed
+      .split(",")
+      .map((n) => n.trim())
+      .filter((n) => n.length > 0);
+  }
+  return to;
+}
+
 export async function dispatchTool(
   deps: DispatchDeps,
   toolName: string,
@@ -172,15 +220,18 @@ export async function dispatchTool(
       try {
         const result = await deps.link.call(Method.Register, {
           name: args["name"] as string,
-          // The cwd of this Claude Code session is auto-injected from the
-          // broker-client subprocess; Claude doesn't need to think about it.
           cwd: process.cwd(),
+          ...(args["team"] !== undefined ? { team: args["team"] as string } : {}),
           ...(args["purpose"] !== undefined ? { purpose: args["purpose"] as string } : {}),
           ...(args["expertise"] !== undefined
             ? { expertise: args["expertise"] as string[] }
             : {}),
         });
-        deps.state.setRegistered({ peer_id: result.peer_id, name: result.name });
+        deps.state.setRegistered({
+          peer_id: result.peer_id,
+          name: result.name,
+          ...(result.team !== undefined ? { team: result.team } : {}),
+        });
         return ok(result);
       } catch (e) {
         if (e instanceof DaemonLinkError) return err(e.userMessage);
@@ -196,7 +247,7 @@ export async function dispatchTool(
       return callDaemon(deps, Method.ListPeers, {});
     case "send_message":
       return callDaemon(deps, Method.SendMessage, {
-        to: args["to"],
+        to: normalizeRecipients(args["to"]),
         body: args["body"],
         ...(args["in_reply_to"] !== undefined
           ? { in_reply_to: args["in_reply_to"] }
@@ -209,7 +260,11 @@ export async function dispatchTool(
         in_reply_to: args["in_reply_to"],
       });
     case "broadcast":
-      return callDaemon(deps, Method.Broadcast, { body: args["body"] });
+      return callDaemon(deps, Method.Broadcast, {
+        body: args["body"],
+        ...(args["scope"] !== undefined ? { scope: args["scope"] } : {}),
+        ...(args["urgent"] !== undefined ? { urgent: args["urgent"] } : {}),
+      });
     case "update_status":
       return callDaemon(deps, Method.UpdateStatus, { status: args["status"] });
     default:

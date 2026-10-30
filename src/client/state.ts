@@ -2,6 +2,7 @@ export interface RegisteredState {
   registered: true;
   peer_id: string;
   name: string;
+  team?: string;
 }
 
 export interface UnregisteredState {
@@ -17,8 +18,13 @@ export class SessionStateBox {
     return this.value;
   }
 
-  setRegistered(info: { peer_id: string; name: string }): void {
-    this.value = { registered: true, peer_id: info.peer_id, name: info.name };
+  setRegistered(info: { peer_id: string; name: string; team?: string }): void {
+    this.value = {
+      registered: true,
+      peer_id: info.peer_id,
+      name: info.name,
+      ...(info.team !== undefined ? { team: info.team } : {}),
+    };
   }
 
   reset(): void {

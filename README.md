@@ -53,6 +53,7 @@ Drop a `.mcp.json` in your project root:
       "command": "bobnet-mcp",
       "env": {
         "BOBNET_NAME": "Riker",
+        "BOBNET_TEAM": "backend",
         "BOBNET_PURPOSE": "exploring the auth subsystem",
         "BOBNET_EXPERTISE": "typescript,security"
       }
@@ -61,7 +62,7 @@ Drop a `.mcp.json` in your project root:
 }
 ```
 
-All three env vars are optional — without them, Claude picks a Bob-name from
+All four env vars are optional — without them, Claude picks a Bob-name from
 the canonical roster (Bob, Riker, Homer, Bill, Charles, Mario, Luke, …) and
 distills the project's purpose/expertise from `CLAUDE.md` (or `AGENTS.md` /
 `README.md` / `package.json`). Setting them in `.mcp.json` is just a way to
@@ -96,28 +97,60 @@ A convenience wrapper is included at `scripts/replicant`:
 
 | Tool | Purpose |
 |---|---|
-| `register` | Required first call. Claim a name; advertise purpose and expertise. |
+| `register` | Required first call. Claim a name and optional team; advertise purpose and expertise. |
 | `deregister` | Leave the broker. |
-| `list_peers` | Snapshot of connected peers (excluding self). |
-| `send_message` | Directed message to one peer by name. |
+| `list_peers` | Snapshot of connected peers (excluding self), including team and current status. |
+| `send_message` | Directed message to one peer, or to a list of names (`to: ["Bill", "Homer"]`). Each recipient sees the others in `cc`. Cross-team messages include a warning. |
 | `reply` | Convenience wrapper that requires `in_reply_to`. |
-| `broadcast` | Send to all connected peers. |
-| `update_status` | Update free-text status (e.g. `"busy"`, `"running migration"`). |
+| `broadcast` | Send to your team (default) or all peers (`scope: "all"`). Queued for recipients unless `urgent: true`. |
+| `update_status` | Update free-text status (e.g. `"busy"`, `"running migration"`). Silent — peers read it via `list_peers`. |
 
 Calling any tool other than `register` before registration returns a friendly
 error.
 
+## Teams
+
+Replicants can register with an optional **team** name. Teams scope
+communication so that related sessions stay in sync without flooding the
+entire network:
+
+- **Broadcasts** default to `scope: "team"` — only teammates receive them.
+  Pass `scope: "all"` to reach every peer on the network.
+- **Presence events** (`peer_joined`, `peer_left`, `status_changed`) are
+  delivered only to teammates. Peers without a team see all events.
+- **Direct messages** work across teams, but both the sender's tool result
+  and the recipient's inbound event include a **cross-team warning** —
+  reminding both sides that the other may lack context on their team's
+  activities.
+- **Info-only annotations** — queued updates are delivered with an "info
+  only, no response needed" note to discourage agents from reacting to
+  routine updates (saving tokens).
+
+Set the team via the `team` argument to `register`, or pin it with the
+`BOBNET_TEAM` env var in `.mcp.json`.
+
 ## Channel events delivered to Claude
 
-Each event arrives as `<channel source="bobnet-mcp" event="..." ...>body</channel>`:
+Every channel notification wakes the receiving session and costs it a full
+context re-read, so only two kinds of event are pushed immediately, as
+`<channel source="bobnet-mcp" event="..." ...>body</channel>`:
 
 | `event` attribute | When | Body |
 |---|---|---|
-| `peer_joined` | Another session registered | `${name} joined — ${purpose}` |
-| `peer_left` | Peer disconnected/deregistered/crashed | `${name} left (${reason})` |
-| `message` | Directed message to you | The sender's body verbatim |
-| `broadcast` | Fan-out from a peer | The sender's body verbatim |
-| `status_changed` | Peer updated their status | `${name} status: ${status}` |
+| `message` | Directed message to you | The sender's body (+ `Also sent to: …` for multi-recipient messages, + cross-team warning if applicable) |
+| `broadcast` | Broadcast sent with `urgent: true` | The sender's body (+ urgent note) |
+
+Everything else is **queued per session** and delivered as a "Queued BobNet
+updates" digest, appended to the next pushed event or to the result of the
+session's next BobNet tool call, whichever comes first:
+
+- non-urgent broadcasts (team or global)
+- `peer_joined` / `peer_left` (teammates only)
+- `status_changed` (teammates only; only each peer's latest status is kept)
+
+The queue holds up to 50 entries; beyond that the oldest are dropped and the
+digest reports how many. Current roster and status are always available
+from `list_peers`.
 
 Reply to a `message` event by calling the `reply` tool with `to=<from>` and
 `in_reply_to=<message_id>`.
@@ -127,20 +160,28 @@ Reply to a `message` event by calling the `reply` tool with `to=<from>` and
 Open two terminals in two different project directories, each launched via
 `./scripts/replicant`. In session A:
 
-> Register on BobNet as Riker. You're working on the auth backend.
+> Register on BobNet as Riker, team backend. You're working on the auth API.
 
 Session B:
 
-> Register on BobNet as Bender. You're working on the React frontend.
+> Register on BobNet as Bender, team backend. You're working on the user API.
 
-Riker now sees a `peer_joined` event for Bender. Either side can ask Claude
-to use `list_peers`, `send_message`, or `broadcast` — e.g.
+Both are on team `backend`, so broadcasts and presence events flow between
+them. They're queued rather than pushed: each side sees them in a digest the
+next time it's messaged or calls a BobNet tool. Only `urgent: true`
+broadcasts (holds such as "don't push to main") interrupt immediately.
 
-> Ask Bender what auth flow he expects on the login screen.
+Now open a third session C:
 
-Claude calls `send_message`, Bender's session receives a `<channel
-event="message">` tag, and replies via the `reply` tool. The conversation
-flows over BobNet without either user copy-pasting between terminals.
+> Register on BobNet as Homer, team frontend. You're working on the React UI.
+
+Homer won't see Riker's or Bender's broadcasts or status updates — they're
+on a different team. But Homer can still `send_message` to Riker directly:
+
+> Ask Riker what auth flow he expects on the login screen.
+
+Both Homer and Riker see a cross-team warning reminding them to provide
+full context since they haven't been following each other's team activity.
 
 ## Debugging
 
@@ -184,6 +225,11 @@ npm run typecheck
 - Directed and broadcast messaging
 - Automatic daemon spawn (race-safe via flock) and idle shutdown
 - Status updates, reply threading, channel-event push to Claude
+- **Teams** — scoped broadcasts, presence events, cross-team warnings,
+  and "info only" annotations to reduce agent chatter
+- **Quiet by default** — only direct messages and urgent broadcasts wake a
+  session; presence, status and ordinary broadcasts are queued into a digest
+- **Multi-recipient messages** — `send_message` to a list of names
 
 ## Out of scope (deferred)
 

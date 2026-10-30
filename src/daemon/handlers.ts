@@ -97,12 +97,18 @@ function handleRegister(
   const p = ensureObject(params, Method.Register) as Partial<RegisterParams>;
   const peer = ctx.registry.register(conn.id, {
     name: p.name,
+    team: p.team,
     cwd: p.cwd,
     purpose: p.purpose,
     expertise: p.expertise,
   });
   ctx.router.emitPeerJoined(peer);
-  return { peer_id: peer.peer_id, name: peer.name, registered_at: peer.joined_at };
+  return {
+    peer_id: peer.peer_id,
+    name: peer.name,
+    ...(peer.team !== undefined ? { team: peer.team } : {}),
+    registered_at: peer.joined_at,
+  };
 }
 
 function handleDeregister(
@@ -137,8 +143,16 @@ function handleSendMessage(
 ) {
   requireHandshaken(conn);
   const p = ensureObject(params, Method.SendMessage);
+  const to = p["to"];
+  if (Array.isArray(to)) {
+    return ctx.router.sendMulti(conn.id, {
+      to,
+      body: p["body"],
+      in_reply_to: p["in_reply_to"],
+    });
+  }
   return ctx.router.send(conn.id, {
-    to: p["to"],
+    to,
     body: p["body"],
     in_reply_to: p["in_reply_to"],
   });
@@ -147,7 +161,11 @@ function handleSendMessage(
 function handleBroadcast(ctx: DaemonContext, conn: Connection, params: unknown) {
   requireHandshaken(conn);
   const p = ensureObject(params, Method.Broadcast);
-  return ctx.router.broadcast(conn.id, { body: p["body"] });
+  return ctx.router.broadcast(conn.id, {
+    body: p["body"],
+    scope: p["scope"],
+    urgent: p["urgent"],
+  });
 }
 
 function handleUpdateStatus(

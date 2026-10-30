@@ -4,8 +4,10 @@ import { ErrorCode, RpcError } from "../shared/errors.js";
 import {
   isValidExpertise,
   isValidName,
+  isValidTeam,
   PURPOSE_MAX_LEN,
   STATUS_MAX_LEN,
+  TEAM_MAX_LEN,
   type PeerInfo,
 } from "../shared/protocol.js";
 
@@ -50,6 +52,7 @@ export class Registry {
     connectionId: string,
     args: {
       name: unknown;
+      team?: unknown;
       cwd?: unknown;
       purpose?: unknown;
       expertise?: unknown;
@@ -77,6 +80,17 @@ export class Registry {
         `name '${args.name}' is already taken`,
         { name: args.name },
       );
+    }
+
+    let team: string | undefined;
+    if (args.team !== undefined) {
+      if (!isValidTeam(args.team)) {
+        throw new RpcError(
+          ErrorCode.InvalidParams,
+          `team must be a non-empty string of at most ${TEAM_MAX_LEN} chars`,
+        );
+      }
+      team = args.team;
     }
 
     const purpose = args.purpose === undefined ? undefined : String(args.purpose);
@@ -112,6 +126,7 @@ export class Registry {
     const peer: RegisteredPeer = {
       peer_id: newPeerId(),
       name: args.name,
+      ...(team !== undefined ? { team } : {}),
       ...(cwd !== undefined ? { cwd } : {}),
       ...(purpose !== undefined ? { purpose } : {}),
       ...(expertise !== undefined ? { expertise } : {}),
@@ -151,6 +166,16 @@ export class Registry {
     peer.status = status;
     this.emit({ kind: "status", peer });
     return peer;
+  }
+
+  sameTeam(a: RegisteredPeer, b: RegisteredPeer): boolean {
+    return a.team !== undefined && a.team === b.team;
+  }
+
+  teamMembers(team: string, exceptConnId?: string): RegisteredPeer[] {
+    return this.list().filter(
+      (p) => p.team === team && p.connection_id !== exceptConnId,
+    );
   }
 
   toPublicInfo(peer: RegisteredPeer): PeerInfo {
