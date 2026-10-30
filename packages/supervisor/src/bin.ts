@@ -8,6 +8,7 @@ import { createLogger } from "@bobnet/client/log";
 import { configDir, loadSupervisorConfig } from "./config.ts";
 import { installLaunchAgent } from "./launchd.ts";
 import { ensureToken, serveMcp } from "./mcp.ts";
+import { type AccessConfig, ownerCheck } from "./owner.ts";
 import { Policy } from "./policy.ts";
 import { Store } from "./store.ts";
 import { Supervisor } from "./supervisor.ts";
@@ -51,7 +52,19 @@ const connection = new BrokerConnection({
 });
 connection.start();
 
-supervisor = new Supervisor({ config, policy, store, broker: connection, queryFn: query, log });
+// Access settings in config.json let the owner act from the dashboard.
+const access = (JSON.parse(readFileSync(join(dir, "config.json"), "utf8")) as { access?: AccessConfig }).access;
+if (!access) log.warn("no \"access\" in config.json: dashboard actions will be refused");
+
+supervisor = new Supervisor({
+  config,
+  policy,
+  store,
+  broker: connection,
+  queryFn: query,
+  log,
+  ...(access ? { ownerCheck: ownerCheck(access) } : {}),
+});
 writeFileSync(pidFile, String(process.pid));
 try {
   await supervisor.start();

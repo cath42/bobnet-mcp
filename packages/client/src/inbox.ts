@@ -35,6 +35,8 @@ export class Inbox {
    * was queued or was a duplicate. `ack` lists message ids to acknowledge.
    */
   receive(frame: PushFrame): { event: ChannelEvent | null; ack: string[] } {
+    // Dashboard actions are for supervisors; an interactive session ignores them.
+    if (frame.t === "action") return { event: null, ack: [] };
     if (frame.t === "presence") {
       this.queuePresence(frame.event, frame.peer);
       return { event: null, ack: [] };

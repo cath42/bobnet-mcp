@@ -32,9 +32,10 @@ export default {
       }
       // A fresh request, so nothing the client sent reaches the object except
       // the identity this Worker vouches for.
-      const forwarded = new Request("https://broker.internal/connect", {
-        headers: { upgrade: "websocket", "x-bobnet-identity": JSON.stringify(identity) },
-      });
+      const headers: Record<string, string> = { upgrade: "websocket", "x-bobnet-identity": JSON.stringify(identity) };
+      // The owner's own token travels with their actions, for supervisors to verify.
+      if (identity.kind === "owner") headers["x-bobnet-owner-token"] = req.headers.get("cf-access-jwt-assertion")!;
+      const forwarded = new Request("https://broker.internal/connect", { headers });
       return env.BROKER.getByName(NETWORK).fetch(forwarded);
     }
 

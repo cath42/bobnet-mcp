@@ -1,4 +1,5 @@
 import {
+  type Action,
   addressKey,
   ClientFrame,
   type Dashboard,
@@ -89,6 +90,10 @@ export class Broker extends DurableObject<Env> {
     const { 0: client, 1: server } = new WebSocketPair();
     const conn: Conn = { connId: crypto.randomUUID(), identity, connectedAt: Date.now() };
     this.ctx.acceptWebSocket(server, [conn.connId]);
+    const ownerToken = req.headers.get("x-bobnet-owner-token");
+    if (identity.kind === "owner" && ownerToken) {
+      this.sql.exec("INSERT INTO owner_tokens (conn_id, token) VALUES (?, ?)", conn.connId, ownerToken);
+    }
     server.serializeAttachment(conn);
     this.send(server, { t: "welcome", v: PROTOCOL_VERSION, identity });
     this.audit(conn, "connect", {});
@@ -133,6 +138,7 @@ export class Broker extends DurableObject<Env> {
 
   private disconnect(conn: Conn): void {
     const now = new Date().toISOString();
+    this.sql.exec("DELETE FROM owner_tokens WHERE conn_id = ?", conn.connId);
     const left = this.sql
       .exec<PeerRow>("UPDATE peers SET conn_id = NULL, last_seen = ? WHERE conn_id = ? RETURNING *", now, conn.connId)
       .toArray();
@@ -165,6 +171,10 @@ export class Broker extends DurableObject<Env> {
       case "dashboard":
         if (conn.identity.kind !== "owner") throw new FrameError("forbidden", "Only the owner reads the dashboard");
         return this.ok(ws, frame.rid, this.dashboard());
+      case "action":
+        return this.ok(ws, frame.rid, this.forwardAction(conn, frame.laptop, frame.action));
+      case "action_result":
+        return this.actionResult(conn, frame);
     }
   }
 
@@ -311,11 +321,12 @@ export class Broker extends DurableObject<Env> {
     const peer = this.hosted(conn, as);
     const at = new Date().toISOString();
     this.sql.exec(
-      `INSERT INTO laptop_reports (laptop, snapshot, at) VALUES (?, ?, ?)
-       ON CONFLICT (laptop) DO UPDATE SET snapshot = excluded.snapshot, at = excluded.at`,
+      `INSERT INTO laptop_reports (laptop, snapshot, at, reporter) VALUES (?, ?, ?, ?)
+       ON CONFLICT (laptop) DO UPDATE SET snapshot = excluded.snapshot, at = excluded.at, reporter = excluded.reporter`,
       peer.laptop,
       JSON.stringify(snapshot),
       at,
+      peer.name,
     );
     this.toOwners({ t: "report", laptop: peer.laptop, at, snapshot });
     return { laptop: peer.laptop };
@@ -385,6 +396,30 @@ export class Broker extends DurableObject<Env> {
         .map((u): UpdateItem => ({ seq: u.seq, from: u.from_addr, laptop: u.laptop, text: u.text, at: u.at })),
       traffic: recent.slice(0, DASHBOARD_ITEMS).map(traffic),
     };
+  }
+
+  /** Hands an owner's action to the laptop's supervisor, with the owner's own token. */
+  private forwardAction(conn: Conn, laptop: string, action: Action): Results["action"] {
+    if (conn.identity.kind !== "owner") throw new FrameError("forbidden", "Only the owner acts from the dashboard");
+    const report = this.sql
+      .exec<{ reporter: string | null }>("SELECT reporter FROM laptop_reports WHERE laptop = ?", laptop)
+      .toArray()[0];
+    const supervisor = report?.reporter ? this.peer(addressKey({ name: report.reporter, laptop })) : undefined;
+    const ws = supervisor?.conn_id ? this.socket(supervisor.conn_id) : undefined;
+    if (!supervisor || !ws) throw new FrameError("offline", `No supervisor is online on ${laptop}`);
+    const token = this.sql.exec<{ token: string }>("SELECT token FROM owner_tokens WHERE conn_id = ?", conn.connId).toArray()[0]?.token;
+    if (!token) throw new FrameError("forbidden", "This connection carries no owner token; reload the page");
+
+    const id = `a_${crypto.randomUUID()}`;
+    this.send(ws, { t: "action", id, to: formatAddress(supervisor), by: conn.identity.email, token, action });
+    this.audit(conn, "action", { id, laptop, action });
+    return { id };
+  }
+
+  private actionResult(conn: Conn, frame: Extract<ClientFrame, { t: "action_result" }>): void {
+    const peer = this.hosted(conn, frame.as);
+    this.audit(conn, "action_result", { id: frame.id, ok: frame.ok });
+    this.toOwners({ t: "action_result", id: frame.id, laptop: peer.laptop, ok: frame.ok, message: frame.message });
   }
 
   private toOwners(frame: ServerFrame): void {

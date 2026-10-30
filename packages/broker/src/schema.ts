@@ -64,6 +64,17 @@ const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE peers ADD COLUMN instance TEXT;
   `,
+  `
+  -- The supervisor peer that reports for each laptop, which dashboard actions go to.
+  ALTER TABLE laptop_reports ADD COLUMN reporter TEXT;
+
+  -- Each owner connection's Access JWT, forwarded with its actions so the
+  -- supervisor can verify the owner itself. Deleted when the socket closes.
+  CREATE TABLE owner_tokens (
+    conn_id TEXT PRIMARY KEY,
+    token   TEXT NOT NULL
+  );
+  `,
 ];
 
 export function migrate(sql: SqlStorage): void {

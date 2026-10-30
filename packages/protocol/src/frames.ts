@@ -109,6 +109,8 @@ export const LaptopSnapshot = z.object({
         tool: z.string().max(80),
         tier: z.enum(["orchestrator", "human"]),
         created_at: z.string(),
+        /** What is being asked, shortened; redacted if it looks like it holds a credential. */
+        preview: z.string().max(400),
       }),
     )
     .max(100),
@@ -216,6 +218,26 @@ export const UpdateFrame = z.object({ t: z.literal("update"), rid, as: segment, 
 /** Owner only: everything the dashboard shows, in one reply. */
 export const DashboardFrame = z.object({ t: z.literal("dashboard"), rid });
 
+/** What the owner can do from the dashboard. */
+export const Action = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("answer"), request: z.string().max(40), decision: z.enum(["allow", "deny"]) }),
+  z.object({ kind: z.literal("stop"), worker: z.string().max(40) }),
+  z.object({ kind: z.literal("reset"), worker: z.string().max(40) }),
+]);
+export type Action = z.infer<typeof Action>;
+
+/** Owner only: an action for one laptop's supervisor. */
+export const ActionFrame = z.object({ t: z.literal("action"), rid, laptop: segment, action: Action });
+
+/** A supervisor's outcome for an action it was handed. */
+export const ActionResultFrame = z.object({
+  t: z.literal("action_result"),
+  as: segment,
+  id: z.string().max(64),
+  ok: z.boolean(),
+  message: z.string().max(500),
+});
+
 export const AckFrame = z.object({
   t: z.literal("ack"),
   as: segment,
@@ -232,6 +254,8 @@ export const ClientFrame = z.discriminatedUnion("t", [
   ReportFrame,
   UpdateFrame,
   DashboardFrame,
+  ActionFrame,
+  ActionResultFrame,
   AckFrame,
 ]);
 export type ClientFrame = z.infer<typeof ClientFrame>;
@@ -248,6 +272,7 @@ export const ErrorCode = z.enum([
   "no_team",
   "secret_detected",
   "unknown_message",
+  "offline",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
@@ -264,7 +289,11 @@ export type ServerFrame =
   // To owner connections only:
   | { t: "report"; laptop: string; at: string; snapshot: LaptopSnapshot }
   | { t: "update"; item: UpdateItem }
-  | { t: "traffic"; item: TrafficItem };
+  | { t: "traffic"; item: TrafficItem }
+  | { t: "action_result"; id: string; laptop: string; ok: boolean; message: string }
+  // To a laptop's supervisor. `token` is the owner's Access JWT, for the
+  // supervisor to verify itself: the broker alone can't act as the owner.
+  | { t: "action"; id: string; to: string; by: string; token: string; action: Action };
 
 /** Results carried by `ok` frames, per request type. */
 export interface Results {
@@ -277,4 +306,5 @@ export interface Results {
   report: { laptop: string };
   update: { seq: number };
   dashboard: Dashboard;
+  action: { id: string };
 }

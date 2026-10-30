@@ -284,6 +284,34 @@ describe("dashboard", () => {
   });
 });
 
+describe("dashboard actions", () => {
+  const snapshot = {
+    supervisor: { started_at: "2026-10-30T00:00:00.000Z", concurrency: 3, active: 0, queued: 0 },
+    workers: [],
+    pending: [],
+    usage: [],
+  };
+
+  it("hands an owner's action, with the owner's token, to the laptop's supervisor and relays the result", async () => {
+    const sup = await agent(1, "supervisor");
+    await sup.request({ t: "report", as: "supervisor", snapshot });
+    const token = await ownerToken();
+    const owner = await Client.open(token, { origin: ORIGIN });
+    const { id } = await owner.request({ t: "action", laptop: "mbp-1", action: { kind: "stop", worker: "w_1" } });
+    const handed = await sup.next((f) => f.t === "action");
+    expect(handed).toEqual({ t: "action", id, to: "supervisor@mbp-1", by: "owner@example.com", token, action: { kind: "stop", worker: "w_1" } });
+    sup.raw(JSON.stringify({ t: "action_result", as: "supervisor", id, ok: true, message: "stopped" }));
+    expect(await owner.next((f) => f.t === "action_result")).toMatchObject({ id, laptop: "mbp-1", ok: true, message: "stopped" });
+  });
+
+  it("refuses actions from laptops, and for a laptop with no supervisor online", async () => {
+    const bob = await agent(1, "Bob");
+    expect(await errorCode(bob.request({ t: "action", laptop: "mbp-1", action: { kind: "stop", worker: "w_1" } }))).toBe("forbidden");
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    expect(await errorCode(owner.request({ t: "action", laptop: "mbp-2", action: { kind: "stop", worker: "w_1" } }))).toBe("offline");
+  });
+});
+
 describe("keepalive", () => {
   it("answers ping with pong", async () => {
     const c = await agent(1, "Bob");

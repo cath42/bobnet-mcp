@@ -21,6 +21,38 @@ function h(tag, attrs, ...children) {
   return el;
 }
 
+// ---------- Actions ----------
+
+/** Requests sent and not yet answered by the broker, by rid. */
+const sentActions = new Map();
+let toastTimer = null;
+
+function toast(text, ok = true) {
+  const el = $("toast");
+  el.textContent = text;
+  el.dataset.ok = String(ok);
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.hidden = true), 8000);
+}
+
+/** Sends a dashboard action to a laptop's supervisor; the button stays disabled until it's settled. */
+function act(laptop, action, button, confirmText) {
+  if (confirmText && !confirm(confirmText)) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return toast("Not connected; try again in a moment.", false);
+  const id = String(++rid);
+  sentActions.set(id, button);
+  if (button) button.disabled = true;
+  ws.send(JSON.stringify({ t: "action", rid: id, laptop, action }));
+}
+
+function button(label, cls, onClick) {
+  const b = h("button", { type: "button", class: cls });
+  b.textContent = label;
+  b.addEventListener("click", () => onClick(b));
+  return b;
+}
+
 // ---------- Formatting ----------
 
 const fmtInt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
@@ -45,6 +77,14 @@ const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", m
 
 function workerCard(w) {
   const running = !w.ended_at && w.started_at;
+  const controls = !w.ended_at
+    ? h(
+        "div",
+        { class: "actions" },
+        button("Stop", "danger", (b) => act(w.laptop, { kind: "stop", worker: w.id }, b, `Stop ${w.name} (${w.id})? It is interrupted, then ended.`)),
+        button("Reset", "", (b) => act(w.laptop, { kind: "reset", worker: w.id }, b, `Reset ${w.name} (${w.id})? It is stopped and a fresh worker starts the same task with no prior context.`)),
+      )
+    : null;
   return h(
     "div",
     { class: "card" },
@@ -60,6 +100,7 @@ function workerCard(w) {
       h("span", null, `${fmtTokens(totalTokens(w.tokens))} tokens`),
       h("span", null, fmtCost(w.cost_usd)),
     ),
+    controls,
   );
 }
 
@@ -84,6 +125,22 @@ function renderWorkers() {
         h("b", null, p.name),
         p.kind === "question" ? " asks a question" : ` wants ${p.tool}`,
         h("div", { class: "muted" }, `${p.tier === "human" ? "needs you" : "orchestrator decides"} · ${p.id} · ${p.laptop} · waiting `, h("span", { "data-ago": p.created_at }, since(p.created_at))),
+        h("div", { class: "preview" }, p.preview),
+        p.kind === "question"
+          ? h(
+              "div",
+              { class: "actions" },
+              h("span", { class: "muted" }, "Answer it through the orchestrator, or "),
+              button("Deny", "danger", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "deny" }, b)),
+            )
+          : h(
+              "div",
+              { class: "actions" },
+              button("Allow", "primary", (b) =>
+                act(p.laptop, { kind: "answer", request: p.id, decision: "allow" }, b, p.tier === "human" ? `Allow ${p.name} to run ${p.tool}?\n\n${p.preview}` : null),
+              ),
+              button("Deny", "danger", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "deny" }, b)),
+            ),
       ),
     ),
   );
@@ -217,7 +274,23 @@ function connect() {
         backoff = 1000;
         dashboardRid = request("dashboard");
         break;
+      case "error":
+        if (sentActions.has(f.rid)) {
+          const b = sentActions.get(f.rid);
+          sentActions.delete(f.rid);
+          if (b) b.disabled = false;
+          toast(f.message, false);
+        }
+        break;
+      case "action_result":
+        toast(f.message, f.ok);
+        break;
       case "ok":
+        if (sentActions.has(f.rid)) {
+          sentActions.delete(f.rid);
+          toast("Sent; waiting for the supervisor…");
+          break;
+        }
         if (f.rid === dashboardRid) {
           state.peers = f.result.peers;
           state.laptops = new Map(f.result.laptops.map((l) => [l.laptop, l]));

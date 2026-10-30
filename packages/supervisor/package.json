@@ -18,6 +18,7 @@
     "@bobnet/client": "workspace:*",
     "@bobnet/protocol": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.32.0",
+    "jose": "6.2.13",
     "yaml": "^2.8.0",
     "zod": "^4.6.7"
   },

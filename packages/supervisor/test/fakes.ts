@@ -116,8 +116,11 @@ export class FakeBroker implements BrokerLink {
     return { id: `m_${this.sent.length}`, delivered_to: frame.to, queued_for: [] } as R;
   }
 
-  sendRaw(frame: { t: "ack"; as: string; ids: string[] }): void {
-    this.acks.push({ as: frame.as, ids: frame.ids });
+  readonly results: Array<{ id: string; ok: boolean; message: string }> = [];
+
+  sendRaw(frame: Parameters<BrokerLink["sendRaw"]>[0]): void {
+    if (frame.t === "ack") this.acks.push({ as: frame.as, ids: frame.ids });
+    else this.results.push({ id: frame.id, ok: frame.ok, message: frame.message });
   }
 
   toOrchestrator(): string[] {

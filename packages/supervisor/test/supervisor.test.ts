@@ -30,10 +30,13 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/** Accepts only the token "good-token" for owner@example.com. */
+const ownerCheck = async (token: string, email: string) => token === "good-token" && email === "owner@example.com";
+
 async function setup(over = "", s = store) {
   const broker = new FakeBroker();
   const { queryFn, sessions } = fakeQuery();
-  const sup = new Supervisor({ config: testConfig(dir, over), policy: POLICY, store: s, broker, queryFn, log: quiet });
+  const sup = new Supervisor({ config: testConfig(dir, over), policy: POLICY, store: s, broker, queryFn, log: quiet, ownerCheck });
   await sup.start();
   running.push(sup);
   return { sup, broker, sessions };
@@ -372,6 +375,71 @@ describe("notifications", () => {
     await sup.start();
     expect(broker.registered.map((r) => r.name)).toContain("supervisor");
   }, 15_000);
+});
+
+describe("dashboard actions", () => {
+  const action = (a: Record<string, unknown>, token = "good-token") =>
+    ({ t: "action", id: `a_${Math.random()}`, to: "supervisor@mbp-1", by: "owner@example.com", token, action: a }) as never;
+
+  it("lets the verified owner allow a human-tier request, recorded as theirs", async () => {
+    const { sup, broker, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const pending = sessions[0]!.ask("Bash", { command: "git push origin HEAD:main" });
+    await until(() => sup.pending().length === 1);
+    const id = sup.pending()[0]!.id;
+    sup.onPush(action({ kind: "answer", request: id, decision: "allow" }));
+    await expect(pending).resolves.toMatchObject({ behavior: "allow" });
+    await until(() => broker.results.length === 1);
+    expect(broker.results[0]).toMatchObject({ ok: true, message: `${id} allowed` });
+    expect(store.request(id)!.decided_by).toBe("human");
+    expect(store.auditLog().some((a) => a.actor === "human:owner@example.com" && a.action === "dashboard:answer")).toBe(true);
+  });
+
+  it("refuses an action whose owner token doesn't verify, and changes nothing", async () => {
+    const { sup, broker, sessions } = await setup();
+    const w = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    sup.onPush(action({ kind: "stop", worker: w.id }, "forged"));
+    await until(() => broker.results.length === 1);
+    expect(broker.results[0]).toMatchObject({ ok: false, message: expect.stringMatching(/couldn't be verified/) });
+    expect(sup.status(w.id).state).toBe("running");
+  });
+
+  it("stops and resets workers from the dashboard", async () => {
+    const { sup, broker, sessions } = await setup();
+    const w = sup.spawn({ project: "helix", role: "bill", task: "the task" });
+    await until(() => sessions.length === 1);
+    sup.onPush(action({ kind: "reset", worker: w.id }));
+    await until(() => broker.results.length === 1);
+    expect(broker.results[0]!.message).toMatch(new RegExp(`${w.id} reset; w_\\w+ starts fresh`));
+    await until(() => sessions.length === 2);
+    const fresh = sup.list().at(-1)!;
+    sup.onPush(action({ kind: "stop", worker: fresh.id }));
+    await until(() => broker.results.length === 2);
+    expect(broker.results[1]).toMatchObject({ ok: true, message: `${fresh.id} stopped` });
+  });
+
+  it("refuses actions when the laptop has no Access settings", async () => {
+    const broker = new FakeBroker();
+    const { queryFn } = fakeQuery();
+    const sup = new Supervisor({ config: testConfig(dir), policy: POLICY, store, broker, queryFn, log: quiet });
+    running.push(sup);
+    await sup.start();
+    sup.onPush(action({ kind: "stop", worker: "w_x" }));
+    await until(() => broker.results.length === 1);
+    expect(broker.results[0]!.message).toMatch(/aren't set up/);
+  });
+
+  it("previews requests for the dashboard, hiding anything that looks like a credential", async () => {
+    const { sup, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    void sessions[0]!.ask("Bash", { command: "git push origin HEAD:main" });
+    void sessions[0]!.ask("Bash", { command: "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456' https://x" });
+    await until(() => sup.snapshot().pending.length === 2);
+    expect(sup.snapshot().pending.map((p) => p.preview)).toEqual(["git push origin HEAD:main", "[hidden: looks like it contains a credential]"]);
+  });
 });
 
 describe("dismissing", () => {

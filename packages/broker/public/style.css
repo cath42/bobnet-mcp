@@ -88,4 +88,19 @@ td .team { color: var(--muted); font-size: 12px; }
 .totals span { font-size: 12px; color: var(--muted); }
 .note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
 
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+button {
+  font: inherit; font-size: 14px; padding: 6px 14px; min-height: 36px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+button.danger { color: var(--bad); border-color: currentColor; }
+button:disabled { opacity: 0.5; cursor: default; }
+.preview { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background: var(--bg); border-radius: 6px; padding: 6px 8px; margin-top: 6px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.toast {
+  position: sticky; top: 52px; z-index: 1; margin: 8px 16px 0; padding: 10px 14px; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--ok); font-size: 14px;
+}
+.toast[data-ok="false"] { border-left-color: var(--bad); }
+
 summary { cursor: pointer; color: var(--muted); font-size: 14px; margin: 12px 0 8px; }

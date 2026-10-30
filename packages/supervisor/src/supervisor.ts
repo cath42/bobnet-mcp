@@ -1,10 +1,11 @@
 import { mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
-import type { Envelope, LaptopSnapshot, PeerInfo, TokenCounts, WorkerSnapshot } from "@bobnet/protocol";
+import { findSecret, type Envelope, type LaptopSnapshot, type PeerInfo, type ServerFrame, type TokenCounts, type WorkerSnapshot } from "@bobnet/protocol";
 import type { Identity } from "@bobnet/client/config";
 import type { PushFrame, RequestFrame } from "@bobnet/client/connection";
 import type { Logger } from "@bobnet/client/log";
+import type { OwnerCheck } from "./owner.ts";
 import type { ProjectConfig, RoleConfig, SupervisorConfig } from "./config.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
@@ -17,7 +18,11 @@ import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
 export interface BrokerLink {
   register(identity: Identity): Promise<unknown>;
   request<R>(frame: RequestFrame): Promise<R>;
-  sendRaw(frame: { t: "ack"; as: string; ids: string[] }): void;
+  sendRaw(
+    frame:
+      | { t: "ack"; as: string; ids: string[] }
+      | { t: "action_result"; as: string; id: string; ok: boolean; message: string },
+  ): void;
 }
 
 export class SupervisorError extends Error {}
@@ -49,6 +54,7 @@ export class Supervisor {
   private startedAt = new Date().toISOString();
   /** Usage a resumed session started from, per running worker. */
   private readonly baselines = new Map<string, Usage>();
+  private readonly ownerCheck: OwnerCheck | null;
 
   constructor(deps: {
     config: SupervisorConfig;
@@ -57,7 +63,10 @@ export class Supervisor {
     broker: BrokerLink;
     queryFn: QueryFn;
     log: Logger;
+    /** Verifies the owner's Access JWT on dashboard actions; without it they're refused. */
+    ownerCheck?: OwnerCheck;
   }) {
+    this.ownerCheck = deps.ownerCheck ?? null;
     this.config = deps.config;
     this.store = deps.store;
     this.broker = deps.broker;
@@ -248,6 +257,10 @@ export class Supervisor {
   // ---------- Broker events ----------
 
   onPush(frame: PushFrame): void {
+    if (frame.t === "action") {
+      void this.onAction(frame);
+      return;
+    }
     if (frame.t === "presence") {
       if (frame.event === "joined" && frame.peer.name.toLowerCase() === this.config.orchestrator.toLowerCase()) this.flushOutbox();
       return;
@@ -285,6 +298,34 @@ export class Supervisor {
       );
     }
     ack();
+  }
+
+  /** A dashboard action: only after the owner's own token checks out. */
+  private async onAction(frame: Extract<ServerFrame, { t: "action" }>): Promise<void> {
+    const reply = (ok: boolean, message: string) =>
+      this.broker.sendRaw({ t: "action_result", as: this.config.name, id: frame.id, ok, message });
+    if (!this.ownerCheck) return reply(false, "Dashboard actions aren't set up on this laptop (no Access settings in config.json)");
+    if (!(await this.ownerCheck(frame.token, frame.by))) {
+      this.store.audit("dashboard", "refused", null, { id: frame.id, by: frame.by, reason: "owner token did not verify" });
+      return reply(false, "Your sign-in couldn't be verified; reload the page and try again");
+    }
+    const a = frame.action;
+    this.store.audit(`human:${frame.by}`, `dashboard:${a.kind}`, a.kind === "answer" ? null : a.worker, { id: frame.id, action: a });
+    try {
+      if (a.kind === "answer") {
+        const answer: Answer = a.decision === "deny" ? { decision: "deny", message: "denied from the dashboard" } : { decision: "allow" };
+        const { request, resumed } = this.answer(a.request, answer, "human");
+        reply(true, `${request.id} ${a.decision === "allow" ? "allowed" : "denied"}${resumed ? `; ${resumed.id} resumes the worker` : ""}`);
+      } else if (a.kind === "stop") {
+        await this.stop(a.worker, "stopped from the dashboard");
+        reply(true, `${a.worker} stopped`);
+      } else {
+        const fresh = await this.reset(a.worker);
+        reply(true, `${a.worker} reset; ${fresh.id} starts fresh`);
+      }
+    } catch (err) {
+      reply(false, (err as Error).message);
+    }
   }
 
   // ---------- Scheduling ----------
@@ -556,7 +597,16 @@ export class Supervisor {
       workers,
       pending: this.store.requests(["open", "orphaned"]).slice(0, 100).map((r) => {
         const w = this.store.worker(r.worker_id);
-        return { id: r.id, worker_id: r.worker_id, name: w ? this.roleOf(w).name : "?", kind: r.kind, tool: r.tool.slice(0, 80), tier: r.tier, created_at: r.created_at };
+        return {
+          id: r.id,
+          worker_id: r.worker_id,
+          name: w ? this.roleOf(w).name : "?",
+          kind: r.kind,
+          tool: r.tool.slice(0, 80),
+          tier: r.tier,
+          created_at: r.created_at,
+          preview: preview(r),
+        };
       }),
       usage: [...days.values()].sort((a, b) => a.day.localeCompare(b.day)).slice(-500),
     };
@@ -634,6 +684,21 @@ export class Supervisor {
     if (!w) throw new SupervisorError(`No worker ${id}`);
     return w;
   }
+}
+
+/** What a request asks, short enough for the dashboard; never a credential. */
+function preview(r: RequestRow): string {
+  let text: string;
+  try {
+    const input = JSON.parse(r.input) as Record<string, unknown>;
+    const q = (input["questions"] as Array<{ question?: string }> | undefined)?.[0]?.question;
+    const v = q ?? input["command"] ?? input["file_path"] ?? input["url"] ?? input["path"];
+    text = typeof v === "string" ? v : r.input;
+  } catch {
+    text = r.input;
+  }
+  if (findSecret(text)) return "[hidden: looks like it contains a credential]";
+  return text.length > 400 ? `${text.slice(0, 399)}…` : text;
 }
 
 function formatInbound(msg: Envelope): string {

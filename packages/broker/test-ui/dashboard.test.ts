@@ -99,6 +99,49 @@ describe("dashboard page", () => {
     expect($("laptops").textContent).toContain("0 of 3 slots busy");
   });
 
+  it("sends actions for pending requests and running workers, confirming the risky ones", () => {
+    const ws = FakeSocket.last;
+    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+    snap.workers.push({ id: "w_9", name: "Homer", project: "sandbox", role: "writer", state: "waiting-approval", task: "push", checkpoint: null, started_at: iso(1), ended_at: null, last_event_at: iso(0), tokens: tokens(1), cost_usd: 0 });
+    snap.pending.push({ id: "r_9", worker_id: "w_9", name: "Homer", kind: "approval", tool: "Bash", tier: "human", created_at: iso(0), preview: "git push origin HEAD:main" } as never);
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    expect($("needs-list").textContent).toContain("git push origin HEAD:main");
+
+    const asked: string[] = [];
+    let answer = false;
+    globalThis.confirm = (q?: string) => (asked.push(String(q)), answer);
+    const buttons = (root: Element) => [...root.querySelectorAll("button")] as HTMLButtonElement[];
+    const allow = buttons($("needs-list")).find((b) => b.textContent === "Allow")!;
+
+    allow.click(); // declined
+    expect(asked[0]).toContain("git push origin HEAD:main");
+    expect(ws.sent.filter((f) => f["t"] === "action")).toHaveLength(0);
+
+    answer = true;
+    allow.click();
+    const sent = ws.sent.filter((f) => f["t"] === "action");
+    expect(sent.at(-1)).toMatchObject({ laptop: "mbp-1", action: { kind: "answer", request: "r_9", decision: "allow" } });
+    expect(allow.disabled).toBe(true);
+
+    ws.frame({ t: "action_result", id: "a_1", laptop: "mbp-1", ok: true, message: "r_9 allowed" });
+    expect($("toast").textContent).toBe("r_9 allowed");
+
+    const stop = buttons($("workers")).find((b) => b.textContent === "Stop")!;
+    stop.click();
+    expect(ws.sent.filter((f) => f["t"] === "action").at(-1)).toMatchObject({ action: { kind: "stop", worker: "w_9" } });
+  });
+
+  it("shows a refused action and re-enables its button", () => {
+    const ws = FakeSocket.last;
+    const deny = [...$("needs-list").querySelectorAll("button")].find((b) => b.textContent === "Deny") as HTMLButtonElement;
+    deny.click();
+    const rid = ws.sent.at(-1)!["rid"];
+    ws.frame({ t: "error", rid, code: "offline", message: "No supervisor is online on mbp-1" });
+    expect($("toast").textContent).toBe("No supervisor is online on mbp-1");
+    expect($("toast").dataset["ok"]).toBe("false");
+    expect(deny.disabled).toBe(false);
+  });
+
   it("applies live frames", () => {
     const ws = FakeSocket.last;
     const snap = structuredClone(dashboard.laptops[0]!.snapshot);

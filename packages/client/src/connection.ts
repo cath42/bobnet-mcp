@@ -11,7 +11,7 @@ const BACKOFF_MAX_MS = 30_000;
 const REREGISTER_EVERY_MS = 5_000;
 
 export type RequestFrame = ClientFrame extends infer F ? (F extends { rid: string } ? Omit<F, "rid"> : never) : never;
-export type PushFrame = Extract<ServerFrame, { t: "deliver" | "presence" }>;
+export type PushFrame = Extract<ServerFrame, { t: "deliver" | "presence" | "action" }>;
 
 export class BrokerError extends Error {
   readonly code: ErrorCode | "disconnected" | "timeout";
@@ -189,6 +189,7 @@ export class BrokerConnection {
       }
       case "deliver":
       case "presence":
+      case "action":
         this.opts.onPush(frame);
         return;
     }
