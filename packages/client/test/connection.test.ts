@@ -8,7 +8,8 @@ import type { Logger } from "../src/log.ts";
 const quiet: Logger = { debug() {}, info() {}, warn() {}, error() {} };
 
 /** A minimal stand-in broker: answers register/peers, records frames, can drop sockets. */
-function fakeBroker() {
+function fakeBroker(opts: { refuseRegisters?: number } = {}) {
+  let refusals = 0;
   const wss = new WebSocketServer({ port: 0 });
   const frames: Array<Record<string, unknown>> = [];
   const headers: Array<Record<string, string | string[] | undefined>> = [];
@@ -23,7 +24,14 @@ function fakeBroker() {
       if (data === PING) return ws.send(PONG);
       const f = JSON.parse(data) as Record<string, unknown>;
       frames.push(f);
-      if (f["t"] === "register") send({ t: "ok", rid: f["rid"] as string, result: { address: `${f["name"]}@mbp-1`, queued: 0 } });
+      if (f["t"] === "register") {
+        // The first registration always succeeds; refusals model a reconnect racing the old socket.
+        const n = frames.filter((x) => x["t"] === "register").length;
+        if (n > 1 && refusals < (opts.refuseRegisters ?? 0)) {
+          refusals++;
+          send({ t: "error", rid: f["rid"] as string, code: "name_in_use", message: "in use" });
+        } else send({ t: "ok", rid: f["rid"] as string, result: { address: `${f["name"]}@mbp-1`, queued: 0 } });
+      }
       if (f["t"] === "peers") send({ t: "ok", rid: f["rid"] as string, result: { peers: [] } });
       if (f["t"] === "send") send({ t: "error", rid: f["rid"] as string, code: "unknown_peer", message: "No such peer: X" });
     });
@@ -120,6 +128,30 @@ describe("BrokerConnection", () => {
     await new Promise((r) => setTimeout(r, 1500));
     expect(b.frames.some((f) => f["t"] === "register")).toBe(false);
   });
+});
+
+describe("BrokerConnection restoring registrations", () => {
+  it("sends the same instance id on every registration, across reconnects", async () => {
+    const b = fakeBroker();
+    cleanup.push(b.close);
+    const c = connect(b.url);
+    await c.register({ name: "Bill" });
+    b.dropAll();
+    await until(() => b.frames.filter((f) => f["t"] === "register").length === 2, 5000);
+    const [first, second] = b.frames.filter((f) => f["t"] === "register");
+    expect(first!["instance"]).toEqual(expect.any(String));
+    expect(second!["instance"]).toBe(first!["instance"]);
+  });
+
+  it("keeps retrying a registration the broker refused after a reconnect", async () => {
+    const b = fakeBroker({ refuseRegisters: 2 });
+    cleanup.push(b.close);
+    const c = connect(b.url);
+    await c.register({ name: "Bill" });
+    b.dropAll();
+    // Refused twice after the reconnect, then accepted on a background retry.
+    await until(() => b.frames.filter((f) => f["t"] === "register").length === 4, 15_000);
+  }, 20_000);
 });
 
 describe("BrokerConnection hosting several peers", () => {

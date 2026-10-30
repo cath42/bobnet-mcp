@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { type ClientFrame, type ErrorCode, PING, PONG, type ServerFrame } from "@bobnet/protocol";
 import type { Credentials, Identity } from "./config.ts";
 import type { Logger } from "./log.ts";
@@ -7,6 +8,7 @@ const PONG_WITHIN_MS = 10_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 const BACKOFF_MIN_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
+const REREGISTER_EVERY_MS = 5_000;
 
 export type RequestFrame = ClientFrame extends infer F ? (F extends { rid: string } ? Omit<F, "rid"> : never) : never;
 export type PushFrame = Extract<ServerFrame, { t: "deliver" | "presence" }>;
@@ -52,6 +54,11 @@ export class BrokerConnection {
   private readonly pending = new Map<string, Pending>();
   private readonly waitingForReady: Array<() => void> = [];
   private readonly registrations = new Map<string, Identity>();
+  /** Sent with every registration, so the broker knows a reconnect from this process. */
+  private readonly instance = randomUUID();
+  /** Registrations a reconnect couldn't restore yet; retried until they are. */
+  private readonly unrestored = new Set<string>();
+  private retryTimer: NodeJS.Timeout | null = null;
   private backoff = BACKOFF_MIN_MS;
   private pingTimer: NodeJS.Timeout | null = null;
   private pongTimer: NodeJS.Timeout | null = null;
@@ -68,6 +75,7 @@ export class BrokerConnection {
 
   stop(): void {
     this.stopped = true;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
     this.clearTimers();
     this.ws?.close(1000, "client stopping");
     this.failPending("disconnected", "Client stopped");
@@ -79,14 +87,16 @@ export class BrokerConnection {
 
   /** Remembers the identity so reconnects restore it, then registers. */
   async register(identity: Identity): Promise<{ address: string; queued: number }> {
-    const result = await this.request<{ address: string; queued: number }>({ t: "register", ...identity });
+    const result = await this.request<{ address: string; queued: number }>({ t: "register", ...identity, instance: this.instance });
     this.registrations.set(identity.name.toLowerCase(), identity);
+    this.unrestored.delete(identity.name.toLowerCase());
     return result;
   }
 
   /** Forgets the identity first, so a drop mid-request can't re-register it. */
   async deregister(name: string): Promise<{ address: string }> {
     this.registrations.delete(name.toLowerCase());
+    this.unrestored.delete(name.toLowerCase());
     return this.request<{ address: string }>({ t: "deregister", as: name });
   }
 
@@ -187,13 +197,16 @@ export class BrokerConnection {
   private async onWelcome(): Promise<void> {
     this.backoff = BACKOFF_MIN_MS;
     this.startPings();
-    for (const identity of this.registrations.values()) {
+    for (const [key, identity] of this.registrations) {
       try {
-        await this.sendRequest({ t: "register", ...identity });
+        await this.sendRequest({ t: "register", ...identity, instance: this.instance });
+        this.unrestored.delete(key);
       } catch (err) {
-        this.opts.log.error("re-register failed", { name: identity.name, err: (err as Error).message });
+        this.unrestored.add(key);
+        this.opts.log.error("re-register failed; retrying", { name: identity.name, err: (err as Error).message });
       }
     }
+    if (this.unrestored.size > 0) this.scheduleRetry();
     this.ready = true;
     for (const w of this.waitingForReady.splice(0)) w();
     this.opts.log.info("connected", { laptop: this.laptop });
@@ -211,6 +224,31 @@ export class BrokerConnection {
     this.backoff = Math.min(this.backoff * 2, BACKOFF_MAX_MS);
     this.opts.log.warn("disconnected; reconnecting", { code, reason, in_ms: Math.round(delay) });
     setTimeout(() => this.connect(), delay).unref();
+  }
+
+  /** Keeps retrying registrations a reconnect couldn't restore: an agent must never silently drop off. */
+  private scheduleRetry(): void {
+    if (this.retryTimer || this.stopped) return;
+    this.retryTimer = setTimeout(async () => {
+      this.retryTimer = null;
+      if (!this.ready) return; // the next welcome retries them
+      for (const key of [...this.unrestored]) {
+        const identity = this.registrations.get(key);
+        if (!identity) {
+          this.unrestored.delete(key);
+          continue;
+        }
+        try {
+          await this.sendRequest({ t: "register", ...identity, instance: this.instance });
+          this.unrestored.delete(key);
+          this.opts.log.info("re-registered", { name: identity.name });
+        } catch {
+          // Still held; try again.
+        }
+      }
+      if (this.unrestored.size > 0) this.scheduleRetry();
+    }, REREGISTER_EVERY_MS);
+    this.retryTimer.unref();
   }
 
   private startPings(): void {

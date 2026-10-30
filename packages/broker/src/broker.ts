@@ -47,6 +47,7 @@ interface PeerRow {
   status: string | null;
   conn_id: string | null;
   last_seen: string;
+  instance: string | null;
   [k: string]: SqlStorageValue;
 }
 
@@ -178,9 +179,13 @@ export class Broker extends DurableObject<Env> {
     const existing = this.peer(key);
     if (existing?.conn_id && existing.conn_id !== conn.connId && this.isLive(existing.conn_id)) {
       const holder = this.socket(existing.conn_id)!;
-      if (!this.isSilent(holder)) throw new FrameError("name_in_use", `${frame.name} is already online on ${laptop}`);
-      // The holder stopped answering pings (a sleeping laptop, a dropped
-      // network): close it so the name, and anything else it hosted, frees up.
+      const sameProcess = frame.instance !== undefined && existing.instance === frame.instance;
+      if (!sameProcess && !this.isSilent(holder)) {
+        throw new FrameError("name_in_use", `${frame.name} is already online on ${laptop}`);
+      }
+      // Either the same process reconnecting before the broker noticed its old
+      // socket die, or a holder that stopped answering pings (a sleeping
+      // laptop, a dropped network): close it so its names free up.
       this.audit(conn, "takeover", { peer: key, from: existing.conn_id });
       try {
         holder.close(4001, "silent; replaced by a new connection");
@@ -192,10 +197,11 @@ export class Broker extends DurableObject<Env> {
 
     const peer = this.sql
       .exec<PeerRow>(
-        `INSERT INTO peers (key, name, laptop, team, purpose, expertise, status, conn_id, last_seen)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+        `INSERT INTO peers (key, name, laptop, team, purpose, expertise, status, conn_id, last_seen, instance)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
          ON CONFLICT (key) DO UPDATE SET name = excluded.name, team = excluded.team, purpose = excluded.purpose,
-           expertise = excluded.expertise, conn_id = excluded.conn_id, last_seen = excluded.last_seen
+           expertise = excluded.expertise, conn_id = excluded.conn_id, last_seen = excluded.last_seen,
+           instance = excluded.instance
          RETURNING *`,
         key,
         frame.name,
@@ -205,6 +211,7 @@ export class Broker extends DurableObject<Env> {
         JSON.stringify(frame.expertise ?? []),
         conn.connId,
         new Date().toISOString(),
+        frame.instance ?? null,
       )
       .one();
 

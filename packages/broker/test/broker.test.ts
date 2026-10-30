@@ -50,6 +50,16 @@ describe("registration", () => {
     expect(await closed).toBe(4001);
   });
 
+  it("hands a name straight back to the same client process reconnecting", async () => {
+    const before = await Client.open(await laptopToken(1));
+    await before.request({ t: "register", name: "Riker", instance: "proc-abc123" });
+    const after = await Client.open(await laptopToken(1));
+    // Another process can't take it while the first still answers pings...
+    expect(await errorCode(after.request({ t: "register", name: "Riker", instance: "proc-other1" }))).toBe("name_in_use");
+    // ...but the same process, on its new socket, gets it at once.
+    await expect(after.request({ t: "register", name: "Riker", instance: "proc-abc123" })).resolves.toMatchObject({ address: "Riker@mbp-1" });
+  });
+
   it("lets the same name exist on two laptops", async () => {
     await agent(1, "Homer");
     await expect(agent(2, "Homer")).resolves.toBeInstanceOf(Client);

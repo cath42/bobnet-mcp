@@ -170,6 +170,11 @@ export const RegisterFrame = z.object({
   team: segment.optional(),
   purpose: z.string().max(LIMITS.purposeChars).optional(),
   expertise: z.array(z.string().min(1).max(40)).max(LIMITS.expertiseTags).optional(),
+  /**
+   * Random per client process. A name held by a connection with the same
+   * instance is this process reconnecting, and is handed over at once.
+   */
+  instance: z.string().min(8).max(64).optional(),
 });
 
 export const DeregisterFrame = z.object({ t: z.literal("deregister"), rid, as: segment });

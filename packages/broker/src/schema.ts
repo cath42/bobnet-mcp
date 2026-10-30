@@ -61,6 +61,9 @@ const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX updates_at ON updates (at);
   `,
+  `
+  ALTER TABLE peers ADD COLUMN instance TEXT;
+  `,
 ];
 
 export function migrate(sql: SqlStorage): void {
