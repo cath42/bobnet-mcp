@@ -1,22 +1,22 @@
 import { mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
-import type { Envelope, PeerInfo } from "@bobnet/protocol";
+import type { Envelope, LaptopSnapshot, PeerInfo, TokenCounts, WorkerSnapshot } from "@bobnet/protocol";
 import type { Identity } from "@bobnet/client/config";
-import type { PushFrame } from "@bobnet/client/connection";
+import type { PushFrame, RequestFrame } from "@bobnet/client/connection";
 import type { Logger } from "@bobnet/client/log";
 import type { ProjectConfig, RoleConfig, SupervisorConfig } from "./config.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, Router } from "./router.ts";
 import { ACTIVE_STATES, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
-import { type Outcome, type QueryFn, WorkerRun } from "./worker.ts";
+import { type Outcome, type QueryFn, type Usage, WorkerRun, ZERO_USAGE } from "./worker.ts";
 import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
 
 /** What the supervisor needs from its broker connection. */
 export interface BrokerLink {
   register(identity: Identity): Promise<unknown>;
-  request<R>(frame: { t: "send"; as: string; to: string[]; body: string; in_reply_to?: string } | { t: "peers" }): Promise<R>;
+  request<R>(frame: RequestFrame): Promise<R>;
   sendRaw(frame: { t: "ack"; as: string; ids: string[] }): void;
 }
 
@@ -26,6 +26,10 @@ const STALL_CHECK_MS = 60_000;
 const REGISTER_RETRY_MS = 5_000;
 /** Longer than the broker's silence window, so a stale holder of our names has been replaced. */
 const REGISTER_GIVE_UP_MS = 120_000;
+/** At most one snapshot to the broker per this interval, plus one a minute regardless. */
+const REPORT_THROTTLE_MS = 3_000;
+const REPORT_HEARTBEAT_MS = 60_000;
+const USAGE_DAYS = 14;
 
 export class Supervisor {
   private readonly config: SupervisorConfig;
@@ -40,6 +44,11 @@ export class Supervisor {
   /** One-shot approvals for a resumed worker: the call its earlier request asked for. */
   private readonly preapproved = new Map<string, Array<{ tool: string; input: string }>>();
   private stallTimer: NodeJS.Timeout | null = null;
+  private reportTimer: NodeJS.Timeout | null = null;
+  private lastReport = 0;
+  private startedAt = new Date().toISOString();
+  /** Usage a resumed session started from, per running worker. */
+  private readonly baselines = new Map<string, Usage>();
 
   constructor(deps: {
     config: SupervisorConfig;
@@ -93,10 +102,13 @@ export class Supervisor {
           `Requests still answerable (answering resumes the worker): ${orphanedRequests.map((r) => r.id).join(", ") || "none"}.`,
       );
     }
+    this.startedAt = new Date().toISOString();
     this.stallTimer = setInterval(() => {
       this.checkStalls();
       this.flushOutbox();
     }, STALL_CHECK_MS);
+    const heartbeat = setInterval(() => this.report(true), REPORT_HEARTBEAT_MS);
+    heartbeat.unref();
     this.stallTimer.unref();
     this.schedule();
     this.writeStatus();
@@ -104,6 +116,7 @@ export class Supervisor {
 
   async shutdown(): Promise<void> {
     if (this.stallTimer) clearInterval(this.stallTimer);
+    if (this.reportTimer) clearTimeout(this.reportTimer);
     await Promise.all([...this.runs.values()].map((r) => r.stop("supervisor shutting down")));
   }
 
@@ -283,6 +296,8 @@ export class Supervisor {
     const role = this.roleOf(w);
     const handoff = w.handoff ?? join(this.config.stateDir, "handoffs", w.project, `${w.id}.md`);
     const waiting = this.store.waiting(w.project, w.role);
+    const baseline = this.resumeBaseline(w.resume_session);
+    this.baselines.set(w.id, baseline);
     const run = new WorkerRun({
       id: w.id,
       role: { ...role, writeRoots: [...role.writeRoots, join(this.config.stateDir, "handoffs")] },
@@ -307,11 +322,17 @@ export class Supervisor {
       onEvent: (msg) => {
         if (msg.type === "system" && msg.subtype === "init") this.store.updateWorker(w.id, { session_id: msg.session_id });
         this.stallReported.delete(w.id);
+        if (msg.type === "assistant" || msg.type === "result") this.report();
       },
       onExit: (outcome) => this.onExit(w.id, outcome),
     });
 
-    this.store.updateWorker(w.id, { state: "running", started_at: new Date().toISOString(), handoff });
+    this.store.updateWorker(w.id, {
+      state: "running",
+      started_at: new Date().toISOString(),
+      handoff,
+      usage: JSON.stringify({ cum: ZERO_USAGE, base: baseline }),
+    });
     if (waiting.length > 0) this.store.consumeInbox(waiting.map((m) => m.id), w.id);
     this.store.audit("supervisor", "start", w.id, { role: role.name, cwd: role.dir, resume: w.resume_session });
     this.runs.set(w.id, run);
@@ -349,9 +370,12 @@ export class Supervisor {
     const w = this.store.worker(id)!;
     const checkpoint = this.checkpoints.get(id) ?? w.checkpoint;
     this.checkpoints.delete(id);
+    const base = this.baselines.get(id) ?? ZERO_USAGE;
+    this.baselines.delete(id);
     this.store.updateWorker(id, {
       state: outcome.state,
       ended_at: new Date().toISOString(),
+      ...(run ? { usage: JSON.stringify({ cum: run.usage, base }) } : {}),
       error: outcome.state === "failed" ? outcome.error : outcome.state === "stopped" ? outcome.reason : null,
       ...(run?.sessionId ? { session_id: run.sessionId } : {}),
       last_event_at: run ? new Date(run.lastEventAt).toISOString() : w.last_event_at,
@@ -445,7 +469,107 @@ export class Supervisor {
     this.writeStatus();
   }
 
+  // ---------- Reporting ----------
+
+  /** A resumed session's SDK totals include its earlier run; count only what's new. */
+  private resumeBaseline(sessionId: string | null): Usage {
+    if (!sessionId) return ZERO_USAGE;
+    const prior = this.store
+      .workers()
+      .filter((p) => p.session_id === sessionId && p.usage)
+      .at(-1);
+    return prior ? (JSON.parse(prior.usage!) as { cum: Usage }).cum : ZERO_USAGE;
+  }
+
+  /** This worker's own usage: live while it runs, stored once it has ended. */
+  private ownUsage(w: WorkerRow): Usage {
+    const run = this.runs.get(w.id);
+    const stored = w.usage ? (JSON.parse(w.usage) as { cum: Usage; base: Usage }) : { cum: ZERO_USAGE, base: ZERO_USAGE };
+    const cum = run ? run.usage : stored.cum;
+    const base = run ? (this.baselines.get(w.id) ?? ZERO_USAGE) : stored.base;
+    const sub = (k: keyof TokenCounts) => Math.max(0, cum.tokens[k] - base.tokens[k]);
+    return {
+      tokens: { input: sub("input"), output: sub("output"), cache_read: sub("cache_read"), cache_write: sub("cache_write") },
+      cost_usd: Math.max(0, cum.cost_usd - base.cost_usd),
+    };
+  }
+
+  snapshot(): LaptopSnapshot {
+    const now = Date.now();
+    const dayAgo = new Date(now - 24 * 3600_000).toISOString();
+    const usageSince = new Date(now - USAGE_DAYS * 86400_000).toISOString();
+    const all = this.store.workers();
+    const shown = all.filter((w) => !w.ended_at || w.ended_at > dayAgo).slice(-100);
+
+    const workers: WorkerSnapshot[] = shown.map((w) => {
+      const run = this.runs.get(w.id);
+      const u = this.ownUsage(w);
+      return {
+        id: w.id,
+        name: this.roleOf(w).name,
+        project: w.project,
+        role: w.role,
+        state: w.state,
+        task: w.task.length > 200 ? `${w.task.slice(0, 199)}…` : w.task,
+        checkpoint: this.checkpoints.get(w.id) ?? w.checkpoint,
+        started_at: w.started_at,
+        ended_at: w.ended_at,
+        last_event_at: run ? new Date(run.lastEventAt).toISOString() : w.last_event_at,
+        tokens: u.tokens,
+        cost_usd: u.cost_usd,
+      };
+    });
+
+    const days = new Map<string, LaptopSnapshot["usage"][number]>();
+    for (const w of all) {
+      if (!w.started_at || w.started_at < usageSince) continue;
+      const day = w.started_at.slice(0, 10);
+      const key = `${day}|${w.project}|${w.role}`;
+      const row = days.get(key) ?? { day, project: w.project, role: w.role, workers: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, cost_usd: 0 };
+      const u = this.ownUsage(w);
+      row.workers++;
+      row.tokens.input += u.tokens.input;
+      row.tokens.output += u.tokens.output;
+      row.tokens.cache_read += u.tokens.cache_read;
+      row.tokens.cache_write += u.tokens.cache_write;
+      row.cost_usd += u.cost_usd;
+      days.set(key, row);
+    }
+
+    return {
+      supervisor: {
+        started_at: this.startedAt,
+        concurrency: this.config.concurrency,
+        active: this.runs.size,
+        queued: this.store.queued().length,
+      },
+      workers,
+      pending: this.store.requests(["open", "orphaned"]).slice(0, 100).map((r) => {
+        const w = this.store.worker(r.worker_id);
+        return { id: r.id, worker_id: r.worker_id, name: w ? this.roleOf(w).name : "?", kind: r.kind, tool: r.tool.slice(0, 80), tier: r.tier, created_at: r.created_at };
+      }),
+      usage: [...days.values()].sort((a, b) => a.day.localeCompare(b.day)).slice(-500),
+    };
+  }
+
+  /** Sends the dashboard a snapshot, at most once per throttle interval. */
+  private report(force = false): void {
+    const wait = this.lastReport + REPORT_THROTTLE_MS - Date.now();
+    if (!force && wait > 0) {
+      this.reportTimer ??= setTimeout(() => {
+        this.reportTimer = null;
+        this.report(true);
+      }, wait);
+      return;
+    }
+    this.lastReport = Date.now();
+    this.broker
+      .request({ t: "report", as: this.config.name, snapshot: this.snapshot() })
+      .catch((err: Error) => this.log.warn("could not report to the broker", { err: err.message }));
+  }
+
   private writeStatus(): void {
+    this.report();
     const status = {
       updated_at: new Date().toISOString(),
       workers: this.store.workers({ states: ["queued", ...ACTIVE_STATES] }).map((w) => ({

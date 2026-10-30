@@ -7,6 +7,9 @@
   // the Worker also verifies the Access JWT, so it fails closed without it.
   "workers_dev": true,
   "preview_urls": false,
+  // The dashboard. Every request runs the Worker first, so the Access JWT is
+  // checked before any file is served.
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   "durable_objects": {
     "bindings": [{ "name": "BROKER", "class_name": "Broker" }]
   },

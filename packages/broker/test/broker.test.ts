@@ -212,6 +212,68 @@ describe("frames", () => {
   });
 });
 
+describe("dashboard", () => {
+  const snapshot = {
+    supervisor: { started_at: "2026-10-30T00:00:00.000Z", concurrency: 3, active: 1, queued: 0 },
+    workers: [
+      {
+        id: "w_1", name: "Bill", project: "helix", role: "bill", state: "running" as const, task: "ADR 0094", checkpoint: null,
+        started_at: "2026-10-30T00:00:00.000Z", ended_at: null, last_event_at: "2026-10-30T00:01:00.000Z",
+        tokens: { input: 10, output: 2, cache_read: 0, cache_write: 0 }, cost_usd: 0.01,
+      },
+    ],
+    pending: [],
+    usage: [],
+  };
+
+  it("keeps each laptop's latest snapshot and streams it to the owner", async () => {
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const supervisor = await agent(1, "supervisor");
+    await supervisor.request({ t: "report", as: "supervisor", snapshot });
+    const live = await owner.next((f) => f.t === "report");
+    expect(live).toMatchObject({ laptop: "mbp-1", snapshot: { workers: [{ id: "w_1" }] } });
+    const d = await owner.request({ t: "dashboard" });
+    expect(d.laptops).toEqual([{ laptop: "mbp-1", at: expect.any(String), snapshot }]);
+  });
+
+  it("rejects a malformed snapshot", async () => {
+    const supervisor = await agent(1, "supervisor");
+    expect(await errorCode(supervisor.request({ t: "report", as: "supervisor", snapshot: { ...snapshot, supervisor: null } as never }))).toBe("bad_frame");
+  });
+
+  it("feeds session updates, checked for credentials, to the owner", async () => {
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const orch = await agent(1, "Orchestrator", "sandbox");
+    await orch.request({ t: "update", as: "Orchestrator", text: "Story 3: build done, review next" });
+    expect((await owner.next((f) => f.t === "update"))).toMatchObject({ item: { from: "Orchestrator@mbp-1", text: "Story 3: build done, review next" } });
+    expect(await errorCode(orch.request({ t: "update", as: "Orchestrator", text: "key AKIAIOSFODNN7EXAMPLE" }))).toBe("secret_detected");
+    const d = await owner.request({ t: "dashboard" });
+    expect(d.updates.map((u: { text: string }) => u.text)).toEqual(["Story 3: build done, review next"]);
+  });
+
+  it("shows message traffic and counts without bodies", async () => {
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const bob = await agent(1, "Bob", "land");
+    const bill = await agent(1, "Bill", "land");
+    bill.close();
+    await bob.next(presence("left", "Bill"));
+    await bob.request({ t: "send", as: "Bob", to: ["Bill"], body: "the confidential plan" });
+    const t = await owner.next((f) => f.t === "traffic");
+    expect(JSON.stringify(t)).not.toContain("confidential");
+    const d = await owner.request({ t: "dashboard" });
+    expect(JSON.stringify(d)).not.toContain("confidential");
+    expect(d.traffic[0]).toMatchObject({ from: "Bob@mbp-1", to: ["Bill@mbp-1"], type: "message" });
+    const byAddr = new Map(d.peers.map((p: { address: string }) => [p.address, p]));
+    expect(byAddr.get("Bob@mbp-1")).toMatchObject({ online: true, connected_at: expect.any(String), stats: { sent_24h: 1, received_24h: 0, inbox: 0 } });
+    expect(byAddr.get("Bill@mbp-1")).toMatchObject({ online: false, connected_at: null, stats: { received_24h: 1, inbox: 1 } });
+  });
+
+  it("is for the owner only", async () => {
+    const bob = await agent(1, "Bob");
+    expect(await errorCode(bob.request({ t: "dashboard" }))).toBe("forbidden");
+  });
+});
+
 describe("keepalive", () => {
   it("answers ping with pong", async () => {
     const c = await agent(1, "Bob");

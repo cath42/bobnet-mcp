@@ -37,6 +37,7 @@ const BroadcastArgs = z.object({
   urgent: z.boolean().optional(),
 });
 const StatusArgs = z.object({ status: z.string().nullable() });
+const UpdateArgs = z.object({ text: z.string().min(1).max(500) });
 
 const TOOLS = [
   {
@@ -95,6 +96,17 @@ const TOOLS = [
         urgent: { type: "boolean" },
       },
       required: ["body"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "post_update",
+    description:
+      "Post a one-line session update to Casper's BobNet dashboard feed, e.g. \"F12-b story 3: build done, review next\". For milestones only: wakes nobody, and is not a message to anyone.",
+    inputSchema: {
+      type: "object",
+      properties: { text: { type: "string", maxLength: 500 } },
+      required: ["text"],
       additionalProperties: false,
     },
   },
@@ -211,6 +223,10 @@ export function createServer(opts: {
         body: a.body,
         ...(a.urgent !== undefined ? { urgent: a.urgent } : {}),
       });
+    },
+    async post_update(args) {
+      const a = UpdateArgs.parse(args);
+      return connection.request({ t: "update", as: requireSelf().name, text: a.text });
     },
     async update_status(args) {
       const a = StatusArgs.parse(args);

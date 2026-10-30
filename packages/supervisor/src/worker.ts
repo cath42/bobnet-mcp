@@ -1,6 +1,7 @@
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { dirname } from "node:path";
 import type { CanUseTool, McpServerConfig, Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { TokenCounts } from "@bobnet/protocol";
 import type { RoleConfig } from "./config.ts";
 
 // One headless Claude Code session per worker, on the Agent SDK. Input is a
@@ -13,6 +14,14 @@ export interface QueryHandle extends AsyncIterable<SDKMessage> {
   close(): void;
 }
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => QueryHandle;
+
+/** Cumulative usage as the SDK reports it for this session (a resumed one includes its past). */
+export interface Usage {
+  tokens: TokenCounts;
+  cost_usd: number;
+}
+
+export const ZERO_USAGE: Usage = { tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, cost_usd: 0 };
 
 export type Outcome =
   | { state: "done"; result: string }
@@ -74,6 +83,11 @@ export class WorkerRun {
   lastEventAt = Date.now();
   /** Tool calls started and not yet answered: a long build is not a stall. */
   toolsInFlight = 0;
+  /**
+   * Live token counts summed from each model response, until a result
+   * reports the session's exact cumulative totals and cost.
+   */
+  usage: Usage = structuredClone(ZERO_USAGE);
 
   private readonly opts: WorkerRunOptions;
   private readonly input = new InputQueue();
@@ -182,6 +196,28 @@ export class WorkerRun {
 
   private track(msg: SDKMessage): void {
     if (msg.type === "system" && msg.subtype === "init") this.sessionId = msg.session_id;
+    if (msg.type === "assistant") {
+      // Between results, count each response on top of the last reported total.
+      const u = msg.message.usage;
+      this.usage.tokens.input += u.input_tokens;
+      this.usage.tokens.output += u.output_tokens;
+      this.usage.tokens.cache_read += u.cache_read_input_tokens ?? 0;
+      this.usage.tokens.cache_write += u.cache_creation_input_tokens ?? 0;
+    }
+    if (msg.type === "result") {
+      // modelUsage covers every model call (subagents too) and is cumulative for the session.
+      const models = Object.values(msg.modelUsage);
+      const sum = (pick: (m: (typeof models)[number]) => number) => models.reduce((n, m) => n + pick(m), 0);
+      this.usage = {
+        tokens: {
+          input: sum((m) => m.inputTokens),
+          output: sum((m) => m.outputTokens),
+          cache_read: sum((m) => m.cacheReadInputTokens),
+          cache_write: sum((m) => m.cacheCreationInputTokens),
+        },
+        cost_usd: msg.total_cost_usd,
+      };
+    }
     const content = (msg.type === "assistant" || msg.type === "user") && Array.isArray(msg.message.content)
       ? (msg.message.content as Array<{ type: string }>)
       : [];

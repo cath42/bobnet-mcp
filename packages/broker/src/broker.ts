@@ -1,6 +1,11 @@
 import {
   addressKey,
   ClientFrame,
+  type Dashboard,
+  type LaptopSnapshot,
+  type PeerStats,
+  type TrafficItem,
+  type UpdateItem,
   type Envelope,
   type ErrorCode,
   findSecret,
@@ -23,6 +28,8 @@ const SWEEP_INTERVAL_MS = 3600_000;
 const SILENT_AFTER_MS = 90_000;
 const PEER_RETENTION_MS = 30 * 24 * 3600_000;
 const AUDIT_RETENTION_MS = 90 * 24 * 3600_000;
+const UPDATE_RETENTION_MS = 30 * 24 * 3600_000;
+const DASHBOARD_ITEMS = 50;
 
 interface Conn {
   connId: string;
@@ -150,6 +157,13 @@ export class Broker extends DurableObject<Env> {
         return this.ok(ws, frame.rid, { peers: this.listPeers() } satisfies Results["peers"]);
       case "ack":
         return this.ack(conn, frame.as, frame.ids);
+      case "report":
+        return this.ok(ws, frame.rid, this.report(conn, frame.as, frame.snapshot));
+      case "update":
+        return this.ok(ws, frame.rid, this.postUpdate(conn, frame.as, frame.text));
+      case "dashboard":
+        if (conn.identity.kind !== "owner") throw new FrameError("forbidden", "Only the owner reads the dashboard");
+        return this.ok(ws, frame.rid, this.dashboard());
     }
   }
 
@@ -237,6 +251,7 @@ export class Broker extends DurableObject<Env> {
       ttlSeconds: frame.ttl_seconds ?? LIMITS.defaultMessageTtlSeconds,
     });
     const delivered = this.fanOut(msg, recipients);
+    this.toOwners({ t: "traffic", item: traffic(msg) });
     this.audit(conn, "send", { id: msg.id, from: sender.key, to: recipients.map((p) => p.key) });
     return {
       id: msg.id,
@@ -264,6 +279,7 @@ export class Broker extends DurableObject<Env> {
       ttlSeconds: frame.ttl_seconds ?? LIMITS.defaultBroadcastTtlSeconds,
     });
     this.fanOut(msg, recipients);
+    this.toOwners({ t: "traffic", item: traffic(msg) });
     this.audit(conn, "broadcast", { id: msg.id, from: sender.key, scope: frame.scope, recipients: recipients.length });
     return { id: msg.id, recipients: recipients.length };
   }
@@ -280,6 +296,94 @@ export class Broker extends DurableObject<Env> {
   private ack(conn: Conn, as: string, ids: string[]): void {
     const peer = this.hosted(conn, as);
     for (const id of ids) this.sql.exec("DELETE FROM deliveries WHERE message_id = ? AND to_key = ?", id, peer.key);
+  }
+
+  // ---------- Dashboard ----------
+
+  private report(conn: Conn, as: string, snapshot: LaptopSnapshot): Results["report"] {
+    const peer = this.hosted(conn, as);
+    const at = new Date().toISOString();
+    this.sql.exec(
+      `INSERT INTO laptop_reports (laptop, snapshot, at) VALUES (?, ?, ?)
+       ON CONFLICT (laptop) DO UPDATE SET snapshot = excluded.snapshot, at = excluded.at`,
+      peer.laptop,
+      JSON.stringify(snapshot),
+      at,
+    );
+    this.toOwners({ t: "report", laptop: peer.laptop, at, snapshot });
+    return { laptop: peer.laptop };
+  }
+
+  private postUpdate(conn: Conn, as: string, text: string): Results["update"] {
+    const peer = this.hosted(conn, as);
+    this.rejectSecrets(text);
+    const item = this.sql
+      .exec<{ seq: number; from_addr: string; laptop: string; text: string; at: string }>(
+        "INSERT INTO updates (laptop, from_addr, text, at) VALUES (?, ?, ?, ?) RETURNING *",
+        peer.laptop,
+        formatAddress(peer),
+        text,
+        new Date().toISOString(),
+      )
+      .one();
+    this.toOwners({ t: "update", item: { seq: item.seq, from: item.from_addr, laptop: item.laptop, text: item.text, at: item.at } });
+    return { seq: item.seq };
+  }
+
+  private dashboard(): Dashboard {
+    const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+    const stats = new Map<string, PeerStats>();
+    const statFor = (address: string) => {
+      let s = stats.get(address.toLowerCase());
+      if (!s) stats.set(address.toLowerCase(), (s = { sent_24h: 0, received_24h: 0, inbox: 0 }));
+      return s;
+    };
+    const recent = this.sql
+      .exec<{ envelope: string }>("SELECT envelope FROM messages WHERE created_at > ? ORDER BY created_at DESC", since)
+      .toArray()
+      .map((r) => JSON.parse(r.envelope) as Envelope);
+    for (const m of recent) {
+      statFor(m.from).sent_24h++;
+      for (const to of m.to) statFor(to).received_24h++;
+    }
+    for (const r of this.sql.exec<{ to_key: string; n: number }>("SELECT to_key, count(*) AS n FROM deliveries GROUP BY to_key")) {
+      statFor(r.to_key).inbox = r.n;
+    }
+
+    const connectedAt = new Map<string, number>();
+    for (const ws of this.ctx.getWebSockets()) {
+      const c = ws.deserializeAttachment() as Conn;
+      connectedAt.set(c.connId, c.connectedAt);
+    }
+    const peers = this.sql
+      .exec<PeerRow>("SELECT * FROM peers ORDER BY laptop, name")
+      .toArray()
+      .map((p) => {
+        const at = p.conn_id ? connectedAt.get(p.conn_id) : undefined;
+        return { ...this.info(p), connected_at: at ? new Date(at).toISOString() : null, stats: statFor(formatAddress(p)) };
+      });
+
+    return {
+      peers,
+      laptops: this.sql
+        .exec<{ laptop: string; snapshot: string; at: string }>("SELECT * FROM laptop_reports ORDER BY laptop")
+        .toArray()
+        .map((r) => ({ laptop: r.laptop, at: r.at, snapshot: JSON.parse(r.snapshot) as LaptopSnapshot })),
+      updates: this.sql
+        .exec<{ seq: number; from_addr: string; laptop: string; text: string; at: string }>(
+          "SELECT * FROM updates ORDER BY seq DESC LIMIT ?",
+          DASHBOARD_ITEMS,
+        )
+        .toArray()
+        .map((u): UpdateItem => ({ seq: u.seq, from: u.from_addr, laptop: u.laptop, text: u.text, at: u.at })),
+      traffic: recent.slice(0, DASHBOARD_ITEMS).map(traffic),
+    };
+  }
+
+  private toOwners(frame: ServerFrame): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      if ((ws.deserializeAttachment() as Conn).identity.kind === "owner") this.send(ws, frame);
+    }
   }
 
   // ---------- Messages ----------
@@ -453,8 +557,13 @@ export class Broker extends DurableObject<Env> {
     this.sql.exec("DELETE FROM deliveries WHERE to_key IN (SELECT key FROM peers WHERE conn_id IS NULL AND last_seen <= ?)", stale);
     this.sql.exec("DELETE FROM peers WHERE conn_id IS NULL AND last_seen <= ?", stale);
     this.sql.exec("DELETE FROM audit WHERE ts <= ?", new Date(now - AUDIT_RETENTION_MS).toISOString());
+    this.sql.exec("DELETE FROM updates WHERE at <= ?", new Date(now - UPDATE_RETENTION_MS).toISOString());
     await this.ctx.storage.setAlarm(now + SWEEP_INTERVAL_MS);
   }
+}
+
+function traffic(msg: Envelope): TrafficItem {
+  return { id: msg.id, type: msg.type, from: msg.from, to: msg.to, urgent: msg.urgent, at: msg.created_at };
 }
 
 /** A directed message always wakes its reader; a broadcast only when urgent. */

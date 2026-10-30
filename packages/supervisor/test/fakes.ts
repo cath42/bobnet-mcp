@@ -1,5 +1,6 @@
 import type { Options, PermissionResult, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Identity } from "@bobnet/client/config";
+import type { RequestFrame } from "@bobnet/client/connection";
 import type { Logger } from "@bobnet/client/log";
 import { parseSupervisorConfig, type SupervisorConfig } from "../src/config.ts";
 import type { BrokerLink } from "../src/supervisor.ts";
@@ -32,8 +33,8 @@ export class FakeSession implements QueryHandle {
     this.wake?.();
   }
 
-  say(text: string): void {
-    this.emit({ type: "assistant", message: { content: [{ type: "text", text }] } } as unknown as SDKMessage);
+  say(text: string, usage = { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }): void {
+    this.emit({ type: "assistant", message: { content: [{ type: "text", text }], usage } } as unknown as SDKMessage);
   }
 
   /** Asks permission the way the CLI would, through canUseTool. */
@@ -41,13 +42,16 @@ export class FakeSession implements QueryHandle {
     return this.options.canUseTool!(tool, input, { signal: new AbortController().signal } as never);
   }
 
+  /** Cumulative session totals, as the SDK reports them on every result. */
+  totals = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0 };
+
   finish(result = "all done"): void {
-    this.emit({ type: "result", subtype: "success", result } as unknown as SDKMessage);
+    this.emit({ type: "result", subtype: "success", result, modelUsage: { "claude-sonnet-5-5": this.totals }, total_cost_usd: this.totals.costUSD } as unknown as SDKMessage);
     this.end();
   }
 
   fail(subtype = "error_during_execution"): void {
-    this.emit({ type: "result", subtype } as unknown as SDKMessage);
+    this.emit({ type: "result", subtype, modelUsage: {}, total_cost_usd: 0 } as unknown as SDKMessage);
     this.end();
   }
 
@@ -99,8 +103,15 @@ export class FakeBroker implements BrokerLink {
     return { address: `${identity.name}@mbp-1`, queued: 0 };
   }
 
-  async request<R>(frame: { t: "send"; as: string; to: string[]; body: string } | { t: "peers" }): Promise<R> {
+  readonly reports: unknown[] = [];
+
+  async request<R>(frame: RequestFrame): Promise<R> {
     if (frame.t === "peers") return { peers: [] } as R;
+    if (frame.t === "report") {
+      this.reports.push(frame.snapshot);
+      return { laptop: "mbp-1" } as R;
+    }
+    if (frame.t !== "send") return {} as R;
     this.sent.push({ as: frame.as, to: frame.to, body: frame.body });
     return { id: `m_${this.sent.length}`, delivered_to: frame.to, queued_for: [] } as R;
   }

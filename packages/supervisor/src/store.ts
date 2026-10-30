@@ -28,6 +28,8 @@ export interface WorkerRow {
   started_at: string | null;
   ended_at: string | null;
   last_event_at: string | null;
+  /** JSON { cum, base }: the SDK's cumulative usage and, for a resumed session, where it started. */
+  usage: string | null;
 }
 
 export type RequestKind = "approval" | "question";
@@ -96,6 +98,9 @@ export class Store {
     this.db = new DatabaseSync(file);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 2000;");
     this.db.exec(SCHEMA);
+    // Columns added after the first release.
+    const cols = new Set((this.db.prepare("PRAGMA table_info(workers)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!cols.has("usage")) this.db.exec("ALTER TABLE workers ADD COLUMN usage TEXT");
   }
 
   close(): void {

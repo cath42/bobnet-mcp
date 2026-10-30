@@ -64,6 +64,103 @@ export const PeerInfo = z.object({
 });
 export type PeerInfo = z.infer<typeof PeerInfo>;
 
+// ---------- Laptop snapshot: what a supervisor reports ----------
+
+const tokens = z.object({
+  input: z.number().nonnegative(),
+  output: z.number().nonnegative(),
+  cache_read: z.number().nonnegative(),
+  cache_write: z.number().nonnegative(),
+});
+export type TokenCounts = z.infer<typeof tokens>;
+
+export const WorkerSnapshot = z.object({
+  id: z.string().max(40),
+  name: z.string().max(40),
+  project: z.string().max(40),
+  role: z.string().max(40),
+  state: z.enum(["queued", "running", "waiting-approval", "waiting-answer", "done", "failed", "stopped"]),
+  task: z.string().max(200),
+  checkpoint: z.string().max(300).nullable(),
+  started_at: z.string().nullable(),
+  ended_at: z.string().nullable(),
+  last_event_at: z.string().nullable(),
+  tokens,
+  cost_usd: z.number().nonnegative(),
+});
+export type WorkerSnapshot = z.infer<typeof WorkerSnapshot>;
+
+export const LaptopSnapshot = z.object({
+  supervisor: z.object({
+    started_at: z.string(),
+    concurrency: z.number().int().positive(),
+    active: z.number().int().nonnegative(),
+    queued: z.number().int().nonnegative(),
+  }),
+  /** Active workers plus those that ended in the last 24 hours. */
+  workers: z.array(WorkerSnapshot).max(100),
+  pending: z
+    .array(
+      z.object({
+        id: z.string().max(40),
+        worker_id: z.string().max(40),
+        name: z.string().max(40),
+        kind: z.enum(["approval", "question"]),
+        tool: z.string().max(80),
+        tier: z.enum(["orchestrator", "human"]),
+        created_at: z.string(),
+      }),
+    )
+    .max(100),
+  /** Daily totals per project role, last 14 days. */
+  usage: z
+    .array(
+      z.object({
+        day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        project: z.string().max(40),
+        role: z.string().max(40),
+        workers: z.number().int().nonnegative(),
+        tokens,
+        cost_usd: z.number().nonnegative(),
+      }),
+    )
+    .max(500),
+});
+export type LaptopSnapshot = z.infer<typeof LaptopSnapshot>;
+
+/** A short session update for the dashboard feed, e.g. from the orchestrator. */
+export const UpdateItem = z.object({
+  seq: z.number().int(),
+  from: z.string(),
+  laptop: z.string(),
+  text: z.string(),
+  at: z.string(),
+});
+export type UpdateItem = z.infer<typeof UpdateItem>;
+
+/** Message metadata for the dashboard: never the body. */
+export interface TrafficItem {
+  id: string;
+  type: MessageType;
+  from: string;
+  to: string[];
+  urgent: boolean;
+  at: string;
+}
+
+export interface PeerStats {
+  sent_24h: number;
+  received_24h: number;
+  inbox: number;
+}
+
+export interface Dashboard {
+  peers: Array<PeerInfo & { connected_at: string | null; stats: PeerStats }>;
+  laptops: Array<{ laptop: string; at: string; snapshot: LaptopSnapshot }>;
+  updates: UpdateItem[];
+  traffic: TrafficItem[];
+}
+
 // ---------- Client → broker ----------
 
 export const RegisterFrame = z.object({
@@ -107,6 +204,13 @@ export const StatusFrame = z.object({
 
 export const PeersFrame = z.object({ t: z.literal("peers"), rid });
 
+export const ReportFrame = z.object({ t: z.literal("report"), rid, as: segment, snapshot: LaptopSnapshot });
+
+export const UpdateFrame = z.object({ t: z.literal("update"), rid, as: segment, text: z.string().min(1).max(500) });
+
+/** Owner only: everything the dashboard shows, in one reply. */
+export const DashboardFrame = z.object({ t: z.literal("dashboard"), rid });
+
 export const AckFrame = z.object({
   t: z.literal("ack"),
   as: segment,
@@ -120,6 +224,9 @@ export const ClientFrame = z.discriminatedUnion("t", [
   BroadcastFrame,
   StatusFrame,
   PeersFrame,
+  ReportFrame,
+  UpdateFrame,
+  DashboardFrame,
   AckFrame,
 ]);
 export type ClientFrame = z.infer<typeof ClientFrame>;
@@ -148,7 +255,11 @@ export type ServerFrame =
   | { t: "ok"; rid: string; result: unknown }
   | { t: "error"; rid: string | null; code: ErrorCode; message: string }
   | { t: "deliver"; to: string; wake: boolean; msg: Envelope }
-  | { t: "presence"; event: "joined" | "left" | "status"; peer: PeerInfo };
+  | { t: "presence"; event: "joined" | "left" | "status"; peer: PeerInfo }
+  // To owner connections only:
+  | { t: "report"; laptop: string; at: string; snapshot: LaptopSnapshot }
+  | { t: "update"; item: UpdateItem }
+  | { t: "traffic"; item: TrafficItem };
 
 /** Results carried by `ok` frames, per request type. */
 export interface Results {
@@ -158,4 +269,7 @@ export interface Results {
   broadcast: { id: string; recipients: number };
   status: { address: string };
   peers: { peers: PeerInfo[] };
+  report: { laptop: string };
+  update: { seq: number };
+  dashboard: Dashboard;
 }

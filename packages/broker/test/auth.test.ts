@@ -2,10 +2,23 @@ import { describe, expect, it } from "vitest";
 import { accessToken, Client, laptopToken, ORIGIN, ownerToken, upgrade } from "./helpers.ts";
 
 describe("Worker auth", () => {
-  it("serves nothing but the socket", async () => {
+  it("answers nothing to an unauthenticated request", async () => {
     const { exports } = await import("cloudflare:workers");
-    expect((await exports.default.fetch(`${ORIGIN}/`)).status).toBe(404);
-    expect((await exports.default.fetch(`${ORIGIN}/v1/ws`)).status).toBe(426);
+    expect((await exports.default.fetch(`${ORIGIN}/`)).status).toBe(401);
+    expect((await exports.default.fetch(`${ORIGIN}/app.js`)).status).toBe(401);
+    expect((await exports.default.fetch(`${ORIGIN}/v1/ws`)).status).toBe(401);
+  });
+
+  it("serves the dashboard to the owner only, with a strict content policy", async () => {
+    const { exports } = await import("cloudflare:workers");
+    const page = await exports.default.fetch(`${ORIGIN}/`, { headers: { "cf-access-jwt-assertion": await ownerToken() } });
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("<title>BobNet</title>");
+    expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
+    const laptop = await exports.default.fetch(`${ORIGIN}/`, { headers: { "cf-access-jwt-assertion": await laptopToken(1) } });
+    expect(laptop.status).toBe(404);
+    const ws = await exports.default.fetch(`${ORIGIN}/v1/ws`, { headers: { "cf-access-jwt-assertion": await laptopToken(1) } });
+    expect(ws.status).toBe(426);
   });
 
   it("rejects a missing, forged or misaddressed token", async () => {

@@ -286,6 +286,58 @@ describe("restart", () => {
   });
 });
 
+describe("usage and snapshots", () => {
+  it("counts tokens live, takes the SDK's totals at the end, and rolls them up per role and day", async () => {
+    const { sup, broker, sessions } = await setup();
+    const w = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    sessions[0]!.say("thinking", { input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 5000, cache_creation_input_tokens: 0 });
+    await until(() => sup.snapshot().workers[0]!.tokens.input === 1000);
+    expect(sup.snapshot().workers[0]).toMatchObject({ id: w.id, name: "Bill", state: "running", tokens: { input: 1000, output: 200, cache_read: 5000 }, cost_usd: 0 });
+
+    sessions[0]!.totals = { inputTokens: 1500, outputTokens: 300, cacheReadInputTokens: 6000, cacheCreationInputTokens: 400, costUSD: 0.42 };
+    sessions[0]!.finish();
+    await until(() => sup.status(w.id).state === "done");
+    const snap = sup.snapshot();
+    expect(snap.workers[0]).toMatchObject({ state: "done", tokens: { input: 1500, output: 300, cache_read: 6000, cache_write: 400 }, cost_usd: 0.42 });
+    expect(snap.usage).toEqual([
+      { day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), project: "helix", role: "bill", workers: 1, tokens: { input: 1500, output: 300, cache_read: 6000, cache_write: 400 }, cost_usd: 0.42 },
+    ]);
+    expect(snap.supervisor).toMatchObject({ concurrency: 2, active: 0, queued: 0 });
+    await until(() => broker.reports.length > 0);
+  });
+
+  it("counts only the new part of a resumed session", async () => {
+    const { sup, sessions } = await setup();
+    const first = sup.spawn({ project: "helix", role: "bill", task: "build" });
+    await until(() => sessions.length === 1);
+    await until(() => store.worker(first.id)!.session_id !== null);
+    sessions[0]!.totals = { inputTokens: 1000, outputTokens: 100, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.1 };
+    sessions[0]!.finish();
+    await until(() => sup.status(first.id).state === "done");
+
+    const second = sup.spawn({ project: "helix", role: "bill", task: "fix", resume_session: store.worker(first.id)!.session_id! });
+    await until(() => sessions.length === 2);
+    // The SDK's totals for the resumed session include the first run.
+    sessions[1]!.totals = { inputTokens: 1600, outputTokens: 150, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.16 };
+    sessions[1]!.finish();
+    await until(() => sup.status(second.id).state === "done");
+    const byId = new Map(sup.snapshot().workers.map((w) => [w.id, w]));
+    expect(byId.get(second.id)).toMatchObject({ tokens: { input: 600, output: 50 } });
+    expect(byId.get(second.id)!.cost_usd).toBeCloseTo(0.06);
+    expect(sup.snapshot().usage[0]!.tokens.input).toBe(1600);
+  });
+
+  it("shows pending requests in the snapshot", async () => {
+    const { sup, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    void sessions[0]!.ask("Bash", { command: "git push" });
+    await until(() => sup.snapshot().pending.length === 1);
+    expect(sup.snapshot().pending[0]).toMatchObject({ name: "Bill", kind: "approval", tool: "Bash", tier: "human" });
+  });
+});
+
 describe("notifications", () => {
   it("keeps what the broker refuses and sends it when the orchestrator joins", async () => {
     const { sup, broker, sessions } = await setup();

@@ -43,6 +43,24 @@ const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX audit_ts ON audit (ts);
   `,
+  `
+  -- The latest snapshot each laptop's supervisor reported.
+  CREATE TABLE laptop_reports (
+    laptop   TEXT PRIMARY KEY,
+    snapshot TEXT NOT NULL,             -- JSON LaptopSnapshot
+    at       TEXT NOT NULL
+  );
+
+  -- Short session updates for the dashboard feed.
+  CREATE TABLE updates (
+    seq      INTEGER PRIMARY KEY AUTOINCREMENT,
+    laptop   TEXT NOT NULL,
+    from_addr TEXT NOT NULL,
+    text     TEXT NOT NULL,
+    at       TEXT NOT NULL
+  );
+  CREATE INDEX updates_at ON updates (at);
+  `,
 ];
 
 export function migrate(sql: SqlStorage): void {
