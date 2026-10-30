@@ -6,6 +6,14 @@ import { createServer } from "./server.ts";
 
 const log = createLogger();
 
+// Inside a supervised worker the supervisor provides BobNet in-process; this
+// server stays connected to Claude Code but offers nothing and joins nothing.
+if (process.env["BOBNET_SUPERVISED"] === "1") {
+  const { Server } = await import("@modelcontextprotocol/sdk/server/index.js");
+  await new Server({ name: "bobnet", version: "0.2.0" }, { capabilities: {} }).connect(new StdioServerTransport());
+  log.info("supervised worker: dormant");
+} else {
+
 let config;
 try {
   config = loadConfig();
@@ -38,3 +46,4 @@ process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
 
 await server.connect(new StdioServerTransport());
+}

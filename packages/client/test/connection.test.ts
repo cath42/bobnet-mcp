@@ -121,3 +121,17 @@ describe("BrokerConnection", () => {
     expect(b.frames.some((f) => f["t"] === "register")).toBe(false);
   });
 });
+
+describe("BrokerConnection hosting several peers", () => {
+  it("re-registers every hosted peer after a drop", async () => {
+    const b = fakeBroker();
+    cleanup.push(b.close);
+    const c = connect(b.url);
+    await c.register({ name: "Bill", team: "land" });
+    await c.register({ name: "Marvin", team: "land" });
+    b.frames.length = 0;
+    b.dropAll();
+    await until(() => b.frames.filter((f) => f["t"] === "register").length === 2, 5000);
+    expect(b.frames.map((f) => f["name"]).sort()).toEqual(["Bill", "Marvin"]);
+  });
+});

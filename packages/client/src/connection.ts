@@ -40,8 +40,9 @@ export interface ConnectionOptions {
 /**
  * One WebSocket to the broker, kept alive across drops. Requests made while
  * disconnected wait for the next connection (up to the request timeout), and
- * the peer this session registered is registered again on every reconnect,
- * so the broker flushes anything queued while it was away.
+ * every peer registered over it is registered again on each reconnect, so the
+ * broker flushes anything queued while it was away. A session hosts one peer;
+ * the supervisor hosts one per worker.
  */
 export class BrokerConnection {
   private ws: WebSocket | null = null;
@@ -50,7 +51,7 @@ export class BrokerConnection {
   private seq = 0;
   private readonly pending = new Map<string, Pending>();
   private readonly waitingForReady: Array<() => void> = [];
-  private registration: Identity | null = null;
+  private readonly registrations = new Map<string, Identity>();
   private backoff = BACKOFF_MIN_MS;
   private pingTimer: NodeJS.Timeout | null = null;
   private pongTimer: NodeJS.Timeout | null = null;
@@ -79,13 +80,13 @@ export class BrokerConnection {
   /** Remembers the identity so reconnects restore it, then registers. */
   async register(identity: Identity): Promise<{ address: string; queued: number }> {
     const result = await this.request<{ address: string; queued: number }>({ t: "register", ...identity });
-    this.registration = identity;
+    this.registrations.set(identity.name.toLowerCase(), identity);
     return result;
   }
 
   /** Forgets the identity first, so a drop mid-request can't re-register it. */
   async deregister(name: string): Promise<{ address: string }> {
-    this.registration = null;
+    this.registrations.delete(name.toLowerCase());
     return this.request<{ address: string }>({ t: "deregister", as: name });
   }
 
@@ -186,11 +187,11 @@ export class BrokerConnection {
   private async onWelcome(): Promise<void> {
     this.backoff = BACKOFF_MIN_MS;
     this.startPings();
-    if (this.registration) {
+    for (const identity of this.registrations.values()) {
       try {
-        await this.sendRequest({ t: "register", ...this.registration });
+        await this.sendRequest({ t: "register", ...identity });
       } catch (err) {
-        this.opts.log.error("re-register failed", { err: (err as Error).message });
+        this.opts.log.error("re-register failed", { name: identity.name, err: (err as Error).message });
       }
     }
     this.ready = true;

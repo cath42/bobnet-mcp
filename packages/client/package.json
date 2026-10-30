@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "description": "BobNet MCP server for interactive Claude Code sessions: joins the broker and pushes inbound messages as channel events.",
+  "exports": {
+    "./connection": "./src/connection.ts",
+    "./config": "./src/config.ts",
+    "./log": "./src/log.ts"
+  },
   "bin": {
     "bobnet": "./src/bin.ts"
   },
