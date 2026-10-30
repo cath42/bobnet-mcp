@@ -1,3 +1,5 @@
+import { execFile, spawn as spawnProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
@@ -10,8 +12,9 @@ import type { ProjectConfig, RoleConfig, SupervisorConfig } from "./config.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, Router } from "./router.ts";
+import { type Hold, RunSlots } from "./slots.ts";
 import { ACTIVE_STATES, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
-import { type Outcome, type QueryFn, type Usage, WorkerRun, ZERO_USAGE } from "./worker.ts";
+import { type Outcome, type QueryFn, type Usage, WorkerRun, workerEnv, ZERO_USAGE } from "./worker.ts";
 import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
 
 /** What the supervisor needs from its broker connection. */
@@ -35,6 +38,22 @@ const REGISTER_GIVE_UP_MS = 120_000;
 const REPORT_THROTTLE_MS = 3_000;
 const REPORT_HEARTBEAT_MS = 60_000;
 const USAGE_DAYS = 14;
+/** What a land run returns to the worker: the end of its output, where the hook says why. */
+const LAND_OUTPUT_MAX = 20_000;
+const FILE_WRITE_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
+
+interface Consult {
+  id: string;
+  from: string;
+  fromName: string;
+  project: string;
+  role: string;
+  /** The worker answering: a running one it was handed to, or a consult worker started for it. */
+  target: string | null;
+  resolve: (answer: string) => void;
+  reject: (err: Error) => void;
+  timer: NodeJS.Timeout;
+}
 
 export class Supervisor {
   private readonly config: SupervisorConfig;
@@ -55,6 +74,12 @@ export class Supervisor {
   /** Usage a resumed session started from, per running worker. */
   private readonly baselines = new Map<string, Usage>();
   private readonly ownerCheck: OwnerCheck | null;
+  private readonly slots: RunSlots;
+  /** Run slots held by tool calls, by tool use id, freed when the call returns. */
+  private readonly slotCalls = new Map<string, { workerId: string; release: () => void }>();
+  private readonly consults = new Map<string, Consult>();
+  /** Land calls waiting for a slot, cancelled if their worker ends. */
+  private readonly landWaits = new Map<string, AbortController>();
 
   constructor(deps: {
     config: SupervisorConfig;
@@ -72,12 +97,22 @@ export class Supervisor {
     this.broker = deps.broker;
     this.queryFn = deps.queryFn;
     this.log = deps.log;
+    this.slots = new RunSlots({
+      size: deps.config.runSlots,
+      holdFile: join(deps.config.stateDir, "hold.json"),
+      onChange: () => this.writeStatus(),
+    });
     this.router = new Router({
       store: deps.store,
       policy: deps.policy,
       timeoutMs: deps.config.requestTimeoutMinutes * 60_000,
       announce: (req, name) => this.announce(req, name),
       setWorkerState: (id, state) => this.setState(id, state),
+      takeSlot: async (workerId, toolUseId, label, signal) => {
+        const release = await this.slots.acquire(workerId, label, signal);
+        this.slotCalls.set(toolUseId, { workerId, release });
+        this.store.audit("supervisor", "slot", workerId, { label });
+      },
     });
   }
 
@@ -105,12 +140,17 @@ export class Supervisor {
     }
     this.flushOutbox();
 
-    if (orphaned.length > 0 || orphanedRequests.length > 0) {
+    for (const p of this.config.projects.values()) {
+      const lost = orphaned.filter((w) => w.project === p.key);
+      const open = orphanedRequests.filter((r) => this.store.worker(r.worker_id)?.project === p.key);
+      if (lost.length === 0 && open.length === 0) continue;
       this.notify(
-        `Supervisor restarted. Workers that were running and are now failed: ${orphaned.map((w) => `${this.roleOf(w).name} (${w.id})`).join(", ") || "none"}. ` +
-          `Requests still answerable (answering resumes the worker): ${orphanedRequests.map((r) => r.id).join(", ") || "none"}.`,
+        `Supervisor restarted. ${p.key} workers that were running and are now failed: ${lost.map((w) => `${this.roleOf(w).name} (${w.id})`).join(", ") || "none"}. ` +
+          `Requests still answerable (answering resumes the worker): ${open.map((r) => r.id).join(", ") || "none"}.`,
+        p.key,
       );
     }
+    if (this.slots.held) this.notify(`The laptop is still on hold (${this.slots.held.reason}, since ${this.slots.held.since}): no new workers or run slots until release_hold.`);
     this.startedAt = new Date().toISOString();
     this.stallTimer = setInterval(() => {
       this.checkStalls();
@@ -240,12 +280,38 @@ export class Supervisor {
     return { request, resumed };
   }
 
-  projects(): Array<{ key: string; path: string; priority: number; team: string | undefined; roles: Array<{ key: string; name: string; dir: string; model: string | undefined }> }> {
+  /** Keeps the laptop quiet: no new workers and no run slots until released. */
+  hold(reason: string, by = "orchestrator"): Hold {
+    const h = this.slots.hold(reason, by);
+    this.store.audit(by, "hold", null, { reason });
+    return h;
+  }
+
+  releaseHold(by = "orchestrator"): Hold | null {
+    const was = this.slots.release();
+    this.store.audit(by, "release_hold", null, {});
+    this.schedule();
+    return was;
+  }
+
+  slotStatus() {
+    const named = (h: { workerId: string; label: string; since: string }) => {
+      const w = this.store.worker(h.workerId);
+      return { ...h, name: w ? this.roleOf(w).name : "?" };
+    };
+    const st = this.slots.status();
+    return { ...st, holders: st.holders.map(named), queue: st.queue.map(named) };
+  }
+
+  projects(): Array<{ key: string; path: string; priority: number; team: string | undefined; orchestrator: string; consult: string[]; land: boolean; roles: Array<{ key: string; name: string; dir: string; model: string | undefined }> }> {
     return [...this.config.projects.values()].map((p) => ({
       key: p.key,
       path: p.path,
       priority: p.priority,
       team: p.team,
+      orchestrator: p.orchestrator,
+      consult: p.consult,
+      land: p.land !== undefined,
       roles: [...p.roles.values()].map((r) => ({ key: r.key, name: r.name, dir: r.dir, model: r.model })),
     }));
   }
@@ -262,7 +328,7 @@ export class Supervisor {
       return;
     }
     if (frame.t === "presence") {
-      if (frame.event === "joined" && frame.peer.name.toLowerCase() === this.config.orchestrator.toLowerCase()) this.flushOutbox();
+      if (frame.event === "joined" && this.orchestrators().has(frame.peer.name.toLowerCase())) this.flushOutbox();
       return;
     }
     const msg = frame.msg;
@@ -295,6 +361,7 @@ export class Supervisor {
       this.notify(
         `${msg.from} messaged ${role.name} (${role.project}/${role.key}), which has no running worker. ` +
           `It waits in ${role.name}'s inbox and goes into the next ${role.key} worker's prompt; spawn one if it should be handled now.`,
+        role.project,
       );
     }
     ack();
@@ -331,7 +398,7 @@ export class Supervisor {
   // ---------- Scheduling ----------
 
   private schedule(): void {
-    for (const w of this.store.queued()) {
+    for (const w of this.slots.held ? [] : this.store.queued()) {
       if (this.runs.size >= this.config.concurrency) break;
       const busy = [...this.runs.keys()].some((id) => {
         const r = this.store.worker(id);
@@ -343,21 +410,32 @@ export class Supervisor {
     this.writeStatus();
   }
 
-  private launch(w: WorkerRow): void {
-    const role = this.roleOf(w);
+  private launch(w: WorkerRow, consult?: Consult): void {
+    const base = this.roleOf(w);
+    const project = this.project(w.project);
+    // A consult worker only reads and answers: no file writes, no landing, a short life.
+    const role: RoleConfig = consult
+      ? {
+          ...base,
+          disallowedTools: [...(base.disallowedTools ?? []), ...FILE_WRITE_TOOLS],
+          maxRuntimeMinutes: this.config.consultTimeoutMinutes,
+        }
+      : base;
     const handoff = w.handoff ?? join(this.config.stateDir, "handoffs", w.project, `${w.id}.md`);
-    const waiting = this.store.waiting(w.project, w.role);
+    const waiting = consult ? [] : this.store.waiting(w.project, w.role);
     const baseline = this.resumeBaseline(w.resume_session);
     this.baselines.set(w.id, baseline);
     const run = new WorkerRun({
       id: w.id,
       role: { ...role, writeRoots: [...role.writeRoots, join(this.config.stateDir, "handoffs")] },
-      prompt: buildPrompt(w.task, handoff, waiting),
-      systemAppend: systemAppend(role, this.config.orchestrator),
+      prompt: consult ? w.task : buildPrompt(w.task, handoff, waiting),
+      systemAppend: systemAppend(role, project.orchestrator),
       resumeSession: w.resume_session,
       logPath: this.logPath(w),
       queryFn: this.queryFn,
-      canUseTool: this.withPreapprovals(w.id, handoff, role.dir, this.router.forWorker(w.id, role)),
+      canUseTool: consult
+        ? this.readOnly(this.router.forWorker(w.id, role))
+        : this.withPreapprovals(w.id, handoff, role.dir, this.router.forWorker(w.id, role)),
       mcpServers: {
         [WORKER_SERVER]: workerTools({
           name: role.name,
@@ -368,6 +446,10 @@ export class Supervisor {
             this.checkpoints.set(w.id, line);
             this.store.updateWorker(w.id, { checkpoint: line });
           },
+          ...(project.land && !consult ? { land: () => this.land(w.id) } : {}),
+          consultable: consult ? [] : project.consult.filter((r) => r !== w.role),
+          consult: (r, question) => this.consult(w.id, r, question),
+          answerConsult: (id, answer) => this.answerConsult(w.id, id, answer),
         }),
       },
       onEvent: (msg) => {
@@ -375,6 +457,7 @@ export class Supervisor {
         this.stallReported.delete(w.id);
         if (msg.type === "assistant" || msg.type === "result") this.report();
       },
+      onToolResult: (toolUseId) => this.freeSlot(toolUseId),
       onExit: (outcome) => this.onExit(w.id, outcome),
     });
 
@@ -385,7 +468,7 @@ export class Supervisor {
       usage: JSON.stringify({ cum: ZERO_USAGE, base: baseline }),
     });
     if (waiting.length > 0) this.store.consumeInbox(waiting.map((m) => m.id), w.id);
-    this.store.audit("supervisor", "start", w.id, { role: role.name, cwd: role.dir, resume: w.resume_session });
+    this.store.audit("supervisor", consult ? "start:consult" : "start", w.id, { role: role.name, cwd: role.dir, resume: w.resume_session, ...(consult ? { consult: consult.id } : {}) });
     this.runs.set(w.id, run);
     try {
       run.start();
@@ -413,14 +496,151 @@ export class Supervisor {
     };
   }
 
+  /** A consult worker's guard: file writes are refused before policy is asked. */
+  private readOnly(inner: CanUseTool): CanUseTool {
+    return async (tool, input, opts) =>
+      FILE_WRITE_TOOLS.includes(tool)
+        ? { behavior: "deny", message: "A consult only reads and answers; the owner records anything in their own session." }
+        : inner(tool, input, opts);
+  }
+
+  private freeSlot(toolUseId: string): void {
+    const call = this.slotCalls.get(toolUseId);
+    if (!call) return;
+    this.slotCalls.delete(toolUseId);
+    call.release();
+  }
+
+  // ---------- Landing ----------
+
+  /** Runs the project's land command for a worker, in its worktree and a run slot. */
+  async land(workerId: string): Promise<{ ok: boolean; output: string }> {
+    const w = this.worker(workerId);
+    const role = this.roleOf(w);
+    const project = this.project(w.project);
+    if (!project.land) throw new SupervisorError(`Project ${project.key} has no land command`);
+    const run = this.runs.get(workerId);
+    const waiting = new AbortController();
+    this.landWaits.set(workerId, waiting);
+    let release: () => void;
+    try {
+      release = await this.slots.acquire(workerId, "land", waiting.signal);
+    } finally {
+      this.landWaits.delete(workerId);
+    }
+    this.store.audit("supervisor", "land:start", workerId, { command: project.land.command });
+    try {
+      const worktree = await git(role.dir, ["rev-parse", "--show-toplevel"]);
+      const dirty = await git(worktree, ["status", "--porcelain"]);
+      if (dirty) {
+        return { ok: false, output: `Not landed: the worktree ${worktree} has uncommitted changes. Commit or remove them first:\n${dirty}` };
+      }
+      const r = await runCommand(project.land.command, worktree, { ...workerEnv(process.env), ...role.env }, project.land.timeoutMinutes * 60_000);
+      const output = r.output.length > LAND_OUTPUT_MAX ? `…${r.output.slice(-LAND_OUTPUT_MAX)}` : r.output;
+      this.store.audit("supervisor", r.code === 0 ? "land:ok" : "land:failed", workerId, { code: r.code });
+      const last = r.output.trim().split("\n").at(-1)?.slice(0, 300) ?? "";
+      this.notify(
+        r.code === 0
+          ? `${role.name} (${workerId}) landed: ${last}`
+          : `${role.name} (${workerId}) could not land (${r.timedOut ? "timed out" : `exit ${r.code}`}): ${last}`,
+        project.key,
+      );
+      return { ok: r.code === 0, output: `${project.land.command.join(" ")} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
+    } finally {
+      release();
+      if (run) run.lastEventAt = Date.now();
+    }
+  }
+
+  // ---------- Consults ----------
+
+  /** A worker asks another role a question; resolves with that role's advisory answer. */
+  consult(fromId: string, roleKey: string, question: string): Promise<string> {
+    const from = this.worker(fromId);
+    const project = this.project(from.project);
+    const asker = this.roleOf(from);
+    if (!project.consult.includes(roleKey)) throw new SupervisorError(`${roleKey} isn't consultable in ${project.key}; you may consult ${project.consult.join(", ") || "nobody"}`);
+    if (roleKey === from.role) throw new SupervisorError("You can't consult your own role");
+    const target = this.role(project.key, roleKey);
+    const running = this.activeRun(project.key, roleKey);
+    if (running && [...this.consults.values()].some((c) => c.from === running)) {
+      throw new SupervisorError(`${target.name} is itself waiting on a consult; put the question under Open questions in your handoff`);
+    }
+    if (!running && this.slots.held) {
+      throw new SupervisorError(`The laptop is on hold (${this.slots.held.reason}); no consult can start now. Put the question under Open questions in your handoff`);
+    }
+
+    const id = `c_${randomBytes(4).toString("hex")}`;
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.consults.delete(id);
+        this.store.audit("timeout", "consult:expire", fromId, { consult: id, role: roleKey });
+        reject(new SupervisorError(`${target.name} didn't answer within ${this.config.consultTimeoutMinutes} minutes (${id}). Put the question under Open questions in your handoff`));
+      }, this.config.consultTimeoutMinutes * 60_000);
+      timer.unref();
+      const c: Consult = { id, from: fromId, fromName: asker.name, project: project.key, role: roleKey, target: running ?? null, resolve, reject, timer };
+      this.consults.set(id, c);
+      this.store.audit(asker.name, "consult", fromId, { consult: id, role: roleKey, to: running ?? "new worker" });
+
+      const ask =
+        `[Consult ${id}] ${asker.name} asks ${target.name}, mid-task:\n\n${question}\n\n` +
+        `Answer with answer_consult (id ${id}): short, citing files and hashes. Your answer is advisory: if it is a ruling, ` +
+        "it counts only once you've recorded it in your own file on main; say so if it needs recording.";
+      if (running) {
+        this.runs.get(running)!.inject(ask);
+        return;
+      }
+      const w = this.store.createWorker({ project: project.key, role: roleKey, task: ask, handoff: null, priority: 0, resume_session: null });
+      c.target = w.id;
+      this.launch(w, c);
+    });
+  }
+
+  answerConsult(workerId: string, id: string, answer: string): void {
+    const c = this.consults.get(id);
+    if (!c) throw new SupervisorError(`No open consult ${id}; it may have timed out`);
+    const w = this.worker(workerId);
+    if (w.project !== c.project || w.role !== c.role) throw new SupervisorError(`Consult ${id} was put to ${this.role(c.project, c.role).name}, not you`);
+    this.settleConsult(c, answer);
+    // A consult worker's work is done once it has answered.
+    if (c.target === workerId && w.task.startsWith(`[Consult ${id}]`)) void this.runs.get(workerId)?.stop("consult answered");
+  }
+
+  private settleConsult(c: Consult, answer: string): void {
+    clearTimeout(c.timer);
+    this.consults.delete(c.id);
+    const name = this.role(c.project, c.role).name;
+    this.store.audit(name, "consult:answer", c.target, { consult: c.id });
+    c.resolve(`Advisory answer from ${name} (consult ${c.id}). It is not a ruling until ${name} records it in their file on main; cite that file, not this answer.\n\n${answer}`);
+  }
+
   private onExit(id: string, outcome: Outcome): void {
     const run = this.runs.get(id);
     this.runs.delete(id);
     this.preapproved.delete(id);
     this.stallReported.delete(id);
+    for (const [toolUseId, call] of this.slotCalls) if (call.workerId === id) this.freeSlot(toolUseId);
+    this.landWaits.get(id)?.abort();
     const w = this.store.worker(id)!;
     const checkpoint = this.checkpoints.get(id) ?? w.checkpoint;
     this.checkpoints.delete(id);
+    let consultWorker = false;
+    for (const c of [...this.consults.values()]) {
+      if (c.from === id) {
+        clearTimeout(c.timer);
+        this.consults.delete(c.id);
+      } else if (c.target === id) {
+        consultWorker = w.task.startsWith(`[Consult ${c.id}]`);
+        if (consultWorker && outcome.state === "done" && outcome.result.trim()) {
+          this.settleConsult(c, outcome.result.trim());
+        } else {
+          clearTimeout(c.timer);
+          this.consults.delete(c.id);
+          c.reject(new SupervisorError(`${this.roleOf(w).name} ended without answering (${outcome.state}). Put the question under Open questions in your handoff`));
+        }
+      }
+    }
+    if (!consultWorker && w.task.startsWith("[Consult ")) consultWorker = true;
     const base = this.baselines.get(id) ?? ZERO_USAGE;
     this.baselines.delete(id);
     this.store.updateWorker(id, {
@@ -440,7 +660,7 @@ export class Supervisor {
         : outcome.state === "failed"
           ? `failed: ${outcome.error}`
           : `stopped: ${outcome.reason}`;
-    this.notify(`${role.name} (${id}, ${w.project}/${w.role}) ${what}. Handoff: ${w.handoff ?? "none"}.`);
+    if (!consultWorker) this.notify(`${role.name} (${id}, ${w.project}/${w.role}) ${what}. Handoff: ${w.handoff ?? "none"}.`, w.project);
     this.schedule();
   }
 
@@ -452,7 +672,7 @@ export class Supervisor {
       this.stallReported.add(id);
       const w = this.store.worker(id)!;
       this.store.audit("supervisor", "stalled", id, {});
-      this.notify(`${this.roleOf(w).name} (${id}) has produced no events for ${this.config.stallMinutes} minutes and isn't waiting on a tool or a request. Check tail_worker, or stop or reset it.`);
+      this.notify(`${this.roleOf(w).name} (${id}) has produced no events for ${this.config.stallMinutes} minutes and isn't waiting on a tool or a request. Check tail_worker, or stop or reset it.`, w.project);
     }
   }
 
@@ -463,18 +683,30 @@ export class Supervisor {
       req.kind === "question"
         ? `${workerName} asks a question (${req.id})`
         : `${workerName} needs approval for ${req.tool} (${req.id}, ${req.tier} decides; rule ${req.rule})`;
-    this.notify(`${what}. See pending_requests and answer with answer_request.`);
+    this.notify(`${what}. See pending_requests and answer with answer_request.`, this.store.worker(req.worker_id)?.project);
     this.writeStatus();
   }
 
-  /** Messages the orchestrator; what the broker can't take waits in the outbox. */
-  private notify(body: string): void {
+  /** Messages the project's orchestrator (the laptop's if none); what the broker can't take waits in the outbox. */
+  private notify(body: string, project?: string): void {
+    const to = (project && this.config.projects.get(project)?.orchestrator) || this.config.orchestrator;
     this.broker
-      .request({ t: "send", as: this.config.name, to: [this.config.orchestrator], body })
+      .request({ t: "send", as: this.config.name, to: [to], body })
       .catch((err: Error) => {
         this.log.warn("orchestrator unreachable; kept in the outbox", { err: err.message });
-        this.store.addOutbox(this.config.orchestrator, body);
+        this.store.addOutbox(to, body);
       });
+  }
+
+  private orchestrators(): Set<string> {
+    return new Set([this.config.orchestrator, ...[...this.config.projects.values()].map((p) => p.orchestrator)].map((n) => n.toLowerCase()));
+  }
+
+  private activeRun(project: string, role: string): string | undefined {
+    return [...this.runs.keys()].find((id) => {
+      const w = this.store.worker(id);
+      return w?.project === project && w.role === role;
+    });
   }
 
   private flushing = false;
@@ -643,6 +875,7 @@ export class Supervisor {
         last_event_at: this.runs.get(w.id) ? new Date(this.runs.get(w.id)!.lastEventAt).toISOString() : w.last_event_at,
       })),
       pending_requests: this.store.requests(["open", "orphaned"]).map((r) => ({ id: r.id, worker_id: r.worker_id, kind: r.kind, tool: r.tool, tier: r.tier })),
+      run_slots: this.slots.status(),
     };
     try {
       mkdirSync(this.config.stateDir, { recursive: true });
@@ -731,4 +964,38 @@ function resumeTask(req: RequestRow, answer: Answer): string {
         ? `answered: ${JSON.stringify(answer.answers)}`
         : `denied${answer.message ? `: ${answer.message}` : ""}`;
   return `You were stopped while waiting on request ${req.id} (${req.tool}). It has been ${outcome}. Continue your task from where you left off.`;
+}
+
+function git(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) =>
+    execFile("git", ["-C", cwd, ...args], { encoding: "utf8" }, (err, stdout) => (err ? reject(err) : resolve(stdout.trim()))),
+  );
+}
+
+/** Runs a command without a shell, collecting stdout and stderr together. */
+function runCommand(argv: string[], cwd: string, env: Record<string, string>, timeoutMs: number): Promise<{ code: number; output: string; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    const child = spawnProcess(argv[0]!, argv.slice(1), { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    let timedOut = false;
+    const take = (b: Buffer) => {
+      output += b.toString("utf8");
+      if (output.length > 4 * LAND_OUTPUT_MAX) output = output.slice(-2 * LAND_OUTPUT_MAX);
+    };
+    child.stdout.on("data", take);
+    child.stderr.on("data", take);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 10_000).unref();
+    }, timeoutMs);
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ code: -1, output: `${output}\n${err.message}`, timedOut });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? -1, output, timedOut });
+    });
+  });
 }

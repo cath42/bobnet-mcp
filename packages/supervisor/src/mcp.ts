@@ -20,6 +20,7 @@ const Spawn = z.object({
   resume_session: z.string().optional(),
 });
 const Id = z.object({ id: z.string() });
+const HoldArgs = z.object({ reason: z.string().min(1) });
 const Tail = z.object({ id: z.string(), n: z.number().int().positive().max(500).default(40) });
 const ListArgs = z.object({ project: z.string().optional() });
 const AnswerArgs = z.object({
@@ -80,6 +81,14 @@ const TOOLS = [
   },
   { name: "list_projects", description: "Projects registered on this laptop and their roles.", inputSchema: obj({}) },
   { name: "audit_log", description: "The supervisor's most recent actions, newest first.", inputSchema: obj({ limit: { type: "number" } }) },
+  {
+    name: "hold",
+    description:
+      "Keep the laptop quiet (e.g. while CI runs on its runner): no new workers start and no run slot is granted (tests, probes, landing) until release_hold. Runs already in a slot finish. Survives a supervisor restart.",
+    inputSchema: obj({ reason: { type: "string" } }, ["reason"]),
+  },
+  { name: "release_hold", description: "End the hold: queued workers start and waiting runs get their slots.", inputSchema: obj({}) },
+  { name: "run_slots", description: "The run slots: the hold if any, who holds a slot and for what, and who is waiting, in order.", inputSchema: obj({}) },
 ] as const;
 
 function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<unknown> | unknown> {
@@ -115,6 +124,9 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
     },
     list_projects: () => sup.projects(),
     audit_log: (a) => sup.audit(AuditArgs.parse(a).limit),
+    hold: (a) => sup.hold(HoldArgs.parse(a).reason),
+    release_hold: () => sup.releaseHold() ?? "There was no hold",
+    run_slots: () => sup.slotStatus(),
   };
 }
 

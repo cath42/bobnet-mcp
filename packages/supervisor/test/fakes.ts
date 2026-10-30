@@ -42,6 +42,16 @@ export class FakeSession implements QueryHandle {
     return this.options.canUseTool!(tool, input, { signal: new AbortController().signal } as never);
   }
 
+  /** Asks for one specific tool call, as the CLI does with its tool use id. */
+  askCall(toolUseID: string, tool: string, input: Record<string, unknown>): Promise<PermissionResult | null> {
+    return this.options.canUseTool!(tool, input, { signal: new AbortController().signal, toolUseID } as never);
+  }
+
+  /** The tool call has returned. */
+  toolResult(toolUseID: string): void {
+    this.emit({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseID, content: "ok" }] } } as unknown as SDKMessage);
+  }
+
   /** Cumulative session totals, as the SDK reports them on every result. */
   totals = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0 };
 

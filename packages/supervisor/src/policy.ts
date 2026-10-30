@@ -22,6 +22,11 @@ import { z } from "zod";
 //       command: "^git push"
 //       decision: escalate
 //       tier: human
+//     - id: package-tests
+//       tools: [Bash]
+//       command: "^pnpm (--filter \\S+ )?(test|vitest)( |$)"
+//       decision: allow
+//       slot: true           # runs only in one of the laptop's run slots
 
 export type Decision = "allow" | "deny" | "escalate";
 export type Tier = "orchestrator" | "human";
@@ -40,6 +45,8 @@ const Rule = z.object({
   decision: z.enum(["allow", "deny", "escalate"]),
   tier: z.enum(["orchestrator", "human"]).optional(),
   reason: z.string().optional(),
+  /** A heavy run: once allowed, it waits for one of the laptop's run slots and holds it until it returns. */
+  slot: z.boolean().default(false),
 });
 
 const PolicyFile = z.object({
@@ -52,6 +59,8 @@ export interface Verdict {
   rule: string;
   tier: Tier;
   reason: string;
+  /** The call must hold a run slot while it runs. */
+  slot: boolean;
 }
 
 export interface PolicyContext {
@@ -111,7 +120,7 @@ export class Policy {
 
     // Built-in guards, before any rule.
     if (tool === "Bash" && /\bgit\b[^\n]*--no-verify\b/.test(String(input["command"] ?? ""))) {
-      return { decision: "deny", rule: "builtin:no-verify", tier: "human", reason: "Hooks are never skipped" };
+      return { decision: "deny", rule: "builtin:no-verify", tier: "human", reason: "Hooks are never skipped", slot: false };
     }
     if (FILE_WRITE_TOOLS.has(tool) && absPath !== undefined && !ctx.writeRoots.some((r) => inside(r, absPath))) {
       return {
@@ -119,6 +128,7 @@ export class Policy {
         rule: "builtin:write-scope",
         tier: "human",
         reason: `Writes are limited to ${ctx.writeRoots.join(", ")}`,
+        slot: false,
       };
     }
 
@@ -130,8 +140,9 @@ export class Policy {
       if (segments.length > 1) {
         const verdicts = segments.map((s) => this.evaluate(tool, { ...input, command: s }, ctx));
         const worst = verdicts.reduce((a, b) => (SEVERITY[b.decision] > SEVERITY[a.decision] ? b : a));
-        if (worst.decision !== "allow") return { ...worst, reason: `${worst.reason} (in "${clip(segments[verdicts.indexOf(worst)]!)}")` };
-        return { decision: "allow", rule: verdicts.map((v) => v.rule).join("+"), tier: "human", reason: "every segment allowed" };
+        const slot = verdicts.some((v) => v.slot);
+        if (worst.decision !== "allow") return { ...worst, slot, reason: `${worst.reason} (in "${clip(segments[verdicts.indexOf(worst)]!)}")` };
+        return { decision: "allow", rule: verdicts.map((v) => v.rule).join("+"), tier: "human", reason: "every segment allowed", slot };
       }
     }
 
@@ -155,6 +166,7 @@ export class Policy {
         rule: rule.id,
         tier: rule.tier ?? "human",
         reason: rule.reason ?? `policy rule ${rule.id}`,
+        slot: rule.slot,
       };
     }
     return {
@@ -162,6 +174,7 @@ export class Policy {
       rule: "default",
       tier: "human",
       reason: "No policy rule matched",
+      slot: false,
     };
   }
 }

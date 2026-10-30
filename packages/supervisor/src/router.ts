@@ -24,6 +24,8 @@ export interface RouterDeps {
   /** Tells the orchestrator a request is waiting (over BobNet). */
   announce: (req: RequestRow, workerName: string) => void;
   setWorkerState: (workerId: string, state: WorkerState) => void;
+  /** Resolves once the call holds a run slot; the slot is freed when the call returns. */
+  takeSlot: (workerId: string, toolUseId: string, label: string, signal: AbortSignal) => Promise<void>;
 }
 
 interface Waiter {
@@ -45,7 +47,7 @@ export class Router {
 
   /** The canUseTool callback for one worker. */
   forWorker(workerId: string, role: RoleConfig): CanUseTool {
-    return async (toolName, input, { signal, mcpServer }) => {
+    return async (toolName, input, { signal, mcpServer, toolUseID }) => {
       const { store, policy } = this.deps;
 
       // The supervisor's own BobNet tools, served in-process: always allowed.
@@ -61,14 +63,30 @@ export class Router {
         writeRoots: role.writeRoots,
         cwd: role.dir,
       });
+      const slotted = (result: PermissionResult): Promise<PermissionResult> | PermissionResult =>
+        verdict.slot && result.behavior === "allow" ? this.inSlot(workerId, toolUseID, input, signal) : result;
       if (verdict.decision !== "escalate") {
         store.audit("policy", verdict.decision, workerId, { tool: toolName, rule: verdict.rule });
         return verdict.decision === "allow"
-          ? { behavior: "allow", updatedInput: input }
+          ? slotted({ behavior: "allow", updatedInput: input })
           : { behavior: "deny", message: `Denied by policy (${verdict.rule}): ${verdict.reason}` };
       }
-      return this.escalate(workerId, role, toolName, input, "approval", verdict.tier, verdict.rule, verdict.reason, signal);
+      return slotted(await this.escalate(workerId, role, toolName, input, "approval", verdict.tier, verdict.rule, verdict.reason, signal));
     };
+  }
+
+  /** Holds an allowed heavy run until a run slot is free. */
+  private async inSlot(workerId: string, toolUseId: string, input: Record<string, unknown>, signal: AbortSignal): Promise<PermissionResult> {
+    if (input["run_in_background"] === true) {
+      return { behavior: "deny", message: "This command needs a run slot, and slot runs go in the foreground: run it again without run_in_background." };
+    }
+    const label = typeof input["command"] === "string" ? input["command"].slice(0, 120) : "run";
+    try {
+      await this.deps.takeSlot(workerId, toolUseId, label, signal);
+    } catch {
+      return { behavior: "deny", message: "Worker stopped while waiting for a run slot", interrupt: true };
+    }
+    return { behavior: "allow", updatedInput: input };
   }
 
   /**

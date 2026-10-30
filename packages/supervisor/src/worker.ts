@@ -2,7 +2,7 @@ import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { dirname } from "node:path";
 import type { CanUseTool, McpServerConfig, Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { TokenCounts } from "@bobnet/protocol";
-import type { RoleConfig } from "./config.ts";
+import { BILLING_ENV, type RoleConfig } from "./config.ts";
 
 // One headless Claude Code session per worker, on the Agent SDK. Input is a
 // stream, so the supervisor can hand a running worker a message mid-task; the
@@ -31,6 +31,8 @@ export type Outcome =
 const GRACE_MS = 10_000;
 /** v0.1's server; workers use only the supervisor's in-process `bobnet` tools. */
 const ALWAYS_DISALLOWED = ["mcp__bobnet-mcp"];
+/** Key sources that mean the session runs on the Claude subscription's login. */
+const SUBSCRIPTION_SOURCES = new Set(["none", "oauth"]);
 
 /** An async iterable the supervisor can keep pushing user messages into. */
 class InputQueue implements AsyncIterable<SDKUserMessage> {
@@ -74,6 +76,8 @@ export interface WorkerRunOptions {
   canUseTool: CanUseTool;
   mcpServers: Record<string, McpServerConfig>;
   onEvent: (msg: SDKMessage) => void;
+  /** A tool call has returned (or failed). */
+  onToolResult?: (toolUseId: string) => void;
   onExit: (outcome: Outcome) => void;
 }
 
@@ -118,7 +122,7 @@ export class WorkerRun {
       canUseTool: this.opts.canUseTool,
       mcpServers: this.opts.mcpServers,
       disallowedTools: [...ALWAYS_DISALLOWED, ...(role.disallowedTools ?? [])],
-      env: { ...stringEnv(process.env), ...role.env, BOBNET_SUPERVISED: "1", BOBNET_WORKER_ID: this.id },
+      env: { ...workerEnv(process.env), ...role.env, BOBNET_SUPERVISED: "1", BOBNET_WORKER_ID: this.id },
       abortController: this.abort,
       stderr: (data) => this.write({ type: "stderr", data }),
       ...(role.model ? { model: role.model } : {}),
@@ -195,7 +199,14 @@ export class WorkerRun {
   }
 
   private track(msg: SDKMessage): void {
-    if (msg.type === "system" && msg.subtype === "init") this.sessionId = msg.session_id;
+    if (msg.type === "system" && msg.subtype === "init") {
+      this.sessionId = msg.session_id;
+      // The billing guard: a worker never runs on an API key.
+      const source = (msg as { apiKeySource?: string }).apiKeySource;
+      if (source !== undefined && !SUBSCRIPTION_SOURCES.has(source)) {
+        void this.stop(`billing guard: the session would bill to an API key (apiKeySource ${source}), not the subscription`);
+      }
+    }
     if (msg.type === "assistant") {
       // Between results, count each response on top of the last reported total.
       const u = msg.message.usage;
@@ -223,7 +234,11 @@ export class WorkerRun {
       : [];
     for (const block of content) {
       if (block.type === "tool_use") this.toolsInFlight++;
-      if (block.type === "tool_result") this.toolsInFlight = Math.max(0, this.toolsInFlight - 1);
+      if (block.type === "tool_result") {
+        this.toolsInFlight = Math.max(0, this.toolsInFlight - 1);
+        const id = (block as { tool_use_id?: string }).tool_use_id;
+        if (id) this.opts.onToolResult?.(id);
+      }
     }
   }
 
@@ -232,8 +247,10 @@ export class WorkerRun {
   }
 }
 
-function stringEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+/** The supervisor's environment without anything that would move billing off the subscription. */
+export function workerEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  const blocked = new Set<string>(BILLING_ENV);
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(env)) if (v !== undefined) out[k] = v;
+  for (const [k, v] of Object.entries(env)) if (v !== undefined && !blocked.has(k)) out[k] = v;
   return out;
 }

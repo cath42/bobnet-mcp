@@ -14,6 +14,24 @@ import { z } from "zod";
 const expand = (p: string) => (p === "~" ? homedir() : p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
 const path = z.string().min(1).transform(expand);
 
+/**
+ * Variables that would bill a worker's model calls to an API key or another
+ * provider instead of the Claude subscription it runs under. Never passed to
+ * a worker, and refused in config.
+ */
+export const BILLING_ENV = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+] as const;
+
+const Env = z
+  .record(z.string(), z.string())
+  .default({})
+  .refine((env) => !BILLING_ENV.some((k) => k in env), `must not set ${BILLING_ENV.join(", ")}: workers bill to the subscription`);
+
 const Role = z.object({
   /** BobNet name; defaults to the role key with a capital first letter. */
   name: z.string().refine(isValidSegment, "must be a valid BobNet name").optional(),
@@ -21,7 +39,7 @@ const Role = z.object({
   model: z.string().optional(),
   allowed_tools: z.array(z.string()).optional(),
   disallowed_tools: z.array(z.string()).optional(),
-  env: z.record(z.string(), z.string()).default({}),
+  env: Env,
   max_runtime_minutes: z.number().positive().optional(),
   /** Where the worker may write; defaults to the git worktree that holds `dir`. */
   write_roots: z.array(path).optional(),
@@ -35,6 +53,19 @@ const Project = z.object({
   /** Lower runs first when workers queue. */
   priority: z.number().int().default(10),
   team: z.string().refine(isValidSegment, "must be a valid BobNet team").optional(),
+  /** This project's orchestrator, when it isn't the laptop's. */
+  orchestrator: z.string().refine(isValidSegment, "must be a valid BobNet name").optional(),
+  /** Environment for every role in the project; a role's own env wins. */
+  env: Env,
+  /** How a worker lands its commits: run by the supervisor in the worker's worktree, in a run slot. */
+  land: z
+    .object({
+      command: z.array(z.string()).min(1),
+      timeout_minutes: z.number().positive().default(30),
+    })
+    .optional(),
+  /** Roles any worker in the project may consult mid-task. */
+  consult: z.array(z.string()).default([]),
   roles: z.record(z.string(), Role),
 });
 
@@ -50,6 +81,10 @@ const SupervisorFile = z.object({
   max_runtime_minutes: z.number().positive().default(180),
   state_dir: path.default("~/.local/state/bobnet"),
   mcp_port: z.number().int().min(1024).max(65535).default(7425),
+  /** Heavy runs (tests, probes, landing) at once on this laptop. */
+  run_slots: z.number().int().positive().default(1),
+  /** How long a consulted role has to answer. */
+  consult_timeout_minutes: z.number().positive().default(10),
   projects: z.record(z.string(), Project),
 });
 
@@ -74,6 +109,9 @@ export interface ProjectConfig {
   path: string;
   priority: number;
   team: string | undefined;
+  orchestrator: string;
+  land: { command: string[]; timeoutMinutes: number } | undefined;
+  consult: string[];
   roles: Map<string, RoleConfig>;
 }
 
@@ -86,6 +124,8 @@ export interface SupervisorConfig {
   requestTimeoutMinutes: number;
   stateDir: string;
   mcpPort: number;
+  runSlots: number;
+  consultTimeoutMinutes: number;
   projects: Map<string, ProjectConfig>;
 }
 
@@ -116,6 +156,14 @@ export function parseSupervisorConfig(
   const names = new Map<string, string>();
   names.set(file.name.toLowerCase(), "the supervisor");
   names.set(file.orchestrator.toLowerCase(), "the orchestrator");
+  for (const [pKey, p] of Object.entries(file.projects)) {
+    if (!p.orchestrator) continue;
+    const clash = names.get(p.orchestrator.toLowerCase());
+    if (clash && clash !== "the orchestrator" && !clash.startsWith("orchestrator of ")) {
+      throw new Error(`${pKey}: orchestrator ${p.orchestrator} is already used by ${clash}`);
+    }
+    names.set(p.orchestrator.toLowerCase(), `orchestrator of ${pKey}`);
+  }
 
   for (const [pKey, p] of Object.entries(file.projects)) {
     const roles = new Map<string, RoleConfig>();
@@ -135,14 +183,24 @@ export function parseSupervisorConfig(
         model: r.model,
         allowedTools: r.allowed_tools,
         disallowedTools: r.disallowed_tools,
-        env: r.env,
+        env: { ...p.env, ...r.env },
         maxRuntimeMinutes: r.max_runtime_minutes ?? file.max_runtime_minutes,
         writeRoots: r.write_roots ?? [resolveRoot(dir)],
         sandbox: r.sandbox,
         purpose: r.purpose,
       });
     }
-    projects.set(pKey, { key: pKey, path: p.path, priority: p.priority, team: p.team, roles });
+    for (const c of p.consult) if (!roles.has(c)) throw new Error(`${pKey}.consult: no role ${c}`);
+    projects.set(pKey, {
+      key: pKey,
+      path: p.path,
+      priority: p.priority,
+      team: p.team,
+      orchestrator: p.orchestrator ?? file.orchestrator,
+      land: p.land ? { command: p.land.command, timeoutMinutes: p.land.timeout_minutes } : undefined,
+      consult: p.consult,
+      roles,
+    });
   }
 
   return {
@@ -154,6 +212,8 @@ export function parseSupervisorConfig(
     requestTimeoutMinutes: file.request_timeout_minutes,
     stateDir: file.state_dir,
     mcpPort: file.mcp_port,
+    runSlots: file.run_slots,
+    consultTimeoutMinutes: file.consult_timeout_minutes,
     projects,
   };
 }
