@@ -77,8 +77,71 @@ const FILE_TOOLS = new Set([...FILE_WRITE_TOOLS, "Read", "Glob", "Grep"]);
 const COMPOUND = /[;&|\n]/;
 /** Substitution or redirection (other than 2>&1): never allowed by a rule. */
 const OPAQUE = /`|\$\(|<|>(?!&1)|(?<!2)>&1/;
-/** Splits on && || ; | and newlines; quoting is ignored, which only ever splits too much. */
+/** The fallback split for a command whose quotes don't balance: ignores quoting, so it only ever splits too much. */
 const SEGMENTS = /&&|\|\||[;|\n]/;
+
+export interface Scan {
+  /** The commands chained by && || ; | & or a newline, outside quotes. */
+  segments: string[];
+  /** Substitution anywhere but single quotes, or redirection (other than 2>&1) outside quotes. */
+  opaque: boolean;
+}
+
+/**
+ * Reads a Bash command the way the shell splits it, so a quoted commit message
+ * with newlines or <email> is one argument, not more commands. Returns null when
+ * the quotes don't balance; the caller then falls back to the conservative split.
+ */
+export function scanCommand(cmd: string): Scan | null {
+  const segments: string[] = [];
+  let cur = "";
+  let quote: "'" | '"' | null = null;
+  let opaque = false;
+  const cut = () => {
+    if (cur.trim()) segments.push(cur.trim());
+    cur = "";
+  };
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i]!;
+    const next = cmd[i + 1];
+    if (quote === "'") {
+      if (c === "'") quote = null;
+      cur += c;
+      continue;
+    }
+    if (c === "\\") {
+      cur += c + (next ?? "");
+      i++;
+      continue;
+    }
+    if (c === "`" || (c === "$" && next === "(")) opaque = true;
+    if (quote === '"') {
+      if (c === '"') quote = null;
+      cur += c;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      cur += c;
+    } else if (c === ">" && cmd[i - 1] === "2" && cmd.slice(i + 1, i + 3) === "&1") {
+      cur += ">&1";
+      i += 2;
+    } else if (c === "<" || c === ">") {
+      opaque = true;
+      cur += c;
+    } else if ((c === "&" || c === "|") && next === c) {
+      cut();
+      i++;
+    } else if (c === "&" || c === "|" || c === ";" || c === "\n") {
+      cut();
+    } else {
+      cur += c;
+    }
+  }
+  if (quote !== null) return null;
+  cut();
+  return { segments, opaque };
+}
 const SEVERITY: Record<Decision, number> = { allow: 0, escalate: 1, deny: 2 };
 
 export function filePath(tool: string, input: Record<string, unknown>): string | undefined {
@@ -145,14 +208,26 @@ export class Policy {
     // A chained Bash command is decided segment by segment: allowed only if
     // every segment is allowed alone, denied if any segment is denied.
     const cmd = tool === "Bash" && typeof input["command"] === "string" ? input["command"].trim() : null;
-    if (cmd !== null && COMPOUND.test(cmd.replace(/2>&1/g, ""))) {
-      const segments = cmd.split(SEGMENTS).map((s) => s.trim()).filter(Boolean);
+    const scan = cmd === null ? null : scanCommand(cmd);
+    if (cmd !== null && (scan ? scan.segments.length > 1 : COMPOUND.test(cmd.replace(/2>&1/g, "")))) {
+      const segments = scan ? scan.segments : cmd.split(SEGMENTS).map((s) => s.trim()).filter(Boolean);
       if (segments.length > 1) {
         const verdicts = segments.map((s) => this.evaluate(tool, { ...input, command: s }, ctx));
         const worst = verdicts.reduce((a, b) => (SEVERITY[b.decision] > SEVERITY[a.decision] ? b : a));
         const slot = verdicts.some((v) => v.slot);
         if (worst.decision !== "allow") return { ...worst, slot, reason: `${worst.reason} (in "${clip(segments[verdicts.indexOf(worst)]!)}")` };
         return { decision: "allow", rule: verdicts.map((v) => v.rule).join("+"), tier: "human", reason: "every segment allowed", slot };
+      }
+    }
+
+    // A deny rule that matches anywhere in a Bash command wins over any allow,
+    // whatever the order: quoted text isn't split off, but it can't hide either.
+    if (cmd !== null) {
+      for (const { rule, command } of this.compiled) {
+        if (rule.decision !== "deny" || !command || !command.test(cmd)) continue;
+        if (!rule.roles.some((r) => globMatch(r, ctx.role)) || !rule.projects.some((p) => globMatch(p, ctx.project))) continue;
+        if (!rule.tools.some((t) => globMatch(t, tool))) continue;
+        return { decision: "deny", rule: rule.id, tier: rule.tier ?? "human", reason: rule.reason ?? `policy rule ${rule.id}`, slot: false };
       }
     }
 
@@ -163,8 +238,10 @@ export class Policy {
       if (command) {
         const cmd = typeof input["command"] === "string" ? input["command"].trim() : null;
         if (cmd === null || !command.test(cmd)) continue;
-        const chained = COMPOUND.test(cmd.replace(/2>&1/g, ""));
-        if (rule.decision === "allow" && !rule.allow_compound && (chained || OPAQUE.test(cmd))) continue;
+        const scanned = scanCommand(cmd);
+        const chained = scanned ? scanned.segments.length > 1 : COMPOUND.test(cmd.replace(/2>&1/g, ""));
+        const opaque = scanned ? scanned.opaque : OPAQUE.test(cmd);
+        if (rule.decision === "allow" && !rule.allow_compound && (chained || opaque)) continue;
       }
       if (path) {
         if (absPath === undefined) continue;

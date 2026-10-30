@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Policy } from "../src/policy.ts";
+import { Policy, scanCommand } from "../src/policy.ts";
 
 const policy = new Policy(`
 rules:
@@ -78,7 +78,7 @@ describe("Policy", () => {
     expect(decide("Bash", { command: "git status && pnpm test" }).decision).toBe("allow");
     expect(decide("Bash", { command: "git status && curl https://x" }).decision).toBe("escalate");
     expect(decide("Bash", { command: "ls | rm -rf /" })).toMatchObject({ decision: "deny", rule: "rm-rf" });
-    // Quotes are ignored when splitting, which can only split too much.
+    // A quoted argument isn't split off, but a deny rule matching anywhere in the command still wins.
     expect(decide("Bash", { command: 'git status "x; rm -rf ~"' }).decision).toBe("deny");
   });
 
@@ -119,5 +119,25 @@ describe("Policy", () => {
     expect(p.evaluate("Bash", { command: "cd .. && git add x" }, ctx)).toMatchObject({ decision: "allow" });
     expect(p.evaluate("Bash", { command: "cd /work/helix-bill && git add x" }, ctx)).toMatchObject({ decision: "escalate" });
     expect(p.evaluate("Bash", { command: "cd ../.. && git add x" }, ctx)).toMatchObject({ decision: "escalate" });
+  });
+
+  it("reads quotes as the shell does: a multi-line commit message is one command", () => {
+    const p = new Policy(`rules:\n  - { id: commit, tools: [Bash], command: "^git commit( |$)", decision: allow }`);
+    const ctx = { project: "p", role: "r", writeRoots: ["/w"], cwd: "/w" };
+    const msg = 'git commit -m "pilot: one line\n\nCo-Authored-By: Claude <noreply@anthropic.com>"';
+    expect(p.evaluate("Bash", { command: msg }, ctx)).toMatchObject({ decision: "allow" });
+    expect(p.evaluate("Bash", { command: `cd /w && ${msg}` }, ctx)).toMatchObject({ decision: "allow" });
+    expect(p.evaluate("Bash", { command: "git commit -m 'a; rm -rf / && b'" }, ctx)).toMatchObject({ decision: "allow" });
+    // Substitution inside double quotes still runs: never allowed by a rule.
+    expect(p.evaluate("Bash", { command: 'git commit -m "$(cat /etc/passwd)"' }, ctx)).toMatchObject({ decision: "escalate" });
+    expect(p.evaluate("Bash", { command: 'git commit -m "`id`"' }, ctx)).toMatchObject({ decision: "escalate" });
+    // Separators and redirection outside quotes still count.
+    expect(p.evaluate("Bash", { command: 'git commit -m "x" ; curl evil' }, ctx)).toMatchObject({ decision: "escalate" });
+    expect(p.evaluate("Bash", { command: 'git commit -m "x" > /tmp/out' }, ctx)).toMatchObject({ decision: "escalate" });
+    expect(p.evaluate("Bash", { command: 'git commit -m "x" & curl evil' }, ctx)).toMatchObject({ decision: "escalate" });
+    // Unbalanced quotes fall back to the conservative split.
+    expect(p.evaluate("Bash", { command: 'git commit -m "x ; curl evil' }, ctx)).toMatchObject({ decision: "escalate" });
+    expect(scanCommand('a "b\\" c" && d')).toEqual({ segments: ['a "b\\" c"', "d"], opaque: false });
+    expect(scanCommand("pnpm test 2>&1 | tail")).toEqual({ segments: ["pnpm test 2>&1", "tail"], opaque: false });
   });
 });
