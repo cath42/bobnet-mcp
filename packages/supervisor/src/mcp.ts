@@ -20,7 +20,9 @@ const Spawn = z.object({
   resume_session: z.string().optional(),
 });
 const Id = z.object({ id: z.string() });
-const HoldArgs = z.object({ reason: z.string().min(1) });
+const TakeSlot = z.object({ project: z.string(), name: z.string().min(1), label: z.string().min(1) });
+const FreeSlot = z.object({ name: z.string().min(1) });
+const OrderQueue = z.object({ names: z.array(z.string()).min(1) });
 const Tail = z.object({ id: z.string(), n: z.number().int().positive().max(500).default(40) });
 const ListArgs = z.object({ project: z.string().optional() });
 const AnswerArgs = z.object({
@@ -82,13 +84,18 @@ const TOOLS = [
   { name: "list_projects", description: "Projects registered on this laptop and their roles.", inputSchema: obj({}) },
   { name: "audit_log", description: "The supervisor's most recent actions, newest first.", inputSchema: obj({ limit: { type: "number" } }) },
   {
-    name: "hold",
+    name: "take_slot",
     description:
-      "Keep the laptop quiet (e.g. while CI runs on its runner): no new workers start and no run slot is granted (tests, probes, landing) until release_hold. Runs already in a slot finish. Survives a supervisor restart.",
-    inputSchema: obj({ reason: { type: "string" } }, ["reason"]),
+      "Queue an interactive agent (not a worker) for the laptop's one run slot, for a test, probe, browser run or land. You are told when it's given; tell the agent to go, then free_slot when it reports done. Workers queue themselves.",
+    inputSchema: obj({ project: { type: "string" }, name: { type: "string" }, label: { type: "string", description: "What will run" } }, ["project", "name", "label"]),
   },
-  { name: "release_hold", description: "End the hold: queued workers start and waiting runs get their slots.", inputSchema: obj({}) },
-  { name: "run_slots", description: "The run slots: the hold if any, who holds a slot and for what, and who is waiting, in order.", inputSchema: obj({}) },
+  { name: "free_slot", description: "Free the run slot (or a place in its queue) held by an agent or worker, by name or worker id.", inputSchema: obj({ name: { type: "string" } }, ["name"]) },
+  {
+    name: "order_run_queue",
+    description: "Put these agents (names or worker ids) first in the run queue, in this order, e.g. by the critical path. The rest keep their order.",
+    inputSchema: obj({ names: { type: "array", items: { type: "string" } } }, ["names"]),
+  },
+  { name: "run_slots", description: "The run slot: the hold if any (read from the projects' hold files, e.g. pnpm integrate hold), who holds the slot and for what, and who is waiting, in order.", inputSchema: obj({}) },
 ] as const;
 
 function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<unknown> | unknown> {
@@ -124,8 +131,12 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
     },
     list_projects: () => sup.projects(),
     audit_log: (a) => sup.audit(AuditArgs.parse(a).limit),
-    hold: (a) => sup.hold(HoldArgs.parse(a).reason),
-    release_hold: () => sup.releaseHold() ?? "There was no hold",
+    take_slot: (a) => {
+      const t = TakeSlot.parse(a);
+      return sup.takeSlot(t.project, t.name, t.label);
+    },
+    free_slot: (a) => sup.freeSlot(FreeSlot.parse(a).name),
+    order_run_queue: (a) => sup.orderRunQueue(OrderQueue.parse(a).names),
     run_slots: () => sup.slotStatus(),
   };
 }

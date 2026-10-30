@@ -111,4 +111,13 @@ describe("Policy", () => {
     expect(() => new Policy("default: allow")).toThrow();
     expect(new Policy("default: deny").evaluate("Bash", { command: "x" }, ctx()).decision).toBe("deny");
   });
+
+  it("lets a worker cd within its own tree, and only there", () => {
+    const p = new Policy(`rules:\n  - { id: git-add, tools: [Bash], command: "^git add( |$)", decision: allow }`);
+    const ctx = { project: "p", role: "r", writeRoots: ["/work/helix-homer"], cwd: "/work/helix-homer/platform" };
+    expect(p.evaluate("Bash", { command: "cd /work/helix-homer && git add -f x" }, ctx)).toMatchObject({ decision: "allow" });
+    expect(p.evaluate("Bash", { command: "cd .. && git add x" }, ctx)).toMatchObject({ decision: "allow" });
+    expect(p.evaluate("Bash", { command: "cd /work/helix-bill && git add x" }, ctx)).toMatchObject({ decision: "escalate" });
+    expect(p.evaluate("Bash", { command: "cd ../.. && git add x" }, ctx)).toMatchObject({ decision: "escalate" });
+  });
 });

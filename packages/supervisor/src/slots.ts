@@ -1,26 +1,31 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, statSync } from "node:fs";
 
-// Run slots: one heavy run at a time on the laptop (tests, probes, a landing
-// push), whoever asks, in the order they asked. A hold ("keep the Mac quiet",
-// e.g. while CI runs on this laptop's runner) grants no slot and starts no new
-// worker until it is released; runs already in a slot finish. The hold is a
-// file, so it survives a supervisor restart.
+// Run slots (ADR 0094 §2): one heavy run at a time on the laptop (tests,
+// probes, a land and its hook), over every agent: workers wait here, and
+// interactive agents are queued here by their orchestrator. A hold keeps the
+// laptop quiet: no slot is given, except to the authors it allows. The hold
+// is not kept here: it is read from each project's hold file (for helix,
+// `pnpm integrate hold`'s), so there is one register and it can't disagree.
 
-export interface SlotHolder {
-  workerId: string;
+export interface Hold {
+  reason: string;
+  /** Authors whose runs and lands still go (a red main's fix). */
+  allow: string[];
+  /** The file it was read from. */
+  source: string;
+}
+
+export interface SlotEntry {
+  /** A worker id, or `interactive:<name>` for an agent the orchestrator queued. */
+  holder: string;
+  /** The git author the hold's allow list is checked against. */
+  author: string;
   /** What runs: a command, or "land". */
   label: string;
   since: string;
 }
 
-export interface Hold {
-  reason: string;
-  by: string;
-  since: string;
-}
-
-interface Waiter extends SlotHolder {
+interface Waiter extends SlotEntry {
   grant: (release: () => void) => void;
 }
 
@@ -28,24 +33,25 @@ export class SlotAbortedError extends Error {}
 
 export class RunSlots {
   private readonly size: number;
-  private readonly holdFile: string;
+  private readonly readHold: () => Hold | null;
   private readonly onChange: () => void;
-  private readonly holders: SlotHolder[] = [];
-  private readonly queue: Waiter[] = [];
-  private holdState: Hold | null;
+  private readonly onGrant: (entry: SlotEntry) => void;
+  private readonly holders: SlotEntry[] = [];
+  private readonly releases = new Map<SlotEntry, () => void>();
+  private queue: Waiter[] = [];
 
-  constructor(opts: { size: number; holdFile: string; onChange?: () => void }) {
+  constructor(opts: { size: number; readHold: () => Hold | null; onChange?: () => void; onGrant?: (entry: SlotEntry) => void }) {
     this.size = opts.size;
-    this.holdFile = opts.holdFile;
+    this.readHold = opts.readHold;
     this.onChange = opts.onChange ?? (() => {});
-    this.holdState = readHold(opts.holdFile);
+    this.onGrant = opts.onGrant ?? (() => {});
   }
 
   /** Waits for a slot; the returned function releases it (once). */
-  acquire(workerId: string, label: string, signal?: AbortSignal): Promise<() => void> {
+  acquire(holder: string, author: string, label: string, signal?: AbortSignal): Promise<() => void> {
     if (signal?.aborted) return Promise.reject(new SlotAbortedError("aborted"));
     return new Promise((resolve, reject) => {
-      const waiter: Waiter = { workerId, label, since: new Date().toISOString(), grant: resolve };
+      const waiter: Waiter = { holder, author, label, since: new Date().toISOString(), grant: resolve };
       this.queue.push(waiter);
       signal?.addEventListener(
         "abort",
@@ -62,55 +68,125 @@ export class RunSlots {
     });
   }
 
-  hold(reason: string, by: string): Hold {
-    this.holdState = { reason, by, since: new Date().toISOString() };
-    mkdirSync(dirname(this.holdFile), { recursive: true });
-    writeFileSync(`${this.holdFile}.tmp`, JSON.stringify(this.holdState), { mode: 0o600 });
-    renameSync(`${this.holdFile}.tmp`, this.holdFile);
-    this.onChange();
-    return this.holdState;
+  /** Frees every slot a holder has and drops it from the queue. */
+  drop(holder: string): boolean {
+    let found = false;
+    for (const e of [...this.holders]) {
+      if (e.holder !== holder) continue;
+      found = true;
+      this.releases.get(e)?.();
+    }
+    const before = this.queue.length;
+    this.queue = this.queue.filter((w) => w.holder !== holder);
+    if (this.queue.length !== before) found = true;
+    this.pump();
+    return found;
   }
 
-  release(): Hold | null {
-    const was = this.holdState;
-    this.holdState = null;
-    rmSync(this.holdFile, { force: true });
+  /** Moves the named holders to the front of the queue, in that order; the rest keep theirs. */
+  reorder(holders: string[]): void {
+    const first = holders.flatMap((h) => this.queue.filter((w) => w.holder === h));
+    this.queue = [...first, ...this.queue.filter((w) => !first.includes(w))];
     this.pump();
-    this.onChange();
-    return was;
   }
 
   get held(): Hold | null {
-    return this.holdState;
+    return this.readHold();
   }
 
-  status(): { size: number; hold: Hold | null; holders: SlotHolder[]; queue: SlotHolder[] } {
-    const strip = ({ workerId, label, since }: SlotHolder) => ({ workerId, label, since });
-    return { size: this.size, hold: this.holdState, holders: this.holders.map(strip), queue: this.queue.map(strip) };
+  /** Re-reads the hold and gives any slot it now allows. */
+  refresh(): void {
+    this.pump();
+  }
+
+  status(): { size: number; hold: Hold | null; holders: SlotEntry[]; queue: SlotEntry[] } {
+    const strip = ({ holder, author, label, since }: SlotEntry) => ({ holder, author, label, since });
+    return { size: this.size, hold: this.readHold(), holders: this.holders.map(strip), queue: this.queue.map(strip) };
   }
 
   private pump(): void {
-    while (!this.holdState && this.holders.length < this.size && this.queue.length > 0) {
-      const next = this.queue.shift()!;
-      const holder: SlotHolder = { workerId: next.workerId, label: next.label, since: new Date().toISOString() };
-      this.holders.push(holder);
+    const hold = this.readHold();
+    let i = 0;
+    while (this.holders.length < this.size && i < this.queue.length) {
+      const next = this.queue[i]!;
+      if (hold && !hold.allow.includes(next.author)) {
+        i++;
+        continue;
+      }
+      this.queue.splice(i, 1);
+      const entry: SlotEntry = { holder: next.holder, author: next.author, label: next.label, since: new Date().toISOString() };
+      this.holders.push(entry);
       let released = false;
-      next.grant(() => {
+      const release = () => {
         if (released) return;
         released = true;
-        this.holders.splice(this.holders.indexOf(holder), 1);
+        this.releases.delete(entry);
+        this.holders.splice(this.holders.indexOf(entry), 1);
         this.pump();
-        this.onChange();
-      });
+      };
+      this.releases.set(entry, release);
+      next.grant(release);
+      this.onGrant(entry);
     }
     this.onChange();
   }
 }
 
-function readHold(file: string): Hold | null {
+/**
+ * Reads a hold file: JSON `{ "reason": "...", "allow": ["Homer"] }`, or text whose
+ * first line is the reason and whose `allow:` line lists authors. No file, no hold.
+ */
+export function readHoldFile(file: string): Hold | null {
+  let text: string;
   try {
-    return JSON.parse(readFileSync(file, "utf8")) as Hold;
+    text = readFileSync(file, "utf8");
   } catch {
     return null;
   }
+  try {
+    const j = JSON.parse(text) as { reason?: unknown; allow?: unknown };
+    return {
+      reason: typeof j.reason === "string" && j.reason ? j.reason : "held",
+      allow: Array.isArray(j.allow) ? j.allow.filter((a): a is string => typeof a === "string") : [],
+      source: file,
+    };
+  } catch {
+    const lines = text.split("\n").map((l) => l.trim());
+    const allowLine = lines.find((l) => /^allow(ed)?\s*:/i.test(l));
+    return {
+      reason: lines.find((l) => l && l !== allowLine) ?? "held",
+      allow: allowLine ? allowLine.replace(/^allow(ed)?\s*:/i, "").split(/[\s,]+/).filter(Boolean) : [],
+      source: file,
+    };
+  }
+}
+
+/** Reads hold files, re-reading one only when its mtime changes. */
+export function holdReader(files: () => string[]): () => Hold | null {
+  const cache = new Map<string, { mtime: number; hold: Hold | null }>();
+  return () => {
+    const holds: Hold[] = [];
+    for (const f of files()) {
+      let mtime: number;
+      try {
+        mtime = statSync(f).mtimeMs;
+      } catch {
+        cache.delete(f);
+        continue;
+      }
+      let c = cache.get(f);
+      if (!c || c.mtime !== mtime) {
+        c = { mtime, hold: readHoldFile(f) };
+        cache.set(f, c);
+      }
+      if (c.hold) holds.push(c.hold);
+    }
+    if (holds.length === 0) return null;
+    // One Mac: any project's hold holds it; only an author every hold allows still goes.
+    return {
+      reason: holds.map((h) => h.reason).join("; "),
+      allow: holds.reduce((acc, h) => acc.filter((a) => h.allow.includes(a)), holds[0]!.allow),
+      source: holds.map((h) => h.source).join(", "),
+    };
+  };
 }

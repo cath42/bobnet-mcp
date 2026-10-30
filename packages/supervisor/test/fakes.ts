@@ -149,6 +149,7 @@ projects:
     path: /work/helix
     priority: 1
     team: land
+    hold_file: ${stateDir}/land-hold
     roles:
       bill: { dir: /work/helix-bill/architecture }
       marvin: { dir: /work/helix-marvin/qa }

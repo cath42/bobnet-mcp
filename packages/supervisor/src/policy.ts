@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
@@ -130,6 +131,15 @@ export class Policy {
         reason: `Writes are limited to ${ctx.writeRoots.join(", ")}`,
         slot: false,
       };
+    }
+
+    // Changing into the worker's own tree does nothing by itself; the rest of the chain decides.
+    const cdTo = tool === "Bash" && typeof input["command"] === "string" ? /^cd\s+("[^"]+"|'[^']+'|[^\s;&|]+)$/.exec(input["command"].trim()) : null;
+    if (cdTo) {
+      const target = resolve(ctx.cwd, cdTo[1]!.replace(/^["']|["']$/g, "").replace(/^~(?=\/|$)/, homedir()));
+      if (ctx.writeRoots.some((r) => inside(r, target))) {
+        return { decision: "allow", rule: "builtin:cd", tier: "human", reason: "cd inside the worker's write roots", slot: false };
+      }
     }
 
     // A chained Bash command is decided segment by segment: allowed only if

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -36,6 +36,14 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/** Sets or lifts the hold, as `pnpm integrate hold` / `release` would, and lets the supervisor see it. */
+function hold(sup: Supervisor, reason: string | null, allow: string[] = []) {
+  const file = join(dir, "land-hold");
+  if (reason === null) rmSync(file, { force: true });
+  else writeFileSync(file, JSON.stringify({ reason, allow }));
+  sup.checkHold();
+}
+
 async function setup(over = "", config = testConfig(dir, over)) {
   const broker = new FakeBroker();
   const { queryFn, sessions } = fakeQuery();
@@ -68,6 +76,14 @@ describe("billing guard", () => {
     await until(() => sup.status(w.id).state === "stopped");
     expect(sup.status(w.id).error).toMatch(/billing guard/);
     expect(broker.toOrchestrator().at(-1)).toMatch(/billing guard/);
+  });
+
+  it("treats any key source but none as a key, oauth included (ADR 0094 §3)", async () => {
+    const { sup, sessions } = await setup();
+    const w = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    sessions[0]!.emit({ type: "system", subtype: "init", session_id: "s-o", apiKeySource: "oauth" } as unknown as SDKMessage);
+    await until(() => sup.status(w.id).state === "stopped");
   });
 
   it("leaves a subscription session alone", async () => {
@@ -162,29 +178,49 @@ describe("run slots and the hold", () => {
     await until(() => sup.slotStatus().holders.length === 0);
   });
 
-  it("on hold, starts no worker and grants no slot, and survives a restart", async () => {
+  it("on hold (the hold file), starts no worker and grants no slot, then resumes when it is lifted", async () => {
     const { sup, sessions } = await setup();
-    const bill = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
     await until(() => sessions.length === 1);
-    sup.hold("ci 41077 running on the Mac runner");
+    hold(sup, "closing ci");
     const homer = sup.spawn({ project: "helix", role: "homer", task: "t" });
     let granted = false;
     void sessions[0]!.askCall("tu1", "Bash", { command: "pnpm test" }).then(() => (granted = true));
     await tick(30);
     expect([sup.status(homer.id).state, granted]).toEqual(["queued", false]);
-    expect(sup.slotStatus().hold).toMatchObject({ reason: "ci 41077 running on the Mac runner" });
-    expect(existsSync(join(dir, "hold.json"))).toBe(true);
+    expect(sup.slotStatus().hold).toMatchObject({ reason: "closing ci", allow: [] });
+    hold(sup, null);
+    await until(() => granted && sessions.length === 2);
+  });
 
-    // A second supervisor on the same state dir starts on hold.
-    await sup.shutdown();
-    running = running.filter((s) => s !== sup);
-    const second = await setup();
-    expect(second.sup.slotStatus().hold).toMatchObject({ reason: "ci 41077 running on the Mac runner" });
-    expect(second.broker.toOrchestrator().join("\n")).toMatch(/still on hold/);
-    second.sup.releaseHold();
-    await until(() => second.sessions.length >= 1);
-    expect(existsSync(join(dir, "hold.json"))).toBe(false);
-    void bill;
+  it("under a hold with --allow, lets only the allowed author run and start", async () => {
+    const { sup, sessions } = await setup();
+    hold(sup, "red main", ["Homer"]);
+    const bill = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    const homer = sup.spawn({ project: "helix", role: "homer", task: "fix" });
+    await until(() => sessions.length === 1);
+    expect([sup.status(bill.id).state, sup.status(homer.id).state]).toEqual(["queued", "running"]);
+    await expect(sessions[0]!.askCall("tu1", "Bash", { command: "pnpm test" })).resolves.toMatchObject({ behavior: "allow" });
+  });
+
+  it("queues interactive agents in the same slot, tells their orchestrator, and takes Bob's order", async () => {
+    const { sup, broker, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    expect(sup.takeSlot("helix", "Marvin", "e2e on staging")).toEqual({ queued: true, position: 0 });
+    await until(() => broker.toOrchestrator().some((b) => b.startsWith("Run slot given to Marvin")));
+    let billGot = false;
+    void sessions[0]!.askCall("tu1", "Bash", { command: "pnpm test" }).then(() => (billGot = true));
+    expect(sup.takeSlot("helix", "Bender", "wrangler deploy staging").position).toBe(2);
+    sup.orderRunQueue(["Bender"]);
+    expect(sup.slotStatus().queue.map((q) => q.name)).toEqual(["Bender", "Bill"]);
+    expect(() => sup.takeSlot("helix", "Marvin", "again")).toThrow(/already holds/);
+    sup.freeSlot("Marvin");
+    await until(() => broker.toOrchestrator().some((b) => b.startsWith("Run slot given to Bender")));
+    expect(billGot).toBe(false);
+    sup.freeSlot("Bender");
+    await until(() => billGot);
+    expect(() => sup.freeSlot("Marvin")).toThrow(/holds no slot/);
   });
 });
 
@@ -197,8 +233,11 @@ describe("land", () => {
     execFileSync("git", ["-C", worktree, "add", "."]);
     execFileSync("git", ["-C", worktree, "-c", "user.name=Homer", "-c", "user.email=h@x", "commit", "-qm", "init"]);
     const script = join(dir, "land.sh");
-    writeFileSync(script, '#!/bin/sh\necho "author=$GIT_AUTHOR_NAME key=${ANTHROPIC_API_KEY:-none} pwd=$(basename "$PWD")"\nif [ -f FAIL ]; then echo "hook: ownership refused" >&2; exit 3; fi\necho landed 1a2b3c\n');
+    writeFileSync(script, '#!/bin/sh\necho "author=$GIT_AUTHOR_NAME key=${ANTHROPIC_API_KEY:-none} pg=${LAND_PG_ADMIN_URL:-unset} pwd=$(basename "$PWD")"\nif [ -f FAIL ]; then echo "hook: ownership refused" >&2; exit 3; fi\nsleep 0.2\necho landed 1a2b3c\n');
     chmodSync(script, 0o755);
+    const env = join(dir, "env.sh");
+    writeFileSync(env, "#!/bin/sh\n[ -f " + join(dir, "PG_DOWN") + " ] && exit 1\necho \"export LAND_PG_ADMIN_URL='postgres://admin:pw@127.0.0.1:5432/postgres'\"\necho \"export LAND_PG_CONTAINER='land-pg'\"\n");
+    chmodSync(env, 0o755);
     return { worktree, script };
   }
 
@@ -209,7 +248,8 @@ state_dir: ${dir}
 projects:
   helix:
     path: ${worktree}
-    land: { command: [${script}] }
+    land: { command: [${script}], env_command: [${join(dir, "env.sh")}], requires_env: [LAND_PG_ADMIN_URL] }
+    hold_file: ${join(dir, "land-hold")}
     env: { GIT_AUTHOR_NAME: nobody }
     roles:
       homer: { dir: ${join(worktree, "platform")}, env: { GIT_AUTHOR_NAME: Homer } }
@@ -224,7 +264,7 @@ projects:
       await until(() => sessions.length === 1);
       const r = await sup.land(w.id);
       expect(r.ok).toBe(true);
-      expect(r.output).toMatch(/author=Homer key=none pwd=helix-homer/);
+      expect(r.output).toMatch(/author=Homer key=none pg=postgres:\/\/admin:pw@127\.0\.0\.1:5432\/postgres pwd=helix-homer/);
       expect(broker.toOrchestrator().at(-1)).toMatch(/Homer .* landed: landed 1a2b3c/);
       expect(sup.slotStatus().holders).toEqual([]);
     } finally {
@@ -246,6 +286,38 @@ projects:
     const refused = await sup.land(w.id);
     expect(refused).toMatchObject({ ok: false, output: expect.stringMatching(/exited 3[\s\S]*hook: ownership refused/) });
     expect(broker.toOrchestrator().at(-1)).toMatch(/could not land \(exit 3\)/);
+    // The same HEAD again is a retry loop: refused without running.
+    await expect(sup.land(w.id)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(/Nothing has changed since your last land/) });
+  });
+
+  it("refuses, naming it, when the Postgres environment can't be had", async () => {
+    const { worktree, script } = repo();
+    const { sup, sessions } = await setup("", landConfig(worktree, script));
+    const w = sup.spawn({ project: "helix", role: "homer", task: "t" });
+    await until(() => sessions.length === 1);
+    writeFileSync(join(dir, "PG_DOWN"), "");
+    await expect(sup.land(w.id)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(/Precondition: the environment/) });
+  });
+
+  it("holds the worker's edits and Bash until its land returns", async () => {
+    const { worktree, script } = repo();
+    const { sup, sessions } = await setup("", landConfig(worktree, script));
+    const w = sup.spawn({ project: "helix", role: "homer", task: "t" });
+    await until(() => sessions.length === 1);
+    let landed = false;
+    const landing = sup.land(w.id).then((r) => {
+      landed = true;
+      return r;
+    });
+    await tick(20);
+    const edit = sessions[0]!.ask("Read", { file_path: join(worktree, "README") });
+    await expect(edit).resolves.toMatchObject({ behavior: "allow" });
+    expect(landed).toBe(false);
+    // A write (here one policy denies at once) waits for the land before it is even decided.
+    const write = sessions[0]!.ask("Write", { file_path: "/elsewhere/x" }).then((r) => ({ r, landed }));
+    await expect(landing).resolves.toMatchObject({ ok: true });
+    await expect(write).resolves.toMatchObject({ landed: true, r: { behavior: "deny" } });
+    await expect(sup.land(w.id)).resolves.toMatchObject({ ok: true });
   });
 
   it("waits for the hold to end before landing", async () => {
@@ -253,7 +325,7 @@ projects:
     const { sup, sessions } = await setup("", landConfig(worktree, script));
     const w = sup.spawn({ project: "helix", role: "homer", task: "t" });
     await until(() => sessions.length === 1);
-    sup.hold("ci");
+    hold(sup, "closing ci");
     let done = false;
     const landing = sup.land(w.id).then((r) => {
       done = true;
@@ -261,7 +333,7 @@ projects:
     });
     await tick(50);
     expect(done).toBe(false);
-    sup.releaseHold();
+    hold(sup, null);
     await expect(landing).resolves.toMatchObject({ ok: true });
   });
 });
@@ -277,6 +349,7 @@ projects:
   helix:
     path: /work/helix
     team: land
+    hold_file: ${dir}/land-hold
     consult: [bill, homer]
     roles:
       bill: { dir: /work/helix-bill/architecture }
@@ -332,9 +405,9 @@ projects:
     await until(() => sessions.length === 1);
     expect(() => sup.consult(homer.id, "homer", "q")).toThrow(/own role/);
     expect(() => sup.consult(homer.id, "marvin", "q")).toThrow(/isn't consultable/);
-    sup.hold("ci");
+    hold(sup, "closing ci");
     expect(() => sup.consult(homer.id, "bill", "q")).toThrow(/on hold/);
-    sup.releaseHold();
+    hold(sup, null);
     await expect(sup.consult(homer.id, "bill", "q")).rejects.toThrow(/didn't answer within/);
   });
 });

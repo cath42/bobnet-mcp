@@ -11,8 +11,8 @@ import type { OwnerCheck } from "./owner.ts";
 import type { ProjectConfig, RoleConfig, SupervisorConfig } from "./config.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
-import { type Answer, Router } from "./router.ts";
-import { type Hold, RunSlots } from "./slots.ts";
+import { type Answer, authorOf, Router } from "./router.ts";
+import { holdReader, RunSlots, type SlotEntry } from "./slots.ts";
 import { ACTIVE_STATES, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
 import { type Outcome, type QueryFn, type Usage, WorkerRun, workerEnv, ZERO_USAGE } from "./worker.ts";
 import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
@@ -41,6 +41,8 @@ const USAGE_DAYS = 14;
 /** What a land run returns to the worker: the end of its output, where the hook says why. */
 const LAND_OUTPUT_MAX = 20_000;
 const FILE_WRITE_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
+/** How often hold files are re-read, to notice a hold set or released. */
+const HOLD_CHECK_MS = 5_000;
 
 interface Consult {
   id: string;
@@ -80,6 +82,14 @@ export class Supervisor {
   private readonly consults = new Map<string, Consult>();
   /** Land calls waiting for a slot, cancelled if their worker ends. */
   private readonly landWaits = new Map<string, AbortController>();
+  /** A worker's land in progress: its file tools and Bash wait for it (ADR 0094 §1). */
+  private readonly landing = new Map<string, Promise<unknown>>();
+  /** HEAD of each worktree whose last land was refused: the same HEAD isn't tried again. */
+  private readonly refusedHeads = new Map<string, string>();
+  /** Interactive agents queued for a slot by their orchestrator: name → project. */
+  private readonly interactive = new Map<string, string>();
+  private holdTimer: NodeJS.Timeout | null = null;
+  private lastHold = "";
 
   constructor(deps: {
     config: SupervisorConfig;
@@ -97,10 +107,12 @@ export class Supervisor {
     this.broker = deps.broker;
     this.queryFn = deps.queryFn;
     this.log = deps.log;
+    const holdFiles = [...deps.config.projects.values()].flatMap((p) => (p.holdFile ? [p.holdFile] : []));
     this.slots = new RunSlots({
       size: deps.config.runSlots,
-      holdFile: join(deps.config.stateDir, "hold.json"),
+      readHold: holdReader(() => holdFiles),
       onChange: () => this.writeStatus(),
+      onGrant: (e) => this.onSlotGranted(e),
     });
     this.router = new Router({
       store: deps.store,
@@ -108,8 +120,8 @@ export class Supervisor {
       timeoutMs: deps.config.requestTimeoutMinutes * 60_000,
       announce: (req, name) => this.announce(req, name),
       setWorkerState: (id, state) => this.setState(id, state),
-      takeSlot: async (workerId, toolUseId, label, signal) => {
-        const release = await this.slots.acquire(workerId, label, signal);
+      takeSlot: async (workerId, author, toolUseId, label, signal) => {
+        const release = await this.slots.acquire(workerId, author, label, signal);
         this.slotCalls.set(toolUseId, { workerId, release });
         this.store.audit("supervisor", "slot", workerId, { label });
       },
@@ -150,7 +162,9 @@ export class Supervisor {
         p.key,
       );
     }
-    if (this.slots.held) this.notify(`The laptop is still on hold (${this.slots.held.reason}, since ${this.slots.held.since}): no new workers or run slots until release_hold.`);
+    this.lastHold = JSON.stringify(this.slots.held);
+    this.holdTimer = setInterval(() => this.checkHold(), HOLD_CHECK_MS);
+    this.holdTimer.unref();
     this.startedAt = new Date().toISOString();
     this.stallTimer = setInterval(() => {
       this.checkStalls();
@@ -165,6 +179,7 @@ export class Supervisor {
 
   async shutdown(): Promise<void> {
     if (this.stallTimer) clearInterval(this.stallTimer);
+    if (this.holdTimer) clearInterval(this.holdTimer);
     if (this.reportTimer) clearTimeout(this.reportTimer);
     await Promise.all([...this.runs.values()].map((r) => r.stop("supervisor shutting down")));
   }
@@ -280,27 +295,75 @@ export class Supervisor {
     return { request, resumed };
   }
 
-  /** Keeps the laptop quiet: no new workers and no run slots until released. */
-  hold(reason: string, by = "orchestrator"): Hold {
-    const h = this.slots.hold(reason, by);
-    this.store.audit(by, "hold", null, { reason });
-    return h;
+  /**
+   * Queues an interactive agent for the run slot (ADR 0094 §2). Its orchestrator
+   * is told when the slot is given, and frees it with freeSlot when the run is done.
+   */
+  takeSlot(project: string, name: string, label: string): { queued: true; position: number } {
+    this.project(project);
+    const holder = `interactive:${name}`;
+    if (this.slots.status().holders.some((h) => h.holder === holder) || this.slots.status().queue.some((h) => h.holder === holder)) {
+      throw new SupervisorError(`${name} already holds or waits for a slot`);
+    }
+    this.interactive.set(name, project);
+    this.store.audit("orchestrator", "slot:take", null, { name, label });
+    void this.slots.acquire(holder, name, label).catch(() => {});
+    const st = this.slots.status();
+    const pos = st.holders.some((h) => h.holder === holder) ? 0 : st.queue.findIndex((h) => h.holder === holder) + 1;
+    return { queued: true, position: pos };
   }
 
-  releaseHold(by = "orchestrator"): Hold | null {
-    const was = this.slots.release();
-    this.store.audit(by, "release_hold", null, {});
-    this.schedule();
-    return was;
+  /** Frees a slot (or a place in the queue) held for an interactive agent or a worker, by name or id. */
+  freeSlot(nameOrId: string): string {
+    const holders = this.slotHolders(nameOrId);
+    const freed = holders.some((h) => this.slots.drop(h));
+    if (!freed) throw new SupervisorError(`${nameOrId} holds no slot and isn't waiting for one`);
+    this.interactive.delete(nameOrId);
+    this.store.audit("orchestrator", "slot:free", null, { holder: nameOrId });
+    return `${nameOrId}'s slot freed`;
+  }
+
+  /** Puts these holders (names or worker ids) first in the run queue, in this order. */
+  orderRunQueue(names: string[]) {
+    this.slots.reorder(names.flatMap((n) => this.slotHolders(n)));
+    this.store.audit("orchestrator", "slot:order", null, { names });
+    return this.slotStatus();
   }
 
   slotStatus() {
-    const named = (h: { workerId: string; label: string; since: string }) => {
-      const w = this.store.worker(h.workerId);
-      return { ...h, name: w ? this.roleOf(w).name : "?" };
+    const named = (h: SlotEntry) => {
+      if (h.holder.startsWith("interactive:")) return { ...h, name: h.holder.slice("interactive:".length), interactive: true };
+      const w = this.store.worker(h.holder);
+      return { ...h, name: w ? this.roleOf(w).name : "?", interactive: false };
     };
     const st = this.slots.status();
     return { ...st, holders: st.holders.map(named), queue: st.queue.map(named) };
+  }
+
+  private slotHolders(nameOrId: string): string[] {
+    if (this.store.worker(nameOrId)) return [nameOrId];
+    const lower = nameOrId.toLowerCase();
+    const workers = [...this.runs.keys()].filter((id) => {
+      const w = this.store.worker(id);
+      return w && this.roleOf(w).name.toLowerCase() === lower;
+    });
+    return [...workers, `interactive:${nameOrId}`];
+  }
+
+  private onSlotGranted(e: SlotEntry): void {
+    if (!e.holder.startsWith("interactive:")) return;
+    const name = e.holder.slice("interactive:".length);
+    this.notify(`Run slot given to ${name} (${e.label}). Tell ${name} to go; free_slot ${name} when it reports done.`, this.interactive.get(name));
+  }
+
+  /** Notices a hold set or released in a hold file (checked every few seconds). */
+  checkHold(): void {
+    const now = JSON.stringify(this.slots.held);
+    if (now === this.lastHold) return;
+    this.lastHold = now;
+    this.store.audit("supervisor", this.slots.held ? "hold:seen" : "hold:released", null, { hold: this.slots.held });
+    this.slots.refresh();
+    this.schedule();
   }
 
   projects(): Array<{ key: string; path: string; priority: number; team: string | undefined; orchestrator: string; consult: string[]; land: boolean; roles: Array<{ key: string; name: string; dir: string; model: string | undefined }> }> {
@@ -398,7 +461,9 @@ export class Supervisor {
   // ---------- Scheduling ----------
 
   private schedule(): void {
-    for (const w of this.slots.held ? [] : this.store.queued()) {
+    const hold = this.slots.held;
+    for (const w of this.store.queued()) {
+      if (hold && !hold.allow.includes(authorOf(this.roleOf(w)))) continue;
       if (this.runs.size >= this.config.concurrency) break;
       const busy = [...this.runs.keys()].some((id) => {
         const r = this.store.worker(id);
@@ -435,7 +500,7 @@ export class Supervisor {
       queryFn: this.queryFn,
       canUseTool: consult
         ? this.readOnly(this.router.forWorker(w.id, role))
-        : this.withPreapprovals(w.id, handoff, role.dir, this.router.forWorker(w.id, role)),
+        : this.whileLanding(w.id, this.withPreapprovals(w.id, handoff, role.dir, this.router.forWorker(w.id, role))),
       mcpServers: {
         [WORKER_SERVER]: workerTools({
           name: role.name,
@@ -457,7 +522,7 @@ export class Supervisor {
         this.stallReported.delete(w.id);
         if (msg.type === "assistant" || msg.type === "result") this.report();
       },
-      onToolResult: (toolUseId) => this.freeSlot(toolUseId),
+      onToolResult: (toolUseId) => this.releaseCall(toolUseId),
       onExit: (outcome) => this.onExit(w.id, outcome),
     });
 
@@ -496,6 +561,15 @@ export class Supervisor {
     };
   }
 
+  /** While the worker's land runs, its file tools and Bash wait for the result (ADR 0094 §1). */
+  private whileLanding(workerId: string, inner: CanUseTool): CanUseTool {
+    return async (tool, input, opts) => {
+      const landing = this.landing.get(workerId);
+      if (landing && (FILE_WRITE_TOOLS.includes(tool) || tool === "Bash")) await landing.catch(() => {});
+      return inner(tool, input, opts);
+    };
+  }
+
   /** A consult worker's guard: file writes are refused before policy is asked. */
   private readOnly(inner: CanUseTool): CanUseTool {
     return async (tool, input, opts) =>
@@ -504,7 +578,7 @@ export class Supervisor {
         : inner(tool, input, opts);
   }
 
-  private freeSlot(toolUseId: string): void {
+  private releaseCall(toolUseId: string): void {
     const call = this.slotCalls.get(toolUseId);
     if (!call) return;
     this.slotCalls.delete(toolUseId);
@@ -513,39 +587,71 @@ export class Supervisor {
 
   // ---------- Landing ----------
 
-  /** Runs the project's land command for a worker, in its worktree and a run slot. */
-  async land(workerId: string): Promise<{ ok: boolean; output: string }> {
+  /**
+   * Lands a worker's commits with the project's land command (ADR 0094 §1): in its
+   * worktree, as its own author, in the run slot, through the hook, one attempt.
+   * It refuses, naming the precondition, rather than fixing anything for the worker.
+   */
+  land(workerId: string): Promise<{ ok: boolean; output: string }> {
+    if (this.landing.has(workerId)) return Promise.reject(new SupervisorError("A land is already running for you; wait for its result"));
+    const p = this.doLand(workerId).finally(() => this.landing.delete(workerId));
+    this.landing.set(workerId, p);
+    return p;
+  }
+
+  private async doLand(workerId: string): Promise<{ ok: boolean; output: string }> {
     const w = this.worker(workerId);
     const role = this.roleOf(w);
     const project = this.project(w.project);
-    if (!project.land) throw new SupervisorError(`Project ${project.key} has no land command`);
+    const land = project.land;
+    if (!land) throw new SupervisorError(`Project ${project.key} has no land command`);
+    const refuse = (why: string) => {
+      this.store.audit("supervisor", "land:refused", workerId, { why: why.slice(0, 200) });
+      return { ok: false, output: `Not landed. ${why}` };
+    };
+
+    const worktree = await git(role.dir, ["rev-parse", "--show-toplevel"]);
+    const dirty = await git(worktree, ["status", "--porcelain"]);
+    if (dirty) return refuse(`Precondition: a clean tree. ${worktree} has uncommitted changes; commit or remove them:\n${dirty}`);
+    const head = await git(worktree, ["rev-parse", "HEAD"]);
+    if (this.refusedHeads.get(worktree) === head) {
+      return refuse(`Nothing has changed since your last land was refused at ${head.slice(0, 8)}. Fix the cause and commit first; no retry loop (ADR 0093 §4). If you think it was a fluke, say so to ${project.orchestrator} in your handoff.`);
+    }
+
+    const env: Record<string, string> = { ...workerEnv(process.env), ...role.env };
+    if (land.envCommand) {
+      const r = await runCommand(land.envCommand, worktree, env, 60_000);
+      if (r.code !== 0) return refuse(`Precondition: the environment. ${land.envCommand.join(" ")} failed (exit ${r.code}):\n${r.output.slice(-2000)}`);
+      Object.assign(env, parseExports(r.output));
+    }
+    const missing = land.requiresEnv.filter((k) => !env[k]);
+    if (missing.length > 0) return refuse(`Precondition: ${missing.join(", ")} must be set (the Postgres environment). Ask ${project.orchestrator}; the local database may be down.`);
+
     const run = this.runs.get(workerId);
     const waiting = new AbortController();
     this.landWaits.set(workerId, waiting);
     let release: () => void;
     try {
-      release = await this.slots.acquire(workerId, "land", waiting.signal);
+      release = await this.slots.acquire(workerId, authorOf(role), "land", waiting.signal);
     } finally {
       this.landWaits.delete(workerId);
     }
-    this.store.audit("supervisor", "land:start", workerId, { command: project.land.command });
+    this.store.audit("supervisor", "land:start", workerId, { command: land.command, head });
     try {
-      const worktree = await git(role.dir, ["rev-parse", "--show-toplevel"]);
-      const dirty = await git(worktree, ["status", "--porcelain"]);
-      if (dirty) {
-        return { ok: false, output: `Not landed: the worktree ${worktree} has uncommitted changes. Commit or remove them first:\n${dirty}` };
-      }
-      const r = await runCommand(project.land.command, worktree, { ...workerEnv(process.env), ...role.env }, project.land.timeoutMinutes * 60_000);
+      const r = await runCommand(land.command, worktree, env, land.timeoutMinutes * 60_000);
       const output = r.output.length > LAND_OUTPUT_MAX ? `…${r.output.slice(-LAND_OUTPUT_MAX)}` : r.output;
-      this.store.audit("supervisor", r.code === 0 ? "land:ok" : "land:failed", workerId, { code: r.code });
+      const ok = r.code === 0;
+      if (ok) this.refusedHeads.delete(worktree);
+      else this.refusedHeads.set(worktree, head);
+      this.store.audit("supervisor", ok ? "land:ok" : "land:failed", workerId, { code: r.code, head });
       const last = r.output.trim().split("\n").at(-1)?.slice(0, 300) ?? "";
       this.notify(
-        r.code === 0
+        ok
           ? `${role.name} (${workerId}) landed: ${last}`
           : `${role.name} (${workerId}) could not land (${r.timedOut ? "timed out" : `exit ${r.code}`}): ${last}`,
         project.key,
       );
-      return { ok: r.code === 0, output: `${project.land.command.join(" ")} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
+      return { ok, output: `${land.command.join(" ")} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
     } finally {
       release();
       if (run) run.lastEventAt = Date.now();
@@ -619,7 +725,7 @@ export class Supervisor {
     this.runs.delete(id);
     this.preapproved.delete(id);
     this.stallReported.delete(id);
-    for (const [toolUseId, call] of this.slotCalls) if (call.workerId === id) this.freeSlot(toolUseId);
+    for (const [toolUseId, call] of this.slotCalls) if (call.workerId === id) this.releaseCall(toolUseId);
     this.landWaits.get(id)?.abort();
     const w = this.store.worker(id)!;
     const checkpoint = this.checkpoints.get(id) ?? w.checkpoint;
@@ -998,4 +1104,14 @@ function runCommand(argv: string[], cwd: string, env: Record<string, string>, ti
       resolve({ code: code ?? -1, output, timedOut });
     });
   });
+}
+
+/** `export NAME='value'` lines, as `ops/scripts/local.sh env` prints them. */
+export function parseExports(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const m = /^\s*export\s+([A-Za-z_][A-Za-z0-9_]*)=(?:'([^']*)'|"([^"]*)"|(\S*))\s*$/.exec(line);
+    if (m) out[m[1]!] = m[2] ?? m[3] ?? m[4] ?? "";
+  }
+  return out;
 }

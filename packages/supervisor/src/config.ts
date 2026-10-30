@@ -62,8 +62,14 @@ const Project = z.object({
     .object({
       command: z.array(z.string()).min(1),
       timeout_minutes: z.number().positive().default(30),
+      /** Prints `export NAME='value'` lines for the land's environment (read at run time, never stored). */
+      env_command: z.array(z.string()).min(1).optional(),
+      /** Variables the land refuses to run without, naming the one missing. */
+      requires_env: z.array(z.string()).default([]),
     })
     .optional(),
+  /** A hold file (for helix, `pnpm integrate hold`'s): while it exists, no slot and no new worker. */
+  hold_file: path.optional(),
   /** Roles any worker in the project may consult mid-task. */
   consult: z.array(z.string()).default([]),
   roles: z.record(z.string(), Role),
@@ -81,7 +87,7 @@ const SupervisorFile = z.object({
   max_runtime_minutes: z.number().positive().default(180),
   state_dir: path.default("~/.local/state/bobnet"),
   mcp_port: z.number().int().min(1024).max(65535).default(7425),
-  /** Heavy runs (tests, probes, landing) at once on this laptop. */
+  /** Heavy runs (tests, probes, landing) at once on this laptop (ADR 0094 §2: one). */
   run_slots: z.number().int().positive().default(1),
   /** How long a consulted role has to answer. */
   consult_timeout_minutes: z.number().positive().default(10),
@@ -110,7 +116,8 @@ export interface ProjectConfig {
   priority: number;
   team: string | undefined;
   orchestrator: string;
-  land: { command: string[]; timeoutMinutes: number } | undefined;
+  land: { command: string[]; timeoutMinutes: number; envCommand: string[] | undefined; requiresEnv: string[] } | undefined;
+  holdFile: string | undefined;
   consult: string[];
   roles: Map<string, RoleConfig>;
 }
@@ -197,7 +204,10 @@ export function parseSupervisorConfig(
       priority: p.priority,
       team: p.team,
       orchestrator: p.orchestrator ?? file.orchestrator,
-      land: p.land ? { command: p.land.command, timeoutMinutes: p.land.timeout_minutes } : undefined,
+      land: p.land
+        ? { command: p.land.command, timeoutMinutes: p.land.timeout_minutes, envCommand: p.land.env_command, requiresEnv: p.land.requires_env }
+        : undefined,
+      holdFile: p.hold_file,
       consult: p.consult,
       roles,
     });

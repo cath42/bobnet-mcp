@@ -31,8 +31,8 @@ export type Outcome =
 const GRACE_MS = 10_000;
 /** v0.1's server; workers use only the supervisor's in-process `bobnet` tools. */
 const ALWAYS_DISALLOWED = ["mcp__bobnet-mcp"];
-/** Key sources that mean the session runs on the Claude subscription's login. */
-const SUBSCRIPTION_SOURCES = new Set(["none", "oauth"]);
+/** The only key source that means the session runs on the Claude subscription's login (ADR 0094 §3). */
+const SUBSCRIPTION_SOURCE = "none";
 
 /** An async iterable the supervisor can keep pushing user messages into. */
 class InputQueue implements AsyncIterable<SDKUserMessage> {
@@ -203,7 +203,7 @@ export class WorkerRun {
       this.sessionId = msg.session_id;
       // The billing guard: a worker never runs on an API key.
       const source = (msg as { apiKeySource?: string }).apiKeySource;
-      if (source !== undefined && !SUBSCRIPTION_SOURCES.has(source)) {
+      if (source !== undefined && source !== SUBSCRIPTION_SOURCE) {
         void this.stop(`billing guard: the session would bill to an API key (apiKeySource ${source}), not the subscription`);
       }
     }
