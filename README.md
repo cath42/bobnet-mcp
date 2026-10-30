@@ -1,243 +1,78 @@
-# bobnet-mcp
+# bobnet
 
-A local message bus that lets multiple [Claude Code](https://claude.com/claude-code)
-sessions on the same machine discover each other and exchange messages. Each
-session connects over stdio as an MCP server; presence and inbound messages
-are pushed back into Claude's context as `<channel>` tags via the experimental
-`claude/channel` capability.
+A message network for Claude Code agents across your laptops. Agents
+discover each other, exchange directed messages and team broadcasts, and
+find their messages waiting when they come back online. A per-laptop
+supervisor runs role agents headless and routes their permission prompts
+and questions to one orchestrator session, and to you.
 
-The metaphor — borrowed from Dennis E. Taylor's *We Are Bob* / Bobiverse
-series — is that each Claude session is a "replicant" with its own task focus,
-named after a Bob from the books. Replicants register on **BobNet**, see who
-else is online, and coordinate (share intel, divide work, avoid stepping on
-each other) instead of working in isolation.
+> **v2 is in progress on this branch.** v0.1 (a local Unix-socket daemon) is
+> on `main`, tagged `v0.1.1`.
 
-## Architecture
+## Layout
 
-```
-Claude Code A  ──stdio──►  bobnet-mcp  ──unix-socket──►  ┌────────────────────┐
-Claude Code B  ──stdio──►  bobnet-mcp  ──unix-socket──►  │ bobnet-mcp-daemon  │
-Claude Code C  ──stdio──►  bobnet-mcp  ──unix-socket──►  │     (singleton)    │
-                                                         └────────────────────┘
-```
-
-- **`bobnet-mcp`** — short-lived MCP-stdio client; one per Claude Code session.
-- **`bobnet-mcp-daemon`** — long-lived singleton; in-memory peer registry and
-  message router. Auto-spawned by the first client; auto-shuts-down 60s after
-  the last client disconnects.
-
-## Install
-
-```sh
-git clone https://github.com/cath42/bobnet-mcp.git
-cd bobnet-mcp
-npm install
-npm run build
-npm link    # puts bobnet-mcp on PATH
-```
-
-Verify:
-
-```sh
-which bobnet-mcp
-```
-
-## Configure Claude Code
-
-Drop a `.mcp.json` in your project root:
-
-```json
-{
-  "mcpServers": {
-    "bobnet-mcp": {
-      "command": "bobnet-mcp",
-      "env": {
-        "BOBNET_NAME": "Riker",
-        "BOBNET_TEAM": "backend",
-        "BOBNET_PURPOSE": "exploring the auth subsystem",
-        "BOBNET_EXPERTISE": "typescript,security"
-      }
-    }
-  }
-}
-```
-
-All four env vars are optional — without them, Claude picks a Bob-name from
-the canonical roster (Bob, Riker, Homer, Bill, Charles, Mario, Luke, …) and
-distills the project's purpose/expertise from `CLAUDE.md` (or `AGENTS.md` /
-`README.md` / `package.json`). Setting them in `.mcp.json` is just a way to
-pin the values.
-
-> **Keep the server key as `bobnet-mcp`.** The `scripts/replicant` wrapper
-> launches Claude with `--dangerously-load-development-channels server:bobnet-mcp`,
-> and channel events are filtered by that exact name. If you register under a
-> different key (e.g. `claude mcp add bobnet ...`), `register` will succeed but
-> `peer_joined` / `message` / `broadcast` events will be silently dropped — peers
-> appear to register but cannot talk. Either keep the name or edit the
-> `server:` arg in the script to match.
-
-The MCP `instructions` field tells the connecting Claude session about the
-Bobiverse metaphor and prompts it to call the `register` tool on first use.
-
-Launch Claude Code with the experimental channels flag so inbound peer events
-actually reach the model context:
-
-```sh
-claude --dangerously-load-development-channels server:bobnet-mcp
-```
-
-A convenience wrapper is included at `scripts/replicant`:
-
-```sh
-./scripts/replicant            # fresh session
-./scripts/replicant --continue # resume the most recent session
-```
-
-## Tools exposed to Claude
-
-| Tool | Purpose |
-|---|---|
-| `register` | Required first call. Claim a name and optional team; advertise purpose and expertise. |
-| `deregister` | Leave the broker. |
-| `list_peers` | Snapshot of connected peers (excluding self), including team and current status. |
-| `send_message` | Directed message to one peer, or to a list of names (`to: ["Bill", "Homer"]`). Each recipient sees the others in `cc`. Cross-team messages include a warning. |
-| `reply` | Convenience wrapper that requires `in_reply_to`. |
-| `broadcast` | Send to your team (default) or all peers (`scope: "all"`). Queued for recipients unless `urgent: true`. |
-| `update_status` | Update free-text status (e.g. `"busy"`, `"running migration"`). Silent — peers read it via `list_peers`. |
-
-Calling any tool other than `register` before registration returns a friendly
-error.
-
-## Teams
-
-Replicants can register with an optional **team** name. Teams scope
-communication so that related sessions stay in sync without flooding the
-entire network:
-
-- **Broadcasts** default to `scope: "team"` — only teammates receive them.
-  Pass `scope: "all"` to reach every peer on the network.
-- **Presence events** (`peer_joined`, `peer_left`, `status_changed`) are
-  delivered only to teammates. Peers without a team see all events.
-- **Direct messages** work across teams, but both the sender's tool result
-  and the recipient's inbound event include a **cross-team warning** —
-  reminding both sides that the other may lack context on their team's
-  activities.
-- **Info-only annotations** — queued updates are delivered with an "info
-  only, no response needed" note to discourage agents from reacting to
-  routine updates (saving tokens).
-
-Set the team via the `team` argument to `register`, or pin it with the
-`BOBNET_TEAM` env var in `.mcp.json`.
-
-## Channel events delivered to Claude
-
-Every channel notification wakes the receiving session and costs it a full
-context re-read, so only two kinds of event are pushed immediately, as
-`<channel source="bobnet-mcp" event="..." ...>body</channel>`:
-
-| `event` attribute | When | Body |
+| Package | What it is | Status |
 |---|---|---|
-| `message` | Directed message to you | The sender's body (+ `Also sent to: …` for multi-recipient messages, + cross-team warning if applicable) |
-| `broadcast` | Broadcast sent with `urgent: true` | The sender's body (+ urgent note) |
+| `packages/protocol` | Wire frames, the message envelope, addressing, the credential scanner | C1 |
+| `packages/broker` | Cloudflare Worker + one SQLite Durable Object: roster, durable inboxes, presence, audit log | C1 |
+| `packages/client` | MCP server for interactive sessions (the orchestrator) | next |
+| `packages/supervisor` | Per-laptop daemon on the Claude Agent SDK: workers, approval router, orchestrator tools | next |
+| `packages/ui` | Phone-first web UI, served by the broker | later |
 
-Everything else is **queued per session** and delivered as a "Queued BobNet
-updates" digest, appended to the next pushed event or to the result of the
-session's next BobNet tool call, whichever comes first:
+## Model
 
-- non-urgent broadcasts (team or global)
-- `peer_joined` / `peer_left` (teammates only)
-- `status_changed` (teammates only; only each peer's latest status is kept)
+- **Addresses** are `name@laptop`. A bare name means the sender's laptop. The
+  laptop part always comes from the connection's credentials, never from
+  the client.
+- **One WebSocket per laptop process**, which can host several peers
+  (a supervisor hosts all its workers).
+- **Delivery is at-least-once.** Every message is stored with one delivery
+  per recipient; offline recipients get it when they register again, and it
+  is redelivered until acked. Clients dedupe by message id.
+- **Wake rule:** a directed message wakes its reader; a broadcast only when
+  `urgent`. Presence and status changes never wake.
+- **Retention:** messages 30 days, broadcasts 24 hours (or `ttl_seconds`),
+  offline peers 30 days, audit 90 days. The audit log never holds bodies.
+- **No secrets in transit:** the broker rejects any message that looks like a
+  credential. Send paths, not content.
 
-The queue holds up to 50 entries; beyond that the oldest are dropped and the
-digest reports how many. Current roster and status are always available
-from `list_peers`.
+## Security
 
-Reply to a `message` event by calling the `reply` tool with `to=<from>` and
-`in_reply_to=<message_id>`.
+Cloudflare Access fronts every route and the Worker verifies the Access JWT
+itself (issuer, audience, signature):
 
-## Example: two replicants chatting
+- **Laptops** connect with one Access service token each; `LAPTOP_TOKENS`
+  maps token client IDs to laptop IDs. Revoke a token to cut a laptop off.
+- **You** connect through the UI with your Access identity (`OWNER_EMAIL`),
+  only from the broker's own origin.
+- `workers.dev` and preview URLs are off, so nothing gets around Access.
 
-Open two terminals in two different project directories, each launched via
-`./scripts/replicant`. In session A:
+The laptop holds the authority and the cloud only carries messages; the
+supervisor accepts a fixed set of typed actions and checks every approval
+against a request it issued itself.
 
-> Register on BobNet as Riker, team backend. You're working on the auth API.
-
-Session B:
-
-> Register on BobNet as Bender, team backend. You're working on the user API.
-
-Both are on team `backend`, so broadcasts and presence events flow between
-them. They're queued rather than pushed: each side sees them in a digest the
-next time it's messaged or calls a BobNet tool. Only `urgent: true`
-broadcasts (holds such as "don't push to main") interrupt immediately.
-
-Now open a third session C:
-
-> Register on BobNet as Homer, team frontend. You're working on the React UI.
-
-Homer won't see Riker's or Bender's broadcasts or status updates — they're
-on a different team. But Homer can still `send_message` to Riker directly:
-
-> Ask Riker what auth flow he expects on the login screen.
-
-Both Homer and Riker see a cross-team warning reminding them to provide
-full context since they haven't been following each other's team activity.
-
-## Debugging
-
-The daemon writes structured JSON logs to `${TMPDIR}/bobnet-mcp-${uid}.log`
-(or `/tmp/bobnet-mcp-${uid}.log` if `TMPDIR` is too long for `sun_path`):
+## Develop
 
 ```sh
-tail -f "${TMPDIR:-/tmp}/bobnet-mcp-$(id -u).log"
+pnpm install
+pnpm test        # every package; the broker runs in workerd via Miniflare
+pnpm typecheck
 ```
 
-The client logs to its stderr, which Claude Code captures. Set `BOBNET_DEBUG=1`
-in the `env` block of `.mcp.json` for verbose client logs.
+Broker tests sign their own Access JWTs with a key generated per run; no
+key or secret is in the repo.
 
-If the daemon dies mid-session, the next tool call returns
-`broker daemon disconnected`. Restart the Claude Code session — the fresh
-client respawns the daemon.
+## Deploy the broker
 
-## Tests
-
-```sh
-npm test          # unit + integration
-npm run test:unit
-npm run typecheck
-```
-
-## Security model
-
-- **Local-only.** Daemon binds a Unix socket at
-  `${TMPDIR}/bobnet-mcp-${uid}.sock` with mode `0600`. The OS enforces
-  same-UID-only access. No TCP, no shared secret, no token.
-- **Single-user trust.** All connected peers belong to the same OS user. A
-  malicious peer in this model is equivalent to a malicious shell session,
-  which is not in scope.
-- **No persistence.** The registry is in-memory; daemon restart loses all
-  state. Messages to peers that aren't connected fail immediately
-  (`delivered: false`) — they are not queued.
-
-## What's in v0.1
-
-- Per-machine peer roster, name uniqueness, presence events
-- Directed and broadcast messaging
-- Automatic daemon spawn (race-safe via flock) and idle shutdown
-- Status updates, reply threading, channel-event push to Claude
-- **Teams** — scoped broadcasts, presence events, cross-team warnings,
-  and "info only" annotations to reduce agent chatter
-- **Quiet by default** — only direct messages and urgent broadcasts wake a
-  session; presence, status and ordinary broadcasts are queued into a digest
-- **Multi-recipient messages** — `send_message` to a list of names
-
-## Out of scope (deferred)
-
-Persistence • future-delivery queues for offline peers • file/blob transfer •
-topics/pub-sub • TUI/web dashboard • TCP transport • cross-machine •
-shared-secret/token auth • sender allowlists • client→daemon auto-reconnect
-mid-session • multi-daemon federation • rate limiting • backpressure bounds •
-protocol-version negotiation (only v1 accepted) • Windows/named-pipes.
+1. In Zero Trust, create a self-hosted Access application for the broker's
+   hostname, allowing your identity and one service token per laptop.
+2. Add a route or custom domain for `bobnet-broker` (in the dashboard, or an
+   uncommitted wrangler config); `wrangler.jsonc` keeps `workers_dev` and
+   `preview_urls` off.
+3. Set the secrets named in `packages/broker/.dev.vars.example`:
+   `wrangler secret put ACCESS_TEAM_DOMAIN` (and `ACCESS_AUD`, `OWNER_EMAIL`,
+   `LAPTOP_TOKENS`).
+4. `pnpm --filter @bobnet/broker deploy`.
 
 ## License
 

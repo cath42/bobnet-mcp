@@ -1,0 +1,11 @@
+# Copy to .dev.vars for `wrangler dev`; set the same names with
+# `wrangler secret put` for production. Never commit real values.
+
+# Access team origin, exactly as the JWT issuer, e.g. https://myteam.cloudflareaccess.com
+ACCESS_TEAM_DOMAIN=
+# The Access application's audience (AUD) tag.
+ACCESS_AUD=
+# The only human identity the broker accepts.
+OWNER_EMAIL=
+# JSON map of Access service-token client IDs to laptop IDs, e.g. {"abc.access":"mbp-1"}
+LAPTOP_TOKENS=

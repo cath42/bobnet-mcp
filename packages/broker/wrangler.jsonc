@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bobnet-broker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  // Reachable only through the custom domain behind Cloudflare Access.
+  // Set the route in an uncommitted wrangler.local.jsonc or via the dashboard.
+  "workers_dev": false,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [{ "name": "BROKER", "class_name": "Broker" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Broker"] }],
+  "observability": { "enabled": true }
+}
