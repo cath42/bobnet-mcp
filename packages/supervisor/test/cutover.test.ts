@@ -193,11 +193,13 @@ describe("run slots and the hold", () => {
     await until(() => granted && sessions.length === 2);
   });
 
-  it("under a hold with --allow, lets only the allowed author run and start", async () => {
+  it("under a hold with --allow, lets only the allowed author run and start, whatever the name's case", async () => {
     const { sup, sessions } = await setup();
-    hold(sup, "red main", ["Homer"]);
+    hold(sup, "red main", ["homer"]);
     const bill = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    expect(bill.note).toMatch(/^queued: the laptop is on hold \(red main\), which allows homer, not Bill/);
     const homer = sup.spawn({ project: "helix", role: "homer", task: "fix" });
+    expect(homer.note).toBeUndefined();
     await until(() => sessions.length === 1);
     expect([sup.status(bill.id).state, sup.status(homer.id).state]).toEqual(["queued", "running"]);
     await expect(sessions[0]!.askCall("tu1", "Bash", { command: "pnpm test" })).resolves.toMatchObject({ behavior: "allow" });
@@ -255,7 +257,7 @@ projects:
       homer: { dir: ${join(worktree, "platform")}, env: { GIT_AUTHOR_NAME: Homer } }
 `, (d) => d);
 
-  it("runs the land command in the worker's worktree, with its author, in a slot, and tells the orchestrator", async () => {
+  it("runs the land command in the worker's worktree, with its author, in a slot, and tells the orchestrator when the run ends", async () => {
     const { worktree, script } = repo();
     process.env["ANTHROPIC_API_KEY"] = "must-not-leak";
     try {
@@ -265,9 +267,13 @@ projects:
       const r = await sup.land(w.id);
       expect(r.ok).toBe(true);
       expect(r.output).toMatch(/author=Homer key=none pg=postgres:\/\/admin:pw@127\.0\.0\.1:5432\/postgres pwd=helix-homer/);
-      expect(broker.toOrchestrator().at(-1)).toMatch(/Homer .* landed: landed 1a2b3c/);
       expect(broker.updates).toEqual(["Homer: started", "Homer: landed: landed 1a2b3c"]);
       expect(sup.slotStatus().holders).toEqual([]);
+      // One wake for the orchestrator: the land result rides on the run's done.
+      expect(broker.toOrchestrator().filter((b) => b.startsWith("Homer"))).toEqual([]);
+      sessions[0]!.finish("ok");
+      await until(() => broker.toOrchestrator().some((b) => b.startsWith("Homer")));
+      expect(broker.toOrchestrator().filter((b) => b.startsWith("Homer"))).toEqual([expect.stringMatching(/^Homer .* done.* Land: landed: landed 1a2b3c\. Handoff/)]);
     } finally {
       delete process.env["ANTHROPIC_API_KEY"];
     }
@@ -286,9 +292,11 @@ projects:
     execFileSync("git", ["-C", worktree, "-c", "user.name=Homer", "-c", "user.email=h@x", "commit", "-qm", "fail"]);
     const refused = await sup.land(w.id);
     expect(refused).toMatchObject({ ok: false, output: expect.stringMatching(/exited 3[\s\S]*hook: ownership refused/) });
-    expect(broker.toOrchestrator().at(-1)).toMatch(/could not land \(exit 3\)/);
     // The same HEAD again is a retry loop: refused without running.
     await expect(sup.land(w.id)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(/Nothing has changed since your last land/) });
+    sessions[0]!.finish("gave up");
+    await until(() => broker.toOrchestrator().some((b) => b.startsWith("Homer")));
+    expect(broker.toOrchestrator().at(-1)).toMatch(/Land: could not land \(exit 3\)/);
   });
 
   it("reports a held tip as held, not refused, and lets it land again", async () => {
@@ -302,8 +310,10 @@ projects:
     execFileSync("git", ["-C", worktree, "add", "."]);
     execFileSync("git", ["-C", worktree, "-c", "user.name=Homer", "-c", "user.email=h@x", "commit", "-qm", "f"]);
     await expect(sup.land(w.id)).resolves.toMatchObject({ ok: true, output: expect.stringMatching(/^Held, not refused/) });
-    expect(broker.toOrchestrator().at(-1)).toMatch(/is held/);
     await expect(sup.land(w.id)).resolves.toMatchObject({ output: expect.not.stringMatching(/Nothing has changed/) });
+    sessions[0]!.finish("ok");
+    await until(() => broker.toOrchestrator().some((b) => b.startsWith("Homer")));
+    expect(broker.toOrchestrator().at(-1)).toMatch(/Land: held, lands after the hold: .*; held, lands after the hold/);
   });
 
   it("refuses, naming it, when the Postgres environment can't be had", async () => {

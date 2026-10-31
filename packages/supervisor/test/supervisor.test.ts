@@ -653,11 +653,12 @@ describe("BobNet messages", () => {
     expect(broker.acks).toContainEqual({ as: "Bill", ids: ["m_x1"] });
   });
 
-  it("keeps a message for an idle role, tells the orchestrator once, and gives it to the next worker", async () => {
+  it("keeps a message for an idle role, says so once in an update (no wake), and gives it to the next worker", async () => {
     const { sup, broker, sessions } = await setup();
     sup.onPush({ t: "deliver", to: "Bill@mbp-1", wake: true, msg: msg() });
     sup.onPush({ t: "deliver", to: "Bill@mbp-1", wake: true, msg: msg() });
-    expect(broker.toOrchestrator().filter((b) => b.includes("Riker@mbp-1 messaged Bill"))).toHaveLength(1);
+    expect(broker.updates.filter((u) => u.startsWith("Bill: message from Riker@mbp-1 waits"))).toHaveLength(1);
+    expect(broker.toOrchestrator()).toEqual([]);
     const w = sup.spawn({ project: "helix", role: "bill", task: "t" });
     await until(() => sessions.length === 1 && sessions[0]!.inputs.length === 1);
     expect(sessions[0]!.inputs[0]).toContain("Messages that arrived for you while no worker was running");

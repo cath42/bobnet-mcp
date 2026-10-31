@@ -28,7 +28,7 @@ const TakeSlot = z.object({ project: z.string(), name: z.string().min(1), label:
 const FreeSlot = z.object({ name: z.string().min(1) });
 const OrderQueue = z.object({ names: z.array(z.string()).min(1) });
 const Tail = z.object({ id: z.string(), n: z.number().int().positive().max(500).default(40) });
-const ListArgs = z.object({ project: z.string().optional() });
+const ListArgs = z.object({ project: z.string().optional(), all: z.boolean().default(false) });
 const AnswerArgs = z.object({
   id: z.string(),
   decision: z.enum(["allow", "deny", "answer"]),
@@ -75,7 +75,7 @@ const TOOLS = [
     description: "Stop a worker and queue a fresh one for the same role and task, with no prior context, on what it ran on unless you set model or effort (a retry that failed for lack of power).",
     inputSchema: obj({ id: { type: "string" }, ...POWER }, ["id"]),
   },
-  { name: "list_workers", description: "Workers and their states, optionally for one project.", inputSchema: obj({ project: { type: "string" } }) },
+  { name: "list_workers", description: "Live workers (queued or running) and their states, tasks cut short, optionally for one project. all: true includes finished ones.", inputSchema: obj({ project: { type: "string" }, all: { type: "boolean", description: "Include finished workers (the whole history)." } }) },
   { name: "worker_status", description: "A worker's state, task, last activity, session id and how to open its transcript.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
   { name: "tail_worker", description: "The worker's last n events, one line each.", inputSchema: obj({ id: { type: "string" }, n: { type: "number" } }, ["id"]) },
   { name: "worker_summary", description: "A short digest of what a worker has done: tools used, files changed, last message, result.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
@@ -133,7 +133,10 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
       const r = Reset.parse(a);
       return sup.reset(r.id, { ...(r.model ? { model: r.model } : {}), ...(r.effort ? { effort: r.effort } : {}) });
     },
-    list_workers: (a) => sup.list(ListArgs.parse(a).project),
+    list_workers: (a) => {
+      const l = ListArgs.parse(a);
+      return sup.list(l.project, l.all);
+    },
     worker_status: (a) => sup.status(Id.parse(a).id),
     tail_worker: (a) => {
       const t = Tail.parse(a);

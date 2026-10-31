@@ -118,7 +118,8 @@ describe("orchestrator MCP server", () => {
     await until(() => sup.status(w.id).state === "done");
     expect(await call(c, "worker_summary", { id: w.id })).toMatchObject({ state: "done", result: "ADR drafted" });
     expect(await call(c, "tail_worker", { id: w.id, n: 5 })).toContain("say  Drafted.");
-    expect((await call(c, "list_workers", { project: "helix" }))[0]).toMatchObject({ id: w.id, name: "Bill", state: "done" });
+    expect(await call(c, "list_workers", { project: "helix" })).toEqual([]);
+    expect((await call(c, "list_workers", { project: "helix", all: true }))[0]).toMatchObject({ id: w.id, name: "Bill", state: "done" });
   });
 
   it("returns clear errors for bad input", async () => {

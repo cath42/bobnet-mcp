@@ -109,7 +109,7 @@ export class RunSlots {
     let i = 0;
     while (this.holders.length < this.size && i < this.queue.length) {
       const next = this.queue[i]!;
-      if (hold && !hold.allow.includes(next.author)) {
+      if (hold && !holdAllows(hold, next.author)) {
         i++;
         continue;
       }
@@ -130,6 +130,12 @@ export class RunSlots {
     }
     this.onChange();
   }
+}
+
+/** Whether a hold lets this git author run; names match whatever their case (`homer` allows Homer). */
+export function holdAllows(hold: Hold, author: string): boolean {
+  const a = author.toLowerCase();
+  return hold.allow.some((x) => x.toLowerCase() === a);
 }
 
 /**

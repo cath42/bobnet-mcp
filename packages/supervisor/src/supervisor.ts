@@ -12,7 +12,7 @@ import { EFFORTS, type Effort, type ProjectConfig, type RoleConfig, type RunConf
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
-import { holdReader, RunSlots, type SlotEntry } from "./slots.ts";
+import { holdAllows, holdReader, RunSlots, type SlotEntry } from "./slots.ts";
 import { ACTIVE_STATES, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
 import { type Outcome, type QueryFn, type Usage, WorkerRun, type WorkerRunOptions, workerEnv, ZERO_USAGE } from "./worker.ts";
 import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
@@ -40,6 +40,8 @@ const REPORT_HEARTBEAT_MS = 60_000;
 const USAGE_DAYS = 14;
 /** What a land run returns to the worker: the end of its output, where the hook says why. */
 const LAND_OUTPUT_MAX = 20_000;
+/** How much of a task list_workers shows. */
+const LIST_TASK_MAX = 100;
 const FILE_WRITE_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 /** How often hold files are re-read, to notice a hold set or released. */
 const HOLD_CHECK_MS = 5_000;
@@ -89,6 +91,8 @@ export class Supervisor {
   private readonly landing = new Map<string, Promise<unknown>>();
   /** HEAD of each worktree whose last land was refused: the same HEAD isn't tried again. */
   private readonly refusedHeads = new Map<string, string>();
+  /** A run's land results, told to the orchestrator in its one end-of-run message. */
+  private readonly landResults = new Map<string, string[]>();
   /** Interactive agents queued for a slot by their orchestrator: name → project. */
   private readonly interactive = new Map<string, string>();
   private holdTimer: NodeJS.Timeout | null = null;
@@ -187,7 +191,7 @@ export class Supervisor {
 
   // ---------- Orchestrator API ----------
 
-  spawn(opts: { project: string; role: string; task: string; handoff?: string; resume_session?: string; model?: string; effort?: Effort }): WorkerRow {
+  spawn(opts: { project: string; role: string; task: string; handoff?: string; resume_session?: string; model?: string; effort?: Effort }): WorkerRow & { note?: string } {
     const project = this.project(opts.project);
     const role = this.role(opts.project, opts.role);
     if (opts.model !== undefined && role.models && !role.models.includes(opts.model)) {
@@ -208,7 +212,21 @@ export class Supervisor {
     });
     this.store.audit("orchestrator", "spawn", w.id, { project: w.project, role: w.role, resume: w.resume_session, model: w.model, effort: w.effort });
     this.schedule();
-    return this.store.worker(w.id)!;
+    const row = this.store.worker(w.id)!;
+    const note = row.state === "queued" ? this.queuedBecause(row) : undefined;
+    return note ? { ...row, note } : row;
+  }
+
+  /** Why a queued worker hasn't started, so a spawn that waits says so. */
+  private queuedBecause(w: WorkerRow): string {
+    const hold = this.slots.held;
+    const author = authorOf(this.roleOf(w));
+    if (hold && !holdAllows(hold, author)) {
+      return `queued: the laptop is on hold (${hold.reason}), which allows ${hold.allow.join(", ") || "no one"}, not ${author}; it starts when the hold is released`;
+    }
+    if (this.activeRun(w.project, w.role)) return `queued: ${this.roleOf(w).name} already has a worker running; it starts after that one ends`;
+    if (this.runs.size >= this.config.concurrency) return `queued: ${this.runs.size} workers running, the laptop's limit; it starts when one ends`;
+    return "queued";
   }
 
   async stop(id: string, reason = "stopped by the orchestrator"): Promise<WorkerRow> {
@@ -236,8 +254,14 @@ export class Supervisor {
     return this.spawn({ project: w.project, role: w.role, task: w.task, ...(w.handoff ? { handoff: w.handoff } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
   }
 
-  list(project?: string): Array<WorkerRow & { name: string }> {
-    return this.store.workers(project ? { project } : {}).map((w) => ({ ...w, name: this.roleOf(w).name }));
+  /** Live workers (queued or running) unless `all`, tasks cut short: the full history is too big for a tool result. */
+  list(project?: string, all = false): Array<WorkerRow & { name: string }> {
+    const filter = { ...(project ? { project } : {}), ...(all ? {} : { states: ["queued", ...ACTIVE_STATES] as const }) };
+    return this.store.workers(filter).map((w) => ({
+      ...w,
+      task: w.task.length > LIST_TASK_MAX ? `${w.task.slice(0, LIST_TASK_MAX - 1)}…` : w.task,
+      name: this.roleOf(w).name,
+    }));
   }
 
   status(id: string) {
@@ -448,11 +472,10 @@ export class Supervisor {
       active[1].inject(formatInbound(msg));
       this.store.audit("broker", "inject", active[0], { message: msg.id, from: msg.from });
     } else if (this.store.addInbox(role.project, role.key, msg)) {
-      this.notify(
-        `${msg.from} messaged ${role.name} (${role.project}/${role.key}), which has no running worker. ` +
-          `It waits in ${role.name}'s inbox and goes into the next ${role.key} worker's prompt; spawn one if it should be handled now.`,
-        role.project,
-      );
+      // An update, not a message: it reaches the orchestrator's digest without waking it.
+      this.broker
+        .request({ t: "update", as: role.name, text: `message from ${msg.from} waits in my inbox for my next worker (none running; spawn one if it should be handled now)` })
+        .catch(() => {});
     }
     ack();
   }
@@ -490,7 +513,7 @@ export class Supervisor {
   private schedule(): void {
     const hold = this.slots.held;
     for (const w of this.store.queued()) {
-      if (hold && !hold.allow.includes(authorOf(this.roleOf(w)))) continue;
+      if (hold && !holdAllows(hold, authorOf(this.roleOf(w)))) continue;
       if (this.runs.size >= this.config.concurrency) break;
       const busy = [...this.runs.keys()].some((id) => {
         const r = this.store.worker(id);
@@ -743,15 +766,10 @@ export class Supervisor {
       else this.refusedHeads.set(worktree, head);
       this.store.audit("supervisor", ok ? "land:ok" : held ? "land:held" : "land:failed", workerId, { code: r.code, head });
       const last = landSummary(r.output);
+      const result = ok ? `landed: ${last}` : held ? `held, lands after the hold: ${last}` : `could not land (${r.timedOut ? "timed out" : `exit ${r.code}`}): ${last}`;
       this.progress(w, ok ? `landed: ${last}` : held ? "held: lands after the hold" : `could not land (${r.timedOut ? "timed out" : `exit ${r.code}`})`);
-      this.notify(
-        ok
-          ? `${role.name} (${workerId}) landed: ${last}`
-          : held
-            ? `${role.name} (${workerId}) is held: its tip waits and lands after the hold. ${last}`
-            : `${role.name} (${workerId}) could not land (${r.timedOut ? "timed out" : `exit ${r.code}`}): ${last}`,
-        project.key,
-      );
+      // Told with the run's end, not now: one wake per worker for the orchestrator.
+      this.landResults.set(workerId, [...(this.landResults.get(workerId) ?? []), result]);
       if (held) return { ok: true, output: `Held, not refused: your tip waits and lands when the hold is released; don't land again.\n\n${output}` };
       return { ok, landed: ok, output: `${land.command.join(" ")} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
     } finally {
@@ -981,8 +999,11 @@ export class Supervisor {
         : outcome.state === "failed"
           ? `failed: ${outcome.error}`
           : `stopped: ${outcome.reason}`;
+    const lands = this.landResults.get(id) ?? [];
+    this.landResults.delete(id);
     if (!consultWorker) {
-      this.notify(`${role.name} (${id}, ${w.project}/${w.role}) ${what}. Handoff: ${w.handoff ?? "none"}.`, w.project);
+      const landed = lands.length ? ` Land: ${lands.join("; ")}.` : "";
+      this.notify(`${role.name} (${id}, ${w.project}/${w.role}) ${what}.${landed} Handoff: ${w.handoff ?? "none"}.`, w.project);
       this.progress(w, outcome.state === "done" ? "done" : what);
     }
     this.schedule();
@@ -1043,7 +1064,7 @@ export class Supervisor {
    * which lists the role online. The status says whether a worker is behind it.
    */
   private roleStatus(role: RoleConfig, workerId: string | undefined): void {
-    const status = workerId ? `role · worker ${workerId} running` : "role · no worker running (a message starts one)";
+    const status = workerId ? `role · worker ${workerId} running` : "role · no worker running (messages wait for the next one)";
     this.broker.request({ t: "status", as: role.name, status }).catch(() => {});
   }
 
