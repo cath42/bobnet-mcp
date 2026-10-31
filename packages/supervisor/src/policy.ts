@@ -53,6 +53,8 @@ const Rule = z.object({
 
 const PolicyFile = z.object({
   default: z.enum(["escalate", "deny"]).default("escalate"),
+  /** Who decides what no rule matched: under auto mode only what the classifier can't settle gets there. */
+  default_tier: z.enum(["orchestrator", "human"]).default("orchestrator"),
   rules: z.array(Rule).default([]),
 });
 
@@ -244,7 +246,21 @@ export class Policy {
     return null;
   }
 
-  evaluate(tool: string, input: Record<string, unknown>, ctx: PolicyContext): Verdict {
+  /**
+   * For a worker in auto mode, before its classifier: what the rules settle on their
+   * own. A deny is final; a deliberate escalation, or an allow that needs a run slot,
+   * must come through canUseTool ("ask"), past the classifier. Anything no rule
+   * matched is the classifier's (null).
+   */
+  preflight(tool: string, input: Record<string, unknown>, ctx: PolicyContext): (Verdict & { ask: boolean }) | null {
+    const v = this.evaluate(tool, input, ctx, true);
+    if (v.decision === "deny") return { ...v, ask: false };
+    if (v.decision === "escalate" || v.slot) return { ...v, ask: true };
+    return null;
+  }
+
+  /** `unmatchedPasses`: what no rule matches counts as allowed (preflight's view), never as the default. */
+  evaluate(tool: string, input: Record<string, unknown>, ctx: PolicyContext, unmatchedPasses = false): Verdict {
     const rawPath = filePath(tool, input);
     const absPath = rawPath === undefined ? undefined : resolve(ctx.cwd, rawPath);
 
@@ -273,7 +289,7 @@ export class Policy {
     if (raw !== null && (scan ? scan.segments.length > 1 : COMPOUND.test(raw.replace(/2>&1/g, "")))) {
       const segments = scan ? scan.segments : raw.split(SEGMENTS).map((s) => s.trim()).filter(Boolean);
       if (segments.length > 1) {
-        const verdicts = segments.map((s) => this.evaluate(tool, { ...input, command: s }, ctx));
+        const verdicts = segments.map((s) => this.evaluate(tool, { ...input, command: s }, ctx, unmatchedPasses));
         const worst = verdicts.reduce((a, b) => (rank(b) > rank(a) ? b : a));
         const slot = verdicts.some((v) => v.slot);
         if (worst.decision !== "allow") return { ...worst, slot, reason: `${worst.reason} (in "${clip(segments[verdicts.indexOf(worst)]!)}")` };
@@ -329,10 +345,11 @@ export class Policy {
         slot: rule.slot,
       };
     }
+    if (unmatchedPasses) return { decision: "allow", rule: "default", tier: "human", reason: "No policy rule matched", slot: false };
     return {
       decision: this.file.default,
       rule: "default",
-      tier: "orchestrator",
+      tier: this.file.default_tier,
       reason: "No policy rule matched",
       slot: false,
     };

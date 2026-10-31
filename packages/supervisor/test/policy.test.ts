@@ -141,6 +141,32 @@ describe("Policy", () => {
     expect(scanCommand("pnpm test 2>&1 | tail")).toEqual({ segments: ["pnpm test 2>&1", "tail"], opaque: false });
   });
 
+  it("preflights for auto mode: deny is final, deliberate rules and slots go on, unmatched is the classifier's", () => {
+    const p = new Policy(`default_tier: human
+rules:
+  - { id: no-push, tools: [Bash], command: "^git push", decision: deny }
+  - { id: secrets, tools: [Bash], command: "^security ", decision: escalate, tier: human }
+  - { id: tests, tools: [Bash], command: "^pnpm test( |$)", decision: allow, slot: true }
+  - { id: read, tools: [Bash], command: "^cat( |$)", decision: allow }`);
+    const ctx = { project: "p", role: "r", writeRoots: ["/w"], cwd: "/w" };
+    const pre = (command: string) => p.preflight("Bash", { command }, ctx);
+    expect(pre("git push origin main")).toMatchObject({ decision: "deny", ask: false, rule: "no-push" });
+    expect(pre("python3 - <<'EOF'\nprint(1)\nEOF\ngit push")).toMatchObject({ decision: "deny" });
+    expect(pre("security find-generic-password -w")).toMatchObject({ decision: "escalate", ask: true, tier: "human" });
+    expect(pre("pnpm test")).toMatchObject({ ask: true, slot: true });
+    // Unmatched, even chained with an allowed part, is left to the classifier.
+    expect(pre("pnpm exec tsc --noEmit")).toBeNull();
+    expect(pre("cat x && awk '{print $1}' y")).toBeNull();
+    expect(pre("cat x")).toBeNull();
+    // A chain keeps the deliberate part's decision.
+    expect(pre("pnpm exec tsc && security find-generic-password")).toMatchObject({ ask: true, rule: "secrets" });
+    // Built-in guards hold too.
+    expect(p.preflight("Write", { file_path: "/etc/x" }, ctx)).toMatchObject({ decision: "deny", rule: "builtin:write-scope" });
+    expect(pre("git commit --no-verify -m x")).toMatchObject({ decision: "deny", rule: "builtin:no-verify" });
+    // What reaches canUseTool unmatched goes to default_tier.
+    expect(p.evaluate("Bash", { command: "make" }, ctx)).toMatchObject({ decision: "escalate", tier: "human", rule: "default" });
+  });
+
   it("expands {role} in a command regex to the worker's role", () => {
     const p = new Policy(`rules:
   - { id: refs, tools: [Bash], command: "^git (switch|checkout)\\\\b(?! (-[cbCB] )?{role}/\\\\S+$)", decision: deny }`);

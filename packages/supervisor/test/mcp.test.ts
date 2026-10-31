@@ -81,6 +81,7 @@ describe("orchestrator MCP server", () => {
         "list_projects",
         "list_workers",
         "pending_requests",
+        "request_detail",
         "take_slot",
         "free_slot",
         "order_run_queue",
@@ -105,8 +106,11 @@ describe("orchestrator MCP server", () => {
     const pending = sessions[0]!.ask("WebFetch", { url: "https://docs.example" });
     await until(() => sup.pending().length === 1);
     const [req] = await call(c, "pending_requests");
-    expect(req).toMatchObject({ worker: "Bill", tool: "WebFetch", kind: "approval" });
-    await call(c, "answer_request", { id: req.id, decision: "allow" });
+    expect(req).toMatchObject({ worker: "Bill", tool: "WebFetch", kind: "approval", preview: "https://docs.example" });
+    expect(req.input).toBeUndefined();
+    expect(await call(c, "request_detail", { id: req.id })).toMatchObject({ id: req.id, input: JSON.stringify({ url: "https://docs.example" }) });
+    // The answer is only what was settled, never the input again.
+    expect(await call(c, "answer_request", { id: req.id, decision: "allow" })).toEqual({ id: req.id, state: "answered", decision: "allow" });
     await expect(pending).resolves.toMatchObject({ behavior: "allow" });
 
     sessions[0]!.say("Drafted.");

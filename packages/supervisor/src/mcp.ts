@@ -79,7 +79,8 @@ const TOOLS = [
   { name: "worker_status", description: "A worker's state, task, last activity, session id and how to open its transcript.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
   { name: "tail_worker", description: "The worker's last n events, one line each.", inputSchema: obj({ id: { type: "string" }, n: { type: "number" } }, ["id"]) },
   { name: "worker_summary", description: "A short digest of what a worker has done: tools used, files changed, last message, result.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
-  { name: "pending_requests", description: "Open approvals and questions across all workers, including ones orphaned by a restart.", inputSchema: obj({}) },
+  { name: "pending_requests", description: "Open approvals and questions across all workers (including ones orphaned by a restart), one line each. request_detail gives one in full.", inputSchema: obj({}) },
+  { name: "request_detail", description: "One request in full, its whole input included. Only when the one-line preview isn't enough to decide.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
   {
     name: "answer_request",
     description:
@@ -140,6 +141,7 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
     },
     worker_summary: (a) => sup.summary(Id.parse(a).id),
     pending_requests: () => sup.pending(),
+    request_detail: (a) => sup.requestDetail(Id.parse(a).id),
     answer_request: (a) => {
       const x = AnswerArgs.parse(a);
       if (x.decision === "answer" && !x.answers) throw new AnswerError("decision \"answer\" needs answers");
@@ -147,7 +149,9 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
         x.decision === "answer"
           ? { decision: "answer" as const, answers: x.answers!, ...(x.message ? { message: x.message } : {}) }
           : { decision: x.decision, ...(x.message ? { message: x.message } : {}) };
-      return sup.answer(x.id, answer, x.user_decided ? "human" : "orchestrator", x.resume);
+      // Only what was settled: the request's input is already known to whoever answered it.
+      const r = sup.answer(x.id, answer, x.user_decided ? "human" : "orchestrator", x.resume);
+      return { id: r.request.id, state: r.request.state, decision: r.request.decision, ...(r.resumed ? { resumed: r.resumed.id } : {}) };
     },
     list_projects: () => sup.projects(),
     audit_log: (a) => sup.audit(AuditArgs.parse(a).limit),

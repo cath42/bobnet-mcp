@@ -230,6 +230,33 @@ describe("lifecycle", () => {
     expect(broker.updates.at(-1)).toBe("Bill: LAND-41.1 · started on opus/xhigh (above the role's effort high)");
   });
 
+  it("runs an auto-mode worker with policy as a preflight ahead of the classifier", async () => {
+    const config = testConfig(dir);
+    const bill = config.projects.get("helix")!.roles.get("bill")!;
+    bill.permissionMode = "auto";
+    const broker = new FakeBroker();
+    const { queryFn, sessions } = fakeQuery();
+    const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, ownerCheck });
+    await sup.start();
+    running.push(sup);
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const o = sessions[0]!.options;
+    expect(o.permissionMode).toBe("auto");
+    const hook = o.hooks!.PreToolUse![0]!.hooks[0]!;
+    const pre = async (tool_name: string, tool_input: unknown, mcp_server?: unknown) =>
+      ((await hook({ hook_event_name: "PreToolUse", tool_name, tool_input, tool_use_id: "t1", ...(mcp_server ? { mcp_server } : {}) } as never, "t1", { signal: new AbortController().signal })) as { hookSpecificOutput?: { permissionDecision: string } }).hookSpecificOutput?.permissionDecision;
+    expect(await pre("Bash", { command: "git push origin HEAD:main" })).toBe("ask");
+    expect(await pre("Bash", { command: "pnpm exec vitest run" })).toBeUndefined();
+    expect(await pre("Write", { file_path: "/etc/passwd" })).toBe("deny");
+    expect(await pre("mcp__bobnet__land", {}, { name: "bobnet", source: "sdk" })).toBeUndefined();
+    // A worker in default mode gets no preflight.
+    sup.spawn({ project: "helix", role: "homer", task: "t" });
+    await until(() => sessions.length === 2);
+    expect(sessions[1]!.options).toMatchObject({ permissionMode: "default" });
+    expect(sessions[1]!.options.hooks).toBeUndefined();
+  });
+
   it("notes what a run is on, and what is above the role's default", () => {
     const role = { model: "sonnet", effort: "medium" as const };
     expect(powerNote({ model: null, effort: null }, role)).toBe("");

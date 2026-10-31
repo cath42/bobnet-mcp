@@ -14,7 +14,7 @@ import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
 import { holdReader, RunSlots, type SlotEntry } from "./slots.ts";
 import { ACTIVE_STATES, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
-import { type Outcome, type QueryFn, type Usage, WorkerRun, workerEnv, ZERO_USAGE } from "./worker.ts";
+import { type Outcome, type QueryFn, type Usage, WorkerRun, type WorkerRunOptions, workerEnv, ZERO_USAGE } from "./worker.ts";
 import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
 
 /** What the supervisor needs from its broker connection. */
@@ -64,6 +64,7 @@ export class Supervisor {
   private readonly queryFn: QueryFn;
   private readonly log: Logger;
   private readonly router: Router;
+  private readonly policy: Policy;
   private readonly runs = new Map<string, WorkerRun>();
   private readonly checkpoints = new Map<string, string>();
   private readonly stallReported = new Set<string>();
@@ -105,6 +106,7 @@ export class Supervisor {
   }) {
     this.ownerCheck = deps.ownerCheck ?? null;
     this.config = deps.config;
+    this.policy = deps.policy;
     this.store = deps.store;
     this.broker = deps.broker;
     this.queryFn = deps.queryFn;
@@ -268,16 +270,31 @@ export class Supervisor {
     return { state: w.state, task: w.task, checkpoint: this.checkpoints.get(id) ?? w.checkpoint, ...summarize(this.logPath(w)) };
   }
 
-  pending(): Array<RequestRow & { worker: string; project: string; input_preview: string }> {
+  /** Open requests, one line each: the full input is request_detail's, so a check costs the orchestrator little. */
+  pending(): Array<Pick<RequestRow, "id" | "worker_id" | "kind" | "tool" | "tier" | "rule" | "state" | "created_at"> & { worker: string; project: string; preview: string }> {
     return this.store.requests(["open", "orphaned"]).map((r) => {
       const w = this.store.worker(r.worker_id);
       return {
-        ...r,
+        id: r.id,
+        worker_id: r.worker_id,
+        kind: r.kind,
+        tool: r.tool,
+        tier: r.tier,
+        rule: r.rule,
+        state: r.state,
+        created_at: r.created_at,
         worker: w ? this.roleOf(w).name : "?",
         project: w?.project ?? "?",
-        input_preview: r.input.length > 400 ? `${r.input.slice(0, 399)}…` : r.input,
+        preview: oneLine(r),
       };
     });
+  }
+
+  /** One request in full, input included. */
+  requestDetail(id: string): RequestRow {
+    const r = this.store.request(id);
+    if (!r) throw new SupervisorError(`No request ${id}`);
+    return r;
   }
 
   /**
@@ -517,6 +534,7 @@ export class Supervisor {
       canUseTool: consult
         ? this.readOnly(this.router.forWorker(w.id, role))
         : this.whileLanding(w.id, this.withPreapprovals(w.id, handoff, role.dir, this.router.forWorker(w.id, role))),
+      ...(role.permissionMode === "auto" ? { preToolUse: this.preflight(w.id, role, handoff, consult !== undefined) } : {}),
       mcpServers: {
         [WORKER_SERVER]: workerTools({
           name: role.name,
@@ -589,6 +607,28 @@ export class Supervisor {
       const landing = this.landing.get(workerId);
       if (landing && (FILE_WRITE_TOOLS.includes(tool) || tool === "Bash")) await landing.catch(() => {});
       return inner(tool, input, opts);
+    };
+  }
+
+  /**
+   * Auto mode's guard, run before the classifier on every call: what the canUseTool
+   * wrappers and policy.yaml enforce in default mode, because the classifier never
+   * asks canUseTool about what it approves. A consult writes nothing; a land
+   * pauses Bash and file writes; the handoff file is the worker's own; then
+   * policy's deny and deliberate rules (and slot runs) decide or send the call on.
+   */
+  private preflight(workerId: string, role: RoleConfig, handoff: string, consult: boolean): NonNullable<WorkerRunOptions["preToolUse"]> {
+    return async (tool, input, server) => {
+      if (server === WORKER_SERVER) return null;
+      if (consult && FILE_WRITE_TOOLS.includes(tool)) return { decision: "deny", reason: "A consult only reads and answers; the owner records anything in their own session." };
+      const landing = this.landing.get(workerId);
+      if (landing && (FILE_WRITE_TOOLS.includes(tool) || tool === "Bash")) await landing.catch(() => {});
+      const fp = input["file_path"];
+      if ((tool === "Write" || tool === "Edit") && typeof fp === "string" && resolve(role.dir, fp) === resolve(handoff)) return null;
+      const v = this.policy.preflight(tool, input, { project: role.project, role: role.key, writeRoots: role.writeRoots, cwd: role.dir });
+      if (!v) return null;
+      this.store.audit("policy", v.ask ? "preflight:ask" : "preflight:deny", workerId, { tool, rule: v.rule });
+      return v.ask ? { decision: "ask", reason: `policy rule ${v.rule}` } : { decision: "deny", reason: `Denied by policy (${v.rule}): ${v.reason}` };
     };
   }
 
@@ -947,7 +987,7 @@ export class Supervisor {
     const what =
       req.kind === "question"
         ? `${workerName} asks a question (${req.id})`
-        : `${workerName} needs approval for ${req.tool} (${req.id}, ${req.tier} decides; rule ${req.rule})`;
+        : `${workerName} needs approval for ${req.tool} (${req.id}, ${req.tier} decides; rule ${req.rule}): ${oneLine(req)}`;
     this.notify(`${what}. See pending_requests and answer with answer_request.`, this.store.worker(req.worker_id)?.project);
     this.writeStatus();
   }
@@ -1215,6 +1255,12 @@ export class Supervisor {
 }
 
 /** What a request asks, short enough for the dashboard; never a credential. */
+/** A request on one line, at most 160 characters: what the orchestrator sees before it asks for detail. */
+function oneLine(r: RequestRow): string {
+  const text = preview(r).replace(/\s+/g, " ");
+  return text.length > 160 ? `${text.slice(0, 159)}…` : text;
+}
+
 function preview(r: RequestRow): string {
   let text: string;
   try {

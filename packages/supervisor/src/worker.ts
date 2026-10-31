@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import type { CanUseTool, McpServerConfig, Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { TokenCounts } from "@bobnet/protocol";
 import { BILLING_ENV, type RoleConfig } from "./config.ts";
 
@@ -71,6 +71,9 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
   }
 }
 
+/** A preflight can wait out a land (up to its timeout), so its hook gets as long as a land can take. */
+const PRE_TOOL_USE_TIMEOUT_S = 2 * 3600;
+
 export interface WorkerRunOptions {
   id: string;
   role: RoleConfig;
@@ -80,6 +83,11 @@ export interface WorkerRunOptions {
   logPath: string;
   queryFn: QueryFn;
   canUseTool: CanUseTool;
+  /**
+   * In auto mode, runs before the classifier on every call: "deny" is final, "ask"
+   * sends the call to canUseTool past the classifier, null leaves it to the classifier.
+   */
+  preToolUse?: (tool: string, input: Record<string, unknown>, server: string | undefined, signal: AbortSignal) => Promise<{ decision: "deny" | "ask"; reason: string } | null>;
   mcpServers: Record<string, McpServerConfig>;
   onEvent: (msg: SDKMessage) => void;
   /** A tool call has returned (or failed). */
@@ -126,8 +134,9 @@ export class WorkerRun {
       cwd: role.dir,
       settingSources: ["user", "project", "local"],
       systemPrompt: { type: "preset", preset: "claude_code", append: this.opts.systemAppend, snapshot: true },
-      permissionMode: "default",
+      permissionMode: role.permissionMode,
       canUseTool: this.opts.canUseTool,
+      ...(this.opts.preToolUse ? { hooks: { PreToolUse: [{ hooks: [this.preToolUseHook(this.opts.preToolUse)], timeout: PRE_TOOL_USE_TIMEOUT_S }] } } : {}),
       tools: role.tools ?? WORKER_TOOLS,
       // Only the role's own servers: nothing from ~/.claude.json or the worktree's .mcp.json.
       mcpServers: { ...(role.mcpServers as Record<string, McpServerConfig>), ...this.opts.mcpServers },
@@ -164,6 +173,15 @@ export class WorkerRun {
     );
     this.runtimeTimer.unref();
     void this.consume();
+  }
+
+  private preToolUseHook(guard: NonNullable<WorkerRunOptions["preToolUse"]>): HookCallback {
+    return async (input, _toolUseId, { signal }) => {
+      if (input.hook_event_name !== "PreToolUse") return {};
+      const server = input.mcp_server?.source === "sdk" ? input.mcp_server.name : undefined;
+      const d = await guard(input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>, server, signal);
+      return d ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: d.decision, permissionDecisionReason: d.reason } } : {};
+    };
   }
 
   /** Hands the running worker a message, as its next user turn. */

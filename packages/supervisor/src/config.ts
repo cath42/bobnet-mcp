@@ -49,6 +49,12 @@ const Power = {
   models: z.array(z.string()).min(1).optional(),
   /** The highest effort a spawn may choose; unset allows any. */
   max_effort: EffortLevel.optional(),
+  /**
+   * "auto": Claude Code's classifier approves or denies each call, as for an
+   * interactive agent; policy.yaml's rules still run first and win. "default":
+   * policy.yaml decides every call no settings already allow.
+   */
+  permission_mode: z.enum(["default", "auto"]).optional(),
 };
 
 const Role = z.object({
@@ -163,6 +169,7 @@ export interface RoleConfig {
   effort: Effort | undefined;
   models: string[] | undefined;
   maxEffort: Effort | undefined;
+  permissionMode: "default" | "auto";
   allowedTools: string[] | undefined;
   disallowedTools: string[] | undefined;
   tools: string[] | undefined;
@@ -275,6 +282,7 @@ export function parseSupervisorConfig(
         effort: r.effort ?? p.effort,
         models: r.models ?? p.models,
         maxEffort: r.max_effort ?? p.max_effort,
+        permissionMode: r.permission_mode ?? p.permission_mode ?? "default",
         allowedTools: r.allowed_tools,
         disallowedTools: r.disallowed_tools,
         tools: r.tools,
