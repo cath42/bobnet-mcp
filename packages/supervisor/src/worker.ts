@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type { CanUseTool, McpServerConfig, Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { TokenCounts } from "@bobnet/protocol";
 import { BILLING_ENV, type RoleConfig } from "./config.ts";
@@ -92,6 +93,8 @@ export class WorkerRun {
    * reports the session's exact cumulative totals and cost.
    */
   usage: Usage = structuredClone(ZERO_USAGE);
+  /** What each response has added so far: the SDK repeats a response's usage on every content block. */
+  private readonly counted = new Map<string, TokenCounts>();
 
   private readonly opts: WorkerRunOptions;
   private readonly input = new InputQueue();
@@ -135,7 +138,7 @@ export class WorkerRun {
               failIfUnavailable: true,
               allowUnsandboxedCommands: false,
               autoAllowBashIfSandboxed: false,
-              filesystem: { allowWrite: role.writeRoots },
+              filesystem: { allowWrite: [...role.writeRoots, ...gitWriteDirs(role.dir, role.writeRoots)] },
             },
           }
         : {}),
@@ -208,12 +211,18 @@ export class WorkerRun {
       }
     }
     if (msg.type === "assistant") {
-      // Between results, count each response on top of the last reported total.
+      // Between results, count each response once on top of the last reported total.
       const u = msg.message.usage;
-      this.usage.tokens.input += u.input_tokens;
-      this.usage.tokens.output += u.output_tokens;
-      this.usage.tokens.cache_read += u.cache_read_input_tokens ?? 0;
-      this.usage.tokens.cache_write += u.cache_creation_input_tokens ?? 0;
+      const now: TokenCounts = {
+        input: u.input_tokens,
+        output: u.output_tokens,
+        cache_read: u.cache_read_input_tokens ?? 0,
+        cache_write: u.cache_creation_input_tokens ?? 0,
+      };
+      const id = msg.message.id as string | undefined;
+      const before = (id && this.counted.get(id)) || ZERO_USAGE.tokens;
+      for (const k of ["input", "output", "cache_read", "cache_write"] as const) this.usage.tokens[k] += now[k] - before[k];
+      if (id) this.counted.set(id, now);
     }
     if (msg.type === "result") {
       // modelUsage covers every model call (subagents too) and is cumulative for the session.
@@ -246,6 +255,42 @@ export class WorkerRun {
     this.log?.write(JSON.stringify({ ts: new Date().toISOString(), event }) + "\n");
   }
 }
+
+/**
+ * What git commit needs outside a linked worktree: its own git dir and the
+ * shared objects, refs and logs in the main checkout's .git. Not hooks or
+ * config, which the sandbox write-protects anyway. Empty for a plain checkout
+ * whose .git is already inside a write root.
+ */
+export function gitWriteDirs(
+  dir: string,
+  writeRoots: string[],
+  gitDirs: (dir: string) => [string, string] | null = revParseGitDirs,
+): string[] {
+  const dirs = gitDirs(dir);
+  if (!dirs) return [];
+  const [gitDir, common] = dirs;
+  const out = [gitDir, ...(gitDir === common ? [] : ["objects", "refs", "logs"].map((d) => join(common, d)))];
+  return out.filter((d) => !writeRoots.some((r) => inside(r, d)));
+}
+
+function revParseGitDirs(dir: string): [string, string] | null {
+  try {
+    const out = execFileSync("git", ["-C", dir, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const [gitDir, common] = out.trim().split("\n");
+    return gitDir && common ? [gitDir, common] : null;
+  } catch {
+    return null;
+  }
+}
+
+const inside = (root: string, p: string) => {
+  const rel = relative(root, p);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+};
 
 /** The supervisor's environment without anything that would move billing off the subscription. */
 export function workerEnv(env: NodeJS.ProcessEnv): Record<string, string> {

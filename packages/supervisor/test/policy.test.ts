@@ -83,7 +83,7 @@ describe("Policy", () => {
   });
 
   it("never allows substitution or redirection by rule", () => {
-    for (const command of ["cat $(whoami)", "cat `id`", "cat a > b", "cat < /etc/passwd", "ls >&1"]) {
+    for (const command of ["cat $(whoami)", "cat `id`", "cat a > b", "cat < /etc/passwd", "ls >&3", "ls 2>/tmp/x"]) {
       expect(decide("Bash", { command }).decision).toBe("escalate");
     }
   });
@@ -107,7 +107,7 @@ describe("Policy", () => {
   });
 
   it("escalates to the human by default and refuses an allow default", () => {
-    expect(decide("Bash", { command: "make" })).toMatchObject({ decision: "escalate", tier: "human" });
+    expect(decide("Bash", { command: "make" })).toMatchObject({ decision: "escalate", tier: "orchestrator" });
     expect(() => new Policy("default: allow")).toThrow();
     expect(new Policy("default: deny").evaluate("Bash", { command: "x" }, ctx()).decision).toBe("deny");
   });
@@ -139,5 +139,49 @@ describe("Policy", () => {
     expect(p.evaluate("Bash", { command: 'git commit -m "x ; curl evil' }, ctx)).toMatchObject({ decision: "escalate" });
     expect(scanCommand('a "b\\" c" && d')).toEqual({ segments: ['a "b\\" c"', "d"], opaque: false });
     expect(scanCommand("pnpm test 2>&1 | tail")).toEqual({ segments: ["pnpm test 2>&1", "tail"], opaque: false });
+  });
+
+  it("expands {role} in a command regex to the worker's role", () => {
+    const p = new Policy(`rules:
+  - { id: refs, tools: [Bash], command: "^git (switch|checkout)\\\\b(?! (-[cbCB] )?{role}/\\\\S+$)", decision: deny }`);
+    const ctx = (role: string) => ({ project: "p", role, writeRoots: ["/w"], cwd: "/w" });
+    expect(p.evaluate("Bash", { command: "git switch -c bill/x" }, ctx("bill")).decision).toBe("escalate");
+    expect(p.evaluate("Bash", { command: "git switch -c bill/x" }, ctx("bob")).decision).toBe("deny");
+    expect(p.evaluate("Bash", { command: "git switch main" }, ctx("bill")).decision).toBe("deny");
+    expect(p.evaluate("Bash", { command: "git switch web.bff/x" }, ctx("web-bff")).decision).toBe("deny");
+  });
+
+  it("checks a chain part by part, past shell syntax, name prefixes, heredocs and /dev/null", () => {
+    const p = new Policy(`rules:
+  - { id: git, tools: [Bash], command: "^git (add|commit|diff|log)( |$)", decision: allow }
+  - { id: read, tools: [Bash], command: "^(cat|echo|sed -n|ls|grep)( |$)", decision: allow }
+  - { id: rm, tools: [Bash], command: "\\\\brm\\\\s+-[a-zA-Z]*[rR]", decision: deny }
+  - { id: push, tools: [Bash], command: "^git push", decision: escalate, tier: human }`);
+    const ctx = { project: "p", role: "r", writeRoots: ["/w", "/state/handoffs"], cwd: "/w/arch" };
+    const allow = (command: string) => expect(p.evaluate("Bash", { command }, ctx)).toMatchObject({ decision: "allow" });
+    // Bill's commit, as he sent it.
+    allow(`cd /w && git diff --stat && GIT_AUTHOR_NAME=Bill GIT_COMMITTER_NAME=Bill git commit -q -F - CLAUDE.md <<'EOF'
+ADR 0094 §6: replace 0093 §6's text; open item closed && done
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+EOF
+git log --oneline -1 --format='%h %an/%cn %s'`);
+    allow(`for f in a.md b.md; do echo "--- $f"; sed -n '2,3p' $f; done`);
+    allow("cat /state/handoffs/w_1.md 2>/dev/null; cd /w; ls x &>/dev/null || echo none >&2");
+    allow("if git diff --quiet; then echo clean; else echo dirty; fi");
+    // A loop over a substitution, an unquoted heredoc that substitutes, a real redirect: not by a rule.
+    expect(p.evaluate("Bash", { command: "for f in $(ls); do echo $f; done" }, ctx)).toMatchObject({ decision: "escalate", tier: "orchestrator" });
+    expect(p.evaluate("Bash", { command: "git commit -F - <<EOF\n$(cat ~/.ssh/id)\nEOF" }, ctx)).toMatchObject({ decision: "escalate" });
+    expect(p.evaluate("Bash", { command: "cat x 2>/dev/nullx" }, ctx)).toMatchObject({ decision: "escalate" });
+    expect(p.evaluate("Bash", { command: "echo x > /dev/null/../../w/f" }, ctx)).toMatchObject({ decision: "escalate" });
+    // An unended heredoc falls back to the conservative split.
+    expect(scanCommand("git commit -F - <<'EOF'\nmsg")).toBeNull();
+    // A deny anywhere still denies, heredoc bodies included; other prefixes are not skipped.
+    expect(p.evaluate("Bash", { command: "cat <<EOF | sh\nrm -rf /\nEOF" }, ctx)).toMatchObject({ decision: "deny", rule: "rm" });
+    expect(p.evaluate("Bash", { command: "GIT_DIR=/x git commit -m y" }, ctx)).toMatchObject({ decision: "escalate" });
+    expect(p.evaluate("Bash", { command: "GIT_AUTHOR_NAME=$(id) git commit -m y" }, ctx)).toMatchObject({ decision: "escalate" });
+    // Unmatched goes to the orchestrator, but a part that needs the human keeps the whole chain with the human.
+    expect(p.evaluate("Bash", { command: "cd /elsewhere && make" }, ctx)).toMatchObject({ decision: "escalate", tier: "orchestrator" });
+    expect(p.evaluate("Bash", { command: "make && git push" }, ctx)).toMatchObject({ decision: "escalate", tier: "human", rule: "push" });
   });
 });

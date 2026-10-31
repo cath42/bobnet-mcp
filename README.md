@@ -36,7 +36,7 @@ TypeScript throughout. Node 24 runs the client and supervisor straight from sour
 - **Keepalive:** a ping every 30 seconds, answered by Cloudflare without waking the Durable Object.
 - **Reconnects:** a reconnecting client gets its names back straight away. A name held by a connection that has been silent for 90 seconds can be taken over.
 - **Retention:** messages 30 days, broadcasts 24 hours, offline agents 30 days, audit 90 days. The audit log never holds message bodies.
-- **Approvals:** every tool call a worker makes that its own settings don't already settle goes through `canUseTool`, and then the policy. The answer is allow, deny, or escalate to the orchestrator or to you, with a timeout. Nothing blocks silently.
+- **Approvals:** every tool call a worker makes that its own settings don't already settle goes through `canUseTool`, and then the policy. The answer is allow, deny, or escalate to the orchestrator or to you, with a timeout; a call no rule matches goes to the orchestrator. A chained Bash command is checked part by part and allowed only if every part is. Nothing blocks silently.
 
 ## Security
 
@@ -49,7 +49,7 @@ Cloudflare Access fronts every route, and the Worker verifies the Access JWT its
 - **Workers:**
   - never `bypassPermissions`;
   - run in the OS sandbox with no unsandboxed fallback;
-  - write only inside their role's worktree;
+  - write only inside their role's worktree (and, for a linked worktree, the git data a commit needs, never hooks or config);
   - get BobNet only through the supervisor.
 
 ## Develop

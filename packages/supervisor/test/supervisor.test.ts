@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Envelope } from "@bobnet/protocol";
@@ -7,6 +8,7 @@ import { parseSupervisorConfig } from "../src/config.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
 import { Supervisor } from "../src/supervisor.ts";
+import { gitWriteDirs } from "../src/worker.ts";
 import { FakeBroker, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 
 const POLICY = new Policy(`
@@ -310,6 +312,21 @@ describe("usage and snapshots", () => {
     await until(() => broker.reports.length > 0);
   });
 
+  it("counts a response once, though the SDK repeats its usage on every content block", async () => {
+    const { sup, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const usage = { input_tokens: 10, output_tokens: 6, cache_read_input_tokens: 39385, cache_creation_input_tokens: 0 };
+    const block = (id: string, u = usage) =>
+      sessions[0]!.emit({ type: "assistant", message: { id, content: [{ type: "text", text: "x" }], usage: u } } as never);
+    block("msg_1");
+    block("msg_1");
+    block("msg_1", { ...usage, output_tokens: 9 });
+    block("msg_2");
+    await until(() => sup.snapshot().workers[0]!.tokens.input === 20);
+    expect(sup.snapshot().workers[0]!.tokens).toEqual({ input: 20, output: 15, cache_read: 78770, cache_write: 0 });
+  });
+
   it("counts only the new part of a resumed session", async () => {
     const { sup, sessions } = await setup();
     const first = sup.spawn({ project: "helix", role: "bill", task: "build" });
@@ -492,5 +509,39 @@ describe("BobNet messages", () => {
     await tick(30);
     expect(sessions[0]!.inputs).toHaveLength(1);
     expect(broker.acks).toContainEqual({ as: "Bill", ids: ["m_b"] });
+  });
+});
+
+describe("gitWriteDirs", () => {
+  it("opens a linked worktree's git data to the sandbox, but not hooks or config", () => {
+    const dirs = (): [string, string] => ["/repo/.git/worktrees/bill", "/repo/.git"];
+    expect(gitWriteDirs("/repo-bill/arch", ["/repo-bill"], dirs)).toEqual([
+      "/repo/.git/worktrees/bill",
+      "/repo/.git/objects",
+      "/repo/.git/refs",
+      "/repo/.git/logs",
+    ]);
+    // A plain checkout's .git is already inside its write root.
+    expect(gitWriteDirs("/repo/arch", ["/repo"], () => ["/repo/.git", "/repo/.git"])).toEqual([]);
+    expect(gitWriteDirs("/not-git", ["/not-git"], () => null)).toEqual([]);
+  });
+
+  it("finds a real worktree's git dirs", () => {
+    const root = mkdtempSync(join(tmpdir(), "bobnet-git-"));
+    try {
+      const git = (...args: string[]) => execFileSync("git", args, { cwd: root, stdio: "ignore" });
+      git("init", "-q", "main");
+      git("-C", "main", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x");
+      git("-C", "main", "worktree", "add", "-q", "../bill");
+      const real = realpathSync(root);
+      expect(gitWriteDirs(join(real, "bill"), [join(real, "bill")])).toEqual([
+        join(real, "main/.git/worktrees/bill"),
+        join(real, "main/.git/objects"),
+        join(real, "main/.git/refs"),
+        join(real, "main/.git/logs"),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
