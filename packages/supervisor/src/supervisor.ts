@@ -8,7 +8,7 @@ import type { Identity } from "@bobnet/client/config";
 import type { PushFrame, RequestFrame } from "@bobnet/client/connection";
 import type { Logger } from "@bobnet/client/log";
 import type { OwnerCheck } from "./owner.ts";
-import type { ProjectConfig, RoleConfig, SupervisorConfig } from "./config.ts";
+import type { ProjectConfig, RoleConfig, RunConfig, SupervisorConfig } from "./config.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
@@ -82,6 +82,8 @@ export class Supervisor {
   private readonly consults = new Map<string, Consult>();
   /** Land calls waiting for a slot, cancelled if their worker ends. */
   private readonly landWaits = new Map<string, AbortController>();
+  /** Listed runs waiting for a slot, per worker: aborted when the worker ends. */
+  private readonly runWaits = new Map<string, Set<AbortController>>();
   /** A worker's land in progress: its file tools and Bash wait for it (ADR 0094 §1). */
   private readonly landing = new Map<string, Promise<unknown>>();
   /** HEAD of each worktree whose last land was refused: the same HEAD isn't tried again. */
@@ -511,8 +513,12 @@ export class Supervisor {
           checkpoint: (line) => {
             this.checkpoints.set(w.id, line);
             this.store.updateWorker(w.id, { checkpoint: line });
+            this.progress(w, line);
           },
           ...(project.land && !consult ? { land: () => this.land(w.id) } : {}),
+          ...(project.rebase && !consult ? { rebase: () => this.rebase(w.id) } : {}),
+          runs: consult ? [] : this.runsFor(project, w.role).map((r) => ({ name: r.name, description: r.description, takesArgs: r.args !== undefined })),
+          run: (name, args) => this.runListed(w.id, name, args),
           consultable: consult ? [] : project.consult.filter((r) => r !== w.role),
           consult: (r, question) => this.consult(w.id, r, question),
           answerConsult: (id, answer) => this.answerConsult(w.id, id, answer),
@@ -537,6 +543,7 @@ export class Supervisor {
     this.store.audit("supervisor", consult ? "start:consult" : "start", w.id, { role: role.name, cwd: role.dir, resume: w.resume_session, ...(consult ? { consult: consult.id } : {}) });
     this.runs.set(w.id, run);
     this.roleStatus(role, w.id);
+    if (!consult) this.progress(w, w.resume_session ? "resumed" : "started");
     try {
       run.start();
     } catch (err) {
@@ -648,6 +655,7 @@ export class Supervisor {
       else this.refusedHeads.set(worktree, head);
       this.store.audit("supervisor", ok ? "land:ok" : held ? "land:held" : "land:failed", workerId, { code: r.code, head });
       const last = landSummary(r.output);
+      this.progress(w, ok ? `landed: ${last}` : held ? "held: lands after the hold" : `could not land (${r.timedOut ? "timed out" : `exit ${r.code}`})`);
       this.notify(
         ok
           ? `${role.name} (${workerId}) landed: ${last}`
@@ -658,6 +666,115 @@ export class Supervisor {
       );
       if (held) return { ok: true, output: `Held, not refused: your tip waits and lands when the hold is released; don't land again.\n\n${output}` };
       return { ok, output: `${land.command.join(" ")} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
+    } finally {
+      release();
+      if (run) run.lastEventAt = Date.now();
+    }
+  }
+
+  /**
+   * Rebases a worker's branch onto the project's main, outside the sandbox, as its
+   * own committer. Its file tools and Bash wait meanwhile, as for a land. A conflict
+   * is aborted, never left for the worker: its branch is as it was.
+   */
+  rebase(workerId: string): Promise<{ ok: boolean; output: string }> {
+    if (this.landing.has(workerId)) return Promise.reject(new SupervisorError("A land or rebase is already running for you; wait for its result"));
+    const p = this.doRebase(workerId).finally(() => this.landing.delete(workerId));
+    this.landing.set(workerId, p);
+    return p;
+  }
+
+  private async doRebase(workerId: string): Promise<{ ok: boolean; output: string }> {
+    const w = this.worker(workerId);
+    const role = this.roleOf(w);
+    const rebase = this.project(w.project).rebase;
+    if (!rebase) throw new SupervisorError(`Project ${w.project} has no rebase`);
+    const onto = `${rebase.remote}/${rebase.branch}`;
+    const refuse = (why: string) => {
+      this.store.audit("supervisor", "rebase:refused", workerId, { why: why.slice(0, 200) });
+      return { ok: false, output: `Not rebased. ${why}` };
+    };
+
+    const worktree = await git(role.dir, ["rev-parse", "--show-toplevel"]);
+    const dirty = await git(worktree, ["status", "--porcelain"]);
+    if (dirty) return refuse(`Precondition: a clean tree. ${worktree} has uncommitted changes; commit or remove them:\n${dirty}`);
+    const branch = await git(worktree, ["symbolic-ref", "--short", "-q", "HEAD"]).catch(() => "");
+    if (!branch) return refuse("Precondition: you are on a branch. HEAD is detached.");
+    if (branch === rebase.branch) return refuse(`Precondition: your own branch. You are on ${branch}.`);
+
+    const env: Record<string, string> = { ...workerEnv(process.env), ...role.env, GIT_EDITOR: "true" };
+    const fetched = await runCommand(["git", "fetch", rebase.remote, rebase.branch], worktree, env, 120_000);
+    if (fetched.code !== 0) return refuse(`git fetch ${rebase.remote} ${rebase.branch} failed (exit ${fetched.code}):\n${fetched.output.slice(-2000)}`);
+    const before = await git(worktree, ["rev-parse", "HEAD"]);
+    const run = this.runs.get(workerId);
+    try {
+      const r = await runCommand(["git", "rebase", onto], worktree, env, 300_000);
+      if (r.code !== 0) {
+        const conflicts = await git(worktree, ["diff", "--name-only", "--diff-filter=U"]).catch(() => "");
+        await runCommand(["git", "rebase", "--abort"], worktree, env, 60_000);
+        this.store.audit("supervisor", "rebase:failed", workerId, { code: r.code, head: before });
+        return {
+          ok: false,
+          output: `Not rebased: git rebase ${onto} ${r.timedOut ? "timed out" : `exited ${r.code}`}, so it was aborted and ${branch} is still at ${before.slice(0, 8)}.` +
+            `${conflicts ? `\nConflicts in:\n${conflicts}` : ""}\n\n${r.output.slice(-4000)}`,
+        };
+      }
+      const after = await git(worktree, ["rev-parse", "HEAD"]);
+      this.store.audit("supervisor", "rebase:ok", workerId, { before, after });
+      return { ok: true, output: `Rebased ${branch} onto ${onto}: ${before.slice(0, 8)} → ${after.slice(0, 8)}\n\n${r.output.slice(-2000)}` };
+    } finally {
+      if (run) run.lastEventAt = Date.now();
+    }
+  }
+
+  // ---------- Listed runs ----------
+
+  private runsFor(project: ProjectConfig, role: string): RunConfig[] {
+    return [...project.runs.values()].filter((r) => r.roles.includes("*") || r.roles.includes(role));
+  }
+
+  /**
+   * Runs a command the project lists, outside the sandbox (a browser can't start in
+   * it): in the worker's worktree, with its environment, in a run slot. Only listed
+   * commands, only arguments their pattern allows, and none that reach outside the tree.
+   */
+  async runListed(workerId: string, name: string, args: string[]): Promise<{ ok: boolean; output: string }> {
+    const w = this.worker(workerId);
+    const role = this.roleOf(w);
+    const spec = this.runsFor(this.project(w.project), w.role).find((r) => r.name === name);
+    const refuse = (why: string) => {
+      this.store.audit("supervisor", "run:refused", workerId, { name, why: why.slice(0, 200) });
+      return { ok: false, output: `Not run. ${why}` };
+    };
+    if (!spec) return refuse(`${name} isn't a command ${role.name} may run.`);
+    if (args.length > 0 && !spec.args) return refuse(`${name} takes no arguments.`);
+    for (const a of args) {
+      if (/^[/~]|(^|\/)\.\.(\/|$)/.test(a) || /^-\S*=[/~]/.test(a)) return refuse(`Argument ${JSON.stringify(a)} reaches outside your worktree.`);
+      if (spec.args && !spec.args.test(a)) return refuse(`Argument ${JSON.stringify(a)} doesn't match what ${name} allows (${spec.args.source}).`);
+    }
+    const worktree = await git(role.dir, ["rev-parse", "--show-toplevel"]);
+    const cwd = join(worktree, spec.cwd);
+    const env: Record<string, string> = { ...workerEnv(process.env), ...role.env, ...spec.env };
+
+    let release = () => {};
+    if (spec.slot) {
+      const waiting = new AbortController();
+      const waits = this.runWaits.get(workerId) ?? new Set();
+      this.runWaits.set(workerId, waits.add(waiting));
+      try {
+        release = await this.slots.acquire(workerId, authorOf(role), `run ${name}`, waiting.signal);
+      } finally {
+        waits.delete(waiting);
+      }
+    }
+    const run = this.runs.get(workerId);
+    this.store.audit("supervisor", "run:start", workerId, { name, args });
+    try {
+      const r = await runCommand([...spec.command, ...args], cwd, env, spec.timeoutMinutes * 60_000);
+      const ok = r.code === 0;
+      this.store.audit("supervisor", ok ? "run:ok" : "run:failed", workerId, { name, code: r.code });
+      const output = r.output.length > LAND_OUTPUT_MAX ? `…${r.output.slice(-LAND_OUTPUT_MAX)}` : r.output;
+      return { ok, output: `${name} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
     } finally {
       release();
       if (run) run.lastEventAt = Date.now();
@@ -735,6 +852,8 @@ export class Supervisor {
     this.stallReported.delete(id);
     for (const [toolUseId, call] of this.slotCalls) if (call.workerId === id) this.releaseCall(toolUseId);
     this.landWaits.get(id)?.abort();
+    for (const c of this.runWaits.get(id) ?? []) c.abort();
+    this.runWaits.delete(id);
     const w = this.store.worker(id)!;
     const checkpoint = this.checkpoints.get(id) ?? w.checkpoint;
     this.checkpoints.delete(id);
@@ -774,7 +893,10 @@ export class Supervisor {
         : outcome.state === "failed"
           ? `failed: ${outcome.error}`
           : `stopped: ${outcome.reason}`;
-    if (!consultWorker) this.notify(`${role.name} (${id}, ${w.project}/${w.role}) ${what}. Handoff: ${w.handoff ?? "none"}.`, w.project);
+    if (!consultWorker) {
+      this.notify(`${role.name} (${id}, ${w.project}/${w.role}) ${what}. Handoff: ${w.handoff ?? "none"}.`, w.project);
+      this.progress(w, outcome.state === "done" ? "done" : what);
+    }
     this.schedule();
   }
 
@@ -799,6 +921,18 @@ export class Supervisor {
         : `${workerName} needs approval for ${req.tool} (${req.id}, ${req.tier} decides; rule ${req.rule})`;
     this.notify(`${what}. See pending_requests and answer with answer_request.`, this.store.worker(req.worker_id)?.project);
     this.writeStatus();
+  }
+
+  /**
+   * A line on the owner's Session updates, posted as the role and led by the task
+   * number it is about (from the line itself, else the worker's task), so progress
+   * reads by task. Consults aren't progress.
+   */
+  private progress(w: WorkerRow, line: string): void {
+    if (w.task.startsWith("[Consult ")) return;
+    const task = taskRef(line) ?? taskRef(w.task);
+    const text = task && !line.startsWith(task) ? `${task} · ${line}` : line;
+    this.broker.request({ t: "update", as: this.roleOf(w).name, text: text.length > 500 ? `${text.slice(0, 499)}…` : text }).catch(() => {});
   }
 
   /** Messages the project's orchestrator (the laptop's if none); what the broker can't take waits in the outbox. */
@@ -1144,6 +1278,18 @@ export function parseExports(text: string): Record<string, string> {
  * The land output's tail for the orchestrator's notice: from the `landed:` line on,
  * because its hashes are the ones to quote from main; else the last line.
  */
+/**
+ * The task number a text is about: of the backlog ids in it (LAND-41, LAND-41.2), the
+ * most specific, the first on a tie. "LAND-41 session. Your task: LAND-41.2" is LAND-41.2.
+ */
+export function taskRef(text: string): string | undefined {
+  let best: string | undefined;
+  for (const [ref] of text.matchAll(/\b[A-Z][A-Z0-9]*-\d+(?:\.\d+)*\b/g)) {
+    if (!best || ref.split(".").length > best.split(".").length) best = ref;
+  }
+  return best;
+}
+
 export function landSummary(output: string, max = 800): string {
   const lines = output.trim().split("\n");
   const at = lines.findLastIndex((l) => l.trimStart().startsWith("landed:"));

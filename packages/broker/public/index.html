@@ -11,13 +11,27 @@
 <body>
   <header>
     <h1>BobNet</h1>
+    <nav>
+      <a href="#" data-view="activity">Activity</a>
+      <a href="#agents" data-view="agents">Agents <span class="count" id="agents-nav-count"></span></a>
+    </nav>
     <span id="conn" class="conn" data-state="connecting">connecting</span>
   </header>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <main>
+  <main id="activity">
     <section id="needs" hidden>
       <h2>Waiting on a decision <span class="count" id="needs-count"></span></h2>
       <ul class="list" id="needs-list"></ul>
+    </section>
+
+    <section>
+      <h2>Progress by task</h2>
+      <div id="progress" class="cards"></div>
+    </section>
+
+    <section>
+      <h2>Session updates <span class="count" id="updates-filter"></span></h2>
+      <ul class="feed" id="updates"></ul>
     </section>
 
     <section>
@@ -27,19 +41,6 @@
         <summary>Ended in the last 24 hours <span class="count" id="ended-count"></span></summary>
         <div id="ended" class="cards"></div>
       </details>
-    </section>
-
-    <section>
-      <h2>Session updates</h2>
-      <ul class="feed" id="updates"></ul>
-    </section>
-
-    <section>
-      <h2>Agents <span class="count" id="agents-count"></span></h2>
-      <div class="table-wrap"><table id="agents">
-        <thead><tr><th>Agent</th><th>Status</th><th class="num">Up</th><th class="num">In / out 24h</th><th class="num">Inbox</th></tr></thead>
-        <tbody></tbody>
-      </table></div>
     </section>
 
     <section>
@@ -61,6 +62,16 @@
     <section>
       <h2>Laptops</h2>
       <div id="laptops" class="cards"></div>
+    </section>
+  </main>
+
+  <main id="agents-view" hidden>
+    <section>
+      <h2>Agents <span class="count" id="agents-count"></span></h2>
+      <div class="table-wrap"><table id="agents">
+        <thead><tr><th>Agent</th><th>Status</th><th class="num">Up</th><th class="num">In / out 24h</th><th class="num">Inbox</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
     </section>
   </main>
 </body>

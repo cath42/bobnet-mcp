@@ -80,6 +80,8 @@ const COMPOUND = /[;&|\n]/;
 const OPAQUE = /`|\$\(|<|>(?!&[12]|\s*\/dev\/null\b)/;
 /** Redirections that write nothing: 2>&1, >&2, 2>/dev/null, &>/dev/null and the like. */
 const HARMLESS_REDIRECT = /^(?:[12]?>&[12]|(?:[12&]?>>?)\s*\/dev\/null(?![\w/.-]))/;
+/** Harmless redirections at a part's end, outside quotes (only stripped when the scan read the quotes). */
+const TRAILING_HARMLESS = /(?:\s+(?:[12]?>&[12]|[12&]?>>?\s*\/dev\/null))+$/;
 /** A heredoc's start: <<EOF, <<-'EOF', <<"EOF". Its body is skipped, not split. */
 const HEREDOC = /^<<(-?)\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][\w-]*))/;
 /** Leading assignments that only set who a commit is by. */
@@ -281,7 +283,9 @@ export class Policy {
 
     // One part: its shell keywords and GIT_*_NAME= prefixes say nothing about
     // what it runs, and a heredoc's body is input, not part of the command.
-    const cmd = raw === null ? null : (scan?.segments[0] ?? raw).replace(KEYWORD_PREFIX, "").replace(GIT_NAME_PREFIX, "").trim();
+    // Nor do trailing redirections that write nothing, so `git branch -a 2>&1` meets a rule anchored at $.
+    const part = raw === null ? null : (scan?.segments[0] ?? raw).replace(KEYWORD_PREFIX, "").replace(GIT_NAME_PREFIX, "").trim();
+    const cmd = part !== null && scan ? part.replace(TRAILING_HARMLESS, "") : part;
     if (cmd !== null && scan && !scan.opaque && SYNTAX_ONLY.test(cmd)) {
       return { decision: "allow", rule: "builtin:syntax", tier: "human", reason: "shell syntax only", slot: false };
     }

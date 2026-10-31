@@ -160,4 +160,48 @@ describe("dashboard page", () => {
     ws.frame({ t: "presence", event: "joined", peer: { ...dashboard.peers[1], online: true, status: "reviewing" } });
     expect($("agents-count").textContent).toBe("2 online of 2");
   });
+
+  it("keeps agents on their own page, and Activity as the page", () => {
+    expect($("activity").hidden).toBe(false);
+    expect($("agents-view").hidden).toBe(true);
+    location.hash = "#agents";
+    window.dispatchEvent(new Event("hashchange"));
+    expect($("activity").hidden).toBe(true);
+    expect($("agents-view").hidden).toBe(false);
+    location.hash = "";
+    window.dispatchEvent(new Event("hashchange"));
+    expect($("activity").hidden).toBe(false);
+  });
+
+  it("reads progress by task number: the latest per task, chips on the feed, a filter", () => {
+    const ws = FakeSocket.last;
+    const up = (seq: number, from: string, text: string, minAgo: number) =>
+      ws.frame({ t: "update", item: { seq, from: `${from}@mbp-1`, laptop: "mbp-1", text, at: iso(minAgo) } });
+    up(10, "Bill", "LAND-41.1 · started", 30);
+    up(11, "Calvin", "LAND-41.2 · started", 20);
+    up(12, "Bill", "LAND-41.1 · ADR 0095 proposed · Q1–Q3 to Bob", 10);
+    up(13, "Bob", "Casper approved the LAND-41 plan; LAND-41.2 waits on the brief", 5);
+    up(14, "Bill", "LAND-41.1 · landed: main 449a6982", 1);
+
+    const cards = [...$("progress").querySelectorAll(".task-card")];
+    expect(cards.map((c) => c.querySelector(".chip")!.textContent)).toEqual(["LAND-41.1", "LAND-41.2"]);
+    expect(cards[0]!.textContent).toContain("landed: main 449a6982");
+    expect(cards[0]!.textContent).toContain("3 updates");
+    expect((cards[0] as HTMLElement).dataset["phase"]).toBe("done");
+    expect(cards[1]!.textContent).toContain("waits on the brief");
+
+    // The feed shows the chip and the short name, not the repeated prefix.
+    const first = $("updates").firstElementChild!;
+    expect(first.querySelector(".chip")!.textContent).toBe("LAND-41.1");
+    expect(first.textContent).toContain("Bill landed: main 449a6982");
+    expect(first.textContent).not.toContain("@mbp-1");
+
+    (first.querySelector(".chip") as HTMLButtonElement).click();
+    const shown = [...$("updates").children].map((li) => li.textContent);
+    expect(shown).toHaveLength(3);
+    expect(shown.every((t) => t!.includes("LAND-41.1"))).toBe(true);
+    expect($("updates-filter").textContent).toContain("LAND-41.1 only");
+    ($("updates-filter").querySelector(".chip") as HTMLButtonElement).click();
+    expect($("updates").children.length).toBeGreaterThan(3);
+  });
 });

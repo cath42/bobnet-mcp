@@ -108,6 +108,8 @@ export class FakeBroker implements BrokerLink {
   readonly sent: Array<{ as: string; to: string[]; body: string }> = [];
   readonly acks: Array<{ as: string; ids: string[] }> = [];
   readonly statuses: Array<{ as: string; status: string | null }> = [];
+  /** Session updates posted, as "Name: text". */
+  readonly updates: string[] = [];
 
   async register(identity: Identity): Promise<unknown> {
     this.registered.push(identity);
@@ -123,6 +125,7 @@ export class FakeBroker implements BrokerLink {
       return { laptop: "mbp-1" } as R;
     }
     if (frame.t === "status") this.statuses.push({ as: frame.as, status: frame.status });
+    if (frame.t === "update") this.updates.push(`${frame.as}: ${frame.text}`);
     if (frame.t !== "send") return {} as R;
     this.sent.push({ as: frame.as, to: frame.to, body: frame.body });
     return { id: `m_${this.sent.length}`, delivered_to: frame.to, queued_for: [] } as R;

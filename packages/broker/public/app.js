@@ -1,7 +1,9 @@
 // BobNet dashboard: one owner WebSocket, a full snapshot on connect, then
 // live frames. Agent-supplied text is only ever set as textContent.
 
-const state = { peers: [], laptops: new Map(), updates: [], traffic: [] };
+const state = { peers: [], laptops: new Map(), updates: [], traffic: [], taskFilter: null };
+/** Updates kept in the page: the broker's snapshot plus what arrives live. */
+const UPDATES_MAX = 200;
 let ws = null;
 let rid = 0;
 let backoff = 1000;
@@ -74,6 +76,40 @@ const since = (iso) => (iso ? duration(Date.now() - Date.parse(iso)) : "–");
 const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 // ---------- Rendering ----------
+
+/**
+ * The task number an update is about: of the backlog ids in it (LAND-41, LAND-41.2),
+ * the most specific, the first on a tie. Same rule as the supervisor's taskRef.
+ */
+function taskRef(text) {
+  let best = null;
+  for (const [ref] of text.matchAll(/\b[A-Z][A-Z0-9]*-\d+(?:\.\d+)*\b/g)) {
+    if (!best || ref.split(".").length > best.split(".").length) best = ref;
+  }
+  return best;
+}
+
+/** An update's text without its leading "LAND-41.2 · ", which the chip shows. */
+const withoutTask = (text, task) => (task && text.startsWith(task) ? text.slice(task.length).replace(/^\s*[·:-]\s*/, "") : text);
+const shortName = (address) => address.split("@")[0];
+
+/** What an update says about its task: done, landed, failed, or still going. */
+function phase(text) {
+  if (/^(landed|done)\b/.test(text)) return "done";
+  if (/^(failed|stopped|could not land)\b/.test(text)) return "failed";
+  if (/^held\b/.test(text)) return "waiting";
+  return "running";
+}
+
+function taskChip(task) {
+  const b = h("button", { type: "button", class: `chip${state.taskFilter === task ? " on" : ""}`, title: `Show only ${task}` });
+  b.textContent = task;
+  b.addEventListener("click", () => {
+    state.taskFilter = state.taskFilter === task ? null : task;
+    renderFeeds();
+  });
+  return b;
+}
 
 function workerCard(w) {
   const running = !w.ended_at && w.started_at;
@@ -149,6 +185,7 @@ function renderWorkers() {
 function renderAgents() {
   const rows = [...state.peers].sort((a, b) => Number(b.online) - Number(a.online) || a.address.localeCompare(b.address));
   $("agents-count").textContent = `${rows.filter((p) => p.online).length} online of ${rows.length}`;
+  $("agents-nav-count").textContent = String(rows.filter((p) => p.online).length);
   $("agents").tBodies[0].replaceChildren(
     ...rows.map((p) =>
       h(
@@ -199,9 +236,41 @@ function renderUsage() {
 }
 
 function renderFeeds() {
+  const items = state.updates.map((u) => ({ ...u, task: taskRef(u.text) }));
+
+  // Progress: each task's latest word, newest first, for tasks heard from in the last 24 hours.
+  const latest = new Map();
+  const dayAgo = new Date(Date.now() - 86400_000).toISOString();
+  for (const u of items) if (u.task && u.at >= dayAgo && !latest.has(u.task)) latest.set(u.task, { ...u, count: items.filter((x) => x.task === u.task).length });
+  $("progress").replaceChildren(
+    ...(latest.size
+      ? [...latest.values()].map((u) => {
+          const text = withoutTask(u.text, u.task);
+          const p = phase(text);
+          return h(
+            "div",
+            { class: "card task-card", dataset: { phase: p } },
+            h("div", { class: "top" }, taskChip(u.task), h("span", { class: "badge", dataset: { state: p } }, p === "waiting" ? "held" : p)),
+            h("div", { class: "checkpoint" }, text),
+            h("div", { class: "meta" }, h("span", null, shortName(u.from)), h("span", null, h("span", { "data-ago": u.at }, since(u.at)), " ago"), h("span", null, `${u.count} update${u.count === 1 ? "" : "s"}`)),
+          );
+        })
+      : [h("div", { class: "empty" }, "No task has reported progress in the last 24 hours.")]),
+  );
+
+  const shown = state.taskFilter ? items.filter((u) => u.task === state.taskFilter) : items;
+  const filter = $("updates-filter");
+  filter.replaceChildren(...(state.taskFilter ? [`${state.taskFilter} only · `, taskChip(state.taskFilter)] : []));
   $("updates").replaceChildren(
-    ...(state.updates.length
-      ? state.updates.map((u) => h("li", null, h("time", { datetime: u.at, title: u.at }, clock(u.at)), h("span", null, h("b", null, u.from), " ", u.text)))
+    ...(shown.length
+      ? shown.map((u) =>
+          h(
+            "li",
+            null,
+            h("time", { datetime: u.at, title: u.at }, clock(u.at)),
+            h("span", null, u.task ? taskChip(u.task) : null, h("b", null, shortName(u.from)), " ", withoutTask(u.text, u.task)),
+          ),
+        )
       : [h("li", { class: "empty" }, "No updates yet.")]),
   );
   $("traffic").replaceChildren(
@@ -247,6 +316,18 @@ setInterval(() => {
   for (const el of document.querySelectorAll("[data-ago]")) el.textContent = since(el.dataset.ago);
   for (const el of document.querySelectorAll("[data-tick]")) el.textContent = `up ${since(el.dataset.tick)}`;
 }, 1000);
+
+// ---------- Views ----------
+
+/** Activity is the page; the agents list is a secondary view at #agents. */
+function showView() {
+  const view = location.hash === "#agents" ? "agents" : "activity";
+  $("activity").hidden = view !== "activity";
+  $("agents-view").hidden = view !== "agents";
+  for (const a of document.querySelectorAll("nav a")) a.toggleAttribute("aria-current", a.dataset.view === view);
+}
+window.addEventListener("hashchange", showView);
+showView();
 
 // ---------- Socket ----------
 
@@ -316,7 +397,7 @@ function connect() {
         renderLaptops();
         break;
       case "update":
-        state.updates = [f.item, ...state.updates].slice(0, 50);
+        state.updates = [f.item, ...state.updates].slice(0, UPDATES_MAX);
         renderFeeds();
         break;
       case "traffic":

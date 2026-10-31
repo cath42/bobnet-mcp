@@ -266,6 +266,7 @@ projects:
       expect(r.ok).toBe(true);
       expect(r.output).toMatch(/author=Homer key=none pg=postgres:\/\/admin:pw@127\.0\.0\.1:5432\/postgres pwd=helix-homer/);
       expect(broker.toOrchestrator().at(-1)).toMatch(/Homer .* landed: landed 1a2b3c/);
+      expect(broker.updates).toEqual(["Homer: started", "Homer: landed: landed 1a2b3c"]);
       expect(sup.slotStatus().holders).toEqual([]);
     } finally {
       delete process.env["ANTHROPIC_API_KEY"];
@@ -424,6 +425,134 @@ projects:
     expect(() => sup.consult(homer.id, "bill", "q")).toThrow(/on hold/);
     hold(sup, null);
     await expect(sup.consult(homer.id, "bill", "q")).rejects.toThrow(/didn't answer within/);
+  });
+});
+
+describe("rebase", () => {
+  const g = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-C", cwd, "-c", "user.name=Main", "-c", "user.email=m@x", ...args], { encoding: "utf8" }).trim();
+
+  /** An origin with main, and Homer's clone on homer/x one commit ahead of where main was. */
+  function repo() {
+    const origin = join(dir, "origin.git");
+    const seed = join(dir, "seed");
+    const worktree = join(dir, "helix-homer");
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+    execFileSync("git", ["clone", "-q", origin, seed], { stdio: "ignore" });
+    writeFileSync(join(seed, "README"), "x\n");
+    g(seed, "add", ".");
+    g(seed, "commit", "-qm", "init");
+    g(seed, "push", "-q", "origin", "HEAD:main");
+    execFileSync("git", ["clone", "-q", origin, worktree]);
+    mkdirSync(join(worktree, "platform"));
+    g(worktree, "switch", "-qc", "homer/x");
+    writeFileSync(join(worktree, "homer.md"), "mine\n");
+    g(worktree, "add", ".");
+    g(worktree, "commit", "-qm", "homer's work");
+    // main moves on after Homer branched.
+    writeFileSync(join(seed, "main.md"), "theirs\n");
+    g(seed, "add", ".");
+    g(seed, "commit", "-qm", "main moves");
+    g(seed, "push", "-q", "origin", "HEAD:main");
+    return { worktree, seed };
+  }
+
+  const config = (worktree: string) =>
+    parseOver(`
+orchestrator: Bob
+state_dir: ${dir}
+projects:
+  helix:
+    path: ${worktree}
+    rebase: { onto: origin/main }
+    roles:
+      homer: { dir: ${join(worktree, "platform")}, env: { GIT_AUTHOR_NAME: Homer, GIT_COMMITTER_NAME: Homer } }
+`, (d) => d);
+
+  it("fetches main and rebases the worker's branch onto it, as the worker", async () => {
+    const { worktree, seed } = repo();
+    const { sup, sessions } = await setup("", config(worktree));
+    const w = sup.spawn({ project: "helix", role: "homer", task: "t" });
+    await until(() => sessions.length === 1);
+    const r = await sup.rebase(w.id);
+    expect(r).toMatchObject({ ok: true, output: expect.stringMatching(/^Rebased homer\/x onto origin\/main: /) });
+    expect(g(worktree, "rev-parse", "HEAD~1")).toBe(g(seed, "rev-parse", "HEAD"));
+    expect(g(worktree, "log", "-1", "--format=%cn %s")).toBe("Homer homer's work");
+    expect(g(worktree, "status", "--porcelain")).toBe("");
+  });
+
+  it("aborts a conflict and leaves the branch as it was; refuses a dirty tree or main itself", async () => {
+    const { worktree, seed } = repo();
+    writeFileSync(join(seed, "homer.md"), "clash\n");
+    g(seed, "add", ".");
+    g(seed, "commit", "-qm", "clash");
+    g(seed, "push", "-q", "origin", "HEAD:main");
+    const { sup, sessions } = await setup("", config(worktree));
+    const w = sup.spawn({ project: "helix", role: "homer", task: "t" });
+    await until(() => sessions.length === 1);
+    const before = g(worktree, "rev-parse", "HEAD");
+    const r = await sup.rebase(w.id);
+    expect(r).toMatchObject({ ok: false, output: expect.stringMatching(/aborted and homer\/x is still at [\s\S]*Conflicts in:\nhomer\.md/) });
+    expect(g(worktree, "rev-parse", "HEAD")).toBe(before);
+    expect(g(worktree, "status", "--porcelain")).toBe("");
+
+    writeFileSync(join(worktree, "stray"), "");
+    await expect(sup.rebase(w.id)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(/uncommitted changes[\s\S]*stray/) });
+    rmSync(join(worktree, "stray"));
+    g(worktree, "switch", "-q", "main");
+    await expect(sup.rebase(w.id)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(/You are on main/) });
+  });
+});
+
+describe("listed runs", () => {
+  function setupRuns() {
+    const worktree = join(dir, "helix-calvin");
+    mkdirSync(join(worktree, "design", "tools"), { recursive: true });
+    execFileSync("git", ["init", "-q", worktree]);
+    const script = join(worktree, "design", "tools", "shot.sh");
+    writeFileSync(script, '#!/bin/sh\necho "author=$GIT_AUTHOR_NAME pwd=$(basename "$PWD") np=$NODE_PATH args=$*"\n[ "$1" = fail ] && exit 2\nexit 0\n');
+    chmodSync(script, 0o755);
+    const config = parseOver(`
+orchestrator: Bob
+state_dir: ${dir}
+projects:
+  helix:
+    path: ${worktree}
+    runs:
+      shot: { command: [./shot.sh], cwd: design/tools, description: "phone screenshots", args: "^[\\\\w.:/=-]+$", roles: [calvin], env: { NODE_PATH: ../../node_modules } }
+      pdf: { command: [./design/tools/shot.sh, pdf], description: "the model PDF", slot: false }
+    roles:
+      calvin: { dir: ${join(worktree, "design")}, env: { GIT_AUTHOR_NAME: Calvin } }
+      bill: { dir: ${join(worktree, "design")}, env: { GIT_AUTHOR_NAME: Bill } }
+`, (d) => d);
+    return config;
+  }
+
+  it("runs a listed command in the worktree, as the worker, in a slot", async () => {
+    const { sup, sessions } = await setup("", setupRuns());
+    const w = sup.spawn({ project: "helix", role: "calvin", task: "t" });
+    await until(() => sessions.length === 1);
+    const r = await sup.runListed(w.id, "shot", ["http://localhost:5173/map", "shots/d14", "390"]);
+    expect(r).toMatchObject({ ok: true, output: expect.stringMatching(/exited 0[\s\S]*author=Calvin pwd=tools np=\.\.\/\.\.\/node_modules args=http:\/\/localhost:5173\/map shots\/d14 390/) });
+    expect(sup.slotStatus().holders).toEqual([]);
+    await expect(sup.runListed(w.id, "shot", ["fail"])).resolves.toMatchObject({ ok: false, output: expect.stringMatching(/exited 2/) });
+  });
+
+  it("refuses what isn't listed, isn't the role's, or reaches outside the worktree", async () => {
+    const { sup, sessions } = await setup("", setupRuns());
+    const calvin = sup.spawn({ project: "helix", role: "calvin", task: "t" });
+    await until(() => sessions.length === 1);
+    const no = (name: string, args: string[], why: RegExp) => expect(sup.runListed(calvin.id, name, args)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(why) });
+    await no("rm", [], /isn't a command Calvin may run/);
+    await no("pdf", ["x"], /takes no arguments/);
+    await no("shot", ["/Users/ct/.ssh/id"], /reaches outside/);
+    await no("shot", ["~/x"], /reaches outside/);
+    await no("shot", ["shots/../../x"], /reaches outside/);
+    await no("shot", ["--out=/tmp/x"], /reaches outside/);
+    await no("shot", ["a;b"], /doesn't match/);
+    await expect(sup.runListed(calvin.id, "pdf", [])).resolves.toMatchObject({ ok: true, output: expect.stringMatching(/args=pdf/) });
+    expect(() => parseOver(`orchestrator: Bob\nprojects:\n  a: { path: /a, runs: { x: { command: [y], description: z, cwd: ../up } }, roles: { bill: { dir: /a/b } } }`, (d) => d)).toThrow(/inside the worktree/);
+    expect(() => parseOver(`orchestrator: Bob\nprojects:\n  a: { path: /a, runs: { x: { command: [y], description: z, roles: [nobody] } }, roles: { bill: { dir: /a/b } } }`, (d) => d)).toThrow(/no role nobody/);
   });
 });
 

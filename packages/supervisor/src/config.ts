@@ -54,6 +54,23 @@ const Role = z.object({
   purpose: z.string().optional(),
 });
 
+/** A command a worker may have the supervisor run outside the sandbox: one a browser needs, say. */
+const Run = z.object({
+  command: z.array(z.string()).min(1),
+  /** What it does, for the worker's tool description. */
+  description: z.string().min(1),
+  /** Where it runs, relative to the worker's worktree. */
+  cwd: z.string().default(".").refine((d) => !isAbsolute(d) && !d.split("/").includes(".."), "must be inside the worktree"),
+  roles: z.array(z.string()).default(["*"]),
+  /** A regex every extra argument must match; without it the command takes none. */
+  args: z.string().optional(),
+  timeout_minutes: z.number().positive().default(10),
+  /** Variables for this command on top of the role's; paths in them are relative to `cwd`. */
+  env: Env,
+  /** Holds one of the laptop's run slots while it runs. */
+  slot: z.boolean().default(true),
+});
+
 const Project = z.object({
   path,
   /** Lower runs first when workers queue. */
@@ -78,6 +95,13 @@ const Project = z.object({
       held_exit: z.number().int().optional(),
     })
     .optional(),
+  /**
+   * Gives workers a rebase tool: the supervisor rebases the worker's branch onto `onto`
+   * outside the sandbox, which write-protects .claude/ even in the worker's own tree.
+   */
+  rebase: z.object({ onto: z.string().regex(/^[\w.-]+\/[\w./-]+$/, "must be remote/branch, e.g. origin/main") }).optional(),
+  /** Commands workers may run outside the sandbox through the run tool, by name. */
+  runs: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/, "must be lowercase, digits and -"), Run).default({}),
   /** A hold file (for helix, `pnpm integrate hold`'s): while it exists, no slot and no new worker. */
   hold_file: path.optional(),
   /** Roles any worker in the project may consult mid-task. */
@@ -127,6 +151,18 @@ export interface RoleConfig {
   purpose: string | undefined;
 }
 
+export interface RunConfig {
+  name: string;
+  command: string[];
+  description: string;
+  cwd: string;
+  roles: string[];
+  args: RegExp | undefined;
+  timeoutMinutes: number;
+  env: Record<string, string>;
+  slot: boolean;
+}
+
 export interface ProjectConfig {
   key: string;
   path: string;
@@ -134,6 +170,8 @@ export interface ProjectConfig {
   team: string | undefined;
   orchestrator: string;
   land: { command: string[]; timeoutMinutes: number; envCommand: string[] | undefined; requiresEnv: string[]; heldExit: number | undefined } | undefined;
+  rebase: { remote: string; branch: string } | undefined;
+  runs: Map<string, RunConfig>;
   holdFile: string | undefined;
   consult: string[];
   roles: Map<string, RoleConfig>;
@@ -219,6 +257,11 @@ export function parseSupervisorConfig(
       });
     }
     for (const c of p.consult) if (!roles.has(c)) throw new Error(`${pKey}.consult: no role ${c}`);
+    const runs = new Map<string, RunConfig>();
+    for (const [name, r] of Object.entries(p.runs)) {
+      for (const role of r.roles) if (role !== "*" && !roles.has(role)) throw new Error(`${pKey}.runs.${name}: no role ${role}`);
+      runs.set(name, { name, command: r.command, description: r.description, cwd: r.cwd, roles: r.roles, args: r.args === undefined ? undefined : new RegExp(r.args), timeoutMinutes: r.timeout_minutes, env: r.env, slot: r.slot });
+    }
     projects.set(pKey, {
       key: pKey,
       path: p.path,
@@ -228,6 +271,8 @@ export function parseSupervisorConfig(
       land: p.land
         ? { command: p.land.command, timeoutMinutes: p.land.timeout_minutes, envCommand: p.land.env_command, requiresEnv: p.land.requires_env, heldExit: p.land.held_exit }
         : undefined,
+      rebase: p.rebase ? { remote: p.rebase.onto.split("/")[0]!, branch: p.rebase.onto.slice(p.rebase.onto.indexOf("/") + 1) } : undefined,
+      runs,
       holdFile: p.hold_file,
       consult: p.consult,
       roles,

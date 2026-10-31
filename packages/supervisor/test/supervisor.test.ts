@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseSupervisorConfig } from "../src/config.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
-import { landSummary, Supervisor } from "../src/supervisor.ts";
+import { landSummary, Supervisor, taskRef } from "../src/supervisor.ts";
 import { gitWriteDirs, WORKER_TOOLS } from "../src/worker.ts";
 import { FakeBroker, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 
@@ -132,6 +132,14 @@ describe("lean workers", () => {
   });
 });
 
+describe("taskRef", () => {
+  it("picks the most specific task number, the first on a tie", () => {
+    expect(taskRef("LAND-41 design session (Bob's plan). Your task: LAND-41.2 (Ready), the prototype")).toBe("LAND-41.2");
+    expect(taskRef("LAND-41.4 · note on main f2017530 · needs LAND-41.1")).toBe("LAND-41.4");
+    expect(taskRef("Finish your ADR 0094 §6 task")).toBeUndefined();
+  });
+});
+
 describe("landSummary", () => {
   it("keeps the landed line with main's hashes, not just the last line", () => {
     const out = "verify passed\nlanded: land/Bill 11943fbf: main e2d601ee → 1165f8b0\n  11943fbf → 1165f8b0 ADR 0094\n  Quote these hashes from main.\n";
@@ -185,6 +193,15 @@ describe("lifecycle", () => {
     expect(broker.toOrchestrator().at(-1)).toMatch(/Bill \(w_\w+, helix\/bill\) done: F12-b · story 3 · design done/);
     expect(sup.summary(w.id)).toMatchObject({ result: "all done", last_message: "Wrote the ADR." });
     expect(sup.tail(w.id, 10).join("\n")).toMatch(/say  Wrote the ADR\.[\s\S]*end  success/);
+  });
+
+  it("posts progress to Session updates led by the task number, and none for a consult", async () => {
+    const { sup, broker, sessions } = await setup();
+    const w = sup.spawn({ project: "helix", role: "bill", task: "LAND-41 design session. Your task: LAND-41.1, the ADR" });
+    await until(() => sessions.length === 1);
+    sessions[0]!.finish();
+    await until(() => sup.status(w.id).state === "done");
+    expect(broker.updates).toEqual(["Bill: LAND-41.1 · started", "Bill: LAND-41.1 · done"]);
   });
 
   it("caps concurrency and runs the queue by project priority, then age", async () => {

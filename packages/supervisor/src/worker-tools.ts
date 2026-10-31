@@ -13,6 +13,11 @@ export interface WorkerToolDeps {
   checkpoint: (line: string) => void;
   /** Lands this worker's commits with the project's land command, in a run slot. Absent if the project has none. */
   land?: () => Promise<{ ok: boolean; output: string }>;
+  /** Rebases this worker's branch onto the project's main, outside the sandbox. Absent if the project has none. */
+  rebase?: () => Promise<{ ok: boolean; output: string }>;
+  /** Commands this worker may have the supervisor run outside the sandbox, and how. */
+  runs: Array<{ name: string; description: string; takesArgs: boolean }>;
+  run: (name: string, args: string[]) => Promise<{ ok: boolean; output: string }>;
   /** Roles this worker may consult, and how. */
   consultable: string[];
   consult: (role: string, question: string) => Promise<string>;
@@ -49,6 +54,43 @@ export function workerTools(deps: WorkerToolDeps) {
               async () => {
                 try {
                   const r = await deps.land!();
+                  return r.ok ? text(r.output) : { isError: true, content: [{ type: "text" as const, text: r.output }] };
+                } catch (err) {
+                  return failed(err);
+                }
+              },
+            ),
+          ]
+        : []),
+      ...(deps.rebase
+        ? [
+            tool(
+              "rebase",
+              "Rebase your branch onto the latest main: the supervisor fetches it and rebases in your worktree (don't run git rebase yourself; the sandbox can't write .claude/). " +
+                "Commit first; the tree must be clean. On a conflict it aborts and your branch is left exactly as it was.",
+              {},
+              async () => {
+                try {
+                  const r = await deps.rebase!();
+                  return r.ok ? text(r.output) : { isError: true, content: [{ type: "text" as const, text: r.output }] };
+                } catch (err) {
+                  return failed(err);
+                }
+              },
+            ),
+          ]
+        : []),
+      ...(deps.runs.length > 0
+        ? [
+            tool(
+              "run",
+              "Run one of these commands outside the sandbox, in your worktree (for what a browser needs, which can't start in your Bash): " +
+                deps.runs.map((r) => `${r.name}: ${r.description}${r.takesArgs ? "" : " (no args)"}`).join("; ") +
+                ". It may wait for a run slot. Arguments stay inside your worktree: no absolute paths, ~ or ..",
+              { name: z.enum(deps.runs.map((r) => r.name) as [string, ...string[]]), args: z.array(z.string()).max(20).default([]) },
+              async (a) => {
+                try {
+                  const r = await deps.run(a.name, a.args);
                   return r.ok ? text(r.output) : { isError: true, content: [{ type: "text" as const, text: r.output }] };
                 } catch (err) {
                   return failed(err);

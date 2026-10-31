@@ -180,6 +180,12 @@ git log --oneline -1 --format='%h %an/%cn %s'`);
     expect(p.evaluate("Bash", { command: "cat <<EOF | sh\nrm -rf /\nEOF" }, ctx)).toMatchObject({ decision: "deny", rule: "rm" });
     expect(p.evaluate("Bash", { command: "GIT_DIR=/x git commit -m y" }, ctx)).toMatchObject({ decision: "escalate" });
     expect(p.evaluate("Bash", { command: "GIT_AUTHOR_NAME=$(id) git commit -m y" }, ctx)).toMatchObject({ decision: "escalate" });
+    // A trailing redirect that writes nothing doesn't stop a rule anchored at $; a quoted one is still text.
+    const anchored = new Policy(`rules:\n  - { id: rebase, tools: [Bash], command: "^git rebase origin/main$", decision: allow }`);
+    expect(anchored.evaluate("Bash", { command: "git rebase origin/main 2>&1" }, ctx)).toMatchObject({ decision: "allow" });
+    expect(anchored.evaluate("Bash", { command: "git rebase origin/main 2>/dev/null >&2" }, ctx)).toMatchObject({ decision: "allow" });
+    expect(anchored.evaluate("Bash", { command: "git rebase origin/main > out" }, ctx)).toMatchObject({ decision: "escalate" });
+    expect(anchored.evaluate("Bash", { command: "git rebase origin/main '2>&1'" }, ctx)).toMatchObject({ decision: "escalate" });
     // Unmatched goes to the orchestrator, but a part that needs the human keeps the whole chain with the human.
     expect(p.evaluate("Bash", { command: "cd /elsewhere && make" }, ctx)).toMatchObject({ decision: "escalate", tier: "orchestrator" });
     expect(p.evaluate("Bash", { command: "make && git push" }, ctx)).toMatchObject({ decision: "escalate", tier: "human", rule: "push" });

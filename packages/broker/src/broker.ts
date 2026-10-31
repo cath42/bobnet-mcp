@@ -31,6 +31,8 @@ const PEER_RETENTION_MS = 30 * 24 * 3600_000;
 const AUDIT_RETENTION_MS = 90 * 24 * 3600_000;
 const UPDATE_RETENTION_MS = 30 * 24 * 3600_000;
 const DASHBOARD_ITEMS = 50;
+/** Session updates are the owner's progress view: more of them than of traffic. */
+const DASHBOARD_UPDATES = 200;
 
 interface Conn {
   connId: string;
@@ -390,7 +392,7 @@ export class Broker extends DurableObject<Env> {
       updates: this.sql
         .exec<{ seq: number; from_addr: string; laptop: string; text: string; at: string }>(
           "SELECT * FROM updates ORDER BY seq DESC LIMIT ?",
-          DASHBOARD_ITEMS,
+          DASHBOARD_UPDATES,
         )
         .toArray()
         .map((u): UpdateItem => ({ seq: u.seq, from: u.from_addr, laptop: u.laptop, text: u.text, at: u.at })),
