@@ -3,7 +3,7 @@ import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { CanUseTool, HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { TokenCounts } from "@bobnet/protocol";
-import { BILLING_ENV, type RoleConfig } from "./config.ts";
+import { BILLING_ENV, configDir, type RoleConfig } from "./config.ts";
 
 // One headless Claude Code session per worker, on the Agent SDK. Input is a
 // stream, so the supervisor can hand a running worker a message mid-task; the
@@ -159,7 +159,9 @@ export class WorkerRun {
               failIfUnavailable: true,
               allowUnsandboxedCommands: false,
               autoAllowBashIfSandboxed: false,
-              filesystem: { allowWrite: [...role.writeRoots, ...gitWriteDirs(role.dir, role.writeRoots)] },
+              // Never the supervisor's own folder: its MCP token would let a worker answer its own requests.
+              filesystem: { allowWrite: [...role.writeRoots, ...gitWriteDirs(role.dir, role.writeRoots)], denyRead: [configDir()] },
+              ...(role.sandboxLocalhost ? { network: { allowLocalBinding: true } } : {}),
             },
           }
         : {}),

@@ -55,6 +55,8 @@ const Power = {
    * policy.yaml decides every call no settings already allow.
    */
   permission_mode: z.enum(["default", "auto"]).optional(),
+  /** Lets sandboxed Bash connect to (and listen on) localhost: the local database, a dev server. */
+  sandbox_localhost: z.boolean().optional(),
 };
 
 const Role = z.object({
@@ -170,6 +172,7 @@ export interface RoleConfig {
   models: string[] | undefined;
   maxEffort: Effort | undefined;
   permissionMode: "default" | "auto";
+  sandboxLocalhost: boolean;
   allowedTools: string[] | undefined;
   disallowedTools: string[] | undefined;
   tools: string[] | undefined;
@@ -283,6 +286,7 @@ export function parseSupervisorConfig(
         models: r.models ?? p.models,
         maxEffort: r.max_effort ?? p.max_effort,
         permissionMode: r.permission_mode ?? p.permission_mode ?? "default",
+        sandboxLocalhost: r.sandbox_localhost ?? p.sandbox_localhost ?? false,
         allowedTools: r.allowed_tools,
         disallowedTools: r.disallowed_tools,
         tools: r.tools,

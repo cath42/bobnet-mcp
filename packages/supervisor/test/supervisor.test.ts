@@ -250,11 +250,19 @@ describe("lifecycle", () => {
     expect(await pre("Bash", { command: "pnpm exec vitest run" })).toBeUndefined();
     expect(await pre("Write", { file_path: "/etc/passwd" })).toBe("deny");
     expect(await pre("mcp__bobnet__land", {}, { name: "bobnet", source: "sdk" })).toBeUndefined();
+    // Its sandbox never reads the supervisor's folder; localhost only when the role asks for it.
+    expect(o.sandbox).toMatchObject({ filesystem: { denyRead: [expect.stringMatching(/\.config\/bobnet$/)] } });
+    expect(o.sandbox!.network).toBeUndefined();
     // A worker in default mode gets no preflight.
     sup.spawn({ project: "helix", role: "homer", task: "t" });
     await until(() => sessions.length === 2);
     expect(sessions[1]!.options).toMatchObject({ permissionMode: "default" });
     expect(sessions[1]!.options.hooks).toBeUndefined();
+    config.projects.get("helix")!.roles.get("marvin")!.sandboxLocalhost = true;
+    sessions[0]!.finish();
+    sup.spawn({ project: "helix", role: "marvin", task: "t" });
+    await until(() => sessions.length === 3);
+    expect(sessions[2]!.options.sandbox).toMatchObject({ network: { allowLocalBinding: true } });
   });
 
   it("notes what a run is on, and what is above the role's default", () => {
