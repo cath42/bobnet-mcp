@@ -280,6 +280,13 @@ describe("dashboard", () => {
     expect(d.boards).toEqual([{ laptop: "mbp-1", at: expect.any(String), board }]);
   });
 
+  it("takes a snapshot larger than other frames: a busy day's workers", async () => {
+    const supervisor = await agent(1, "supervisor");
+    const busy = { ...snapshot, workers: Array.from({ length: 100 }, (_, i) => ({ ...snapshot.workers[0]!, id: `w_${i}`, task: "x".repeat(200), checkpoint: "y".repeat(300) })) };
+    expect(JSON.stringify(busy).length).toBeGreaterThan(LIMITS.frameBytes);
+    await expect(supervisor.request({ t: "report", as: "supervisor", snapshot: busy })).resolves.toMatchObject({ laptop: "mbp-1" });
+  });
+
   it("rejects a malformed snapshot", async () => {
     const supervisor = await agent(1, "supervisor");
     expect(await errorCode(supervisor.request({ t: "report", as: "supervisor", snapshot: { ...snapshot, supervisor: null } as never }))).toBe("bad_frame");

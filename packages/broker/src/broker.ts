@@ -119,8 +119,9 @@ export class Broker extends DurableObject<Env> {
       if (typeof raw === "object" && raw !== null && typeof (raw as { rid?: unknown }).rid === "string") {
         rid = (raw as { rid: string }).rid;
       }
-      // A project board is sent only when it changes, so it may be larger than other frames.
-      const limit = (raw as { t?: unknown } | null)?.t === "board" ? LIMITS.boardFrameBytes : LIMITS.frameBytes;
+      // A supervisor's snapshot and boards may be larger than other frames.
+      const t = (raw as { t?: unknown } | null)?.t;
+      const limit = t === "board" || t === "report" ? LIMITS.boardFrameBytes : LIMITS.frameBytes;
       if (encoder.encode(data).byteLength > limit) {
         throw new FrameError("frame_too_large", `Frames are limited to ${limit} bytes`);
       }

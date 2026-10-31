@@ -16,7 +16,10 @@ export const PONG = '{"t":"pong"}';
 
 export const LIMITS = {
   frameBytes: 64 * 1024,
-  /** A project board (backlog, sessions, past runs) is sent only when it changes, so it may be larger. */
+  /**
+   * What a supervisor reports may be larger: its snapshot carries a day of workers, and a project
+   * board (backlog, sessions, past runs) is sent only when it changes.
+   */
   boardFrameBytes: 900 * 1024,
   bodyChars: 16 * 1024,
   recipients: 32,
