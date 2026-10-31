@@ -3,7 +3,9 @@ import { readFileSync, statSync } from "node:fs";
 // Run slots (ADR 0094 §2): one heavy run at a time on the laptop (tests,
 // probes, a land and its hook), over every agent: workers wait here, and
 // interactive agents are queued here by their orchestrator. A hold keeps the
-// laptop quiet: no slot is given, except to the authors it allows. The hold
+// laptop quiet: no slot is given, except to the authors it allows and to a
+// worker's land, whose command checks the hold itself and parks the tip as
+// held (ADR 0093: a pair lands in one round after the release). The hold
 // is not kept here: it is read from each project's hold file (for helix,
 // `pnpm integrate hold`'s), so there is one register and it can't disagree.
 
@@ -26,6 +28,8 @@ export interface SlotEntry {
 }
 
 interface Waiter extends SlotEntry {
+  /** A land: it goes under a hold, whose command answers it with "held". */
+  passesHold: boolean;
   grant: (release: () => void) => void;
 }
 
@@ -47,11 +51,11 @@ export class RunSlots {
     this.onGrant = opts.onGrant ?? (() => {});
   }
 
-  /** Waits for a slot; the returned function releases it (once). */
-  acquire(holder: string, author: string, label: string, signal?: AbortSignal): Promise<() => void> {
+  /** Waits for a slot; the returned function releases it (once). A land passes a hold. */
+  acquire(holder: string, author: string, label: string, signal?: AbortSignal, opts: { land?: boolean } = {}): Promise<() => void> {
     if (signal?.aborted) return Promise.reject(new SlotAbortedError("aborted"));
     return new Promise((resolve, reject) => {
-      const waiter: Waiter = { holder, author, label, since: new Date().toISOString(), grant: resolve };
+      const waiter: Waiter = { holder, author, label, since: new Date().toISOString(), passesHold: opts.land ?? false, grant: resolve };
       this.queue.push(waiter);
       signal?.addEventListener(
         "abort",
@@ -109,7 +113,7 @@ export class RunSlots {
     let i = 0;
     while (this.holders.length < this.size && i < this.queue.length) {
       const next = this.queue[i]!;
-      if (hold && !holdAllows(hold, next.author)) {
+      if (hold && !next.passesHold && !holdAllows(hold, next.author)) {
         i++;
         continue;
       }

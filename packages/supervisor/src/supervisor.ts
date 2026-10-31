@@ -12,7 +12,7 @@ import { EFFORTS, type Effort, type ProjectConfig, type RoleConfig, type RunConf
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
-import { holdAllows, holdReader, RunSlots, type SlotEntry } from "./slots.ts";
+import { holdReader, RunSlots, type SlotEntry } from "./slots.ts";
 import { ACTIVE_STATES, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
 import { type Outcome, type QueryFn, type Usage, WorkerRun, type WorkerRunOptions, workerEnv, ZERO_USAGE } from "./worker.ts";
 import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
@@ -219,11 +219,6 @@ export class Supervisor {
 
   /** Why a queued worker hasn't started, so a spawn that waits says so. */
   private queuedBecause(w: WorkerRow): string {
-    const hold = this.slots.held;
-    const author = authorOf(this.roleOf(w));
-    if (hold && !holdAllows(hold, author)) {
-      return `queued: the laptop is on hold (${hold.reason}), which allows ${hold.allow.join(", ") || "no one"}, not ${author}; it starts when the hold is released`;
-    }
     if (this.activeRun(w.project, w.role)) return `queued: ${this.roleOf(w).name} already has a worker running; it starts after that one ends`;
     if (this.runs.size >= this.config.concurrency) return `queued: ${this.runs.size} workers running, the laptop's limit; it starts when one ends`;
     return "queued";
@@ -510,10 +505,10 @@ export class Supervisor {
 
   // ---------- Scheduling ----------
 
+  // A hold doesn't stop a spawn: the worker's heavy runs wait in the slot queue,
+  // and its land reaches the land command, which answers "held" (ADR 0093).
   private schedule(): void {
-    const hold = this.slots.held;
     for (const w of this.store.queued()) {
-      if (hold && !holdAllows(hold, authorOf(this.roleOf(w)))) continue;
       if (this.runs.size >= this.config.concurrency) break;
       const busy = [...this.runs.keys()].some((id) => {
         const r = this.store.worker(id);
@@ -752,7 +747,7 @@ export class Supervisor {
     this.landWaits.set(workerId, waiting);
     let release: () => void;
     try {
-      release = await this.slots.acquire(workerId, authorOf(role), "land", waiting.signal);
+      release = await this.slots.acquire(workerId, authorOf(role), "land", waiting.signal, { land: true });
     } finally {
       this.landWaits.delete(workerId);
     }

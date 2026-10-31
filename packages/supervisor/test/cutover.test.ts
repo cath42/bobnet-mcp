@@ -178,31 +178,41 @@ describe("run slots and the hold", () => {
     await until(() => sup.slotStatus().holders.length === 0);
   });
 
-  it("on hold (the hold file), starts no worker and grants no slot, then resumes when it is lifted", async () => {
+  it("on hold (the hold file), still starts workers but grants no slot, then grants it when the hold is lifted", async () => {
     const { sup, sessions } = await setup();
     sup.spawn({ project: "helix", role: "bill", task: "t" });
     await until(() => sessions.length === 1);
     hold(sup, "closing ci");
-    const homer = sup.spawn({ project: "helix", role: "homer", task: "t" });
+    sup.spawn({ project: "helix", role: "homer", task: "t" });
+    await until(() => sessions.length === 2);
     let granted = false;
     void sessions[0]!.askCall("tu1", "Bash", { command: "pnpm test" }).then(() => (granted = true));
     await tick(30);
-    expect([sup.status(homer.id).state, granted]).toEqual(["queued", false]);
+    expect(granted).toBe(false);
     expect(sup.slotStatus().hold).toMatchObject({ reason: "closing ci", allow: [] });
     hold(sup, null);
-    await until(() => granted && sessions.length === 2);
+    await until(() => granted);
   });
 
-  it("under a hold with --allow, lets only the allowed author run and start, whatever the name's case", async () => {
+  it("under a hold with --allow, gives a slot only to the allowed author, whatever the name's case", async () => {
     const { sup, sessions } = await setup();
     hold(sup, "red main", ["homer"]);
-    const bill = sup.spawn({ project: "helix", role: "bill", task: "t" });
-    expect(bill.note).toMatch(/^queued: the laptop is on hold \(red main\), which allows homer, not Bill/);
-    const homer = sup.spawn({ project: "helix", role: "homer", task: "fix" });
-    expect(homer.note).toBeUndefined();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    sup.spawn({ project: "helix", role: "homer", task: "fix" });
+    await until(() => sessions.length === 2);
+    const [bill, homer] = sessions[0]!.options.cwd!.endsWith("platform") ? [sessions[1]!, sessions[0]!] : [sessions[0]!, sessions[1]!];
+    let billGot = false;
+    void bill.askCall("tu1", "Bash", { command: "pnpm test" }).then(() => (billGot = true));
+    await expect(homer.askCall("tu2", "Bash", { command: "pnpm test" })).resolves.toMatchObject({ behavior: "allow" });
+    await tick(30);
+    expect(billGot).toBe(false);
+  });
+
+  it("says why a spawn stays queued", async () => {
+    const { sup, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
     await until(() => sessions.length === 1);
-    expect([sup.status(bill.id).state, sup.status(homer.id).state]).toEqual(["queued", "running"]);
-    await expect(sessions[0]!.askCall("tu1", "Bash", { command: "pnpm test" })).resolves.toMatchObject({ behavior: "allow" });
+    expect(sup.spawn({ project: "helix", role: "bill", task: "u" }).note).toMatch(/^queued: Bill already has a worker running/);
   });
 
   it("queues interactive agents in the same slot, tells their orchestrator, and takes Bob's order", async () => {
@@ -309,6 +319,8 @@ projects:
     writeFileSync(join(worktree, "FAIL"), "");
     execFileSync("git", ["-C", worktree, "add", "."]);
     execFileSync("git", ["-C", worktree, "-c", "user.name=Homer", "-c", "user.email=h@x", "commit", "-qm", "f"]);
+    // Under a hold (allowing no one) the land still gets its slot: the land command answers "held".
+    hold(sup, "LAND-41.17 pair");
     await expect(sup.land(w.id)).resolves.toMatchObject({ ok: true, output: expect.stringMatching(/^Held, not refused/) });
     await expect(sup.land(w.id)).resolves.toMatchObject({ output: expect.not.stringMatching(/Nothing has changed/) });
     sessions[0]!.finish("ok");
