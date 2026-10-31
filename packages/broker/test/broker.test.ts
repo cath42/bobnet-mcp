@@ -230,7 +230,7 @@ describe("dashboard", () => {
         id: "w_1", name: "Bill", project: "helix", role: "bill", state: "running" as const, task: "ADR 0094", model: "opus", effort: "high", checkpoint: null,
         started_at: "2026-10-30T00:00:00.000Z", ended_at: null, last_event_at: "2026-10-30T00:01:00.000Z",
         tokens: { input: 10, output: 2, cache_read: 0, cache_write: 0 }, cost_usd: 0.01,
-        session: "LAND-41 build 3", task_ref: "LAND-41.16", calls: 3, context: 41000, ctx: [30000, 36000, 41000],
+        session: "LAND-41 build 3", task_ref: "LAND-41.16", task_refs: ["LAND-41.16"], calls: 3, context: 41000, ctx: [30000, 36000, 41000],
       },
     ],
     pending: [],
@@ -269,7 +269,7 @@ describe("dashboard", () => {
     // Past runs' context per call make a board bigger than the 64 KiB other frames are held to.
     const big: ProjectBoard = {
       ...board,
-      runs: Array.from({ length: 60 }, (_, i) => ({ id: `w_${i}`, name: "Homer", role: "homer", session: "LAND-41 build 2", task_ref: "LAND-41.16", model: "opus", effort: "high", started_at: null, ended_at: null, resumed: false, tokens: 1, ctx: Array.from({ length: 300 }, (_, j) => 100000 + j) })),
+      runs: Array.from({ length: 60 }, (_, i) => ({ id: `w_${i}`, name: "Homer", role: "homer", session: "LAND-41 build 2", task_ref: "LAND-41.16", task_refs: ["LAND-41.16"], model: "opus", effort: "high", started_at: null, ended_at: null, resumed: false, tokens: 1, ctx: Array.from({ length: 300 }, (_, j) => 100000 + j) })),
     };
     expect(JSON.stringify(big).length).toBeGreaterThan(LIMITS.frameBytes);
     await supervisor.request({ t: "board", as: "supervisor", board: big });

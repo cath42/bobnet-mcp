@@ -296,6 +296,29 @@ describe("a review session", () => {
     ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board });
     await settle();
   });
+
+  it("shows each agent on the items its spawn named, opening a finished build's lane while one is on it", async () => {
+    const ws = FakeSocket.last;
+    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+    snap.workers = [
+      worker({ id: "w_b", name: "Bill", role: "bill", task: "LAND-41 review 1", session: "LAND-41 review 1", task_ref: "LAND-41", task_refs: ["LAND-41"] }),
+      worker({ id: "w_h", name: "Homer", role: "homer", task: "LAND-41 review 1: QUICK fix of R1-1", session: "LAND-41 review 1", task_ref: "LAND-41.1", task_refs: ["LAND-41.1", "LAND-41.16"] }),
+    ] as never;
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    await go("#feature");
+    const pick = $("inc-pick") as HTMLSelectElement;
+    pick.value = "LAND-41";
+    pick.dispatchEvent(new Event("change"));
+    await settle();
+    expect(view().textContent).toContain("2 agents on it now");
+    expect(view().textContent).toContain("On the feature as a whole");
+    // The design lane is all reviewed, so it would fold; Homer on 41.1 keeps it open.
+    expect(view().querySelector('[data-id="LAND-41.1"] .agent')!.textContent).toContain("Homer");
+    expect(view().querySelector('[data-id="LAND-41.16"] .agent')!.textContent).toContain("Homer");
+    expect(view().querySelector('[data-id="LAND-41.18"] .agent')).toBeNull();
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
+    await settle();
+  });
 });
 
 describe("live frames", () => {

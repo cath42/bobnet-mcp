@@ -70,6 +70,13 @@ export function briefTask(task: string): string | null {
   return best;
 }
 
+/** The backlog items a worker works on, as its spawn named them; a worker spawned before spawns did falls back to its brief. */
+export function workerTasks(w: Pick<WorkerRow, "task" | "tasks">): string[] {
+  if (w.tasks !== null) return JSON.parse(w.tasks) as string[];
+  const t = briefTask(w.task);
+  return t ? [t] : [];
+}
+
 // ---------- Context per call ----------
 
 /** At most `max` points, evenly picked, first and last kept. */
@@ -352,7 +359,8 @@ export class Boards {
         name: this.deps.nameOf(w),
         role: w.role,
         session: sessions.get(w.id)!.name,
-        task_ref: briefTask(w.task),
+        task_ref: workerTasks(w)[0] ?? null,
+        task_refs: workerTasks(w),
         model: w.model,
         effort: w.effort,
         started_at: w.started_at,

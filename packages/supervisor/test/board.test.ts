@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProjectBoard } from "@bobnet/protocol";
 import { describe, expect, it } from "vitest";
-import { assignSessions, baseline, Boards, briefTask, downsample, namedSession, parseBacklogItem, shapeBacklog, transcriptCtx } from "../src/board.ts";
+import { assignSessions, baseline, Boards, briefTask, downsample, namedSession, parseBacklogItem, shapeBacklog, transcriptCtx, workerTasks } from "../src/board.ts";
 import { parseSupervisorConfig } from "../src/config.ts";
 import { Store, type WorkerRow } from "../src/store.ts";
 import { quiet } from "./fakes.ts";
 
 const row = (over: Partial<WorkerRow>): WorkerRow => ({
   id: "w_x", project: "helix", role: "homer", task: "", handoff: null, state: "done", priority: 1, resume_session: null, session_id: null,
-  checkpoint: null, error: null, created_at: "2026-10-31T10:00:00.000Z", started_at: null, ended_at: null, last_event_at: null,
+  checkpoint: null, error: null, created_at: "2026-10-31T10:00:00.000Z", started_at: null, ended_at: null, last_event_at: null, tasks: null,
   usage: null, model: null, effort: null, ctx: null, ...over,
 });
 
@@ -40,6 +40,13 @@ describe("sessions", () => {
     expect(briefTask("Bob's brief, LAND-41 build 3. Your task: LAND-41.16 AC #16 only, then LAND-41.18")).toBe("LAND-41.16");
     expect(briefTask("Fresh worker. LAND-41 build 2, LAND-41.17's documents half (note LAND-41.10)")).toBe("LAND-41.17");
     expect(briefTask("No backlog id here")).toBeNull();
+  });
+
+  it("takes a worker's items from its spawn, and from its brief only for a worker spawned before spawns named them", () => {
+    expect(workerTasks({ task: "LAND-41 review 1, mentions LAND-41.33", tasks: JSON.stringify(["LAND-41"]) })).toEqual(["LAND-41"]);
+    expect(workerTasks({ task: "A consult, LAND-41.33 in passing", tasks: "[]" })).toEqual([]);
+    expect(workerTasks({ task: "Your task: LAND-41.16", tasks: null })).toEqual(["LAND-41.16"]);
+    expect(workerTasks({ task: "LAND-41 review 1", tasks: null })).toEqual([]);
   });
 });
 

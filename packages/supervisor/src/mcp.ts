@@ -17,6 +17,7 @@ const Spawn = z.object({
   project: z.string(),
   role: z.string(),
   task: z.string().min(1),
+  tasks: z.array(z.string()).max(50).optional(),
   handoff: z.string().optional(),
   resume_session: z.string().optional(),
   model: z.string().optional(),
@@ -62,6 +63,12 @@ const TOOLS = [
         project: { type: "string" },
         role: { type: "string" },
         task: { type: "string", description: "The whole task: what to do, what done means, which files to read." },
+        tasks: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "The backlog items it builds, fixes or reviews, e.g. [\"LAND-41.3\", \"LAND-41.32\"]; a feature id (\"LAND-41\") for work on the feature as a whole, [] for none. Required for a project with a backlog: the dashboard shows the worker on these cards and guesses nothing from the brief.",
+        },
         handoff: { type: "string", description: "Handoff file path to read first and write before finishing." },
         resume_session: { type: "string", description: "Resume this session id instead of starting fresh (review-to-build fix loops)." },
         ...POWER,
@@ -122,6 +129,7 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
         project: s.project,
         role: s.role,
         task: s.task,
+        ...(s.tasks ? { tasks: s.tasks } : {}),
         ...(s.handoff ? { handoff: s.handoff } : {}),
         ...(s.resume_session ? { resume_session: s.resume_session } : {}),
         ...(s.model ? { model: s.model } : {}),

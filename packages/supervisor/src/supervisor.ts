@@ -9,7 +9,7 @@ import type { PushFrame, RequestFrame } from "@bobnet/client/connection";
 import type { Logger } from "@bobnet/client/log";
 import type { OwnerCheck } from "./owner.ts";
 import { EFFORTS, type Effort, type ProjectConfig, type RoleConfig, type RunConfig, type SupervisorConfig } from "./config.ts";
-import { assignSessions, Boards, briefTask } from "./board.ts";
+import { assignSessions, Boards, workerTasks } from "./board.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
@@ -209,9 +209,17 @@ export class Supervisor {
 
   // ---------- Orchestrator API ----------
 
-  spawn(opts: { project: string; role: string; task: string; handoff?: string; resume_session?: string; model?: string; effort?: Effort }): WorkerRow & { note?: string } {
+  /** `tasks` null: not known, for a worker carried over from one spawned before spawns named them. */
+  spawn(opts: { project: string; role: string; task: string; tasks?: string[] | null; handoff?: string; resume_session?: string; model?: string; effort?: Effort }): WorkerRow & { note?: string } {
     const project = this.project(opts.project);
     const role = this.role(opts.project, opts.role);
+    // The board shows a worker on the items its spawn names, and guesses none from the brief.
+    if (opts.tasks === undefined && project.backlog) {
+      throw new SupervisorError(`${project.key} has a backlog: say which items this worker works on or reviews, tasks: ["LAND-41.3", …] (a feature id for the feature as a whole; [] for none)`);
+    }
+    const bad = (opts.tasks ?? []).filter((t) => !TASK_ID.test(t));
+    if (bad.length) throw new SupervisorError(`not backlog ids: ${bad.join(", ")} (e.g. LAND-41 or LAND-41.3)`);
+    const tasks = opts.tasks ? [...new Set(opts.tasks.map((t) => t.toUpperCase()))] : null;
     if (opts.model !== undefined && role.models && !role.models.includes(opts.model)) {
       throw new SupervisorError(`${role.name} may run on ${role.models.join(", ")}, not ${opts.model}`);
     }
@@ -227,8 +235,9 @@ export class Supervisor {
       handoff: opts.handoff ?? null,
       priority: project.priority,
       resume_session: opts.resume_session ?? null,
+      tasks,
     });
-    this.store.audit("orchestrator", "spawn", w.id, { project: w.project, role: w.role, resume: w.resume_session, model: w.model, effort: w.effort });
+    this.store.audit("orchestrator", "spawn", w.id, { project: w.project, role: w.role, tasks, resume: w.resume_session, model: w.model, effort: w.effort });
     this.schedule();
     const row = this.store.worker(w.id)!;
     const note = row.state === "queued" ? this.queuedBecause(row) : undefined;
@@ -264,7 +273,7 @@ export class Supervisor {
     if (this.runs.has(id) || w.state === "queued") await this.stop(id, "reset");
     const model = power.model ?? w.model ?? undefined;
     const effort = power.effort ?? (w.effort as Effort | null) ?? undefined;
-    return this.spawn({ project: w.project, role: w.role, task: w.task, ...(w.handoff ? { handoff: w.handoff } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
+    return this.spawn({ project: w.project, role: w.role, task: w.task, tasks: storedTasks(w), ...(w.handoff ? { handoff: w.handoff } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
   }
 
   /** Live workers (queued or running) unless `all`, tasks cut short: the full history is too big for a tool result. */
@@ -352,6 +361,7 @@ export class Supervisor {
       project: w.project,
       role: w.role,
       task: resumeTask(request, answer),
+      tasks: storedTasks(w),
       ...(w.handoff ? { handoff: w.handoff } : {}),
       resume_session: w.session_id,
     });
@@ -1194,7 +1204,8 @@ export class Supervisor {
         tokens: u.tokens,
         cost_usd: u.cost_usd,
         session: sessions.get(w.id)?.name ?? null,
-        task_ref: briefTask(w.task),
+        task_ref: workerTasks(w)[0] ?? null,
+        task_refs: workerTasks(w),
         ...this.callsOf(w, run),
       };
     });
@@ -1418,6 +1429,11 @@ export function parseExports(text: string): Record<string, string> {
  */
 const MODEL_TIERS = ["haiku", "sonnet", "opus"];
 const modelTier = (m: string | null | undefined) => (m ? MODEL_TIERS.findIndex((t) => m.toLowerCase().includes(t)) : -1);
+
+const TASK_ID = /^[A-Z][A-Z0-9]*-\d+(\.\d+)*$/i;
+
+/** The items a worker's spawn named, for a worker that carries on its task; null if its spawn named none. */
+const storedTasks = (w: WorkerRow): string[] | null => (w.tasks === null ? null : (JSON.parse(w.tasks) as string[]));
 
 /** " on opus/high", plus what the spawn chose above the role's default, so a costlier run is visible. */
 export function powerNote(w: { model: string | null; effort: string | null }, role: { model: string | undefined; effort: Effort | undefined }): string {

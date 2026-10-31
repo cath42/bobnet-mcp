@@ -97,8 +97,10 @@ export const WorkerSnapshot = z.object({
   cost_usd: z.number().nonnegative(),
   /** The session it works in, as its brief names it ("LAND-41 build 3"), or the one running when it started. */
   session: z.string().max(60).nullable().default(null),
-  /** The backlog item its brief is about, if it names one. */
+  /** The first of `task_refs`, for a dashboard that reads only one. */
   task_ref: z.string().max(40).nullable().default(null),
+  /** The backlog items its spawn named (an older worker's: the one its brief names, if any). */
+  task_refs: z.array(z.string().max(40)).max(50).default([]),
   /** Model calls so far, and the context the latest one carried. */
   calls: z.number().int().nonnegative().default(0),
   context: z.number().int().nonnegative().nullable().default(null),
@@ -207,6 +209,7 @@ export const ProjectBoard = z.object({
         role: short(40),
         session: short(60).nullable(),
         task_ref: short(40).nullable(),
+        task_refs: z.array(short(40)).max(50).default([]),
         model: short(60).nullable(),
         effort: short(10).nullable(),
         started_at: z.string().nullable(),

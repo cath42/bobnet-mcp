@@ -172,14 +172,17 @@ function sessionRuns(b, name) {
 
 // ---------- Backlog ----------
 
+/** The backlog items a worker or run is on, as its spawn named them (a supervisor before that sends only task_ref). */
+const refsOf = (w) => (w.task_refs?.length ? w.task_refs : w.task_ref ? [w.task_ref] : []);
+
 function backlogModel(b) {
   const items = b.backlog?.items ?? [];
   const byId = new Map(items.map((x) => [x.id, x]));
   const kids = (pid) => items.filter((x) => x.parent === pid);
   const settled = (st) => st === "In Review" || st === "Done";
   const live = running().filter((w) => w.project === b.project);
-  const workerOn = (id) => live.filter((w) => w.task_ref === id);
-  const runningOnInc = (id) => live.filter((w) => w.task_ref === id || byId.get(w.task_ref)?.parent === id);
+  const workerOn = (id) => live.filter((w) => refsOf(w).includes(id));
+  const runningOnInc = (id) => live.filter((w) => refsOf(w).some((r) => r === id || byId.get(r)?.parent === id));
   const { cur } = sessionsOf(b);
   const commitsFor = (id) => b.commits.filter((c) => new RegExp(`\\b${id.replace(/\./g, "\\.")}(?![\\d.])`).test(c.subject));
   /** Commits on main for the task since the current session started, not counting docs-only ones. */
@@ -206,7 +209,7 @@ function lanesOf(b, m, inc) {
   const sessions = b.sessions.filter((x) => x.name.startsWith(prefix) && (x.kind === "design" || x.kind === "build"));
   for (const ss of sessions) {
     const key = ss.name.slice(prefix.length);
-    for (const r of sessionRuns(b, ss.name)) if (r.task_ref && ks.some((k) => k.id === r.task_ref) && !ks.find((k) => k.id === r.task_ref).labels.some((v) => v.startsWith("build:"))) place.set(r.task_ref, key);
+    for (const r of sessionRuns(b, ss.name)) for (const id of refsOf(r)) if (ks.some((k) => k.id === id) && !ks.find((k) => k.id === id).labels.some((v) => v.startsWith("build:"))) place.set(id, key);
   }
   const order = (k) => (k === "design" ? -1 : Number(k.split(" ")[1]) || 0);
   const keys = [...new Set(place.values())].sort((a, c) => order(a) - order(c));
@@ -214,7 +217,8 @@ function lanesOf(b, m, inc) {
     const ids = ks.filter((k) => place.get(k.id) === key).map((k) => k.id);
     const ss = sessions.find((x) => x.name === `${prefix}${key}`);
     const now = !!ss && m.cur?.name === ss.name;
-    return { title: key[0].toUpperCase() + key.slice(1), ids, now, closed: !now && ids.every((id) => m.settled(m.byId.get(id).status)) };
+    // A lane with an agent on one of its cards stays open, as during a review of its build.
+    return { title: key[0].toUpperCase() + key.slice(1), ids, now, closed: !now && ids.every((id) => m.settled(m.byId.get(id).status) && !m.workerOn(id).length) };
   });
   const rest = ks.filter((k) => !place.has(k.id)).map((k) => k.id);
   if (rest.length) lanes.push({ title: "Not in a build yet", ids: rest, now: false, closed: false });
@@ -254,13 +258,13 @@ function viewNow() {
       ? h("div", { class: "table-wrap" }, h("table", { class: "stack", id: "running" },
           h("thead", null, h("tr", null, h("th", null, "Agent"), h("th", null, "Working on"), h("th", null, "Model"), h("th", null, "Machine"), h("th", { class: "num" }, "Worked"), h("th", { class: "num" }, "Tokens"), h("th", { class: "num" }, "Context now"), h("th", null, ""))),
           h("tbody", null, run.map((w) => {
-            const x = w.task_ref ? boardOf(w)?.backlog?.items.find((i) => i.id === w.task_ref) : null;
+            const xs = refsOf(w).map((id) => boardOf(w)?.backlog?.items.find((i) => i.id === id)).filter(Boolean), x = xs.length === 1 ? xs[0] : null;
             const head = headlineOf(w.task);
             return h("tr", { class: "pick", tabindex: "0", title: "Show its context per call", onclick: () => showRun(w), onkeydown: (e) => e.key === "Enter" && showRun(w) },
               h("td", null, h("b", null, w.name), h("div", { class: "cp" }, w.session ?? w.project), w.state !== "running" ? h("div", null, h("span", { class: "badge", dataset: { state: w.state } }, w.state)) : null),
               h("td", { class: "wide" },
-                head ? [h("span", { class: "title" }, head), x ? h("div", { class: "cp" }, "about ", chip(x.id), x.title) : null]
-                  : x ? [chip(x.id), " ", h("span", { class: "title" }, x.title)] : h("span", { class: "title" }, w.task),
+                head ? [h("span", { class: "title" }, head), x ? h("div", { class: "cp" }, "about ", chip(x.id), x.title) : xs.length ? h("div", { class: "cp" }, "about ", xs.map((i) => chip(i.id))) : null]
+                  : x ? [chip(x.id), " ", h("span", { class: "title" }, x.title)] : [xs.map((i) => chip(i.id)), h("span", { class: "title" }, w.task)],
                 w.checkpoint ? h("div", { class: "cp" }, w.checkpoint) : null),
               h("td", { "data-label": "Model" }, fmtModel(w)),
               h("td", { "data-label": "Machine" }, w.laptop),
@@ -279,11 +283,11 @@ function viewNow() {
 // ---------- Rendering: kanban ----------
 
 function agentTag(w, showTask, m) {
-  const x = w.task_ref ? m.byId.get(w.task_ref) : null;
+  const refs = refsOf(w), x = refs.length === 1 ? m.byId.get(refs[0]) : null;
   const head = headlineOf(w.task);
   return h("div", { class: "agent", role: "button", tabindex: "0", title: "Show its context per call", style: "cursor:pointer", onclick: (e) => (e.stopPropagation(), showRun(w)), onkeydown: (e) => e.key === "Enter" && (e.stopPropagation(), showRun(w)) },
     h("b", null, w.name),
-    showTask ? h("span", { class: "d" }, head ? `${head}${x ? ` · ${x.id}` : ""}` : `${w.task_ref ?? ""} · ${x ? x.title.slice(0, 60) : w.task.slice(0, 60)}`)
+    showTask ? h("span", { class: "d" }, head ? `${head}${refs.length ? ` · ${refs.join(", ")}` : ""}` : `${refs.join(", ")} · ${x ? x.title.slice(0, 60) : w.task.slice(0, 60)}`)
       : w.checkpoint ? h("span", { class: "d" }, w.checkpoint.length > 90 ? `${w.checkpoint.slice(0, 90)}…` : w.checkpoint) : null,
     h("span", { class: "d" }, `${fmtModel(w)} · ${w.laptop} · ${since(w.started_at)} · ${fmtTokens(totalTokens(w.tokens))} tokens`));
 }
@@ -359,7 +363,7 @@ function viewFeature() {
     for (const id of l.ids) cells[column(m.byId.get(id))].push(card(m.byId.get(id)));
     return { ...l, cells };
   });
-  const ws = m.runningOnInc(inc.id);
+  const ws = m.runningOnInc(inc.id), onFeature = ws.filter((w) => refsOf(w).includes(inc.id));
   return [
     h("div", { class: "bar-row" },
       h("label", { for: "inc-pick", class: "muted" }, "Feature"),
@@ -368,6 +372,7 @@ function viewFeature() {
     details("feature-desc", { class: "card" }, h("summary", { style: "margin:0;color:var(--text);font-weight:600" }, inc.title),
       inc.desc ? h("div", { class: "sub" }, inc.desc.replace(/^## What\s*/, "")) : null,
       inc.ac.length ? h("ol", { class: "ac", style: "font-size:13px" }, inc.ac.map(([on, t]) => h("li", null, on ? "✓ " : "", t))) : null),
+    onFeature.length ? h("div", { class: "card" }, h("div", { class: "muted", style: "margin-bottom:6px" }, "On the feature as a whole"), onFeature.map((w) => agentTag(w, true, m))) : null,
     board(cols, lanes),
     h("p", { class: "note" }, "Click a task to open it. Tasks with an agent on them stay open, and the agent links to its context per call. A task's build:<n> label puts it in a build; without one, the build whose workers had it as their task."),
   ];

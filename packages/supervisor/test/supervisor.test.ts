@@ -511,6 +511,18 @@ describe("usage and snapshots", () => {
     expect(sup.snapshot().workers[0]).toMatchObject({ calls: 2, context: 42005, ctx: [] });
   });
 
+  it("asks a spawn in a project with a backlog which items the worker is on, and keeps them on a reset", async () => {
+    const { sup } = await setup(`  books:\n    path: /work/books\n    backlog: { dir: product/backlog }\n    roles:\n      ann: { dir: /work/books/ann }\n`);
+    expect(() => sup.spawn({ project: "books", role: "ann", task: "LAND-41 review 1" })).toThrow(/has a backlog: say which items/);
+    expect(() => sup.spawn({ project: "books", role: "ann", task: "x", tasks: ["the review"] })).toThrow(/not backlog ids: the review/);
+    const w = sup.spawn({ project: "books", role: "ann", task: "LAND-41 review 1", tasks: ["land-41.3", "LAND-41.32", "LAND-41.3"] });
+    expect(sup.snapshot().workers.find((x) => x.id === w.id)).toMatchObject({ task_ref: "LAND-41.3", task_refs: ["LAND-41.3", "LAND-41.32"] });
+    const fresh = await sup.reset(w.id);
+    expect(JSON.parse(store.worker(fresh.id)!.tasks!)).toEqual(["LAND-41.3", "LAND-41.32"]);
+    // A project with no backlog needs none.
+    expect(sup.spawn({ project: "games", role: "mario", task: "x" }).tasks).toBeNull();
+  });
+
   it("counts only the new part of a resumed session", async () => {
     const { sup, sessions } = await setup();
     const first = sup.spawn({ project: "helix", role: "bill", task: "build" });
