@@ -32,6 +32,11 @@ export type Outcome =
 const GRACE_MS = 10_000;
 /** v0.1's server; workers use only the supervisor's in-process `bobnet` tools. */
 const ALWAYS_DISALLOWED = ["mcp__bobnet-mcp"];
+/**
+ * A worker's built-in tools; its BobNet tools come from the supervisor's server.
+ * Grep and Glob are named, or native builds drop them for Bash.
+ */
+export const WORKER_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash"];
 /** The only key source that means the session runs on the Claude subscription's login (ADR 0094 §3). */
 const SUBSCRIPTION_SOURCE = "none";
 
@@ -123,9 +128,15 @@ export class WorkerRun {
       systemPrompt: { type: "preset", preset: "claude_code", append: this.opts.systemAppend, snapshot: true },
       permissionMode: "default",
       canUseTool: this.opts.canUseTool,
-      mcpServers: this.opts.mcpServers,
+      tools: role.tools ?? WORKER_TOOLS,
+      // Only the role's own servers: nothing from ~/.claude.json or the worktree's .mcp.json.
+      mcpServers: { ...(role.mcpServers as Record<string, McpServerConfig>), ...this.opts.mcpServers },
+      strictMcpConfig: true,
+      ...(role.memoryDir !== undefined
+        ? { settings: role.memoryDir === false ? { autoMemoryEnabled: false } : { autoMemoryDirectory: role.memoryDir } }
+        : {}),
       disallowedTools: [...ALWAYS_DISALLOWED, ...(role.disallowedTools ?? [])],
-      env: { ...workerEnv(process.env), ...role.env, BOBNET_SUPERVISED: "1", BOBNET_WORKER_ID: this.id },
+      env: { ...workerEnv(process.env), ...role.env, BOBNET_SUPERVISED: "1", BOBNET_WORKER_ID: this.id, ENABLE_TOOL_SEARCH: "false" },
       abortController: this.abort,
       stderr: (data) => this.write({ type: "stderr", data }),
       ...(role.model ? { model: role.model } : {}),
@@ -258,7 +269,7 @@ export class WorkerRun {
 
 /**
  * What git commit needs outside a linked worktree: its own git dir and the
- * shared objects, refs and logs in the main checkout's .git. Not hooks or
+ * shared objects, refs, logs and packed-refs in the main checkout's .git. Not hooks or
  * config, which the sandbox write-protects anyway. Empty for a plain checkout
  * whose .git is already inside a write root.
  */
@@ -270,7 +281,7 @@ export function gitWriteDirs(
   const dirs = gitDirs(dir);
   if (!dirs) return [];
   const [gitDir, common] = dirs;
-  const out = [gitDir, ...(gitDir === common ? [] : ["objects", "refs", "logs"].map((d) => join(common, d)))];
+  const out = [gitDir, ...(gitDir === common ? [] : ["objects", "refs", "logs", "packed-refs", "packed-refs.lock"].map((d) => join(common, d)))];
   return out.filter((d) => !writeRoots.some((r) => inside(r, d)));
 }
 

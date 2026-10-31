@@ -149,6 +149,7 @@ export class Supervisor {
         ...(role.team ? { team: role.team } : {}),
         purpose: role.purpose ?? `${role.project} ${role.key} (headless, started by the supervisor)`,
       });
+      this.roleStatus(role, this.activeRun(role.project, role.key));
     }
     this.flushOutbox();
 
@@ -492,7 +493,7 @@ export class Supervisor {
     this.baselines.set(w.id, baseline);
     const run = new WorkerRun({
       id: w.id,
-      role: { ...role, writeRoots: [...role.writeRoots, join(this.config.stateDir, "handoffs")] },
+      role: { ...role, writeRoots: [...role.writeRoots, join(this.config.stateDir, "handoffs"), ...this.config.sandboxWrite] },
       prompt: consult ? w.task : buildPrompt(w.task, handoff, waiting),
       systemAppend: systemAppend(role, project.orchestrator),
       resumeSession: w.resume_session,
@@ -506,7 +507,7 @@ export class Supervisor {
           name: role.name,
           send: (to, body, inReplyTo) =>
             this.broker.request({ t: "send", as: role.name, to, body, ...(inReplyTo ? { in_reply_to: inReplyTo } : {}) }),
-          peers: async () => (await this.broker.request<{ peers: PeerInfo[] }>({ t: "peers" })).peers,
+          peers: async () => this.livePeers((await this.broker.request<{ peers: PeerInfo[] }>({ t: "peers" })).peers),
           checkpoint: (line) => {
             this.checkpoints.set(w.id, line);
             this.store.updateWorker(w.id, { checkpoint: line });
@@ -535,6 +536,7 @@ export class Supervisor {
     if (waiting.length > 0) this.store.consumeInbox(waiting.map((m) => m.id), w.id);
     this.store.audit("supervisor", consult ? "start:consult" : "start", w.id, { role: role.name, cwd: role.dir, resume: w.resume_session, ...(consult ? { consult: consult.id } : {}) });
     this.runs.set(w.id, run);
+    this.roleStatus(role, w.id);
     try {
       run.start();
     } catch (err) {
@@ -645,7 +647,7 @@ export class Supervisor {
       if (ok || held) this.refusedHeads.delete(worktree);
       else this.refusedHeads.set(worktree, head);
       this.store.audit("supervisor", ok ? "land:ok" : held ? "land:held" : "land:failed", workerId, { code: r.code, head });
-      const last = r.output.trim().split("\n").at(-1)?.slice(0, 300) ?? "";
+      const last = landSummary(r.output);
       this.notify(
         ok
           ? `${role.name} (${workerId}) landed: ${last}`
@@ -727,6 +729,8 @@ export class Supervisor {
   private onExit(id: string, outcome: Outcome): void {
     const run = this.runs.get(id);
     this.runs.delete(id);
+    const exited = this.store.worker(id);
+    if (exited) this.roleStatus(this.roleOf(exited), this.activeRun(exited.project, exited.role));
     this.preapproved.delete(id);
     this.stallReported.delete(id);
     for (const [toolUseId, call] of this.slotCalls) if (call.workerId === id) this.releaseCall(toolUseId);
@@ -810,6 +814,22 @@ export class Supervisor {
 
   private orchestrators(): Set<string> {
     return new Set([this.config.orchestrator, ...[...this.config.projects.values()].map((p) => p.orchestrator)].map((n) => n.toLowerCase()));
+  }
+
+  /**
+   * The supervisor holds every role's name on the broker so messages queue for it,
+   * which lists the role online. The status says whether a worker is behind it.
+   */
+  private roleStatus(role: RoleConfig, workerId: string | undefined): void {
+    const status = workerId ? `role · worker ${workerId} running` : "role · no worker running (a message starts one)";
+    this.broker.request({ t: "status", as: role.name, status }).catch(() => {});
+  }
+
+  /** Peers as a worker sees them: a role of this supervisor is online only while its worker runs. */
+  private livePeers(peers: PeerInfo[]): PeerInfo[] {
+    const self = peers.find((p) => p.name === this.config.name);
+    const idle = new Set(this.roles().filter((r) => !this.activeRun(r.project, r.key)).map((r) => r.name));
+    return peers.map((p) => (self && p.laptop === self.laptop && idle.has(p.name) ? { ...p, online: false } : p));
   }
 
   private activeRun(project: string, role: string): string | undefined {
@@ -1118,4 +1138,15 @@ export function parseExports(text: string): Record<string, string> {
     if (m) out[m[1]!] = m[2] ?? m[3] ?? m[4] ?? "";
   }
   return out;
+}
+
+/**
+ * The land output's tail for the orchestrator's notice: from the `landed:` line on,
+ * because its hashes are the ones to quote from main; else the last line.
+ */
+export function landSummary(output: string, max = 800): string {
+  const lines = output.trim().split("\n");
+  const at = lines.findLastIndex((l) => l.trimStart().startsWith("landed:"));
+  const tail = at === -1 ? (lines.at(-1) ?? "") : lines.slice(at).join("\n");
+  return tail.length > max ? `${tail.slice(0, max)}…` : tail;
 }

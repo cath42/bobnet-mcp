@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Envelope } from "@bobnet/protocol";
@@ -7,8 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseSupervisorConfig } from "../src/config.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
-import { Supervisor } from "../src/supervisor.ts";
-import { gitWriteDirs } from "../src/worker.ts";
+import { landSummary, Supervisor } from "../src/supervisor.ts";
+import { gitWriteDirs, WORKER_TOOLS } from "../src/worker.ts";
 import { FakeBroker, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 
 const POLICY = new Policy(`
@@ -67,6 +67,76 @@ describe("config", () => {
     expect(() =>
       parseSupervisorConfig(`orchestrator: Bob\nprojects:\n  a: { path: /a, roles: { bob: { dir: /a/b } } }`, (d) => d),
     ).toThrow(/already used by the orchestrator/);
+  });
+});
+
+describe("lean workers", () => {
+  it("gives a worker only its tools and its own MCP servers, without tool search", async () => {
+    const { sup, sessions } = await setup("sandbox_write: [/home/me/.local/state/fnm_multishells]");
+    sup.spawn({ project: "helix", role: "bill", task: "x" });
+    await until(() => sessions.length === 1);
+    const o = sessions[0]!.options;
+    expect(o.tools).toEqual(WORKER_TOOLS);
+    expect(o.strictMcpConfig).toBe(true);
+    expect(Object.keys(o.mcpServers!)).toEqual(["bobnet"]);
+    expect(o.settings).toBeUndefined();
+    expect(o.env).toMatchObject({ ENABLE_TOOL_SEARCH: "false" });
+    expect(o.sandbox!.filesystem!.allowWrite).toContain("/home/me/.local/state/fnm_multishells");
+  });
+
+  it("reads a role's servers from the project's .mcp.json and sets its memory folder", () => {
+    const project = join(dir, "helix");
+    mkdirSync(project);
+    writeFileSync(join(project, ".mcp.json"), JSON.stringify({ mcpServers: { backlog: { command: "backlog" }, landai: { type: "http", url: "x" } } }));
+    const c = parseSupervisorConfig(
+      `orchestrator: Bob\nprojects:\n  helix:\n    path: ${project}\n    memory_dir: /mem/workers\n    roles:\n` +
+        `      riker: { dir: ${project}/product, mcp: [backlog] }\n      bill: { dir: ${project}/arch, memory_dir: false }\n`,
+      (d) => d,
+    );
+    const roles = c.projects.get("helix")!.roles;
+    expect(roles.get("riker")).toMatchObject({ mcpServers: { backlog: { command: "backlog" } }, memoryDir: "/mem/workers" });
+    expect(roles.get("bill")).toMatchObject({ mcpServers: {}, memoryDir: false });
+    expect(() =>
+      parseSupervisorConfig(`orchestrator: Bob\nprojects:\n  helix:\n    path: ${project}\n    roles: { riker: { dir: /x, mcp: [nope] } }\n`, (d) => d),
+    ).toThrow(/no server nope/);
+  });
+
+  it("passes the memory folder and role servers to the worker", async () => {
+    const project = join(dir, "games");
+    mkdirSync(project);
+    writeFileSync(join(project, ".mcp.json"), JSON.stringify({ mcpServers: { backlog: { command: "backlog" } } }));
+    const broker = new FakeBroker();
+    const { queryFn, sessions } = fakeQuery();
+    const config = parseSupervisorConfig(
+      `orchestrator: Bob\nstate_dir: ${dir}\nprojects:\n  games:\n    path: ${project}\n    roles:\n      mario: { dir: ${project}, mcp: [backlog], memory_dir: /mem/m }\n`,
+      (d) => d,
+    );
+    const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, ownerCheck });
+    await sup.start();
+    running.push(sup);
+    sup.spawn({ project: "games", role: "mario", task: "x" });
+    await until(() => sessions.length === 1);
+    expect(Object.keys(sessions[0]!.options.mcpServers!).sort()).toEqual(["backlog", "bobnet"]);
+    expect(sessions[0]!.options.settings).toEqual({ autoMemoryDirectory: "/mem/m" });
+  });
+
+  it("marks each role's peer entry with whether a worker runs behind it", async () => {
+    const { sup, broker, sessions } = await setup();
+    await until(() => broker.statuses.some((s) => s.as === "Bill"));
+    expect(broker.statuses.find((s) => s.as === "Bill")!.status).toMatch(/^role · no worker running/);
+    const w = sup.spawn({ project: "helix", role: "bill", task: "x" });
+    await until(() => sessions.length === 1);
+    await until(() => broker.statuses.at(-1)?.status === `role · worker ${w.id} running`);
+    sessions[0]!.finish();
+    await until(() => broker.statuses.at(-1)?.as === "Bill" && /no worker running/.test(broker.statuses.at(-1)!.status ?? ""));
+  });
+});
+
+describe("landSummary", () => {
+  it("keeps the landed line with main's hashes, not just the last line", () => {
+    const out = "verify passed\nlanded: land/Bill 11943fbf: main e2d601ee → 1165f8b0\n  11943fbf → 1165f8b0 ADR 0094\n  Quote these hashes from main.\n";
+    expect(landSummary(out)).toBe("landed: land/Bill 11943fbf: main e2d601ee → 1165f8b0\n  11943fbf → 1165f8b0 ADR 0094\n  Quote these hashes from main.");
+    expect(landSummary("a\nb\n")).toBe("b");
   });
 });
 
@@ -520,6 +590,8 @@ describe("gitWriteDirs", () => {
       "/repo/.git/objects",
       "/repo/.git/refs",
       "/repo/.git/logs",
+      "/repo/.git/packed-refs",
+      "/repo/.git/packed-refs.lock",
     ]);
     // A plain checkout's .git is already inside its write root.
     expect(gitWriteDirs("/repo/arch", ["/repo"], () => ["/repo/.git", "/repo/.git"])).toEqual([]);
@@ -539,6 +611,8 @@ describe("gitWriteDirs", () => {
         join(real, "main/.git/objects"),
         join(real, "main/.git/refs"),
         join(real, "main/.git/logs"),
+        join(real, "main/.git/packed-refs"),
+        join(real, "main/.git/packed-refs.lock"),
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });

@@ -49,8 +49,9 @@ Cloudflare Access fronts every route, and the Worker verifies the Access JWT its
 - **Workers:**
   - never `bypassPermissions`;
   - run in the OS sandbox with no unsandboxed fallback;
-  - write only inside their role's worktree (and, for a linked worktree, the git data a commit needs, never hooks or config);
-  - get BobNet only through the supervisor.
+  - write only inside their role's worktree (and, for a linked worktree, the git data a commit needs, never hooks or config), plus any `sandbox_write` paths in supervisor.yaml;
+  - get BobNet only through the supervisor;
+  - start lean: built-in tools Read, Edit, Write, Glob, Grep and Bash (a role's `tools` overrides this), and no MCP server but `bobnet` and those the role names in `mcp` (taken from the project's `.mcp.json`). `memory_dir` on a project or role points workers at another auto-memory folder, whose `MEMORY.md` is the index they load; `false` turns memory off.
 
 ## Develop
 

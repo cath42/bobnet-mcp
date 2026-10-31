@@ -39,6 +39,12 @@ const Role = z.object({
   model: z.string().optional(),
   allowed_tools: z.array(z.string()).optional(),
   disallowed_tools: z.array(z.string()).optional(),
+  /** Built-in tools the worker has, in place of WORKER_TOOLS. */
+  tools: z.array(z.string()).optional(),
+  /** Servers from the project's .mcp.json the worker gets; no other MCP server reaches it. */
+  mcp: z.array(z.string()).default([]),
+  /** Auto-memory folder (its MEMORY.md is the index the worker loads); false turns memory off. */
+  memory_dir: z.union([path, z.literal(false)]).optional(),
   env: Env,
   max_runtime_minutes: z.number().positive().optional(),
   /** Where the worker may write; defaults to the git worktree that holds `dir`. */
@@ -57,6 +63,8 @@ const Project = z.object({
   orchestrator: z.string().refine(isValidSegment, "must be a valid BobNet name").optional(),
   /** Environment for every role in the project; a role's own env wins. */
   env: Env,
+  /** Every role's memory_dir, unless the role sets its own. */
+  memory_dir: z.union([path, z.literal(false)]).optional(),
   /** How a worker lands its commits: run by the supervisor in the worker's worktree, in a run slot. */
   land: z
     .object({
@@ -93,6 +101,8 @@ const SupervisorFile = z.object({
   run_slots: z.number().int().positive().default(1),
   /** How long a consulted role has to answer. */
   consult_timeout_minutes: z.number().positive().default(10),
+  /** More paths every sandboxed worker may write, e.g. fnm's multishell folder. */
+  sandbox_write: z.array(path).default([]),
   projects: z.record(z.string(), Project),
 });
 
@@ -105,6 +115,11 @@ export interface RoleConfig {
   model: string | undefined;
   allowedTools: string[] | undefined;
   disallowedTools: string[] | undefined;
+  tools: string[] | undefined;
+  /** Server name to config, read from the project's .mcp.json. */
+  mcpServers: Record<string, unknown>;
+  /** undefined: Claude Code's default folder. */
+  memoryDir: string | false | undefined;
   env: Record<string, string>;
   maxRuntimeMinutes: number;
   writeRoots: string[];
@@ -135,6 +150,7 @@ export interface SupervisorConfig {
   mcpPort: number;
   runSlots: number;
   consultTimeoutMinutes: number;
+  sandboxWrite: string[];
   projects: Map<string, ProjectConfig>;
 }
 
@@ -192,6 +208,9 @@ export function parseSupervisorConfig(
         model: r.model,
         allowedTools: r.allowed_tools,
         disallowedTools: r.disallowed_tools,
+        tools: r.tools,
+        mcpServers: pickMcp(`${pKey}.${rKey}`, r.mcp, () => readMcp(p.path)),
+        memoryDir: r.memory_dir ?? p.memory_dir,
         env: { ...p.env, ...r.env },
         maxRuntimeMinutes: r.max_runtime_minutes ?? file.max_runtime_minutes,
         writeRoots: r.write_roots ?? [resolveRoot(dir)],
@@ -226,8 +245,29 @@ export function parseSupervisorConfig(
     mcpPort: file.mcp_port,
     runSlots: file.run_slots,
     consultTimeoutMinutes: file.consult_timeout_minutes,
+    sandboxWrite: file.sandbox_write,
     projects,
   };
+}
+
+function pickMcp(where: string, names: string[], read: () => Record<string, unknown>): Record<string, unknown> {
+  if (names.length === 0) return {};
+  const all = read();
+  const out: Record<string, unknown> = {};
+  for (const n of names) {
+    if (!(n in all)) throw new Error(`${where}.mcp: no server ${n} in the project's .mcp.json`);
+    out[n] = all[n];
+  }
+  return out;
+}
+
+function readMcp(projectPath: string): Record<string, unknown> {
+  try {
+    const file = JSON.parse(readFileSync(join(projectPath, ".mcp.json"), "utf8")) as { mcpServers?: Record<string, unknown> };
+    return file.mcpServers ?? {};
+  } catch {
+    return {};
+  }
 }
 
 export function loadSupervisorConfig(dir = configDir()): SupervisorConfig {
