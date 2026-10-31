@@ -11,68 +11,17 @@
 <body>
   <header>
     <h1>BobNet</h1>
-    <nav>
-      <a href="#" data-view="activity">Activity</a>
-      <a href="#agents" data-view="agents">Agents <span class="count" id="agents-nav-count"></span></a>
+    <nav id="tabs">
+      <a href="#now">Now <span class="count" id="now-count"></span></a>
+      <a href="#feature">Feature</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="#usage">Usage</a>
+      <a href="#sessions">Sessions</a>
     </nav>
+    <select id="project" aria-label="Project" hidden></select>
     <span id="conn" class="conn" data-state="connecting">connecting</span>
   </header>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <main id="activity">
-    <section id="needs" hidden>
-      <h2>Waiting on a decision <span class="count" id="needs-count"></span></h2>
-      <ul class="list" id="needs-list"></ul>
-    </section>
-
-    <section>
-      <h2>Progress by task</h2>
-      <div id="progress" class="cards"></div>
-    </section>
-
-    <section>
-      <h2>Session updates <span class="count" id="updates-filter"></span></h2>
-      <ul class="feed" id="updates"></ul>
-    </section>
-
-    <section>
-      <h2>Workers <span class="count" id="workers-count"></span></h2>
-      <div id="workers" class="cards"></div>
-      <details id="ended-wrap" hidden>
-        <summary>Ended in the last 24 hours <span class="count" id="ended-count"></span></summary>
-        <div id="ended" class="cards"></div>
-      </details>
-    </section>
-
-    <section>
-      <h2>Token usage</h2>
-      <div class="totals" id="usage-totals"></div>
-      <div class="table-wrap"><table id="usage">
-        <thead><tr><th>Role</th><th class="num">Workers</th><th class="num">Tokens</th><th class="num">Cost</th></tr></thead>
-        <tbody></tbody>
-      </table></div>
-      <p class="note">Supervised workers only, last 7 days. Costs are the SDK's estimates, not a bill.</p>
-    </section>
-
-    <section>
-      <h2>Messages</h2>
-      <ul class="feed" id="traffic"></ul>
-      <p class="note">Who messaged whom, never what was said.</p>
-    </section>
-
-    <section>
-      <h2>Laptops</h2>
-      <div id="laptops" class="cards"></div>
-    </section>
-  </main>
-
-  <main id="agents-view" hidden>
-    <section>
-      <h2>Agents <span class="count" id="agents-count"></span></h2>
-      <div class="table-wrap"><table id="agents">
-        <thead><tr><th>Agent</th><th>Status</th><th class="num">Up</th><th class="num">In / out 24h</th><th class="num">Inbox</th></tr></thead>
-        <tbody></tbody>
-      </table></div>
-    </section>
-  </main>
+  <main id="view"></main>
 </body>
 </html>

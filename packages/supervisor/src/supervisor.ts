@@ -9,6 +9,7 @@ import type { PushFrame, RequestFrame } from "@bobnet/client/connection";
 import type { Logger } from "@bobnet/client/log";
 import type { OwnerCheck } from "./owner.ts";
 import { EFFORTS, type Effort, type ProjectConfig, type RoleConfig, type RunConfig, type SupervisorConfig } from "./config.ts";
+import { assignSessions, Boards, briefTask } from "./board.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
@@ -97,6 +98,7 @@ export class Supervisor {
   private readonly interactive = new Map<string, string>();
   private holdTimer: NodeJS.Timeout | null = null;
   private lastHold = "";
+  private readonly boards: Boards | null;
 
   constructor(deps: {
     config: SupervisorConfig;
@@ -107,6 +109,8 @@ export class Supervisor {
     log: Logger;
     /** Verifies the owner's Access JWT on dashboard actions; without it they're refused. */
     ownerCheck?: OwnerCheck;
+    /** Sends each project's board (backlog, sessions, past runs) to the dashboard; off unless asked for. */
+    boards?: { transcriptsDir?: string };
   }) {
     this.ownerCheck = deps.ownerCheck ?? null;
     this.config = deps.config;
@@ -130,6 +134,18 @@ export class Supervisor {
       setWorkerState: (id, state) => this.setState(id, state),
       takeSlot: (workerId, author, toolUseId, label, signal) => this.takeCallSlot(workerId, author, toolUseId, label, signal),
     });
+    this.boards = deps.boards
+      ? new Boards({
+          projects: deps.config.projects,
+          store: deps.store,
+          log: deps.log,
+          send: async (board) => void (await this.broker.request({ t: "board", as: this.config.name, board })),
+          liveCtx: (id) => this.runs.get(id)?.ctx,
+          ownTokens: (w) => this.ownUsage(w).tokens,
+          nameOf: (w) => this.roleOf(w).name,
+          ...(deps.boards.transcriptsDir ? { transcriptsDir: deps.boards.transcriptsDir } : {}),
+        })
+      : null;
   }
 
   // ---------- Lifecycle ----------
@@ -177,12 +193,14 @@ export class Supervisor {
     }, STALL_CHECK_MS);
     const heartbeat = setInterval(() => this.report(true), REPORT_HEARTBEAT_MS);
     heartbeat.unref();
+    this.boards?.start();
     this.stallTimer.unref();
     this.schedule();
     this.writeStatus();
   }
 
   async shutdown(): Promise<void> {
+    this.boards?.stop();
     if (this.stallTimer) clearInterval(this.stallTimer);
     if (this.holdTimer) clearInterval(this.holdTimer);
     if (this.reportTimer) clearTimeout(this.reportTimer);
@@ -976,12 +994,13 @@ export class Supervisor {
     this.store.updateWorker(id, {
       state: outcome.state,
       ended_at: new Date().toISOString(),
-      ...(run ? { usage: JSON.stringify({ cum: run.usage, base }) } : {}),
+      ...(run ? { usage: JSON.stringify({ cum: run.usage, base }), ctx: JSON.stringify(run.ctx) } : {}),
       error: outcome.state === "failed" ? outcome.error : outcome.state === "stopped" ? outcome.reason : null,
       ...(run?.sessionId ? { session_id: run.sessionId } : {}),
       last_event_at: run ? new Date(run.lastEventAt).toISOString() : w.last_event_at,
     });
     this.store.audit("supervisor", `exit:${outcome.state}`, id, {});
+    void this.boards?.refresh();
 
     const role = this.roleOf(w);
     const what =
@@ -1141,12 +1160,20 @@ export class Supervisor {
     };
   }
 
+  /** Calls so far and the latest one's context; a running worker's whole line goes with it. */
+  private callsOf(w: WorkerRow, run: WorkerRun | undefined): Pick<WorkerSnapshot, "calls" | "context" | "ctx"> {
+    const ctx = run ? run.ctx : w.ctx ? (JSON.parse(w.ctx) as number[]) : [];
+    const line = run ? (ctx.length > 400 ? ctx.slice(-400) : ctx) : [];
+    return { calls: ctx.length, context: ctx.at(-1) ?? null, ctx: line };
+  }
+
   snapshot(): LaptopSnapshot {
     const now = Date.now();
     const dayAgo = new Date(now - 24 * 3600_000).toISOString();
     const usageSince = new Date(now - USAGE_DAYS * 86400_000).toISOString();
     const all = this.store.workers();
     const shown = all.filter((w) => !w.ended_at || w.ended_at > dayAgo).slice(-100);
+    const sessions = assignSessions(all);
 
     const workers: WorkerSnapshot[] = shown.map((w) => {
       const run = this.runs.get(w.id);
@@ -1166,6 +1193,9 @@ export class Supervisor {
         last_event_at: run ? new Date(run.lastEventAt).toISOString() : w.last_event_at,
         tokens: u.tokens,
         cost_usd: u.cost_usd,
+        session: sessions.get(w.id)?.name ?? null,
+        task_ref: briefTask(w.task),
+        ...this.callsOf(w, run),
       };
     });
 

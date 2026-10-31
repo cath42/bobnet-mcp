@@ -1,4 +1,4 @@
-import type { PeerInfo, ServerFrame } from "@bobnet/protocol";
+import { LIMITS, type PeerInfo, type ProjectBoard, type ServerFrame } from "@bobnet/protocol";
 import { env } from "cloudflare:workers";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
@@ -230,6 +230,7 @@ describe("dashboard", () => {
         id: "w_1", name: "Bill", project: "helix", role: "bill", state: "running" as const, task: "ADR 0094", model: "opus", effort: "high", checkpoint: null,
         started_at: "2026-10-30T00:00:00.000Z", ended_at: null, last_event_at: "2026-10-30T00:01:00.000Z",
         tokens: { input: 10, output: 2, cache_read: 0, cache_write: 0 }, cost_usd: 0.01,
+        session: "LAND-41 build 3", task_ref: "LAND-41.16", calls: 3, context: 41000, ctx: [30000, 36000, 41000],
       },
     ],
     pending: [],
@@ -244,6 +245,39 @@ describe("dashboard", () => {
     expect(live).toMatchObject({ laptop: "mbp-1", snapshot: { workers: [{ id: "w_1" }] } });
     const d = await owner.request({ t: "dashboard" });
     expect(d.laptops).toEqual([{ laptop: "mbp-1", at: expect.any(String), snapshot }]);
+  });
+
+  const board: ProjectBoard = {
+    project: "helix",
+    ref: "1b8c34f4aa00",
+    backlog: {
+      milestones: [{ id: "m-2", title: "R1 Partner demo" }],
+      items: [{ id: "LAND-41", title: "An agent proposes changes", status: "Ready", type: "increment", parent: null, milestone: "m-2", assignee: [], labels: [], deps: [], desc: "R1 increment 7c", ac: [[false, "an agent proposes a change (e2e)"]] }],
+      done_counts: {},
+      drafts: [],
+    },
+    sessions: [{ name: "LAND-41 build 3", kind: "build", started_at: "2026-10-31T17:30:00Z", ended_at: null, workers: 2, calls: 120, tokens: { input: 1, output: 2, cache_read: 3, cache_write: 4 } }],
+    runs: [],
+    baseline: { runs: 0, p25: [], p50: [], p75: [] },
+    commits: [],
+    ci: null,
+  };
+
+  it("keeps each project's board, streams it to the owner, and takes one larger than other frames", async () => {
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const supervisor = await agent(1, "supervisor");
+    // Past runs' context per call make a board bigger than the 64 KiB other frames are held to.
+    const big: ProjectBoard = {
+      ...board,
+      runs: Array.from({ length: 60 }, (_, i) => ({ id: `w_${i}`, name: "Homer", role: "homer", session: "LAND-41 build 2", task_ref: "LAND-41.16", model: "opus", effort: "high", started_at: null, ended_at: null, resumed: false, tokens: 1, ctx: Array.from({ length: 300 }, (_, j) => 100000 + j) })),
+    };
+    expect(JSON.stringify(big).length).toBeGreaterThan(LIMITS.frameBytes);
+    await supervisor.request({ t: "board", as: "supervisor", board: big });
+    const live = await owner.next((f) => f.t === "board");
+    expect(live).toMatchObject({ laptop: "mbp-1", board: { project: "helix" } });
+    await supervisor.request({ t: "board", as: "supervisor", board });
+    const d = await owner.request({ t: "dashboard" });
+    expect(d.boards).toEqual([{ laptop: "mbp-1", at: expect.any(String), board }]);
   });
 
   it("rejects a malformed snapshot", async () => {

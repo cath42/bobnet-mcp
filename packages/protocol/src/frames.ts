@@ -16,6 +16,8 @@ export const PONG = '{"t":"pong"}';
 
 export const LIMITS = {
   frameBytes: 64 * 1024,
+  /** A project board (backlog, sessions, past runs) is sent only when it changes, so it may be larger. */
+  boardFrameBytes: 900 * 1024,
   bodyChars: 16 * 1024,
   recipients: 32,
   statusChars: 200,
@@ -90,6 +92,15 @@ export const WorkerSnapshot = z.object({
   last_event_at: z.string().nullable(),
   tokens,
   cost_usd: z.number().nonnegative(),
+  /** The session it works in, as its brief names it ("LAND-41 build 3"), or the one running when it started. */
+  session: z.string().max(60).nullable().default(null),
+  /** The backlog item its brief is about, if it names one. */
+  task_ref: z.string().max(40).nullable().default(null),
+  /** Model calls so far, and the context the latest one carried. */
+  calls: z.number().int().nonnegative().default(0),
+  context: z.number().int().nonnegative().nullable().default(null),
+  /** Context per call, for a worker that is running; a past run's is on its project's board. */
+  ctx: z.array(z.number().int().nonnegative()).max(400).default([]),
 });
 export type WorkerSnapshot = z.infer<typeof WorkerSnapshot>;
 
@@ -134,6 +145,83 @@ export const LaptopSnapshot = z.object({
 });
 export type LaptopSnapshot = z.infer<typeof LaptopSnapshot>;
 
+// ---------- Project board: what a supervisor reports when it changes ----------
+
+export const SessionKind = z.enum(["design", "build", "review", "retro", "other"]);
+export type SessionKind = z.infer<typeof SessionKind>;
+
+const short = (n: number) => z.string().max(n);
+
+export const BoardItem = z.object({
+  id: short(40),
+  title: short(300),
+  status: short(40),
+  type: short(20).nullable(),
+  parent: short(40).nullable(),
+  milestone: short(40).nullable(),
+  assignee: z.array(short(60)).max(10),
+  labels: z.array(short(60)).max(20),
+  deps: z.array(short(40)).max(40),
+  /** Open items only: what it is and how it's accepted, shortened. */
+  desc: short(600).nullable(),
+  ac: z.array(z.tuple([z.boolean(), short(300)])).max(40),
+});
+export type BoardItem = z.infer<typeof BoardItem>;
+
+export const ProjectBoard = z.object({
+  project: short(40),
+  /** The commit the backlog was read at. */
+  ref: short(40).nullable(),
+  backlog: z
+    .object({
+      milestones: z.array(z.object({ id: short(40), title: short(200) })).max(50),
+      /** Increments, every task of an open increment, and any other open item. */
+      items: z.array(BoardItem).max(1500),
+      /** Tasks of accepted increments, counted rather than listed. */
+      done_counts: z.record(z.string(), z.number().int().nonnegative()),
+      drafts: z.array(z.object({ id: short(40), title: short(300), updated: short(40).nullable() })).max(300),
+    })
+    .nullable(),
+  sessions: z
+    .array(
+      z.object({
+        name: short(60),
+        kind: SessionKind,
+        started_at: z.string(),
+        ended_at: z.string().nullable(),
+        workers: z.number().int().nonnegative(),
+        calls: z.number().int().nonnegative(),
+        tokens,
+      }),
+    )
+    .max(200),
+  /** Ended runs of the latest sessions, each with its context per call. */
+  runs: z
+    .array(
+      z.object({
+        id: short(40),
+        name: short(40),
+        role: short(40),
+        session: short(60).nullable(),
+        task_ref: short(40).nullable(),
+        model: short(60).nullable(),
+        effort: short(10).nullable(),
+        started_at: z.string().nullable(),
+        ended_at: z.string().nullable(),
+        resumed: z.boolean(),
+        tokens: z.number().nonnegative(),
+        ctx: z.array(z.number().int().nonnegative()).max(400),
+      }),
+    )
+    .max(300),
+  /** Middle half and median of earlier runs' context, call by call, outside the latest build session. */
+  baseline: z.object({ runs: z.number().int().nonnegative(), p25: z.array(z.number()), p50: z.array(z.number()), p75: z.array(z.number()) }),
+  commits: z.array(z.object({ sha: short(12), at: z.string(), author: short(60), subject: short(200) })).max(200),
+  /** null when the CI can't be read (no gh, or not signed in). */
+  ci: z.array(z.object({ name: short(80), status: short(20), conclusion: short(20).nullable(), created_at: z.string(), sha: short(12) })).max(20).nullable(),
+});
+export type ProjectBoard = z.infer<typeof ProjectBoard>;
+
 /** A short session update for the dashboard feed, e.g. from the orchestrator. */
 export const UpdateItem = z.object({
   seq: z.number().int(),
@@ -163,6 +251,7 @@ export interface PeerStats {
 export interface Dashboard {
   peers: Array<PeerInfo & { connected_at: string | null; stats: PeerStats }>;
   laptops: Array<{ laptop: string; at: string; snapshot: LaptopSnapshot }>;
+  boards: Array<{ laptop: string; at: string; board: ProjectBoard }>;
   updates: UpdateItem[];
   traffic: TrafficItem[];
 }
@@ -217,6 +306,8 @@ export const PeersFrame = z.object({ t: z.literal("peers"), rid });
 
 export const ReportFrame = z.object({ t: z.literal("report"), rid, as: segment, snapshot: LaptopSnapshot });
 
+export const BoardFrame = z.object({ t: z.literal("board"), rid, as: segment, board: ProjectBoard });
+
 export const UpdateFrame = z.object({ t: z.literal("update"), rid, as: segment, text: z.string().min(1).max(500) });
 
 /** Owner only: everything the dashboard shows, in one reply. */
@@ -256,6 +347,7 @@ export const ClientFrame = z.discriminatedUnion("t", [
   StatusFrame,
   PeersFrame,
   ReportFrame,
+  BoardFrame,
   UpdateFrame,
   DashboardFrame,
   ActionFrame,
@@ -292,6 +384,7 @@ export type ServerFrame =
   | { t: "presence"; event: "joined" | "left" | "status"; peer: PeerInfo }
   // To owner connections only:
   | { t: "report"; laptop: string; at: string; snapshot: LaptopSnapshot }
+  | { t: "board"; laptop: string; at: string; board: ProjectBoard }
   | { t: "update"; item: UpdateItem }
   | { t: "traffic"; item: TrafficItem }
   | { t: "action_result"; id: string; laptop: string; ok: boolean; message: string }
@@ -308,6 +401,7 @@ export interface Results {
   status: { address: string };
   peers: { peers: PeerInfo[] };
   report: { laptop: string };
+  board: { laptop: string; project: string };
   update: { seq: number };
   dashboard: Dashboard;
   action: { id: string };

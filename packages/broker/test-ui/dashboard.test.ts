@@ -26,31 +26,82 @@ class FakeSocket extends EventTarget {
 const now = new Date();
 const iso = (minAgo: number) => new Date(now.getTime() - minAgo * 60_000).toISOString();
 const tokens = (input: number) => ({ input, output: 100, cache_read: 0, cache_write: 0 });
+/** Live frames re-render after a short debounce. */
+const settle = () => new Promise((r) => setTimeout(r, 320));
+
+const worker = (over: Record<string, unknown>) => ({
+  id: "w_1", name: "records-agent", project: "helix", role: "records", state: "running", task: "Bob's brief, LAND-41 build 3. Your task: LAND-41.18",
+  model: "opus", effort: "high", checkpoint: "tracts take update items", started_at: iso(25), ended_at: null, last_event_at: iso(0),
+  tokens: tokens(1_500_000), cost_usd: 0, session: "LAND-41 build 3", task_ref: "LAND-41.18", calls: 3, context: 61000, ctx: [30000, 45000, 61000], ...over,
+});
+
+const item = (id: string, status: string, over: Record<string, unknown> = {}) => ({
+  id, title: `${id} title`, status, type: "task", parent: id.includes(".") ? id.split(".")[0] : null, milestone: "m-2", assignee: [], labels: [], deps: [], desc: null, ac: [], ...over,
+});
+
+const board = {
+  project: "helix",
+  ref: "1b8c34f4aa00",
+  backlog: {
+    milestones: [{ id: "m-2", title: "R1 Partner demo" }, { id: "m-3", title: "R2 Write path" }],
+    items: [
+      item("LAND-40", "Done", { type: "increment", title: "Build and CI" }),
+      item("LAND-41", "Ready", { type: "increment", title: "An agent proposes changes to recorded records", desc: "R1 increment 7c.", ac: [[false, "An agent proposes a change (e2e)"]] }),
+      item("LAND-41.1", "In Review", { labels: ["build:design"], title: "ADR: changing a recorded record" }),
+      item("LAND-41.16", "Ready", { labels: ["build:3"], title: "changesets: update items" }),
+      item("LAND-41.18", "Ready", { title: "land: tracts take updates", assignee: ["records-agent"], deps: ["LAND-41.16"] }),
+      item("LAND-41.20", "Ready", { labels: ["build:4"], title: "leases take updates", deps: ["LAND-41.16"] }),
+      item("LAND-42", "Draft", { type: "increment", title: "Demo polish" }),
+    ],
+    done_counts: { "LAND-40": 12 },
+    drafts: [{ id: "DRAFT-1", title: "An <i>idea</i>", updated: "2026-10-31 09:00" }],
+  },
+  sessions: [
+    { name: "LAND-41 design", kind: "design", started_at: iso(900), ended_at: iso(800), workers: 4, calls: 200, tokens: tokens(80_000_000) },
+    { name: "LAND-41 build 2", kind: "build", started_at: iso(400), ended_at: iso(300), workers: 3, calls: 120, tokens: tokens(20_000_000) },
+    { name: "LAND-41 build 3", kind: "build", started_at: iso(200), ended_at: null, workers: 2, calls: 90, tokens: tokens(40_000_000) },
+  ],
+  runs: [
+    { id: "w_0", name: "changesets-agent", role: "changesets", session: "LAND-41 build 3", task_ref: "LAND-41.16", model: "opus", effort: "high", started_at: iso(190), ended_at: iso(120), resumed: false, tokens: 30_000_000, ctx: [30000, 90000, 200000, 360000] },
+    { id: "w_p", name: "records-agent", role: "records", session: "LAND-41 build 2", task_ref: "LAND-41.17", model: "opus", effort: "high", started_at: iso(390), ended_at: iso(350), resumed: false, tokens: 9_000_000, ctx: [29000, 50000] },
+  ],
+  baseline: { runs: 9, p25: [25000, 30000], p50: [30000, 40000], p75: [35000, 55000] },
+  commits: [{ sha: "ae54c540", at: iso(60), author: "records-agent", subject: "LAND-41.18: land: tracts and their geometry take updates" }],
+  ci: [{ name: "ci", status: "in_progress", conclusion: null, created_at: iso(5), sha: "437577e9aa00" }],
+};
 
 const dashboard = {
   peers: [
-    { address: "Orchestrator@mbp-1", name: "Orchestrator", laptop: "mbp-1", team: "sandbox", purpose: null, expertise: [], status: "running story 3", online: true, last_seen: iso(1), connected_at: iso(30), stats: { sent_24h: 2, received_24h: 5, inbox: 0 } },
-    { address: "Writer@mbp-1", name: "Writer", laptop: "mbp-1", team: "sandbox", purpose: null, expertise: [], status: null, online: false, last_seen: iso(60), connected_at: null, stats: { sent_24h: 0, received_24h: 1, inbox: 1 } },
+    { address: "Bob@mbp-1", name: "Bob", laptop: "mbp-1", team: "land", purpose: null, expertise: [], status: "running build 3", online: true, last_seen: iso(1), connected_at: iso(30), stats: { sent_24h: 2, received_24h: 5, inbox: 0 } },
+    { address: "Riker@mbp-1", name: "Riker", laptop: "mbp-1", team: "land", purpose: null, expertise: [], status: null, online: false, last_seen: iso(60), connected_at: null, stats: { sent_24h: 0, received_24h: 1, inbox: 1 } },
   ],
   laptops: [
     {
       laptop: "mbp-1",
       at: iso(0),
       snapshot: {
-        supervisor: { started_at: iso(120), concurrency: 3, active: 0, queued: 0 },
+        supervisor: { started_at: iso(120), concurrency: 3, active: 1, queued: 0 },
         workers: [
-          { id: "w_1", name: "Writer", project: "sandbox", role: "writer", state: "done", task: "Write a <b>haiku</b>", checkpoint: "haiku written", started_at: iso(10), ended_at: iso(9), last_event_at: iso(9), tokens: tokens(1500), cost_usd: 0.12 },
+          worker({}),
+          worker({ id: "w_9", name: "Writer", project: "sandbox", role: "writer", state: "done", task: "Write a <b>haiku</b>", session: null, task_ref: null, checkpoint: "haiku written", started_at: iso(10), ended_at: iso(9), calls: 0, context: null, ctx: [] }),
         ],
         pending: [],
-        usage: [{ day: now.toISOString().slice(0, 10), project: "sandbox", role: "writer", workers: 1, tokens: tokens(1500), cost_usd: 0.12 }],
+        usage: [],
       },
     },
   ],
-  updates: [{ seq: 1, from: "Orchestrator@mbp-1", laptop: "mbp-1", text: "Writer done, reviewer next", at: iso(8) }],
-  traffic: [{ id: "m_1", type: "message", from: "supervisor@mbp-1", to: ["Orchestrator@mbp-1"], urgent: false, at: iso(9) }],
+  boards: [{ laptop: "mbp-1", at: iso(1), board }],
+  updates: [{ seq: 1, from: "Bob@mbp-1", laptop: "mbp-1", text: "LAND-41.18 · started", at: iso(8) }],
+  traffic: [{ id: "m_1", type: "message", from: "supervisor@mbp-1", to: ["Bob@mbp-1"], urgent: false, at: iso(9) }],
 };
 
 const $ = (id: string) => document.getElementById(id)!;
+const view = () => $("view");
+const go = async (hash: string) => {
+  location.hash = hash;
+  window.dispatchEvent(new Event("hashchange"));
+  await settle();
+};
 
 beforeAll(async () => {
   document.documentElement.innerHTML = html.replace(/<script[\s\S]*?<\/script>|<link[^>]*>/g, "");
@@ -62,73 +113,56 @@ beforeAll(async () => {
   ws.frame({ t: "ok", rid: req["rid"], result: dashboard });
 });
 
-describe("dashboard page", () => {
+describe("Now", () => {
   it("connects to its own host and shows live once rendered", () => {
     expect(FakeSocket.last.url).toMatch(/\/v1\/ws$/);
     expect($("conn").dataset["state"]).toBe("live");
+    expect($("now-count").textContent).toBe("1");
   });
 
-  it("lists agents with status, uptime, counts and inbox", () => {
-    const rows = [...$("agents").querySelectorAll("tbody tr")].map((r) => r.textContent);
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toContain("Orchestrator@mbp-1");
-    expect(rows[0]).toContain("running story 3");
-    expect(rows[0]).toContain("5 / 2");
-    expect(rows[1]).toContain("Writer@mbp-1");
-    expect(rows[1]).toContain("last seen");
-    expect($("agents-count").textContent).toBe("1 online of 2");
+  it("shows who is running, on what task, with model, machine, tokens and context, and CI being waited on", () => {
+    const row = $("running").querySelector("tbody tr")!.textContent!;
+    expect(row).toContain("records-agent");
+    expect(row).toContain("LAND-41.18");
+    expect(row).toContain("land: tracts take updates");
+    expect(row).toContain("opus · high");
+    expect(row).toContain("mbp-1");
+    expect(row).toContain("1.5M");
+    expect(row).toContain("61k · 3 calls");
+    expect(view().textContent).toContain("Waiting on CI");
+    expect(view().textContent).not.toMatch(/\$\d/);
   });
 
-  it("shows ended workers with tokens and cost, and renders agent text as text", () => {
-    expect($("workers").textContent).toContain("No workers running.");
-    expect($("ended-wrap").hidden).toBe(false);
-    const card = $("ended").textContent!;
-    expect(card).toContain("Writer");
-    expect(card).toContain("haiku written");
-    expect(card).toContain("1.6k tokens");
-    expect(card).toContain("$0.12");
-    expect($("ended").querySelector("b")).toBeNull();
-    expect(card).toContain("Write a <b>haiku</b>");
-  });
-
-  it("shows usage, the feeds and the laptop", () => {
-    expect($("usage-totals").textContent).toContain("$0.12");
-    expect($("usage").textContent).toContain("sandbox / writer");
-    expect($("updates").textContent).toContain("Writer done, reviewer next");
-    expect($("traffic").textContent).toContain("supervisor@mbp-1 → Orchestrator@mbp-1");
-    expect($("laptops").textContent).toContain("0 of 3 slots busy");
-  });
-
-  it("sends actions for pending requests and running workers, confirming the risky ones", () => {
+  it("sends actions for pending requests and running workers, confirming the risky ones", async () => {
     const ws = FakeSocket.last;
     const snap = structuredClone(dashboard.laptops[0]!.snapshot);
-    snap.workers.push({ id: "w_9", name: "Homer", project: "sandbox", role: "writer", state: "waiting-approval", task: "push", checkpoint: null, started_at: iso(1), ended_at: null, last_event_at: iso(0), tokens: tokens(1), cost_usd: 0 });
-    snap.pending.push({ id: "r_9", worker_id: "w_9", name: "Homer", kind: "approval", tool: "Bash", tier: "human", created_at: iso(0), preview: "git push origin HEAD:main" } as never);
+    snap.workers[0] = worker({ state: "waiting-approval" });
+    snap.pending.push({ id: "r_9", worker_id: "w_1", name: "records-agent", kind: "approval", tool: "Bash", tier: "human", created_at: iso(0), preview: "git push origin HEAD:main" } as never);
     ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    await settle();
     expect($("needs-list").textContent).toContain("git push origin HEAD:main");
+    expect($("needs-list").textContent).toContain("needs you");
 
     const asked: string[] = [];
     let answer = false;
     globalThis.confirm = (q?: string) => (asked.push(String(q)), answer);
     const buttons = (root: Element) => [...root.querySelectorAll("button")] as HTMLButtonElement[];
     const allow = buttons($("needs-list")).find((b) => b.textContent === "Allow")!;
-
     allow.click(); // declined
     expect(asked[0]).toContain("git push origin HEAD:main");
     expect(ws.sent.filter((f) => f["t"] === "action")).toHaveLength(0);
-
     answer = true;
     allow.click();
-    const sent = ws.sent.filter((f) => f["t"] === "action");
-    expect(sent.at(-1)).toMatchObject({ laptop: "mbp-1", action: { kind: "answer", request: "r_9", decision: "allow" } });
+    expect(ws.sent.filter((f) => f["t"] === "action").at(-1)).toMatchObject({ laptop: "mbp-1", action: { kind: "answer", request: "r_9", decision: "allow" } });
     expect(allow.disabled).toBe(true);
-
     ws.frame({ t: "action_result", id: "a_1", laptop: "mbp-1", ok: true, message: "r_9 allowed" });
     expect($("toast").textContent).toBe("r_9 allowed");
 
-    const stop = buttons($("workers")).find((b) => b.textContent === "Stop")!;
+    const stop = buttons($("running")).find((b) => b.textContent === "Stop")!;
     stop.click();
-    expect(ws.sent.filter((f) => f["t"] === "action").at(-1)).toMatchObject({ action: { kind: "stop", worker: "w_9" } });
+    expect(ws.sent.filter((f) => f["t"] === "action").at(-1)).toMatchObject({ action: { kind: "stop", worker: "w_1" } });
+    // Stop doesn't also open the agent's chart.
+    expect(location.hash).not.toBe("#usage");
   });
 
   it("shows a refused action and re-enables its button", () => {
@@ -142,74 +176,117 @@ describe("dashboard page", () => {
     expect(deny.disabled).toBe(false);
   });
 
-  it("applies live frames", () => {
-    const ws = FakeSocket.last;
-    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
-    snap.workers.push({ id: "w_2", name: "Reviewer", project: "sandbox", role: "reviewer", state: "waiting-approval", task: "Review haiku", checkpoint: null, started_at: iso(1), ended_at: null, last_event_at: iso(0), tokens: tokens(200), cost_usd: 0 });
-    snap.pending.push({ id: "r_1", worker_id: "w_2", name: "Reviewer", kind: "approval", tool: "Bash", tier: "human", created_at: iso(0) } as never);
-    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
-    expect($("workers").textContent).toContain("Reviewer");
-    expect($("workers").textContent).toContain("waiting-approval");
-    expect($("needs").hidden).toBe(false);
-    expect($("needs-list").textContent).toContain("Reviewer wants Bash");
-    expect($("needs-list").textContent).toContain("needs you");
+  it("opens an agent's context per call when its row is clicked", async () => {
+    ($("running").querySelector("tbody tr") as HTMLElement).click();
+    await settle();
+    expect(location.hash).toBe("#usage");
+    expect(view().textContent).toContain("showing records-agent's run");
+    expect(view().querySelector("#role-pick option[selected]")!.textContent).toBe("records");
+  });
+});
 
-    ws.frame({ t: "update", item: { seq: 2, from: "Orchestrator@mbp-1", laptop: "mbp-1", text: "Review started", at: iso(0) } });
-    expect($("updates").firstElementChild!.textContent).toContain("Review started");
-
-    ws.frame({ t: "presence", event: "joined", peer: { ...dashboard.peers[1], online: true, status: "reviewing" } });
-    expect($("agents-count").textContent).toBe("2 online of 2");
+describe("Feature", () => {
+  it("shows the current build's feature by session, with agents on their tasks", async () => {
+    await go("#feature");
+    const text = view().textContent!;
+    expect(text).toContain("An agent proposes changes to recorded records");
+    const lanes = [...view().querySelectorAll(".lane-h b")].map((b) => b.textContent);
+    // Labels place 41.1, 41.16 and 41.20; the build 3 worker's brief places 41.18.
+    expect(lanes).toEqual(["Design", "Build 3", "Build 4"]);
+    const card = view().querySelector('[data-id="LAND-41.18"]')!;
+    expect(card.classList.contains("live")).toBe(true);
+    expect(card.textContent).toContain("records-agent");
+    expect(card.textContent).toContain("board says Ready until the session closes");
+    // The design lane is all built and folded.
+    expect(view().querySelector('[data-id="LAND-41.1"]')).toBeNull();
   });
 
-  it("keeps agents on their own page, and Activity as the page", () => {
-    expect($("activity").hidden).toBe(false);
-    expect($("agents-view").hidden).toBe(true);
-    location.hash = "#agents";
-    window.dispatchEvent(new Event("hashchange"));
-    expect($("activity").hidden).toBe(true);
-    expect($("agents-view").hidden).toBe(false);
-    location.hash = "";
-    window.dispatchEvent(new Event("hashchange"));
-    expect($("activity").hidden).toBe(false);
+  it("opens a task's details on click and keeps them across a re-render", async () => {
+    const card = view().querySelector('[data-id="LAND-41.20"]') as HTMLElement;
+    expect(card.getAttribute("aria-expanded")).toBe("false");
+    card.click();
+    await settle();
+    const again = view().querySelector('[data-id="LAND-41.20"]')!;
+    expect(again.getAttribute("aria-expanded")).toBe("true");
+    expect(again.textContent).toContain("waits on 41.16");
+  });
+});
+
+describe("Roadmap", () => {
+  it("puts features in columns by where they stand, agents on their feature, accepted ones folded", async () => {
+    await go("#roadmap");
+    // Below desktop width (the test window is 1024px), empty columns are left out.
+    const cols = [...view().querySelectorAll(".col-h")].map((c) => c.textContent);
+    expect(cols).toEqual(["Shaping1", "Building1", "Accepted1"]);
+    const building = view().querySelectorAll(".col")[1]!;
+    expect(building.textContent).toContain("LAND-41");
+    expect(building.textContent).toContain("records-agent");
+    expect(view().textContent).toContain("Show all 1");
+    expect(view().textContent).toContain("Drafts, not yet placed 1");
+    expect(view().querySelector(".feed i")).toBeNull();
   });
 
-  it("reads progress by task number: the latest per task, chips on the feed, a filter", () => {
+  it("opens a feature's board from its card", async () => {
+    (view().querySelector(".col .kc") as HTMLElement).click();
+    await settle();
+    expect(location.hash).toBe("#feature");
+    expect((view().querySelector("#inc-pick") as HTMLSelectElement).value).toBe("LAND-42");
+  });
+});
+
+describe("Usage", () => {
+  it("charts context per call for the session, a role, and the sessions' tokens", async () => {
+    await go("#usage");
+    (view().querySelector(".seg button") as HTMLButtonElement).click(); // Whole session
+    await settle();
+    expect(view().querySelector(".key")!.textContent).toContain("LAND-41 build 3 so far · 7 calls");
+    expect(view().querySelector(".key")!.textContent).toContain("LAND-41 build 2 · 2 calls");
+    const roles = [...$("roles").querySelectorAll("tbody tr")].map((r) => r.querySelector("b")!.textContent);
+    expect(roles).toEqual(["changesets", "records"]);
+    expect($("roles").textContent).toContain("360k");
+
+    ($("roles").querySelectorAll("tbody tr")[1] as HTMLElement).click();
+    await settle();
+    expect(view().querySelector(".key")!.textContent).toContain("records, LAND-41 build 3 · 3 calls");
+    expect(view().querySelector(".key")!.textContent).toContain("records, LAND-41 build 2 · 2 calls");
+    expect(view().querySelector(".key")!.textContent).toContain("earlier runs, middle half and median");
+
+    const bars = view().querySelectorAll('svg[aria-label="Tokens per session"] path');
+    expect(bars).toHaveLength(3);
+  });
+});
+
+describe("Sessions", () => {
+  it("keeps the feeds, ended workers, laptops and agents for debugging, agent text as text", async () => {
+    await go("#sessions");
+    expect($("updates").textContent).toContain("started");
+    expect($("traffic").textContent).toContain("supervisor@mbp-1 → Bob@mbp-1");
+    expect($("laptops").textContent).toContain("1 of 3 slots busy");
+    expect($("agents-count").textContent).toBe("1 online of 2");
+    const ended = $("ended").textContent!;
+    expect(ended).toContain("Write a <b>haiku</b>");
+    expect($("ended").querySelector("b")).toBeNull();
+  });
+
+  it("filters the feed by task", async () => {
     const ws = FakeSocket.last;
-    const up = (seq: number, from: string, text: string, minAgo: number) =>
-      ws.frame({ t: "update", item: { seq, from: `${from}@mbp-1`, laptop: "mbp-1", text, at: iso(minAgo) } });
-    up(10, "Bill", "LAND-41.1 · started", 30);
-    up(11, "Calvin", "LAND-41.2 · started", 20);
-    up(12, "Bill", "LAND-41.1 · ADR 0095 proposed · Q1–Q3 to Bob", 10);
-    up(13, "Bob", "Casper approved the LAND-41 plan; LAND-41.2 waits on the brief", 5);
-    up(14, "Bill", "LAND-41.1 · landed: main 449a6982", 1);
+    ws.frame({ t: "update", item: { seq: 2, from: "Bob@mbp-1", laptop: "mbp-1", text: "LAND-41.16 · landed", at: iso(0) } });
+    await settle();
+    expect($("updates").children).toHaveLength(2);
+    ($("updates").querySelector(".chip") as HTMLButtonElement).click();
+    expect($("updates").children).toHaveLength(1);
+    expect($("updates-filter").textContent).toContain("LAND-41.16 only");
+  });
+});
 
-    const cards = [...$("progress").querySelectorAll(".task-card")];
-    expect(cards.map((c) => c.querySelector(".chip")!.textContent)).toEqual(["LAND-41.1", "LAND-41.2"]);
-    expect(cards[0]!.textContent).toContain("landed: main 449a6982");
-    expect(cards[0]!.textContent).toContain("3 updates");
-    expect((cards[0] as HTMLElement).dataset["phase"]).toBe("done");
-    expect(cards[1]!.textContent).toContain("waits on the brief");
-
-    // The feed shows the chip and the short name, not the repeated prefix.
-    const first = $("updates").firstElementChild!;
-    expect(first.querySelector(".chip")!.textContent).toBe("LAND-41.1");
-    expect(first.textContent).toContain("Bill landed: main 449a6982");
-    expect(first.textContent).not.toContain("@mbp-1");
-
-    (first.querySelector(".chip") as HTMLButtonElement).click();
-    const shown = [...$("updates").children].map((li) => li.textContent);
-    expect(shown).toHaveLength(3);
-    expect(shown.every((t) => t!.includes("LAND-41.1"))).toBe(true);
-    expect($("updates-filter").textContent).toContain("LAND-41.1 only");
-    ($("updates-filter").querySelector(".chip") as HTMLButtonElement).click();
-    expect($("updates").children.length).toBeGreaterThan(3);
-
-    // Cost per task, from the workers whose task names it; model and effort on the card.
-    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
-    snap.workers.push({ id: "w_7", name: "Bill", project: "helix", role: "bill", state: "running", task: "LAND-41 session. Your task: LAND-41.1", model: "opus", effort: "high", checkpoint: null, started_at: iso(30), ended_at: null, last_event_at: iso(0), tokens: tokens(1), cost_usd: 5.59 } as never);
-    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
-    up(15, "Bill", "LAND-41.1 · checkpoint", 0);
-    expect($("progress").querySelector(".task-card")!.textContent).toContain("$5.59");
-    expect($("workers").textContent).toContain("helix / bill · w_7 · opus/high");
+describe("live frames", () => {
+  it("takes a new board", async () => {
+    await go("#roadmap");
+    const ws = FakeSocket.last;
+    const next = structuredClone(board);
+    next.backlog.items.push(item("LAND-43", "Draft", { type: "increment", title: "Switch to a company" }));
+    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board: next });
+    await settle();
+    expect(view().querySelectorAll(".col")[0]!.textContent).toContain("Switch to a company");
   });
 });

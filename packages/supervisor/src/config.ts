@@ -137,6 +137,16 @@ const Project = z.object({
   runs: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/, "must be lowercase, digits and -"), Run).default({}),
   /** A hold file (for helix, `pnpm integrate hold`'s): reported in run_slots; the land command itself answers a land under it with "held". */
   hold_file: path.optional(),
+  /**
+   * A Backlog.md backlog the dashboard shows as boards: its folder in the repository, read at `ref`
+   * (default: the rebase target, else origin/main) through git, never from a worktree.
+   */
+  backlog: z
+    .object({
+      dir: z.string().regex(/^[\w.-]+(\/[\w.-]+)*$/, "must be a path inside the repository, e.g. product/backlog"),
+      ref: z.string().regex(/^[\w.-]+(\/[\w./-]+)?$/).optional(),
+    })
+    .optional(),
   /** Roles any worker in the project may consult mid-task. */
   consult: z.array(z.string()).default([]),
   roles: z.record(z.string(), Role),
@@ -214,6 +224,7 @@ export interface ProjectConfig {
   rebase: { remote: string; branch: string } | undefined;
   runs: Map<string, RunConfig>;
   holdFile: string | undefined;
+  backlog: { dir: string; ref: string } | undefined;
   consult: string[];
   roles: Map<string, RoleConfig>;
 }
@@ -322,6 +333,7 @@ export function parseSupervisorConfig(
       rebase: p.rebase ? { remote: p.rebase.onto.split("/")[0]!, branch: p.rebase.onto.slice(p.rebase.onto.indexOf("/") + 1) } : undefined,
       runs,
       holdFile: p.hold_file,
+      backlog: p.backlog ? { dir: p.backlog.dir, ref: p.backlog.ref ?? (p.rebase?.onto ?? "origin/main") } : undefined,
       consult: p.consult,
       roles,
     });

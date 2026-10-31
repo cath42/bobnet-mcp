@@ -492,6 +492,25 @@ describe("usage and snapshots", () => {
     expect(sup.snapshot().workers[0]!.tokens).toEqual({ input: 20, output: 15, cache_read: 78770, cache_write: 0 });
   });
 
+  it("records the context of each call, once per response, leaving out a subagent's", async () => {
+    const { sup, sessions } = await setup();
+    const w = sup.spawn({ project: "helix", role: "bill", task: "Bob's brief, LAND-41 build 3. Your task: LAND-41.16" });
+    await until(() => sessions.length === 1);
+    const call = (id: string, cached: number, parent: string | null = null) =>
+      sessions[0]!.emit({ type: "assistant", parent_tool_use_id: parent, message: { id, content: [{ type: "text", text: "x" }], usage: { input_tokens: 5, output_tokens: 1, cache_read_input_tokens: cached, cache_creation_input_tokens: 1000 } } } as never);
+    call("msg_1", 29000);
+    call("msg_1", 29000);
+    call("msg_sub", 9000, "toolu_agent");
+    call("msg_2", 41000);
+    await until(() => sup.snapshot().workers[0]!.calls === 2);
+    expect(sup.snapshot().workers[0]).toMatchObject({ session: "LAND-41 build 3", task_ref: "LAND-41.16", calls: 2, context: 42005, ctx: [30005, 42005] });
+    sessions[0]!.finish();
+    await until(() => sup.status(w.id).state === "done");
+    expect(JSON.parse(store.worker(w.id)!.ctx!)).toEqual([30005, 42005]);
+    // An ended run keeps its count and latest context; its line moves to the project's board.
+    expect(sup.snapshot().workers[0]).toMatchObject({ calls: 2, context: 42005, ctx: [] });
+  });
+
   it("counts only the new part of a resumed session", async () => {
     const { sup, sessions } = await setup();
     const first = sup.spawn({ project: "helix", role: "bill", task: "build" });

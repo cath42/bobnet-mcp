@@ -4,6 +4,7 @@ import {
   ClientFrame,
   type Dashboard,
   type LaptopSnapshot,
+  type ProjectBoard,
   type PeerStats,
   type TrafficItem,
   type UpdateItem,
@@ -118,8 +119,10 @@ export class Broker extends DurableObject<Env> {
       if (typeof raw === "object" && raw !== null && typeof (raw as { rid?: unknown }).rid === "string") {
         rid = (raw as { rid: string }).rid;
       }
-      if (encoder.encode(data).byteLength > LIMITS.frameBytes) {
-        throw new FrameError("frame_too_large", `Frames are limited to ${LIMITS.frameBytes} bytes`);
+      // A project board is sent only when it changes, so it may be larger than other frames.
+      const limit = (raw as { t?: unknown } | null)?.t === "board" ? LIMITS.boardFrameBytes : LIMITS.frameBytes;
+      if (encoder.encode(data).byteLength > limit) {
+        throw new FrameError("frame_too_large", `Frames are limited to ${limit} bytes`);
       }
       const parsed = ClientFrame.safeParse(raw);
       if (!parsed.success) throw new FrameError("bad_frame", parsed.error.issues[0]?.message ?? "Invalid frame");
@@ -168,6 +171,8 @@ export class Broker extends DurableObject<Env> {
         return this.ack(conn, frame.as, frame.ids);
       case "report":
         return this.ok(ws, frame.rid, this.report(conn, frame.as, frame.snapshot));
+      case "board":
+        return this.ok(ws, frame.rid, this.board(conn, frame.as, frame.board));
       case "update":
         return this.ok(ws, frame.rid, this.postUpdate(conn, frame.as, frame.text));
       case "dashboard":
@@ -334,6 +339,21 @@ export class Broker extends DurableObject<Env> {
     return { laptop: peer.laptop };
   }
 
+  private board(conn: Conn, as: string, board: ProjectBoard): Results["board"] {
+    const peer = this.hosted(conn, as);
+    const at = new Date().toISOString();
+    this.sql.exec(
+      `INSERT INTO project_boards (laptop, project, board, at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (laptop, project) DO UPDATE SET board = excluded.board, at = excluded.at`,
+      peer.laptop,
+      board.project,
+      JSON.stringify(board),
+      at,
+    );
+    this.toOwners({ t: "board", laptop: peer.laptop, at, board });
+    return { laptop: peer.laptop, project: board.project };
+  }
+
   private postUpdate(conn: Conn, as: string, text: string): Results["update"] {
     const peer = this.hosted(conn, as);
     this.rejectSecrets(text);
@@ -389,6 +409,10 @@ export class Broker extends DurableObject<Env> {
         .exec<{ laptop: string; snapshot: string; at: string }>("SELECT * FROM laptop_reports ORDER BY laptop")
         .toArray()
         .map((r) => ({ laptop: r.laptop, at: r.at, snapshot: JSON.parse(r.snapshot) as LaptopSnapshot })),
+      boards: this.sql
+        .exec<{ laptop: string; board: string; at: string }>("SELECT laptop, board, at FROM project_boards ORDER BY laptop, project")
+        .toArray()
+        .map((r) => ({ laptop: r.laptop, at: r.at, board: JSON.parse(r.board) as ProjectBoard })),
       updates: this.sql
         .exec<{ seq: number; from_addr: string; laptop: string; text: string; at: string }>(
           "SELECT * FROM updates ORDER BY seq DESC LIMIT ?",

@@ -64,6 +64,7 @@ supervisor = new Supervisor({
   queryFn: query,
   log,
   ...(access ? { ownerCheck: ownerCheck(access) } : {}),
+  boards: {},
 });
 writeFileSync(pidFile, String(process.pid));
 try {

@@ -75,6 +75,16 @@ const MIGRATIONS: readonly string[] = [
     token   TEXT NOT NULL
   );
   `,
+  `
+  -- Each project's latest board (backlog, sessions, past runs), as its laptop's supervisor sent it.
+  CREATE TABLE project_boards (
+    laptop  TEXT NOT NULL,
+    project TEXT NOT NULL,
+    board   TEXT NOT NULL,              -- JSON ProjectBoard
+    at      TEXT NOT NULL,
+    PRIMARY KEY (laptop, project)
+  );
+  `,
 ];
 
 export function migrate(sql: SqlStorage): void {

@@ -33,6 +33,8 @@ export interface WorkerRow {
   /** What it runs on; null is Claude Code's default. */
   model: string | null;
   effort: string | null;
+  /** JSON array: the context each model call carried, in order; null before the run ends (or for one never read). */
+  ctx: string | null;
 }
 
 export type RequestKind = "approval" | "question";
@@ -106,6 +108,7 @@ export class Store {
     if (!cols.has("usage")) this.db.exec("ALTER TABLE workers ADD COLUMN usage TEXT");
     if (!cols.has("model")) this.db.exec("ALTER TABLE workers ADD COLUMN model TEXT");
     if (!cols.has("effort")) this.db.exec("ALTER TABLE workers ADD COLUMN effort TEXT");
+    if (!cols.has("ctx")) this.db.exec("ALTER TABLE workers ADD COLUMN ctx TEXT");
   }
 
   close(): void {

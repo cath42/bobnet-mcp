@@ -4,7 +4,7 @@ A message network and supervisor for Claude Code agents across your laptops.
 
 - **Agents** (Claude Code sessions) discover each other and exchange directed messages and team broadcasts. Messages wait for agents that are offline.
 - **A supervisor on each laptop** runs role agents headless on the Claude Agent SDK, each in its own role folder. It routes every permission prompt and question to one orchestrator session, and to you.
-- **A dashboard** shows what every laptop is doing: workers, token use, pending decisions and agents. From it you can approve or deny requests and stop or reset workers.
+- **A dashboard**, built for a phone as much as a desk, shows who is working on what right now, each project's backlog as kanban boards (the roadmap by release, and a feature's tasks by build session) with the agents at work on their cards, and token use: context per call by session, role and run, and tokens per session. From it you can approve or deny requests and stop or reset workers.
 
 > **v2 is on this branch.** v0.1, a local Unix-socket daemon, is on `main`, tagged `v0.1.1`.
 
@@ -83,7 +83,7 @@ Store this laptop's service token in the Keychain (account `bobnet`). Then creat
 }
 ```
 
-Next to it, create `supervisor.yaml` (projects and roles; see `packages/supervisor/src/config.ts`) and `policy.yaml` (approval rules; see `packages/supervisor/src/policy.ts`). Then install the supervisor as a login service:
+Next to it, create `supervisor.yaml` (projects and roles; see `packages/supervisor/src/config.ts`) and `policy.yaml` (approval rules; see `packages/supervisor/src/policy.ts`). For a project's boards, point it at a [Backlog.md](https://github.com/MrLesk/Backlog.md) backlog: `backlog: { dir: product/backlog }`. It is read from git at the rebase target (or `origin/main`), never from a worktree; a task's `build:<n>` (or `build:design`) label puts it in a build session, and a worker belongs to the session its brief names (`LAND-41 build 3`). Then install the supervisor as a login service:
 
 ```sh
 node packages/supervisor/src/bin.ts install-launchd

@@ -114,6 +114,9 @@ export class WorkerRun {
   usage: Usage = structuredClone(ZERO_USAGE);
   /** What each response has added so far: the SDK repeats a response's usage on every content block. */
   private readonly counted = new Map<string, TokenCounts>();
+  /** Context each model call carried (its input, cached or not), in call order. */
+  readonly ctx: number[] = [];
+  private lastCallId: string | null = null;
 
   private readonly opts: WorkerRunOptions;
   private readonly input = new InputQueue();
@@ -261,6 +264,14 @@ export class WorkerRun {
       const before = (id && this.counted.get(id)) || ZERO_USAGE.tokens;
       for (const k of ["input", "output", "cache_read", "cache_write"] as const) this.usage.tokens[k] += now[k] - before[k];
       if (id) this.counted.set(id, now);
+      // One call per response: its later content blocks repeat the same usage. A subagent's calls
+      // carry its own context, not the worker's, so they're left out.
+      if (!(msg as { parent_tool_use_id?: string | null }).parent_tool_use_id) {
+        const context = now.input + now.cache_read + now.cache_write;
+        if (id && id === this.lastCallId) this.ctx[this.ctx.length - 1] = context;
+        else this.ctx.push(context);
+        this.lastCallId = id ?? null;
+      }
     }
     if (msg.type === "result") {
       // modelUsage covers every model call (subagents too) and is cumulative for the session.
