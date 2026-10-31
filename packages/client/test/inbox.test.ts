@@ -80,14 +80,31 @@ describe("Inbox", () => {
     expect(i.takeDigest()).toBeNull();
   });
 
-  it("ignores its own presence and caps the digest", () => {
+  it("ignores its own presence and caps the broadcasts", () => {
     const i = inbox();
     i.receive({ t: "presence", event: "joined", peer: peer({ address: "Mario@mbp-1" }) });
     expect(i.takeDigest()).toBeNull();
-    for (let n = 0; n < 55; n++) i.receive({ t: "presence", event: "left", peer: peer({ address: `P${n}@mbp-2` }) });
+    for (let n = 0; n < 55; n++) i.receive({ t: "deliver", to: "Mario@mbp-1", wake: false, msg: msg({ id: `m_${n}`, type: "broadcast", body: `b${n}` }) });
     const d = i.takeDigest()!;
-    expect(d.split("\n").filter((l) => l.startsWith("• P"))).toHaveLength(50);
+    expect(d.split("\n").filter((l) => l.includes("broadcast: b"))).toHaveLength(50);
     expect(d).toContain("5 older updates dropped");
+  });
+
+  it("folds a reconnect (every role leaves and rejoins) into a line, and statuses by text", () => {
+    const i = inbox();
+    const roles = ["Riker", "Bill", "Homer"].map((n) => peer({ address: `${n}@mbp-1`, team: "land", purpose: "role" }));
+    for (const r of roles) i.receive({ t: "presence", event: "left", peer: r });
+    for (const r of roles) {
+      i.receive({ t: "presence", event: "joined", peer: r });
+      i.receive({ t: "presence", event: "status", peer: { ...r, status: "no worker running" } });
+    }
+    i.receive({ t: "presence", event: "left", peer: peer({ address: "Gone@mbp-2" }) });
+    const d = i.takeDigest()!.split("\n").slice(1);
+    expect(d).toEqual([
+      "• 3 agents left and rejoined (a reconnect): Riker@mbp-1, Bill@mbp-1, Homer@mbp-1",
+      "• Gone@mbp-2 [team: bobnet] left",
+      "• status: no worker running — 3 agents: Riker@mbp-1 [team: land], Bill@mbp-1 [team: land], Homer@mbp-1 [team: land]",
+    ]);
   });
 
   it("marks an urgent broadcast", () => {

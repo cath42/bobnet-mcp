@@ -2,16 +2,15 @@ import { readFileSync, statSync } from "node:fs";
 
 // Run slots (ADR 0094 §2): one heavy run at a time on the laptop (tests,
 // probes, a land and its hook), over every agent: workers wait here, and
-// interactive agents are queued here by their orchestrator. A hold keeps the
-// laptop quiet: no slot is given, except to the authors it allows and to a
-// worker's land, whose command checks the hold itself and parks the tip as
-// held (ADR 0093: a pair lands in one round after the release). The hold
-// is not kept here: it is read from each project's hold file (for helix,
-// `pnpm integrate hold`'s), so there is one register and it can't disagree.
+// interactive agents are queued here by their orchestrator. A hold doesn't
+// stop slots: a held pair's workers must still run their checks and reach
+// `land`, whose command answers "held" (ADR 0093: the pair lands in one round
+// after the release). The hold is only reported here, read from each project's
+// hold file (for helix, `pnpm integrate hold`'s), so there is one register.
 
 export interface Hold {
   reason: string;
-  /** Authors whose runs and lands still go (a red main's fix). */
+  /** Authors whose lands still go (a red main's fix); the land command applies it. */
   allow: string[];
   /** The file it was read from. */
   source: string;
@@ -20,7 +19,7 @@ export interface Hold {
 export interface SlotEntry {
   /** A worker id, or `interactive:<name>` for an agent the orchestrator queued. */
   holder: string;
-  /** The git author the hold's allow list is checked against. */
+  /** The git author who runs. */
   author: string;
   /** What runs: a command, or "land". */
   label: string;
@@ -28,8 +27,6 @@ export interface SlotEntry {
 }
 
 interface Waiter extends SlotEntry {
-  /** A land: it goes under a hold, whose command answers it with "held". */
-  passesHold: boolean;
   grant: (release: () => void) => void;
 }
 
@@ -51,11 +48,11 @@ export class RunSlots {
     this.onGrant = opts.onGrant ?? (() => {});
   }
 
-  /** Waits for a slot; the returned function releases it (once). A land passes a hold. */
-  acquire(holder: string, author: string, label: string, signal?: AbortSignal, opts: { land?: boolean } = {}): Promise<() => void> {
+  /** Waits for a slot; the returned function releases it (once). */
+  acquire(holder: string, author: string, label: string, signal?: AbortSignal): Promise<() => void> {
     if (signal?.aborted) return Promise.reject(new SlotAbortedError("aborted"));
     return new Promise((resolve, reject) => {
-      const waiter: Waiter = { holder, author, label, since: new Date().toISOString(), passesHold: opts.land ?? false, grant: resolve };
+      const waiter: Waiter = { holder, author, label, since: new Date().toISOString(), grant: resolve };
       this.queue.push(waiter);
       signal?.addEventListener(
         "abort",
@@ -98,7 +95,7 @@ export class RunSlots {
     return this.readHold();
   }
 
-  /** Re-reads the hold and gives any slot it now allows. */
+  /** Re-reads the hold (for status) and gives any free slot. */
   refresh(): void {
     this.pump();
   }
@@ -109,15 +106,8 @@ export class RunSlots {
   }
 
   private pump(): void {
-    const hold = this.readHold();
-    let i = 0;
-    while (this.holders.length < this.size && i < this.queue.length) {
-      const next = this.queue[i]!;
-      if (hold && !next.passesHold && !holdAllows(hold, next.author)) {
-        i++;
-        continue;
-      }
-      this.queue.splice(i, 1);
+    while (this.holders.length < this.size && this.queue.length > 0) {
+      const next = this.queue.shift()!;
       const entry: SlotEntry = { holder: next.holder, author: next.author, label: next.label, since: new Date().toISOString() };
       this.holders.push(entry);
       let released = false;
@@ -134,12 +124,6 @@ export class RunSlots {
     }
     this.onChange();
   }
-}
-
-/** Whether a hold lets this git author run; names match whatever their case (`homer` allows Homer). */
-export function holdAllows(hold: Hold, author: string): boolean {
-  const a = author.toLowerCase();
-  return hold.allow.some((x) => x.toLowerCase() === a);
 }
 
 /**

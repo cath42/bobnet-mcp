@@ -3,7 +3,9 @@ import type { PushFrame } from "./connection.ts";
 
 // Every channel notification wakes the session and costs it a full context
 // re-read, so only frames the broker marks `wake` are pushed. Everything else
-// waits in a digest that rides along on the next push or tool result.
+// waits in a digest that rides along on the next push or tool result. Presence
+// is folded per peer, so a supervisor's restart (every role it holds leaves and
+// rejoins) reads as one line, not one per role.
 
 export interface ChannelEvent {
   content: string;
@@ -14,12 +16,24 @@ const DIGEST_MAX = 50;
 const SEEN_MAX = 2_000;
 const INFO_ONLY = "── Queued BobNet updates (info only, no response needed) ──";
 
+/** What a peer did since the last digest. */
+interface PeerNews {
+  who: string;
+  purpose: string | null;
+  joined: boolean;
+  left: boolean;
+  /** After its last join or leave: online or not; null if it did neither. */
+  online: boolean | null;
+  /** Its latest status, if it changed; undefined if it didn't. */
+  status?: string | null;
+}
+
 export class Inbox {
   private readonly seen = new Set<string>();
+  /** Quiet broadcasts, in order. */
   private digest: string[] = [];
   private dropped = 0;
-  /** Latest status line per peer, so a chatty status only queues once. */
-  private readonly statusLine = new Map<string, number>();
+  private readonly presence = new Map<string, PeerNews>();
   private self: { address: string; team: string | null } | null = null;
 
   setSelf(address: string, team: string | null): void {
@@ -55,13 +69,37 @@ export class Inbox {
 
   /** The pending digest as text for a tool result, emptying it; null if empty. */
   takeDigest(): string | null {
-    if (this.digest.length === 0 && this.dropped === 0) return null;
-    const lines = [INFO_ONLY, ...this.digest];
-    if (this.dropped > 0) lines.push(`• (${this.dropped} older updates dropped)`);
+    const lines = this.digestLines();
+    if (lines.length === 0) return null;
     this.digest = [];
     this.dropped = 0;
-    this.statusLine.clear();
-    return lines.join("\n");
+    this.presence.clear();
+    return [INFO_ONLY, ...lines].join("\n");
+  }
+
+  private digestLines(): string[] {
+    const lines = [...this.digest];
+    if (this.dropped > 0) lines.push(`• (${this.dropped} older updates dropped)`);
+    const left: string[] = [];
+    const rejoined: string[] = [];
+    const statuses = new Map<string, string[]>();
+    for (const [address, p] of this.presence) {
+      if (p.joined && p.left && p.online) rejoined.push(address);
+      else if (p.joined && p.online) lines.push(`• ${p.who} joined${p.purpose ? ` — ${p.purpose}` : ""}`);
+      else if (p.left) left.push(p.who);
+      if (p.status !== undefined && p.online !== false) {
+        const text = p.status ?? "(cleared)";
+        statuses.set(text, [...(statuses.get(text) ?? []), p.who]);
+      }
+    }
+    if (rejoined.length === 1) lines.push(`• ${this.presence.get(rejoined[0]!)!.who} left and rejoined`);
+    else if (rejoined.length > 1) lines.push(`• ${rejoined.length} agents left and rejoined (a reconnect): ${rejoined.join(", ")}`);
+    if (left.length === 1) lines.push(`• ${left[0]} left`);
+    else if (left.length > 1) lines.push(`• ${left.length} agents left: ${left.join(", ")}`);
+    for (const [text, who] of statuses) {
+      lines.push(who.length === 1 ? `• ${who[0]} status: ${text}` : `• status: ${text} — ${who.length} agents: ${who.join(", ")}`);
+    }
+    return lines;
   }
 
   private toEvent(msg: Envelope): ChannelEvent {
@@ -91,26 +129,21 @@ export class Inbox {
   }
 
   private withDigest(event: ChannelEvent): ChannelEvent {
-    const queued = this.digest.length + this.dropped;
     const digest = this.takeDigest();
     if (!digest) return event;
+    const queued = digest.split("\n").length - 1;
     return { content: `${event.content}\n\n${digest}`, meta: { ...event.meta, queued_updates: String(queued) } };
   }
 
   private queuePresence(event: "joined" | "left" | "status", peer: PeerInfo): void {
     if (peer.address === this.self?.address) return;
     const who = `${peer.address}${peer.team ? ` [team: ${peer.team}]` : ""}`;
-    if (event === "joined") this.queue(`• ${who} joined${peer.purpose ? ` — ${peer.purpose}` : ""}`);
-    else if (event === "left") this.queue(`• ${who} left`);
-    else {
-      const line = `• ${who} status: ${peer.status ?? "(cleared)"}`;
-      const at = this.statusLine.get(peer.address);
-      if (at !== undefined && this.digest[at] !== undefined) this.digest[at] = line;
-      else {
-        this.queue(line);
-        this.statusLine.set(peer.address, this.digest.length - 1);
-      }
-    }
+    const p = this.presence.get(peer.address) ?? { who, purpose: null, joined: false, left: false, online: null };
+    p.who = who;
+    if (event === "joined") Object.assign(p, { joined: true, online: true, purpose: peer.purpose ?? null });
+    else if (event === "left") Object.assign(p, { left: true, online: false });
+    else p.status = peer.status ?? null;
+    this.presence.set(peer.address, p);
   }
 
   private queue(line: string): void {
@@ -118,8 +151,6 @@ export class Inbox {
     if (this.digest.length > DIGEST_MAX) {
       this.digest.shift();
       this.dropped++;
-      // Indexes shifted; status de-duplication restarts from here.
-      this.statusLine.clear();
     }
   }
 

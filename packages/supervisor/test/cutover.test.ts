@@ -178,34 +178,13 @@ describe("run slots and the hold", () => {
     await until(() => sup.slotStatus().holders.length === 0);
   });
 
-  it("on hold (the hold file), still starts workers but grants no slot, then grants it when the hold is lifted", async () => {
+  it("on hold (the hold file), still starts workers and grants slots: a held pair must reach land; the hold is reported", async () => {
     const { sup, sessions } = await setup();
+    hold(sup, "LAND-41.17 pair");
     sup.spawn({ project: "helix", role: "bill", task: "t" });
     await until(() => sessions.length === 1);
-    hold(sup, "closing ci");
-    sup.spawn({ project: "helix", role: "homer", task: "t" });
-    await until(() => sessions.length === 2);
-    let granted = false;
-    void sessions[0]!.askCall("tu1", "Bash", { command: "pnpm test" }).then(() => (granted = true));
-    await tick(30);
-    expect(granted).toBe(false);
-    expect(sup.slotStatus().hold).toMatchObject({ reason: "closing ci", allow: [] });
-    hold(sup, null);
-    await until(() => granted);
-  });
-
-  it("under a hold with --allow, gives a slot only to the allowed author, whatever the name's case", async () => {
-    const { sup, sessions } = await setup();
-    hold(sup, "red main", ["homer"]);
-    sup.spawn({ project: "helix", role: "bill", task: "t" });
-    sup.spawn({ project: "helix", role: "homer", task: "fix" });
-    await until(() => sessions.length === 2);
-    const [bill, homer] = sessions[0]!.options.cwd!.endsWith("platform") ? [sessions[1]!, sessions[0]!] : [sessions[0]!, sessions[1]!];
-    let billGot = false;
-    void bill.askCall("tu1", "Bash", { command: "pnpm test" }).then(() => (billGot = true));
-    await expect(homer.askCall("tu2", "Bash", { command: "pnpm test" })).resolves.toMatchObject({ behavior: "allow" });
-    await tick(30);
-    expect(billGot).toBe(false);
+    await expect(sessions[0]!.askCall("tu1", "Bash", { command: "pnpm test" })).resolves.toMatchObject({ behavior: "allow" });
+    expect(sup.slotStatus().hold).toMatchObject({ reason: "LAND-41.17 pair", allow: [] });
   });
 
   it("says why a spawn stays queued", async () => {
@@ -437,15 +416,13 @@ projects:
     expect(sessions[0]!.interrupted).toBe(false);
   });
 
-  it("times out, refuses self and non-consultable roles, and refuses to start one on hold", async () => {
+  it("times out, refuses self and non-consultable roles, and isn't stopped by a hold", async () => {
     const { sup, sessions } = await consultSetup();
     const homer = sup.spawn({ project: "helix", role: "homer", task: "build" });
     await until(() => sessions.length === 1);
     expect(() => sup.consult(homer.id, "homer", "q")).toThrow(/own role/);
     expect(() => sup.consult(homer.id, "marvin", "q")).toThrow(/isn't consultable/);
     hold(sup, "closing ci");
-    expect(() => sup.consult(homer.id, "bill", "q")).toThrow(/on hold/);
-    hold(sup, null);
     await expect(sup.consult(homer.id, "bill", "q")).rejects.toThrow(/didn't answer within/);
   });
 });

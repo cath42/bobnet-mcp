@@ -505,8 +505,7 @@ export class Supervisor {
 
   // ---------- Scheduling ----------
 
-  // A hold doesn't stop a spawn: the worker's heavy runs wait in the slot queue,
-  // and its land reaches the land command, which answers "held" (ADR 0093).
+  // A hold stops neither a spawn nor a slot: only the land command answers "held" (ADR 0093).
   private schedule(): void {
     for (const w of this.store.queued()) {
       if (this.runs.size >= this.config.concurrency) break;
@@ -747,7 +746,7 @@ export class Supervisor {
     this.landWaits.set(workerId, waiting);
     let release: () => void;
     try {
-      release = await this.slots.acquire(workerId, authorOf(role), "land", waiting.signal, { land: true });
+      release = await this.slots.acquire(workerId, authorOf(role), "land", waiting.signal);
     } finally {
       this.landWaits.delete(workerId);
     }
@@ -895,9 +894,6 @@ export class Supervisor {
     const running = this.activeRun(project.key, roleKey);
     if (running && [...this.consults.values()].some((c) => c.from === running)) {
       throw new SupervisorError(`${target.name} is itself waiting on a consult; put the question under Open questions in your handoff`);
-    }
-    if (!running && this.slots.held) {
-      throw new SupervisorError(`The laptop is on hold (${this.slots.held.reason}); no consult can start now. Put the question under Open questions in your handoff`);
     }
 
     const id = `c_${randomBytes(4).toString("hex")}`;

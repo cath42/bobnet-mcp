@@ -135,7 +135,7 @@ const Project = z.object({
   rebase: z.object({ onto: z.string().regex(/^[\w.-]+\/[\w./-]+$/, "must be remote/branch, e.g. origin/main") }).optional(),
   /** Commands workers may run outside the sandbox through the run tool, by name. */
   runs: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/, "must be lowercase, digits and -"), Run).default({}),
-  /** A hold file (for helix, `pnpm integrate hold`'s): while it exists, no slot but a land (its command answers "held") and the allowed authors'. */
+  /** A hold file (for helix, `pnpm integrate hold`'s): reported in run_slots; the land command itself answers a land under it with "held". */
   hold_file: path.optional(),
   /** Roles any worker in the project may consult mid-task. */
   consult: z.array(z.string()).default([]),

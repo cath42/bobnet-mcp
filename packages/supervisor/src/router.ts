@@ -187,7 +187,7 @@ export class Router {
   }
 }
 
-/** The git author a role commits as: what a hold's allow list names. */
+/** The git author a role commits, runs and lands as. */
 export function authorOf(role: RoleConfig): string {
   return role.env["GIT_AUTHOR_NAME"] ?? role.name;
 }
