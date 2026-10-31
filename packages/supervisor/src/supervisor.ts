@@ -124,11 +124,7 @@ export class Supervisor {
       timeoutMs: deps.config.requestTimeoutMinutes * 60_000,
       announce: (req, name) => this.announce(req, name),
       setWorkerState: (id, state) => this.setState(id, state),
-      takeSlot: async (workerId, author, toolUseId, label, signal) => {
-        const release = await this.slots.acquire(workerId, author, label, signal);
-        this.slotCalls.set(toolUseId, { workerId, release });
-        this.store.audit("supervisor", "slot", workerId, { label });
-      },
+      takeSlot: (workerId, author, toolUseId, label, signal) => this.takeCallSlot(workerId, author, toolUseId, label, signal),
     });
   }
 
@@ -615,11 +611,13 @@ export class Supervisor {
    * wrappers and policy.yaml enforce in default mode, because the classifier never
    * asks canUseTool about what it approves. A consult writes nothing; a land
    * pauses Bash and file writes; the handoff file is the worker's own; then
-   * policy's deny and deliberate rules (and slot runs) decide or send the call on.
+   * policy's deny and deliberate rules decide or send the call on. A slot run
+   * waits for its slot here, then goes to the classifier like any other call.
+   * The supervisor's own tools (land among them) are always allowed, as in canUseTool.
    */
   private preflight(workerId: string, role: RoleConfig, handoff: string, consult: boolean): NonNullable<WorkerRunOptions["preToolUse"]> {
-    return async (tool, input, server) => {
-      if (server === WORKER_SERVER) return null;
+    return async (tool, input, server, toolUseId, signal) => {
+      if (server === WORKER_SERVER) return { decision: "allow", reason: "the supervisor's own tool" };
       if (consult && FILE_WRITE_TOOLS.includes(tool)) return { decision: "deny", reason: "A consult only reads and answers; the owner records anything in their own session." };
       const landing = this.landing.get(workerId);
       if (landing && (FILE_WRITE_TOOLS.includes(tool) || tool === "Bash")) await landing.catch(() => {});
@@ -627,6 +625,19 @@ export class Supervisor {
       if ((tool === "Write" || tool === "Edit") && typeof fp === "string" && resolve(role.dir, fp) === resolve(handoff)) return null;
       const v = this.policy.preflight(tool, input, { project: role.project, role: role.key, writeRoots: role.writeRoots, cwd: role.dir });
       if (!v) return null;
+      if (v.decision === "allow") {
+        if (input["run_in_background"] === true) {
+          return { decision: "deny", reason: "This command needs a run slot, and slot runs go in the foreground: run it again without run_in_background." };
+        }
+        if (!toolUseId) return { decision: "ask", reason: `policy rule ${v.rule}` };
+        const label = typeof input["command"] === "string" ? input["command"].slice(0, 120) : "run";
+        try {
+          await this.takeCallSlot(workerId, authorOf(role), toolUseId, label, signal);
+        } catch {
+          return { decision: "deny", reason: "Worker stopped while waiting for a run slot" };
+        }
+        return null;
+      }
       this.store.audit("policy", v.ask ? "preflight:ask" : "preflight:deny", workerId, { tool, rule: v.rule });
       return v.ask ? { decision: "ask", reason: `policy rule ${v.rule}` } : { decision: "deny", reason: `Denied by policy (${v.rule}): ${v.reason}` };
     };
@@ -640,7 +651,15 @@ export class Supervisor {
         : inner(tool, input, opts);
   }
 
-  private releaseCall(toolUseId: string): void {
+  /** Holds one tool call's run slot until its result; a call that already holds one (from the preflight) keeps it. */
+  private async takeCallSlot(workerId: string, author: string, toolUseId: string, label: string, signal: AbortSignal): Promise<void> {
+    if (this.slotCalls.has(toolUseId)) return;
+    const release = await this.slots.acquire(workerId, author, label, signal);
+    this.slotCalls.set(toolUseId, { workerId, release });
+    this.store.audit("supervisor", "slot", workerId, { label });
+  }
+
+    private releaseCall(toolUseId: string): void {
     const call = this.slotCalls.get(toolUseId);
     if (!call) return;
     this.slotCalls.delete(toolUseId);

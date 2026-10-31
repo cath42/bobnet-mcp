@@ -84,10 +84,16 @@ export interface WorkerRunOptions {
   queryFn: QueryFn;
   canUseTool: CanUseTool;
   /**
-   * In auto mode, runs before the classifier on every call: "deny" is final, "ask"
-   * sends the call to canUseTool past the classifier, null leaves it to the classifier.
+   * In auto mode, runs before the classifier on every call: "allow" and "deny" are
+   * final, "ask" sends the call to canUseTool past the classifier, null leaves it to the classifier.
    */
-  preToolUse?: (tool: string, input: Record<string, unknown>, server: string | undefined, signal: AbortSignal) => Promise<{ decision: "deny" | "ask"; reason: string } | null>;
+  preToolUse?: (
+    tool: string,
+    input: Record<string, unknown>,
+    server: string | undefined,
+    toolUseId: string | undefined,
+    signal: AbortSignal,
+  ) => Promise<{ decision: "allow" | "deny" | "ask"; reason: string } | null>;
   mcpServers: Record<string, McpServerConfig>;
   onEvent: (msg: SDKMessage) => void;
   /** A tool call has returned (or failed). */
@@ -178,10 +184,10 @@ export class WorkerRun {
   }
 
   private preToolUseHook(guard: NonNullable<WorkerRunOptions["preToolUse"]>): HookCallback {
-    return async (input, _toolUseId, { signal }) => {
+    return async (input, toolUseId, { signal }) => {
       if (input.hook_event_name !== "PreToolUse") return {};
       const server = input.mcp_server?.source === "sdk" ? input.mcp_server.name : undefined;
-      const d = await guard(input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>, server, signal);
+      const d = await guard(input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>, server, toolUseId ?? input.tool_use_id, signal);
       return d ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: d.decision, permissionDecisionReason: d.reason } } : {};
     };
   }

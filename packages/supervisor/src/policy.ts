@@ -260,14 +260,16 @@ export class Policy {
 
   /**
    * For a worker in auto mode, before its classifier: what the rules settle on their
-   * own. A deny is final; a deliberate escalation, or an allow that needs a run slot,
-   * must come through canUseTool ("ask"), past the classifier. Anything no rule
-   * matched is the classifier's (null).
+   * own. A deny is final; a deliberate escalation must come through canUseTool
+   * ("ask"), past the classifier. An allow that needs a run slot comes back as an
+   * allow: the caller takes the slot, then the classifier judges it like any other
+   * call. Anything else is the classifier's (null).
    */
   preflight(tool: string, input: Record<string, unknown>, ctx: PolicyContext): (Verdict & { ask: boolean }) | null {
     const v = this.evaluate(tool, input, ctx, true);
     if (v.decision === "deny") return { ...v, ask: false };
-    if (v.decision === "escalate" || v.slot) return { ...v, ask: true };
+    if (v.decision === "escalate") return { ...v, ask: true };
+    if (v.slot) return { ...v, ask: false };
     return null;
   }
 

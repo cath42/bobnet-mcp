@@ -16,6 +16,7 @@ rules:
   - { id: read, tools: [Read], decision: allow }
   - { id: push, tools: [Bash], command: "^git push", decision: escalate, tier: human }
   - { id: fetch, tools: [WebFetch], decision: escalate, tier: orchestrator }
+  - { id: tests, tools: [Bash], command: "^pnpm test( |$)", decision: allow, slot: true }
 `);
 
 let dir: string;
@@ -252,7 +253,13 @@ describe("lifecycle", () => {
     expect(await pre("Bash", { command: "git push origin HEAD:main" })).toBe("ask");
     expect(await pre("Bash", { command: "pnpm exec vitest run" })).toBeUndefined();
     expect(await pre("Write", { file_path: "/etc/passwd" })).toBe("deny");
-    expect(await pre("mcp__bobnet__land", {}, { name: "bobnet", source: "sdk" })).toBeUndefined();
+    // The supervisor's own tools, land among them, never meet the classifier.
+    expect(await pre("mcp__bobnet__land", {}, { name: "bobnet", source: "sdk" })).toBe("allow");
+    // A slot run takes its slot in the preflight, then the classifier judges the whole call;
+    // should the classifier ask, canUseTool doesn't take a second slot for it.
+    expect(await pre("Bash", { command: "pnpm test && timeout 550 npx vitest run" })).toBeUndefined();
+    expect(store.auditLog().some((a) => a.action === "slot")).toBe(true);
+    expect(await pre("Bash", { command: "pnpm test", run_in_background: true })).toBe("deny");
     // Its sandbox never reads the supervisor's folder; localhost only when the role asks for it.
     expect(o.sandbox).toMatchObject({ filesystem: { denyRead: [expect.stringMatching(/\.config\/bobnet$/)] } });
     expect(o.sandbox!.network).toBeUndefined();

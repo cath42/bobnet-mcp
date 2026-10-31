@@ -153,7 +153,10 @@ rules:
     expect(pre("git push origin main")).toMatchObject({ decision: "deny", ask: false, rule: "no-push" });
     expect(pre("python3 - <<'EOF'\nprint(1)\nEOF\ngit push")).toMatchObject({ decision: "deny" });
     expect(pre("security find-generic-password -w")).toMatchObject({ decision: "escalate", ask: true, tier: "human" });
-    expect(pre("pnpm test")).toMatchObject({ ask: true, slot: true });
+    // A slot run is an allow: the caller takes the slot, the classifier still judges it.
+    expect(pre("pnpm test")).toMatchObject({ decision: "allow", ask: false, slot: true });
+    // Chained with an unmatched part (r_cdfdd2d8), it stays a slot run, not an escalation.
+    expect(pre("pnpm test && timeout 550 npx vitest run")).toMatchObject({ decision: "allow", ask: false, slot: true });
     // Unmatched, even chained with an allowed part, is left to the classifier.
     expect(pre("pnpm exec tsc --noEmit")).toBeNull();
     expect(pre("cat x && awk '{print $1}' y")).toBeNull();
