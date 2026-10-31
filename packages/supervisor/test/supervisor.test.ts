@@ -64,6 +64,9 @@ describe("config", () => {
     const c = testConfig(dir);
     const bill = c.projects.get("helix")!.roles.get("bill")!;
     expect(bill).toMatchObject({ name: "Bill", team: "land", writeRoots: ["/work/helix-bill"], sandbox: true });
+    const off = parseSupervisorConfig(`orchestrator: Bob\nprojects:\n  a: { path: /a, sandbox: false, roles: { bill: { dir: /a/b }, marvin: { dir: /a/m, sandbox: true } } }`, (d) => d);
+    expect(off.projects.get("a")!.roles.get("bill")!.sandbox).toBe(false);
+    expect(off.projects.get("a")!.roles.get("marvin")!.sandbox).toBe(true);
     expect(() =>
       parseSupervisorConfig(`orchestrator: Bob\nprojects:\n  a: { path: /a, roles: { bob: { dir: /a/b } } }`, (d) => d),
     ).toThrow(/already used by the orchestrator/);

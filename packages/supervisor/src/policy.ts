@@ -198,6 +198,14 @@ function inside(root: string, p: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
+/** A command naming a path, absolute or from ~ or $HOME; a token file is named anywhere. */
+function mentions(command: string, path: string): boolean {
+  if (!command) return false;
+  const home = homedir();
+  const forms = [path, ...(path.startsWith(`${home}/`) ? [`~${path.slice(home.length)}`, `$HOME${path.slice(home.length)}`, `\${HOME}${path.slice(home.length)}`] : [])];
+  return forms.some((f) => command.includes(f)) || /\bsupervisor\.token\b/.test(command);
+}
+
 const clip = (s: string) => (s.length > 60 ? `${s.slice(0, 59)}…` : s);
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -219,7 +227,11 @@ export class Policy {
   private readonly file: z.infer<typeof PolicyFile>;
   private readonly compiled: Array<{ rule: z.infer<typeof Rule>; command?: RegExp | ((role: string) => RegExp); path?: RegExp }>;
 
-  constructor(text: string) {
+  /** Paths no worker may touch by any tool: the supervisor's own folder, which holds its MCP token. */
+  private readonly protect: string[];
+
+  constructor(text: string, opts: { protect?: string[] } = {}) {
+    this.protect = opts.protect ?? [];
     this.file = PolicyFile.parse(parse(text) ?? {});
     this.compiled = this.file.rules.map((rule) => ({
       rule,
@@ -229,7 +241,7 @@ export class Policy {
   }
 
   static load(dir: string): Policy {
-    return new Policy(readFileSync(join(dir, "policy.yaml"), "utf8"));
+    return new Policy(readFileSync(join(dir, "policy.yaml"), "utf8"), { protect: [dir] });
   }
 
   /**
@@ -264,7 +276,12 @@ export class Policy {
     const rawPath = filePath(tool, input);
     const absPath = rawPath === undefined ? undefined : resolve(ctx.cwd, rawPath);
 
-    // Built-in guards, before any rule.
+    // Built-in guards, before any rule. The supervisor's folder first: without a sandbox
+    // nothing else keeps a worker from its token, which would answer its own requests.
+    const command = tool === "Bash" ? String(input["command"] ?? "") : "";
+    if (absPath !== undefined ? this.protect.some((p) => inside(p, absPath)) : this.protect.some((p) => mentions(command, p))) {
+      return { decision: "deny", rule: "builtin:supervisor", tier: "human", reason: "The supervisor's own folder is off limits to workers", slot: false };
+    }
     if (tool === "Bash" && /\bgit\b[^\n]*--no-verify\b/.test(String(input["command"] ?? ""))) {
       return { decision: "deny", rule: "builtin:no-verify", tier: "human", reason: "Hooks are never skipped", slot: false };
     }

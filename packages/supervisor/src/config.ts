@@ -57,6 +57,11 @@ const Power = {
   permission_mode: z.enum(["default", "auto"]).optional(),
   /** Lets sandboxed Bash connect to (and listen on) localhost: the local database, a dev server. */
   sandbox_localhost: z.boolean().optional(),
+  /**
+   * Claude Code's OS sandbox for Bash (default on). Off, Bash runs as in the CLI:
+   * auto mode's classifier and policy.yaml are then the only guards.
+   */
+  sandbox: z.boolean().optional(),
 };
 
 const Role = z.object({
@@ -77,7 +82,7 @@ const Role = z.object({
   /** Where the worker may write; defaults to the git worktree that holds `dir`. */
   write_roots: z.array(path).optional(),
   /** Claude Code's OS sandbox for Bash; off only for roles that truly need it off. */
-  sandbox: z.boolean().default(true),
+  sandbox: z.boolean().optional(),
   purpose: z.string().optional(),
 });
 
@@ -295,7 +300,7 @@ export function parseSupervisorConfig(
         env: { ...p.env, ...r.env },
         maxRuntimeMinutes: r.max_runtime_minutes ?? file.max_runtime_minutes,
         writeRoots: r.write_roots ?? [resolveRoot(dir)],
-        sandbox: r.sandbox,
+        sandbox: r.sandbox ?? p.sandbox ?? true,
         purpose: r.purpose,
       });
     }

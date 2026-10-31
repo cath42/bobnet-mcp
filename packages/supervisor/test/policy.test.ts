@@ -167,6 +167,20 @@ rules:
     expect(p.evaluate("Bash", { command: "make" }, ctx)).toMatchObject({ decision: "escalate", tier: "human", rule: "default" });
   });
 
+  it("keeps every tool out of the supervisor's own folder, however it is named", () => {
+    const home = process.env["HOME"]!;
+    const p = new Policy(`rules:\n  - { id: any, tools: ["*"], decision: allow }\n  - { id: bash, tools: [Bash], command: ".", decision: allow, allow_compound: true }`, { protect: [`${home}/.config/bobnet`] });
+    const ctx = { project: "p", role: "r", writeRoots: ["/w"], cwd: "/w" };
+    const no = (tool: string, input: Record<string, unknown>) => expect(p.evaluate(tool, input, ctx)).toMatchObject({ decision: "deny", rule: "builtin:supervisor" });
+    no("Read", { file_path: `${home}/.config/bobnet/supervisor.token` });
+    no("Grep", { pattern: "x", path: `${home}/.config/bobnet` });
+    no("Bash", { command: "cat ~/.config/bobnet/supervisor.token" });
+    no("Bash", { command: 'curl -H "Authorization: Bearer $(cat $HOME/.config/bobnet/supervisor.token)" http://127.0.0.1:7425/mcp' });
+    no("Bash", { command: "cd /tmp && cat supervisor.token" });
+    expect(p.preflight("Bash", { command: "cat ~/.config/bobnet/config.json" }, ctx)).toMatchObject({ decision: "deny" });
+    expect(p.evaluate("Read", { file_path: `${home}/.config/other/x` }, ctx).decision).toBe("allow");
+  });
+
   it("expands {role} in a command regex to the worker's role", () => {
     const p = new Policy(`rules:
   - { id: refs, tools: [Bash], command: "^git (switch|checkout)\\\\b(?! (-[cbCB] )?{role}/\\\\S+$)", decision: deny }`);
