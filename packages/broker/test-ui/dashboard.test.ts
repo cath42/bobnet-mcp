@@ -203,5 +203,13 @@ describe("dashboard page", () => {
     expect($("updates-filter").textContent).toContain("LAND-41.1 only");
     ($("updates-filter").querySelector(".chip") as HTMLButtonElement).click();
     expect($("updates").children.length).toBeGreaterThan(3);
+
+    // Cost per task, from the workers whose task names it; model and effort on the card.
+    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+    snap.workers.push({ id: "w_7", name: "Bill", project: "helix", role: "bill", state: "running", task: "LAND-41 session. Your task: LAND-41.1", model: "opus", effort: "high", checkpoint: null, started_at: iso(30), ended_at: null, last_event_at: iso(0), tokens: tokens(1), cost_usd: 5.59 } as never);
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    up(15, "Bill", "LAND-41.1 · checkpoint", 0);
+    expect($("progress").querySelector(".task-card")!.textContent).toContain("$5.59");
+    expect($("workers").textContent).toContain("helix / bill · w_7 · opus/high");
   });
 });

@@ -8,7 +8,7 @@ import type { Identity } from "@bobnet/client/config";
 import type { PushFrame, RequestFrame } from "@bobnet/client/connection";
 import type { Logger } from "@bobnet/client/log";
 import type { OwnerCheck } from "./owner.ts";
-import type { ProjectConfig, RoleConfig, RunConfig, SupervisorConfig } from "./config.ts";
+import { EFFORTS, type Effort, type ProjectConfig, type RoleConfig, type RunConfig, type SupervisorConfig } from "./config.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
@@ -189,10 +189,18 @@ export class Supervisor {
 
   // ---------- Orchestrator API ----------
 
-  spawn(opts: { project: string; role: string; task: string; handoff?: string; resume_session?: string }): WorkerRow {
+  spawn(opts: { project: string; role: string; task: string; handoff?: string; resume_session?: string; model?: string; effort?: Effort }): WorkerRow {
     const project = this.project(opts.project);
     const role = this.role(opts.project, opts.role);
+    if (opts.model !== undefined && role.models && !role.models.includes(opts.model)) {
+      throw new SupervisorError(`${role.name} may run on ${role.models.join(", ")}, not ${opts.model}`);
+    }
+    if (opts.effort !== undefined && role.maxEffort && EFFORTS.indexOf(opts.effort) > EFFORTS.indexOf(role.maxEffort)) {
+      throw new SupervisorError(`${role.name}'s effort is capped at ${role.maxEffort}; ${opts.effort} needs Casper to raise max_effort`);
+    }
     const w = this.store.createWorker({
+      model: opts.model ?? role.model ?? null,
+      effort: opts.effort ?? role.effort ?? null,
       project: project.key,
       role: role.key,
       task: opts.task,
@@ -200,7 +208,7 @@ export class Supervisor {
       priority: project.priority,
       resume_session: opts.resume_session ?? null,
     });
-    this.store.audit("orchestrator", "spawn", w.id, { project: w.project, role: w.role, resume: w.resume_session });
+    this.store.audit("orchestrator", "spawn", w.id, { project: w.project, role: w.role, resume: w.resume_session, model: w.model, effort: w.effort });
     this.schedule();
     return this.store.worker(w.id)!;
   }
@@ -221,10 +229,13 @@ export class Supervisor {
   }
 
   /** Stops a worker and queues a fresh one, no prior context, for the same task. */
-  async reset(id: string): Promise<WorkerRow> {
+  /** Stops a worker and starts its task afresh, on what it ran on unless told otherwise (a retry may need more). */
+  async reset(id: string, power: { model?: string; effort?: Effort } = {}): Promise<WorkerRow> {
     const w = this.worker(id);
     if (this.runs.has(id) || w.state === "queued") await this.stop(id, "reset");
-    return this.spawn({ project: w.project, role: w.role, task: w.task, ...(w.handoff ? { handoff: w.handoff } : {}) });
+    const model = power.model ?? w.model ?? undefined;
+    const effort = power.effort ?? (w.effort as Effort | null) ?? undefined;
+    return this.spawn({ project: w.project, role: w.role, task: w.task, ...(w.handoff ? { handoff: w.handoff } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
   }
 
   list(project?: string): Array<WorkerRow & { name: string }> {
@@ -487,8 +498,10 @@ export class Supervisor {
           ...base,
           disallowedTools: [...(base.disallowedTools ?? []), ...FILE_WRITE_TOOLS],
           maxRuntimeMinutes: this.config.consultTimeoutMinutes,
+          model: this.config.consultModel ?? base.model,
+          effort: this.config.consultEffort ?? base.effort,
         }
-      : base;
+      : { ...base, model: w.model ?? undefined, effort: (w.effort as Effort | null) ?? undefined };
     const handoff = w.handoff ?? join(this.config.stateDir, "handoffs", w.project, `${w.id}.md`);
     const waiting = consult ? [] : this.store.waiting(w.project, w.role);
     const baseline = this.resumeBaseline(w.resume_session);
@@ -543,7 +556,7 @@ export class Supervisor {
     this.store.audit("supervisor", consult ? "start:consult" : "start", w.id, { role: role.name, cwd: role.dir, resume: w.resume_session, ...(consult ? { consult: consult.id } : {}) });
     this.runs.set(w.id, run);
     this.roleStatus(role, w.id);
-    if (!consult) this.progress(w, w.resume_session ? "resumed" : "started");
+    if (!consult) this.progress(w, `${w.resume_session ? "resumed" : "started"}${powerNote(w, base)}`);
     try {
       run.start();
     } catch (err) {
@@ -1058,6 +1071,8 @@ export class Supervisor {
         role: w.role,
         state: w.state,
         task: w.task.length > 200 ? `${w.task.slice(0, 199)}…` : w.task,
+        model: w.model,
+        effort: w.effort,
         checkpoint: this.checkpoints.get(w.id) ?? w.checkpoint,
         started_at: w.started_at,
         ended_at: w.ended_at,
@@ -1071,8 +1086,8 @@ export class Supervisor {
     for (const w of all) {
       if (!w.started_at || w.started_at < usageSince) continue;
       const day = w.started_at.slice(0, 10);
-      const key = `${day}|${w.project}|${w.role}`;
-      const row = days.get(key) ?? { day, project: w.project, role: w.role, workers: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, cost_usd: 0 };
+      const key = `${day}|${w.project}|${w.role}|${w.model ?? ""}`;
+      const row = days.get(key) ?? { day, project: w.project, role: w.role, model: w.model, workers: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, cost_usd: 0 };
       const u = this.ownUsage(w);
       row.workers++;
       row.tokens.input += u.tokens.input;
@@ -1278,6 +1293,18 @@ export function parseExports(text: string): Record<string, string> {
  * The land output's tail for the orchestrator's notice: from the `landed:` line on,
  * because its hashes are the ones to quote from main; else the last line.
  */
+const MODEL_TIERS = ["haiku", "sonnet", "opus"];
+const modelTier = (m: string | null | undefined) => (m ? MODEL_TIERS.findIndex((t) => m.toLowerCase().includes(t)) : -1);
+
+/** " on opus/high", plus what the spawn chose above the role's default, so a costlier run is visible. */
+export function powerNote(w: { model: string | null; effort: string | null }, role: { model: string | undefined; effort: Effort | undefined }): string {
+  if (!w.model && !w.effort) return "";
+  const above: string[] = [];
+  if (role.model && w.model && modelTier(w.model) > modelTier(role.model)) above.push(`model ${role.model}`);
+  if (role.effort && w.effort && EFFORTS.indexOf(w.effort as Effort) > EFFORTS.indexOf(role.effort)) above.push(`effort ${role.effort}`);
+  return ` on ${w.model ?? "default"}/${w.effort ?? "default"}${above.length ? ` (above the role's ${above.join(" and ")})` : ""}`;
+}
+
 /**
  * The task number a text is about: of the backlog ids in it (LAND-41, LAND-41.2), the
  * most specific, the first on a tie. "LAND-41 session. Your task: LAND-41.2" is LAND-41.2.

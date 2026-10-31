@@ -32,11 +32,30 @@ const Env = z
   .default({})
   .refine((env) => !BILLING_ENV.some((k) => k in env), `must not set ${BILLING_ENV.join(", ")}: workers bill to the subscription`);
 
+/** Reasoning effort levels, lowest first. */
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORTS)[number];
+const EffortLevel = z.enum(EFFORTS);
+
+/**
+ * What a worker runs on: its role's default, which a spawn may override within the
+ * role's limits (`models` it may use, `max_effort`). A role takes the project's
+ * values for whatever it leaves unset.
+ */
+const Power = {
+  model: z.string().optional(),
+  effort: EffortLevel.optional(),
+  /** Models a spawn may choose instead of the default; unset allows any. */
+  models: z.array(z.string()).min(1).optional(),
+  /** The highest effort a spawn may choose; unset allows any. */
+  max_effort: EffortLevel.optional(),
+};
+
 const Role = z.object({
   /** BobNet name; defaults to the role key with a capital first letter. */
   name: z.string().refine(isValidSegment, "must be a valid BobNet name").optional(),
   dir: path,
-  model: z.string().optional(),
+  ...Power,
   allowed_tools: z.array(z.string()).optional(),
   disallowed_tools: z.array(z.string()).optional(),
   /** Built-in tools the worker has, in place of WORKER_TOOLS. */
@@ -75,6 +94,7 @@ const Project = z.object({
   path,
   /** Lower runs first when workers queue. */
   priority: z.number().int().default(10),
+  ...Power,
   team: z.string().refine(isValidSegment, "must be a valid BobNet team").optional(),
   /** This project's orchestrator, when it isn't the laptop's. */
   orchestrator: z.string().refine(isValidSegment, "must be a valid BobNet name").optional(),
@@ -125,6 +145,9 @@ const SupervisorFile = z.object({
   run_slots: z.number().int().positive().default(1),
   /** How long a consulted role has to answer. */
   consult_timeout_minutes: z.number().positive().default(10),
+  /** What a consult runs on: a short advisory answer needs less than the role's own work. */
+  consult_model: z.string().optional(),
+  consult_effort: EffortLevel.optional(),
   /** More paths every sandboxed worker may write, e.g. fnm's multishell folder. */
   sandbox_write: z.array(path).default([]),
   projects: z.record(z.string(), Project),
@@ -137,6 +160,9 @@ export interface RoleConfig {
   dir: string;
   team: string | undefined;
   model: string | undefined;
+  effort: Effort | undefined;
+  models: string[] | undefined;
+  maxEffort: Effort | undefined;
   allowedTools: string[] | undefined;
   disallowedTools: string[] | undefined;
   tools: string[] | undefined;
@@ -188,6 +214,8 @@ export interface SupervisorConfig {
   mcpPort: number;
   runSlots: number;
   consultTimeoutMinutes: number;
+  consultModel: string | undefined;
+  consultEffort: Effort | undefined;
   sandboxWrite: string[];
   projects: Map<string, ProjectConfig>;
 }
@@ -243,7 +271,10 @@ export function parseSupervisorConfig(
         name,
         dir,
         team: p.team,
-        model: r.model,
+        model: r.model ?? p.model,
+        effort: r.effort ?? p.effort,
+        models: r.models ?? p.models,
+        maxEffort: r.max_effort ?? p.max_effort,
         allowedTools: r.allowed_tools,
         disallowedTools: r.disallowed_tools,
         tools: r.tools,
@@ -290,6 +321,8 @@ export function parseSupervisorConfig(
     mcpPort: file.mcp_port,
     runSlots: file.run_slots,
     consultTimeoutMinutes: file.consult_timeout_minutes,
+    consultModel: file.consult_model,
+    consultEffort: file.consult_effort,
     sandboxWrite: file.sandbox_write,
     projects,
   };

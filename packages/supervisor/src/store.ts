@@ -30,6 +30,9 @@ export interface WorkerRow {
   last_event_at: string | null;
   /** JSON { cum, base }: the SDK's cumulative usage and, for a resumed session, where it started. */
   usage: string | null;
+  /** What it runs on; null is Claude Code's default. */
+  model: string | null;
+  effort: string | null;
 }
 
 export type RequestKind = "approval" | "question";
@@ -101,6 +104,8 @@ export class Store {
     // Columns added after the first release.
     const cols = new Set((this.db.prepare("PRAGMA table_info(workers)").all() as Array<{ name: string }>).map((c) => c.name));
     if (!cols.has("usage")) this.db.exec("ALTER TABLE workers ADD COLUMN usage TEXT");
+    if (!cols.has("model")) this.db.exec("ALTER TABLE workers ADD COLUMN model TEXT");
+    if (!cols.has("effort")) this.db.exec("ALTER TABLE workers ADD COLUMN effort TEXT");
   }
 
   close(): void {
@@ -128,12 +133,14 @@ export class Store {
     handoff: string | null;
     priority: number;
     resume_session: string | null;
+    model?: string | null;
+    effort?: string | null;
   }): WorkerRow {
     const id = `w_${randomUUID().slice(0, 8)}`;
     this.run(
-      `INSERT INTO workers (id, project, role, task, handoff, state, priority, resume_session, created_at)
-       VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
-      id, w.project, w.role, w.task, w.handoff, w.priority, w.resume_session, now(),
+      `INSERT INTO workers (id, project, role, task, handoff, state, priority, resume_session, model, effort, created_at)
+       VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+      id, w.project, w.role, w.task, w.handoff, w.priority, w.resume_session, w.model ?? null, w.effort ?? null, now(),
     );
     return this.worker(id)!;
   }

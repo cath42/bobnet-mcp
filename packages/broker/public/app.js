@@ -125,7 +125,7 @@ function workerCard(w) {
     "div",
     { class: "card" },
     h("div", { class: "top" }, h("span", { class: "name" }, w.name), h("span", { class: "badge", dataset: { state: w.state } }, w.state)),
-    h("div", { class: "sub" }, `${w.project} / ${w.role} · ${w.id}`),
+    h("div", { class: "sub" }, `${w.project} / ${w.role} · ${w.id}${w.model || w.effort ? ` · ${w.model ?? "default"}/${w.effort ?? "default"}` : ""}`),
     h("div", { class: "task" }, w.task),
     w.checkpoint ? h("div", { class: "checkpoint" }, w.checkpoint) : null,
     h(
@@ -211,7 +211,7 @@ function renderUsage() {
   for (const l of state.laptops.values()) {
     for (const u of l.snapshot.usage) {
       if (u.day < cutoff) continue;
-      const key = `${u.project} / ${u.role}`;
+      const key = `${u.project} / ${u.role}${u.model ? ` · ${u.model}` : ""}`;
       const r = byRole.get(key) ?? { workers: 0, tokens: 0, cost: 0 };
       r.workers += u.workers;
       r.tokens += totalTokens(u.tokens);
@@ -238,6 +238,15 @@ function renderUsage() {
 function renderFeeds() {
   const items = state.updates.map((u) => ({ ...u, task: taskRef(u.text) }));
 
+  // What each task has cost: the workers whose task or checkpoint names it.
+  const costs = new Map();
+  for (const l of state.laptops.values()) {
+    for (const w of l.snapshot.workers) {
+      const t = taskRef(w.checkpoint ?? "") ?? taskRef(w.task);
+      if (t) costs.set(t, (costs.get(t) ?? 0) + w.cost_usd);
+    }
+  }
+
   // Progress: each task's latest word, newest first, for tasks heard from in the last 24 hours.
   const latest = new Map();
   const dayAgo = new Date(Date.now() - 86400_000).toISOString();
@@ -252,7 +261,7 @@ function renderFeeds() {
             { class: "card task-card", dataset: { phase: p } },
             h("div", { class: "top" }, taskChip(u.task), h("span", { class: "badge", dataset: { state: p } }, p === "waiting" ? "held" : p)),
             h("div", { class: "checkpoint" }, text),
-            h("div", { class: "meta" }, h("span", null, shortName(u.from)), h("span", null, h("span", { "data-ago": u.at }, since(u.at)), " ago"), h("span", null, `${u.count} update${u.count === 1 ? "" : "s"}`)),
+            h("div", { class: "meta" }, h("span", null, shortName(u.from)), h("span", null, h("span", { "data-ago": u.at }, since(u.at)), " ago"), h("span", null, `${u.count} update${u.count === 1 ? "" : "s"}`), costs.has(u.task) ? h("span", null, fmtCost(costs.get(u.task))) : null),
           );
         })
       : [h("div", { class: "empty" }, "No task has reported progress in the last 24 hours.")]),

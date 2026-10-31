@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Logger } from "@bobnet/client/log";
 import { z } from "zod";
+import { EFFORTS } from "./config.ts";
 import { AnswerError } from "./router.ts";
 import { type Supervisor, SupervisorError } from "./supervisor.ts";
 
@@ -18,8 +19,11 @@ const Spawn = z.object({
   task: z.string().min(1),
   handoff: z.string().optional(),
   resume_session: z.string().optional(),
+  model: z.string().optional(),
+  effort: z.enum(EFFORTS).optional(),
 });
 const Id = z.object({ id: z.string() });
+const Reset = z.object({ id: z.string(), model: z.string().optional(), effort: z.enum(EFFORTS).optional() });
 const TakeSlot = z.object({ project: z.string(), name: z.string().min(1), label: z.string().min(1) });
 const FreeSlot = z.object({ name: z.string().min(1) });
 const OrderQueue = z.object({ names: z.array(z.string()).min(1) });
@@ -42,6 +46,12 @@ const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
   additionalProperties: false,
 });
 
+/** A spawn's model and effort: the role's defaults unless the task needs more or less. */
+const POWER = {
+  model: { type: "string", description: "Override the role's default model (opus, sonnet, haiku) for this task; the role may limit which." },
+  effort: { type: "string", enum: [...EFFORTS], description: "Override the role's default effort: less for routine work, more for hard design; capped by the role's max_effort." },
+};
+
 const TOOLS = [
   {
     name: "spawn_worker",
@@ -54,12 +64,17 @@ const TOOLS = [
         task: { type: "string", description: "The whole task: what to do, what done means, which files to read." },
         handoff: { type: "string", description: "Handoff file path to read first and write before finishing." },
         resume_session: { type: "string", description: "Resume this session id instead of starting fresh (review-to-build fix loops)." },
+        ...POWER,
       },
       ["project", "role", "task"],
     ),
   },
   { name: "stop_worker", description: "Interrupt a worker, then kill it after a grace period.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
-  { name: "reset_worker", description: "Stop a worker and queue a fresh one for the same role and task, with no prior context.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
+  {
+    name: "reset_worker",
+    description: "Stop a worker and queue a fresh one for the same role and task, with no prior context, on what it ran on unless you set model or effort (a retry that failed for lack of power).",
+    inputSchema: obj({ id: { type: "string" }, ...POWER }, ["id"]),
+  },
   { name: "list_workers", description: "Workers and their states, optionally for one project.", inputSchema: obj({ project: { type: "string" } }) },
   { name: "worker_status", description: "A worker's state, task, last activity, session id and how to open its transcript.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
   { name: "tail_worker", description: "The worker's last n events, one line each.", inputSchema: obj({ id: { type: "string" }, n: { type: "number" } }, ["id"]) },
@@ -108,10 +123,15 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
         task: s.task,
         ...(s.handoff ? { handoff: s.handoff } : {}),
         ...(s.resume_session ? { resume_session: s.resume_session } : {}),
+        ...(s.model ? { model: s.model } : {}),
+        ...(s.effort ? { effort: s.effort } : {}),
       });
     },
     stop_worker: (a) => sup.stop(Id.parse(a).id),
-    reset_worker: (a) => sup.reset(Id.parse(a).id),
+    reset_worker: (a) => {
+      const r = Reset.parse(a);
+      return sup.reset(r.id, { ...(r.model ? { model: r.model } : {}), ...(r.effort ? { effort: r.effort } : {}) });
+    },
     list_workers: (a) => sup.list(ListArgs.parse(a).project),
     worker_status: (a) => sup.status(Id.parse(a).id),
     tail_worker: (a) => {

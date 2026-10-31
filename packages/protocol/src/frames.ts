@@ -81,6 +81,9 @@ export const WorkerSnapshot = z.object({
   role: z.string().max(40),
   state: z.enum(["queued", "running", "waiting-approval", "waiting-answer", "done", "failed", "stopped"]),
   task: z.string().max(200),
+  /** What it runs on; null is Claude Code's default. */
+  model: z.string().max(60).nullable().default(null),
+  effort: z.string().max(10).nullable().default(null),
   checkpoint: z.string().max(300).nullable(),
   started_at: z.string().nullable(),
   ended_at: z.string().nullable(),
@@ -121,6 +124,7 @@ export const LaptopSnapshot = z.object({
         day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         project: z.string().max(40),
         role: z.string().max(40),
+        model: z.string().max(60).nullable().default(null),
         workers: z.number().int().nonnegative(),
         tokens,
         cost_usd: z.number().nonnegative(),

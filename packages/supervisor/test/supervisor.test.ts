@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseSupervisorConfig } from "../src/config.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
-import { landSummary, Supervisor, taskRef } from "../src/supervisor.ts";
+import { landSummary, powerNote, Supervisor, taskRef } from "../src/supervisor.ts";
 import { gitWriteDirs, WORKER_TOOLS } from "../src/worker.ts";
 import { FakeBroker, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 
@@ -204,6 +204,39 @@ describe("lifecycle", () => {
     expect(broker.updates).toEqual(["Bill: LAND-41.1 · started", "Bill: LAND-41.1 · done"]);
   });
 
+  it("runs a worker on its role's model and effort, which a spawn may override within the role's limits", async () => {
+    const config = testConfig(dir);
+    const bill = config.projects.get("helix")!.roles.get("bill")!;
+    Object.assign(bill, { model: "opus", effort: "high", models: ["opus", "sonnet"], maxEffort: "xhigh" });
+    const broker = new FakeBroker();
+    const { queryFn, sessions } = fakeQuery();
+    const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, ownerCheck });
+    await sup.start();
+    running.push(sup);
+    const w = sup.spawn({ project: "helix", role: "bill", task: "LAND-41.1 · the ADR" });
+    await until(() => sessions.length === 1);
+    expect(sessions[0]!.options).toMatchObject({ model: "opus", effort: "high" });
+    expect(sup.status(w.id)).toMatchObject({ model: "opus", effort: "high" });
+    expect(broker.updates.at(-1)).toBe("Bill: LAND-41.1 · started on opus/high");
+
+    expect(() => sup.spawn({ project: "helix", role: "bill", task: "t", model: "haiku" })).toThrow(/may run on opus, sonnet, not haiku/);
+    expect(() => sup.spawn({ project: "helix", role: "bill", task: "t", effort: "max" })).toThrow(/capped at xhigh/);
+
+    // A reset keeps what it ran on unless told otherwise.
+    const again = await sup.reset(w.id, { effort: "xhigh" });
+    expect(again).toMatchObject({ model: "opus", effort: "xhigh" });
+    await until(() => sessions.length === 2);
+    expect(sessions[1]!.options).toMatchObject({ model: "opus", effort: "xhigh" });
+    expect(broker.updates.at(-1)).toBe("Bill: LAND-41.1 · started on opus/xhigh (above the role's effort high)");
+  });
+
+  it("notes what a run is on, and what is above the role's default", () => {
+    const role = { model: "sonnet", effort: "medium" as const };
+    expect(powerNote({ model: null, effort: null }, role)).toBe("");
+    expect(powerNote({ model: "sonnet", effort: "low" }, role)).toBe(" on sonnet/low");
+    expect(powerNote({ model: "opus", effort: "max" }, role)).toBe(" on opus/max (above the role's model sonnet and effort medium)");
+  });
+
   it("caps concurrency and runs the queue by project priority, then age", async () => {
     const { sup, sessions } = await setup();
     const homer = sup.spawn({ project: "helix", role: "homer", task: "h" });
@@ -393,7 +426,7 @@ describe("usage and snapshots", () => {
     const snap = sup.snapshot();
     expect(snap.workers[0]).toMatchObject({ state: "done", tokens: { input: 1500, output: 300, cache_read: 6000, cache_write: 400 }, cost_usd: 0.42 });
     expect(snap.usage).toEqual([
-      { day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), project: "helix", role: "bill", workers: 1, tokens: { input: 1500, output: 300, cache_read: 6000, cache_write: 400 }, cost_usd: 0.42 },
+      { day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), project: "helix", role: "bill", model: null, workers: 1, tokens: { input: 1500, output: 300, cache_read: 6000, cache_write: 400 }, cost_usd: 0.42 },
     ]);
     expect(snap.supervisor).toMatchObject({ concurrency: 2, active: 0, queued: 0 });
     await until(() => broker.reports.length > 0);

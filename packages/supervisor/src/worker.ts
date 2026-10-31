@@ -140,6 +140,7 @@ export class WorkerRun {
       abortController: this.abort,
       stderr: (data) => this.write({ type: "stderr", data }),
       ...(role.model ? { model: role.model } : {}),
+      ...(role.effort ? { effort: role.effort } : {}),
       ...(role.allowedTools ? { allowedTools: role.allowedTools } : {}),
       ...(this.opts.resumeSession ? { resume: this.opts.resumeSession } : {}),
       ...(role.sandbox

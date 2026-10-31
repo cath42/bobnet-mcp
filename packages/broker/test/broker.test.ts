@@ -227,7 +227,7 @@ describe("dashboard", () => {
     supervisor: { started_at: "2026-10-30T00:00:00.000Z", concurrency: 3, active: 1, queued: 0 },
     workers: [
       {
-        id: "w_1", name: "Bill", project: "helix", role: "bill", state: "running" as const, task: "ADR 0094", checkpoint: null,
+        id: "w_1", name: "Bill", project: "helix", role: "bill", state: "running" as const, task: "ADR 0094", model: "opus", effort: "high", checkpoint: null,
         started_at: "2026-10-30T00:00:00.000Z", ended_at: null, last_event_at: "2026-10-30T00:01:00.000Z",
         tokens: { input: 10, output: 2, cache_read: 0, cache_write: 0 }, cost_usd: 0.01,
       },
