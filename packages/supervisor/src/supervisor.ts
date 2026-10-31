@@ -616,12 +616,28 @@ export class Supervisor {
    */
   land(workerId: string): Promise<{ ok: boolean; output: string }> {
     if (this.landing.has(workerId)) return Promise.reject(new SupervisorError("A land is already running for you; wait for its result"));
-    const p = this.doLand(workerId).finally(() => this.landing.delete(workerId));
+    const p = this.doLand(workerId)
+      .then((r) => (r.landed ? this.rebaseAfterLand(workerId, r.output) : r))
+      .finally(() => this.landing.delete(workerId));
     this.landing.set(workerId, p);
     return p;
   }
 
-  private async doLand(workerId: string): Promise<{ ok: boolean; output: string }> {
+  /**
+   * After a land, the worker's branch still holds the commits main now has as
+   * replays; rebasing drops them at once, so the next land doesn't replay (and
+   * maybe conflict on) them again. A failed rebase leaves the branch as it was.
+   */
+  private async rebaseAfterLand(workerId: string, landOutput: string): Promise<{ ok: boolean; output: string }> {
+    if (!this.project(this.worker(workerId).project).rebase) return { ok: true, output: landOutput };
+    const rb = await this.doRebase(workerId);
+    return {
+      ok: true,
+      output: `${landOutput}\n\n${rb.ok ? `Then: ${rb.output}` : `Landed, but your branch wasn't rebased onto main, so it still holds the landed commits. Call rebase once the cause is fixed.\n${rb.output}`}`,
+    };
+  }
+
+  private async doLand(workerId: string): Promise<{ ok: boolean; output: string; landed?: boolean }> {
     const w = this.worker(workerId);
     const role = this.roleOf(w);
     const project = this.project(w.project);
@@ -678,7 +694,7 @@ export class Supervisor {
         project.key,
       );
       if (held) return { ok: true, output: `Held, not refused: your tip waits and lands when the hold is released; don't land again.\n\n${output}` };
-      return { ok, output: `${land.command.join(" ")} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
+      return { ok, landed: ok, output: `${land.command.join(" ")} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
     } finally {
       release();
       if (run) run.lastEventAt = Date.now();

@@ -481,6 +481,23 @@ projects:
     expect(g(worktree, "status", "--porcelain")).toBe("");
   });
 
+  it("rebases the worker's branch after a land, so the replayed commits drop out", async () => {
+    const { worktree, seed } = repo();
+    // The integrator replays the worker's commit onto main: same change, new hash.
+    const land = join(dir, "land.sh");
+    writeFileSync(land, `#!/bin/sh\nset -e\ncd ${seed}\ngit pull -q --rebase=false origin main\ngit fetch -q "$OLDPWD" HEAD\ngit -c user.name=Main -c user.email=m@x cherry-pick FETCH_HEAD >/dev/null\ngit push -q origin HEAD:main\necho "landed: main $(git rev-parse --short HEAD)"\n`);
+    chmodSync(land, 0o755);
+    const c = config(worktree);
+    c.projects.get("helix")!.land = { command: [land], timeoutMinutes: 1, envCommand: undefined, requiresEnv: [], heldExit: undefined };
+    const { sup, sessions } = await setup("", c);
+    const w = sup.spawn({ project: "helix", role: "homer", task: "t" });
+    await until(() => sessions.length === 1);
+    const r = await sup.land(w.id);
+    expect(r).toMatchObject({ ok: true, output: expect.stringMatching(/landed: main [\s\S]*Then: Rebased homer\/x onto origin\/main/) });
+    expect(g(worktree, "rev-parse", "HEAD")).toBe(g(seed, "rev-parse", "HEAD"));
+    expect(g(worktree, "rev-list", "--count", "origin/main..HEAD")).toBe("0");
+  });
+
   it("aborts a conflict and leaves the branch as it was; refuses a dirty tree or main itself", async () => {
     const { worktree, seed } = repo();
     writeFileSync(join(seed, "homer.md"), "clash\n");
