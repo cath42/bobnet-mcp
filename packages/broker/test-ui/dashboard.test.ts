@@ -279,6 +279,25 @@ describe("Sessions", () => {
   });
 });
 
+describe("a review session", () => {
+  it("becomes the session Usage shows, with no build lane marked now", async () => {
+    const ws = FakeSocket.last;
+    const next = structuredClone(board);
+    next.sessions.push({ name: "LAND-41 review", kind: "review", started_at: iso(30), ended_at: null, workers: 1, calls: 10, tokens: tokens(5_000_000) });
+    next.runs.push({ id: "w_r", name: "Bill", role: "bill", session: "LAND-41 review", task_ref: "LAND-41.16", model: "opus", effort: "high", started_at: iso(30), ended_at: iso(10), resumed: false, tokens: 5_000_000, ctx: [30000, 70000] });
+    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board: next });
+    await go("#usage");
+    (view().querySelector(".seg button") as HTMLButtonElement).click();
+    await settle();
+    expect(view().querySelector(".key")!.textContent).toContain("LAND-41 review so far · 2 calls");
+    expect(view().querySelector(".key")!.textContent).not.toContain("build 3");
+    await go("#feature");
+    expect(view().querySelector(".lane-h .now")).toBeNull();
+    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board });
+    await settle();
+  });
+});
+
 describe("live frames", () => {
   it("takes a new board", async () => {
     await go("#roadmap");

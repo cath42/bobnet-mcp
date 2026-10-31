@@ -147,10 +147,12 @@ function current() {
   return e ? { ...e.board, laptop: e.laptop } : null;
 }
 
-/** The latest build session (else the latest of any kind), and the build before it. */
+/** The latest session (a build, design, review or retro), and the two before it of the same kind, to compare with. */
 function sessionsOf(b) {
-  const builds = b.sessions.filter((x) => x.kind === "build");
-  return { cur: builds.at(-1) ?? b.sessions.at(-1) ?? null, prev: builds.at(-2) ?? null, prev2: builds.at(-3) ?? null };
+  const named = b.sessions.filter((x) => x.kind !== "other");
+  const cur = named.at(-1) ?? b.sessions.at(-1) ?? null;
+  const same = b.sessions.filter((x) => x.kind === cur?.kind && x !== cur);
+  return { cur, prev: same.at(-1) ?? null, prev2: same.at(-2) ?? null };
 }
 
 /** A session's runs: the board's ended ones, and the snapshot's for those still running or not yet on the board. */
