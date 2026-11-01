@@ -321,6 +321,23 @@ describe("a review session", () => {
   });
 });
 
+describe("the orchestrator's usage", () => {
+  it("shows the orchestrator as a row beside its workers in the session", async () => {
+    const ws = FakeSocket.last;
+    const next = structuredClone(board) as typeof board & { sessions: Array<Record<string, unknown>> };
+    next.sessions[2]!.orchestrator = { name: "Bob", calls: 40, tokens: 7_000_000 };
+    next.runs.push({ id: "orchestrator:LAND-41 build 3", name: "Bob", role: "Bob", session: "LAND-41 build 3", task_ref: null, model: "claude-opus-5-5", effort: null as never, started_at: iso(200), ended_at: iso(1), resumed: false, tokens: 7_000_000, ctx: [40000, 90000] });
+    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board: next });
+    await go("#usage");
+    await settle();
+    const bob = [...$("roles").querySelectorAll("tbody tr")].find((r) => r.textContent!.includes("Bob"))!;
+    expect(bob.textContent).toContain("7.0M");
+    expect(bob.querySelector('[data-label="Calls"]')!.textContent).toBe("2");
+    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board });
+    await settle();
+  });
+});
+
 describe("live frames", () => {
   it("takes a new board", async () => {
     await go("#roadmap");

@@ -590,7 +590,7 @@ function sessionBars(b) {
       gap >= 40 ? s("text", { class: "lab", x: cx, y: y0 - 5, "text-anchor": "middle" }, fmtTokens(v)) : s("g"));
     const show = () => {
       holdRender = true;
-      tip.replaceChildren(h("b", null, ss.name), ...[["tokens", fmtTokens(v)], ["output", fmtTokens(ss.tokens.output)], ["workers", ss.workers], ["calls", ss.calls], ["started", `${ss.started_at.slice(5, 10)} ${clock(ss.started_at)}`]].map(([k, val]) => h("div", { class: "row" }, h("span", null, k), h("span", null, String(val)))));
+      tip.replaceChildren(h("b", null, ss.name), ...[["tokens", fmtTokens(v)], ...(ss.orchestrator ? [[`of which ${ss.orchestrator.name}`, fmtTokens(ss.orchestrator.tokens)]] : []), ["output", fmtTokens(ss.tokens.output)], ["workers", ss.workers], ["calls", ss.calls], ["started", `${ss.started_at.slice(5, 10)} ${clock(ss.started_at)}`]].map(([k, val]) => h("div", { class: "row" }, h("span", null, k), h("span", null, String(val)))));
       tip.hidden = false;
       const wr = wrap.getBoundingClientRect(), gr = g.getBoundingClientRect();
       tip.style.left = `${Math.min(gr.left - wr.left + gr.width / 2, wr.width - 190)}px`;
@@ -641,7 +641,7 @@ function viewUsage() {
             h("td", { class: "num", "data-label": "Tokens" }, fmtTokens(sum(e.rs, workerTokens))),
             h("td", { class: "num muted", "data-label": prev?.name ?? "Before" }, before ? fmtTokens(before) : "–"));
         })))),
-      h("p", { class: "note" }, "Click a role to see its context per call above. Tokens count everything a run read and wrote, cache reads included.")),
+      h("p", { class: "note" }, "Click a role to see its context per call above. Tokens count everything a run read and wrote, cache reads included. The orchestrator's row is its own session's calls while this session ran, its subagents' tokens included.")),
     h("section", null, h("h2", null, "Tokens per session"), sessionBars(b)),
   ];
 }

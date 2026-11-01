@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProjectBoard } from "@bobnet/protocol";
 import { describe, expect, it } from "vitest";
-import { assignSessions, baseline, Boards, briefTask, downsample, namedSession, parseBacklogItem, shapeBacklog, transcriptCtx, workerTasks } from "../src/board.ts";
+import { assignSessions, baseline, Boards, briefTask, downsample, namedSession, parseBacklogItem, sessionAt, shapeBacklog, transcriptCalls, transcriptCtx, transcriptFolder, workerTasks } from "../src/board.ts";
 import { parseSupervisorConfig } from "../src/config.ts";
 import { Store, type WorkerRow } from "../src/store.ts";
 import { quiet } from "./fakes.ts";
@@ -188,5 +188,72 @@ describe("the board", () => {
     // Nothing changed: nothing is sent again.
     await boards.refresh();
     expect(sent).toHaveLength(1);
+  });
+});
+
+const call = (id: string, at: string, input: number, over: Record<string, unknown> = {}) =>
+  JSON.stringify({ type: "assistant", timestamp: at, message: { id, model: "claude-opus-5-5", usage: { input_tokens: input, output_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0 } }, ...over });
+
+describe("the orchestrator's usage", () => {
+  it("reads each call once, its final count, and gives a subagent's tokens but no context", () => {
+    const jsonl = [call("m1", "2026-10-31T14:10:00Z", 5), call("m1", "2026-10-31T14:10:01Z", 7), call("m2", "2026-10-31T14:20:00Z", 3, { isSidechain: true }), "not json"].join("\n");
+    expect(transcriptCalls(jsonl)).toEqual([
+      { id: "m1", at: "2026-10-31T14:10:00Z", model: "claude-opus-5-5", tokens: { input: 7, output: 10, cache_read: 1000, cache_write: 0 }, ctx: 1007 },
+      { id: "m2", at: "2026-10-31T14:20:00Z", model: "claude-opus-5-5", tokens: { input: 3, output: 10, cache_read: 1000, cache_write: 0 }, ctx: null },
+    ]);
+    expect(transcriptCalls(call("m3", "2026-10-31T14:30:00Z", 1), true)[0]!.ctx).toBeNull();
+    expect(transcriptFolder("/t", "/Users/ct/Code/helix-navigator-bob")).toBe("/t/-Users-ct-Code-helix-navigator-bob");
+  });
+
+  it("puts a call in the session whose span holds it, the latest if spans overlap; never in Other work's", () => {
+    const ss = [
+      { name: "Other work", kind: "other", started_at: "2026-10-30T00:00:00Z", ended_at: null },
+      { name: "LAND-41 build 2", kind: "build", started_at: "2026-10-31T14:00:00Z", ended_at: "2026-10-31T15:00:00Z" },
+      { name: "LAND-41 review 1", kind: "review", started_at: "2026-10-31T14:50:00Z", ended_at: null },
+    ];
+    const now = "2026-10-31T18:00:00Z";
+    expect(sessionAt(ss, "2026-10-31T14:30:00Z", now)).toBe("LAND-41 build 2");
+    expect(sessionAt(ss, "2026-10-31T14:55:00Z", now)).toBe("LAND-41 review 1");
+    expect(sessionAt(ss, "2026-10-31T17:00:00Z", now)).toBe("LAND-41 review 1");
+    expect(sessionAt(ss, "2026-10-31T13:00:00Z", now)).toBeNull();
+  });
+
+  it("shows on the board in the sessions it worked in, as a run beside its workers, and the rest as Other work", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "bobnet-orch-"));
+    execFileSync("git", ["-C", repo, "init", "-q", "-b", "main"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=R", "-c", "user.email=r@x", "commit", "-q", "--allow-empty", "-m", "init"]);
+    const root = join(repo, "transcripts"), folder = transcriptFolder(root, "/work/bob");
+    mkdirSync(join(folder, "s1", "subagents"), { recursive: true });
+    const main = join(folder, "s1.jsonl");
+    writeFileSync(main, [call("p1", "2026-10-31T12:00:00Z", 5), call("b1", "2026-10-31T14:10:00Z", 5), call("b2", "2026-10-31T14:40:00Z", 5)].join("\n") + "\n");
+    writeFileSync(join(folder, "s1", "subagents", "agent-a.jsonl"), call("sa", "2026-10-31T14:20:00Z", 5) + "\n");
+    // A resumed session's file repeats an earlier call: counted once.
+    writeFileSync(join(folder, "s2.jsonl"), call("b2", "2026-10-31T14:40:00Z", 5) + "\n");
+
+    const store = new Store(":memory:");
+    const a = store.createWorker({ project: "helix", role: "changesets", task: "LAND-41 build 2", handoff: null, priority: 1, resume_session: null });
+    store.updateWorker(a.id, { state: "done", created_at: "2026-10-31T14:00:00Z", started_at: "2026-10-31T14:00:00Z", ended_at: "2026-10-31T15:00:00Z", ctx: "[30000]" });
+    const config = parseSupervisorConfig(`orchestrator: Bob\nprojects:\n  helix:\n    path: ${repo}\n    orchestrator_dir: /work/bob\n    roles:\n      changesets: { dir: ${repo} }\n`, (d) => d);
+    const sent: ProjectBoard[] = [];
+    const boards = new Boards(
+      { projects: config.projects, store, log: quiet, send: async (x) => void sent.push(x), liveCtx: () => undefined, ownTokens: () => ({ input: 10, output: 5, cache_read: 1000, cache_write: 0 }), nameOf: () => "changesets-agent", transcriptsDir: root },
+      async (cmd, args, cwd) => {
+        if (cmd === "gh") throw new Error("gh: not found");
+        return execFileSync(cmd, args, { cwd, encoding: "utf8" });
+      },
+    );
+    await boards.refresh();
+    const each = 5 + 10 + 1000;
+    expect(sent[0]!.sessions.map((s) => [s.name, s.calls, s.orchestrator])).toEqual([
+      ["Other work", 1, { name: "Bob", calls: 1, tokens: each }],
+      ["LAND-41 build 2", 3, { name: "Bob", calls: 2, tokens: 3 * each }],
+    ]);
+    expect(sent[0]!.sessions[1]!.tokens.input).toBe(10 + 15);
+    expect(sent[0]!.runs.find((r) => r.role === "Bob" && r.session === "LAND-41 build 2")).toMatchObject({ id: "orchestrator:LAND-41 build 2", name: "Bob", session: "LAND-41 build 2", model: "claude-opus-5-5", tokens: 3 * each, ctx: [1005, 1005] });
+
+    // A file that grows is read on from where it was.
+    writeFileSync(main, call("b3", "2026-10-31T14:50:00Z", 5) + "\n", { flag: "a" });
+    await boards.refresh();
+    expect(sent.at(-1)!.sessions[1]!.orchestrator).toEqual({ name: "Bob", calls: 3, tokens: 4 * each });
   });
 });

@@ -196,7 +196,10 @@ export const ProjectBoard = z.object({
         ended_at: z.string().nullable(),
         workers: z.number().int().nonnegative(),
         calls: z.number().int().nonnegative(),
+        /** Workers' and orchestrator's together. */
         tokens,
+        /** The orchestrator's share: its calls in the session's span. */
+        orchestrator: z.object({ name: short(40), calls: z.number().int().nonnegative(), tokens: z.number().nonnegative() }).nullable().default(null),
       }),
     )
     .max(200),

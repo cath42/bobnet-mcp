@@ -110,6 +110,8 @@ const Project = z.object({
   team: z.string().refine(isValidSegment, "must be a valid BobNet team").optional(),
   /** This project's orchestrator, when it isn't the laptop's. */
   orchestrator: z.string().refine(isValidSegment, "must be a valid BobNet name").optional(),
+  /** The folder the orchestrator's Claude Code session runs in: its transcripts there are its usage on the board. */
+  orchestrator_dir: path.optional(),
   /** Environment for every role in the project; a role's own env wins. */
   env: Env,
   /** Every role's memory_dir, unless the role sets its own. */
@@ -222,6 +224,7 @@ export interface ProjectConfig {
   priority: number;
   team: string | undefined;
   orchestrator: string;
+  orchestratorDir: string | undefined;
   land: { command: string[]; timeoutMinutes: number; envCommand: string[] | undefined; requiresEnv: string[]; heldExit: number | undefined } | undefined;
   rebase: { remote: string; branch: string } | undefined;
   runs: Map<string, RunConfig>;
@@ -329,6 +332,7 @@ export function parseSupervisorConfig(
       priority: p.priority,
       team: p.team,
       orchestrator: p.orchestrator ?? file.orchestrator,
+      orchestratorDir: p.orchestrator_dir,
       land: p.land
         ? { command: p.land.command, timeoutMinutes: p.land.timeout_minutes, envCommand: p.land.env_command, requiresEnv: p.land.requires_env, heldExit: p.land.held_exit }
         : undefined,

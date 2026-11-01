@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { BoardItem, ProjectBoard, SessionKind, TokenCounts } from "@bobnet/protocol";
@@ -125,6 +125,48 @@ export function transcriptCtx(jsonl: string, from: string, to: string | null): n
   return out;
 }
 
+/** One model call in a transcript: its tokens, and the context it carried (null for a subagent's). */
+export interface TranscriptCall {
+  id: string;
+  at: string;
+  model: string | null;
+  tokens: TokenCounts;
+  ctx: number | null;
+}
+
+/** Every model call in a transcript, once each; a subagent's file, or a sidechain line, counts tokens but no context. */
+export function transcriptCalls(jsonl: string, subagent = false): TranscriptCall[] {
+  const out = new Map<string, TranscriptCall>();
+  for (const line of jsonl.split("\n")) {
+    if (!line.includes('"assistant"')) continue;
+    let d: { type?: string; isSidechain?: boolean; timestamp?: string; message?: { id?: string; model?: string; usage?: Record<string, number> } };
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const u = d.message?.usage, id = d.message?.id;
+    if (d.type !== "assistant" || !u || !id || !d.timestamp) continue;
+    // A response's later content blocks repeat its usage; the last line has the final count.
+    const tokens = { input: u["input_tokens"] ?? 0, output: u["output_tokens"] ?? 0, cache_read: u["cache_read_input_tokens"] ?? 0, cache_write: u["cache_creation_input_tokens"] ?? 0 };
+    const main = !subagent && !d.isSidechain;
+    out.set(id, { id, at: out.get(id)?.at ?? d.timestamp, model: d.message?.model ?? null, tokens, ctx: main ? tokens.input + tokens.cache_read + tokens.cache_write : null });
+  }
+  return [...out.values()];
+}
+
+/** Claude Code's transcript folder for a working folder: every character but a letter or digit becomes "-". */
+export const transcriptFolder = (root: string, dir: string) => join(root, dir.replace(/[^A-Za-z0-9]/g, "-"));
+
+/** The session whose span holds `at`, the latest started if spans overlap; "Other work" has none. */
+export function sessionAt(sessions: Array<{ name: string; kind: string; started_at: string; ended_at: string | null }>, at: string, now: string): string | null {
+  for (let i = sessions.length - 1; i >= 0; i--) {
+    const s = sessions[i]!;
+    if (s.kind !== "other" && s.started_at <= at && at <= (s.ended_at ?? now)) return s.name;
+  }
+  return null;
+}
+
 // ---------- Backlog (Backlog.md: Markdown files with YAML front matter) ----------
 
 const section = (text: string, name: string) =>
@@ -243,6 +285,8 @@ export class Boards {
   private readonly backlogs = new Map<string, { ref: string; backlog: ProjectBoard["backlog"] }>();
   private readonly ci = new Map<string, { at: number; runs: ProjectBoard["ci"] }>();
   private backfilled = false;
+  /** Orchestrator transcripts read so far: where each file was read to, and its calls. */
+  private readonly transcripts = new Map<string, { offset: number; calls: TranscriptCall[] }>();
 
   constructor(deps: BoardDeps, execImpl: Exec = exec) {
     this.deps = deps;
@@ -285,7 +329,7 @@ export class Boards {
   /** Context per call for ended runs from before the supervisor recorded it, read once from their transcripts. */
   private backfill(): void {
     this.backfilled = true;
-    const dir = this.deps.transcriptsDir ?? join(process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"), "projects");
+    const dir = this.transcriptsRoot;
     const missing = this.deps.store.workers().filter((w) => w.ended_at && w.ctx === null);
     if (missing.length === 0) return;
     const files = new Map<string, string>();
@@ -315,6 +359,63 @@ export class Boards {
     this.deps.log.info("context per call backfilled from transcripts", { workers: missing.length });
   }
 
+  private get transcriptsRoot(): string {
+    return this.deps.transcriptsDir ?? join(process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"), "projects");
+  }
+
+  /**
+   * The orchestrator's calls, from its folder's transcripts and their subagents', once each; a file is
+   * read on only from where it grew. The first read can be hundreds of MB: it yields between files.
+   */
+  private async orchestratorCalls(dir: string): Promise<TranscriptCall[]> {
+    const folder = transcriptFolder(this.transcriptsRoot, dir);
+    const files: Array<[string, boolean]> = [];
+    try {
+      for (const f of readdirSync(folder)) {
+        if (f.endsWith(".jsonl")) files.push([join(folder, f), false]);
+        else {
+          try {
+            for (const a of readdirSync(join(folder, f, "subagents"))) if (a.endsWith(".jsonl")) files.push([join(folder, f, "subagents", a), true]);
+          } catch {
+            // no subagents
+          }
+        }
+      }
+    } catch {
+      return [];
+    }
+    const byId = new Map<string, TranscriptCall>();
+    for (const [file, subagent] of files) {
+      let e = this.transcripts.get(file);
+      try {
+        const size = statSync(file).size;
+        if (!e || size < e.offset) e = { offset: 0, calls: [] };
+        if (size > e.offset) {
+          const buf = Buffer.alloc(size - e.offset);
+          const fd = openSync(file, "r");
+          try {
+            readSync(fd, buf, 0, buf.length, e.offset);
+          } finally {
+            closeSync(fd);
+          }
+          // Whole lines only: the last may still be being written.
+          const end = buf.lastIndexOf(10);
+          if (end >= 0) {
+            for (const c of transcriptCalls(buf.subarray(0, end).toString("utf8"), subagent)) e.calls.push(c);
+            e.offset += end + 1;
+          }
+          await new Promise((r) => setImmediate(r));
+        }
+        this.transcripts.set(file, e);
+      } catch {
+        continue;
+      }
+      // A resumed session's file repeats the calls before it; later lines have the final counts.
+      for (const c of e.calls) byId.set(c.id, c);
+    }
+    return [...byId.values()].sort((a, b) => a.at.localeCompare(b.at));
+  }
+
   private ctxOf(w: WorkerRow): number[] {
     return this.deps.liveCtx(w.id) ?? (w.ctx ? (JSON.parse(w.ctx) as number[]) : []);
   }
@@ -341,10 +442,32 @@ export class Boards {
           calls += this.ctxOf(w).length;
         }
         const ended = ws.every((w) => w.ended_at) ? ws.map((w) => w.ended_at!).sort().at(-1)! : null;
-        return { name: s.name, kind: s.kind, started_at: ws[0]!.created_at, ended_at: ended, workers: ws.length, calls, tokens };
+        return { name: s.name, kind: s.kind, started_at: ws[0]!.created_at, ended_at: ended, workers: ws.length, calls, tokens, orchestrator: null as ProjectBoard["sessions"][number]["orchestrator"] };
       })
       .sort((a, b) => a.started_at.localeCompare(b.started_at))
-      .slice(-200);
+      // One place kept for the orchestrator's "Other work".
+      .slice(-199);
+
+    // The orchestrator's calls go to the session whose span holds them; the rest to "Other work".
+    const orch = new Map<string, TranscriptCall[]>();
+    if (p.orchestratorDir) {
+      const now = new Date().toISOString();
+      for (const c of await this.orchestratorCalls(p.orchestratorDir)) {
+        const name = sessionAt(sessionList, c.at, now) ?? "Other work";
+        orch.set(name, [...(orch.get(name) ?? []), c]);
+      }
+    }
+    for (const [name, cs] of orch) {
+      let ss = sessionList.find((x) => x.name === name);
+      if (!ss) {
+        ss = { name, kind: "other", started_at: cs[0]!.at, ended_at: cs.at(-1)!.at, workers: 0, calls: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, orchestrator: null };
+        sessionList.unshift(ss);
+      }
+      for (const c of cs) for (const k of ["input", "output", "cache_read", "cache_write"] as const) ss.tokens[k] += c.tokens[k];
+      const calls = cs.filter((c) => c.ctx !== null).length;
+      ss.calls += calls;
+      ss.orchestrator = { name: p.orchestrator, calls, tokens: cs.reduce((n, c) => n + total(c.tokens), 0) };
+    }
 
     const recent = new Set(sessionList.slice(-SESSIONS_WITH_RUNS).map((s) => s.name));
     const builds = sessionList.filter((s) => s.kind === "build");
@@ -369,6 +492,26 @@ export class Boards {
         tokens: total(this.deps.ownTokens(w)),
         ctx: downsample(this.ctxOf(w)),
       }));
+    // The orchestrator as one run per recent session, so its share and context show beside its workers'.
+    for (const [name, cs] of orch) {
+      if (!recent.has(name)) continue;
+      const main = cs.filter((c) => c.ctx !== null);
+      runs.push({
+        id: `orchestrator:${name}`.slice(0, 40),
+        name: p.orchestrator,
+        role: p.orchestrator,
+        session: name,
+        task_ref: null,
+        task_refs: [],
+        model: main.at(-1)?.model ?? null,
+        effort: null,
+        started_at: cs[0]!.at,
+        ended_at: cs.at(-1)!.at,
+        resumed: false,
+        tokens: cs.reduce((n, c) => n + total(c.tokens), 0),
+        ctx: downsample(main.map((c) => c.ctx!)),
+      });
+    }
     const earlier = all.filter((w) => w.ended_at && sessions.get(w.id)!.name !== latestBuild).map((w) => this.ctxOf(w)).filter((c) => c.length > 0);
 
     const ref = p.backlog?.ref ?? (p.rebase ? `${p.rebase.remote}/${p.rebase.branch}` : "origin/main");

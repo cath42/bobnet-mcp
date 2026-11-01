@@ -83,7 +83,7 @@ Store this laptop's service token in the Keychain (account `bobnet`). Then creat
 }
 ```
 
-Next to it, create `supervisor.yaml` (projects and roles; see `packages/supervisor/src/config.ts`) and `policy.yaml` (approval rules; see `packages/supervisor/src/policy.ts`). For a project's boards, point it at a [Backlog.md](https://github.com/MrLesk/Backlog.md) backlog: `backlog: { dir: product/backlog }`. It is read from git at the rebase target (or `origin/main`), never from a worktree; a task's `build:<n>` (or `build:design`) label puts it in a build session, and a worker belongs to the session its brief names (`LAND-41 build 3`) and shows on the cards its spawn names (`spawn_worker`'s `tasks`). Then install the supervisor as a login service:
+Next to it, create `supervisor.yaml` (projects and roles; see `packages/supervisor/src/config.ts`) and `policy.yaml` (approval rules; see `packages/supervisor/src/policy.ts`). For a project's boards, point it at a [Backlog.md](https://github.com/MrLesk/Backlog.md) backlog: `backlog: { dir: product/backlog }`. It is read from git at the rebase target (or `origin/main`), never from a worktree; a task's `build:<n>` (or `build:design`) label puts it in a build session, and a worker belongs to the session its brief names (`LAND-41 build 3`) and shows on the cards its spawn names (`spawn_worker`'s `tasks`). Set a project's `orchestrator_dir` to the folder its orchestrator's Claude Code session runs in, and its usage shows in each session beside its workers'. Then install the supervisor as a login service:
 
 ```sh
 node packages/supervisor/src/bin.ts install-launchd

@@ -256,7 +256,7 @@ describe("dashboard", () => {
       done_counts: {},
       drafts: [],
     },
-    sessions: [{ name: "LAND-41 build 3", kind: "build", started_at: "2026-10-31T17:30:00Z", ended_at: null, workers: 2, calls: 120, tokens: { input: 1, output: 2, cache_read: 3, cache_write: 4 } }],
+    sessions: [{ name: "LAND-41 build 3", kind: "build", started_at: "2026-10-31T17:30:00Z", ended_at: null, workers: 2, calls: 120, tokens: { input: 1, output: 2, cache_read: 3, cache_write: 4 }, orchestrator: null }],
     runs: [],
     baseline: { runs: 0, p25: [], p50: [], p75: [] },
     commits: [],
