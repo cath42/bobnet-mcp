@@ -78,7 +78,6 @@ const Role = z.object({
   /** Auto-memory folder (its MEMORY.md is the index the worker loads); false turns memory off. */
   memory_dir: z.union([path, z.literal(false)]).optional(),
   env: Env,
-  max_runtime_minutes: z.number().positive().optional(),
   /** Where the worker may write; defaults to the git worktree that holds `dir`. */
   write_roots: z.array(path).optional(),
   /** Claude Code's OS sandbox for Bash; off only for roles that truly need it off. */
@@ -159,9 +158,11 @@ const SupervisorFile = z.object({
   name: z.string().refine(isValidSegment).default("supervisor"),
   team: z.string().refine(isValidSegment).optional(),
   concurrency: z.number().int().positive().default(3),
+  /** A worker with no events this long, between tool calls, is stuck: interrupted, asked for its handoff, the orchestrator told. */
   stall_minutes: z.number().positive().default(15),
+  /** The same for a tool call that runs this long with no output (a long verify is quiet; a hung one stays so). */
+  tool_stall_minutes: z.number().positive().default(45),
   request_timeout_minutes: z.number().positive().default(60),
-  max_runtime_minutes: z.number().positive().default(180),
   state_dir: path.default("~/.local/state/bobnet"),
   mcp_port: z.number().int().min(1024).max(65535).default(7425),
   /** Heavy runs (tests, probes, landing) at once on this laptop (ADR 0094 §2: one). */
@@ -196,7 +197,8 @@ export interface RoleConfig {
   /** undefined: Claude Code's default folder. */
   memoryDir: string | false | undefined;
   env: Record<string, string>;
-  maxRuntimeMinutes: number;
+  /** A consult's short life; a worker has none, only stuck detection. */
+  maxRuntimeMinutes?: number;
   writeRoots: string[];
   sandbox: boolean;
   purpose: string | undefined;
@@ -235,6 +237,7 @@ export interface SupervisorConfig {
   team: string | undefined;
   concurrency: number;
   stallMinutes: number;
+  toolStallMinutes: number;
   requestTimeoutMinutes: number;
   stateDir: string;
   mcpPort: number;
@@ -309,7 +312,6 @@ export function parseSupervisorConfig(
         mcpServers: pickMcp(`${pKey}.${rKey}`, r.mcp, () => readMcp(p.path)),
         memoryDir: r.memory_dir ?? p.memory_dir,
         env: { ...p.env, ...r.env },
-        maxRuntimeMinutes: r.max_runtime_minutes ?? file.max_runtime_minutes,
         writeRoots: r.write_roots ?? [resolveRoot(dir)],
         sandbox: r.sandbox ?? p.sandbox ?? true,
         purpose: r.purpose,
@@ -345,6 +347,7 @@ export function parseSupervisorConfig(
     team: file.team,
     concurrency: file.concurrency,
     stallMinutes: file.stall_minutes,
+    toolStallMinutes: file.tool_stall_minutes,
     requestTimeoutMinutes: file.request_timeout_minutes,
     stateDir: file.state_dir,
     mcpPort: file.mcp_port,

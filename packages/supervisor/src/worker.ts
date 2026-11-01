@@ -30,6 +30,8 @@ export type Outcome =
   | { state: "stopped"; reason: string };
 
 const GRACE_MS = 10_000;
+/** How long a stopped worker's last turn, for its handoff, may take. */
+const LAST_TURN_MS = 3 * 60_000;
 /** v0.1's server; workers use only the supervisor's in-process `bobnet` tools. */
 const ALWAYS_DISALLOWED = ["mcp__bobnet-mcp"];
 /**
@@ -98,6 +100,8 @@ export interface WorkerRunOptions {
   onEvent: (msg: SDKMessage) => void;
   /** A tool call has returned (or failed). */
   onToolResult?: (toolUseId: string) => void;
+  /** A turn was interrupted to hand the worker a message: its tool calls won't return. */
+  onInterrupted?: () => void;
   onExit: (outcome: Outcome) => void;
 }
 
@@ -126,6 +130,9 @@ export class WorkerRun {
   private stopReason: string | null = null;
   private result: Outcome | null = null;
   private runtimeTimer: NodeJS.Timeout | null = null;
+  /** The message an interrupted turn hands over: the next turn, not the end. */
+  private nextTurn: string | null = null;
+  private ending = false;
 
   constructor(opts: WorkerRunOptions) {
     this.opts = opts;
@@ -178,11 +185,10 @@ export class WorkerRun {
 
     this.input.push(this.opts.prompt);
     this.query = this.opts.queryFn({ prompt: this.input, options });
-    this.runtimeTimer = setTimeout(
-      () => void this.stop(`max runtime of ${role.maxRuntimeMinutes} minutes reached`),
-      role.maxRuntimeMinutes * 60_000,
-    );
-    this.runtimeTimer.unref();
+    if (role.maxRuntimeMinutes !== undefined) {
+      this.runtimeTimer = setTimeout(() => void this.stop(`max runtime of ${role.maxRuntimeMinutes} minutes reached`), role.maxRuntimeMinutes * 60_000);
+      this.runtimeTimer.unref();
+    }
     void this.consume();
   }
 
@@ -200,10 +206,43 @@ export class WorkerRun {
     this.input.push(text);
   }
 
-  /** Interrupts, then ends the session; kills it if it hasn't ended after a grace period. */
-  async stop(reason: string): Promise<void> {
+  /**
+   * Interrupts the turn in progress, a hung tool call with it, and hands the worker `text`
+   * as its next turn: the session goes on.
+   */
+  async nudge(text: string): Promise<void> {
     if (this.stopReason || this.result) return;
+    return this.interruptWith(text);
+  }
+
+  /**
+   * Stops the worker. With `lastTurn`, it first gets one turn, cut short after a few
+   * minutes, to write its handoff; without, the session ends now.
+   */
+  async stop(reason: string, lastTurn?: string): Promise<void> {
+    if (this.result) return;
+    // A stop with no last turn (a shutdown) ends one already in its last turn.
+    if (this.stopReason) return lastTurn ? undefined : this.end();
     this.stopReason = reason;
+    if (!lastTurn) return this.end();
+    setTimeout(() => void this.end(), LAST_TURN_MS).unref();
+    return this.interruptWith(lastTurn);
+  }
+
+  private async interruptWith(text: string): Promise<void> {
+    this.nextTurn = text;
+    try {
+      await this.query?.interrupt();
+    } catch {
+      // Already finished; the result ends it.
+    }
+  }
+
+  /** Interrupts, then ends the session; kills it if it hasn't ended after a grace period. */
+  private async end(): Promise<void> {
+    if (this.ending || this.result) return;
+    this.ending = true;
+    this.nextTurn = null;
     const kill = setTimeout(() => this.abort.abort(), GRACE_MS);
     kill.unref();
     try {
@@ -221,7 +260,13 @@ export class WorkerRun {
         this.write(msg);
         this.track(msg);
         this.opts.onEvent(msg);
-        if (msg.type === "result") {
+        if (msg.type === "result" && this.nextTurn !== null) {
+          // The interrupted turn's end: its tool calls are over, and the worker gets the message.
+          this.input.push(this.nextTurn);
+          this.nextTurn = null;
+          this.toolsInFlight = 0;
+          this.opts.onInterrupted?.();
+        } else if (msg.type === "result") {
           this.result =
             msg.subtype === "success"
               ? { state: "done", result: msg.result }

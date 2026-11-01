@@ -24,6 +24,8 @@ export class FakeSession implements QueryHandle {
         const c = m.message.content;
         this.inputs.push(typeof c === "string" ? c : JSON.stringify(c));
       }
+      // As the SDK: with its input closed, the session ends.
+      this.end();
     })();
     this.emit({ type: "system", subtype: "init", session_id: `sess-${Math.random().toString(36).slice(2, 8)}` } as unknown as SDKMessage);
   }
@@ -70,9 +72,10 @@ export class FakeSession implements QueryHandle {
     this.wake?.();
   }
 
+  /** As the SDK: the turn ends with a result, and the session waits for its next input. */
   async interrupt(): Promise<void> {
     this.interrupted = true;
-    this.end();
+    if (!this.ended) this.emit({ type: "result", subtype: "error_during_execution", modelUsage: {}, total_cost_usd: 0 } as unknown as SDKMessage);
   }
 
   close(): void {}

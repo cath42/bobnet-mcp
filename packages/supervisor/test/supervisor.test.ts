@@ -229,6 +229,8 @@ describe("lifecycle", () => {
     // A reset keeps what it ran on unless told otherwise.
     const again = await sup.reset(w.id, { effort: "xhigh" });
     expect(again).toMatchObject({ model: "opus", effort: "xhigh" });
+    await until(() => sessions[0]!.inputs.length === 2);
+    sessions[0]!.finish();
     await until(() => sessions.length === 2);
     expect(sessions[1]!.options).toMatchObject({ model: "opus", effort: "xhigh" });
     expect(broker.updates.at(-1)).toBe("Bill: LAND-41.1 · started on opus/xhigh (above the role's effort high)");
@@ -315,6 +317,11 @@ describe("lifecycle", () => {
     await until(() => sessions.length === 1);
     const fresh = await sup.reset(w.id);
     expect(sessions[0]!.interrupted).toBe(true);
+    // Its last turn is for its handoff; then it ends, as stopped.
+    await until(() => sessions[0]!.inputs.length === 2);
+    expect(sessions[0]!.inputs[1]).toMatch(/You are being stopped \(reset\)\. Write your checkpoint and your handoff \(.*w_\w+\.md\)/);
+    expect(sup.status(w.id).state).toBe("running");
+    sessions[0]!.finish();
     await until(() => sup.status(w.id).state === "stopped");
     await until(() => sessions.length === 2);
     expect(fresh.id).not.toBe(w.id);
@@ -626,6 +633,8 @@ describe("dashboard actions", () => {
     sup.onPush(action({ kind: "reset", worker: w.id }));
     await until(() => broker.results.length === 1);
     expect(broker.results[0]!.message).toMatch(new RegExp(`${w.id} reset; w_\\w+ starts fresh`));
+    await until(() => sessions[0]!.inputs.length === 2);
+    sessions[0]!.finish();
     await until(() => sessions.length === 2);
     const fresh = sup.list().at(-1)!;
     sup.onPush(action({ kind: "stop", worker: fresh.id }));

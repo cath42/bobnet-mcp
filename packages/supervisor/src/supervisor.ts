@@ -71,6 +71,10 @@ export class Supervisor {
   private readonly runs = new Map<string, WorkerRun>();
   private readonly checkpoints = new Map<string, string>();
   private readonly stallReported = new Set<string>();
+  /** Workers waiting on the supervisor itself (a slot, a land, a listed run), and how many waits: never stuck while they last. */
+  private readonly supervisorWaits = new Map<string, number>();
+  /** Interactive slot holds already reported as too long, by holder and start. */
+  private readonly longHolds = new Set<string>();
   /** One-shot approvals for a resumed worker: the call its earlier request asked for. */
   private readonly preapproved = new Map<string, Array<{ tool: string; input: string }>>();
   private stallTimer: NodeJS.Timeout | null = null;
@@ -260,7 +264,8 @@ export class Supervisor {
       const run = this.runs.get(id);
       if (!run) throw new SupervisorError(`Worker ${id} is ${w.state}, not running`);
       this.store.audit("orchestrator", "stop", id, { reason });
-      await run.stop(reason);
+      // A consult writes nothing; a worker gets a last turn for its handoff.
+      await run.stop(reason, w.task.startsWith("[Consult ") ? undefined : `You are being stopped (${reason}). Write your checkpoint and your handoff (${this.handoffOf(w)}) now, in this turn, and do nothing else; the session ends in a few minutes.`);
     }
     this.writeStatus();
     return this.store.worker(id)!;
@@ -560,7 +565,7 @@ export class Supervisor {
           effort: this.config.consultEffort ?? base.effort,
         }
       : { ...base, model: w.model ?? undefined, effort: (w.effort as Effort | null) ?? undefined };
-    const handoff = w.handoff ?? join(this.config.stateDir, "handoffs", w.project, `${w.id}.md`);
+    const handoff = this.handoffOf(w);
     const waiting = consult ? [] : this.store.waiting(w.project, w.role);
     const baseline = this.resumeBaseline(w.resume_session);
     this.baselines.set(w.id, baseline);
@@ -602,6 +607,7 @@ export class Supervisor {
         if (msg.type === "assistant" || msg.type === "result") this.report();
       },
       onToolResult: (toolUseId) => this.releaseCall(toolUseId),
+      onInterrupted: () => this.releaseCalls(w.id),
       onExit: (outcome) => this.onExit(w.id, outcome),
     });
 
@@ -699,7 +705,7 @@ export class Supervisor {
   /** Holds one tool call's run slot until its result; a call that already holds one (from the preflight) keeps it. */
   private async takeCallSlot(workerId: string, author: string, toolUseId: string, label: string, signal: AbortSignal): Promise<void> {
     if (this.slotCalls.has(toolUseId)) return;
-    const release = await this.slots.acquire(workerId, author, label, signal);
+    const release = await this.waitOn(workerId, () => this.slots.acquire(workerId, author, label, signal));
     this.slotCalls.set(toolUseId, { workerId, release });
     this.store.audit("supervisor", "slot", workerId, { label });
   }
@@ -711,6 +717,27 @@ export class Supervisor {
     call.release();
   }
 
+  private releaseCalls(workerId: string): void {
+    for (const [toolUseId, call] of this.slotCalls) if (call.workerId === workerId) this.releaseCall(toolUseId);
+  }
+
+  /**
+   * Runs `wait` as a wait on the supervisor itself (a slot, a land, a rebase, a listed run):
+   * the worker isn't stuck while it lasts, and its quiet counts from the end.
+   */
+  private async waitOn<T>(workerId: string, wait: () => Promise<T>): Promise<T> {
+    this.supervisorWaits.set(workerId, (this.supervisorWaits.get(workerId) ?? 0) + 1);
+    try {
+      return await wait();
+    } finally {
+      const n = this.supervisorWaits.get(workerId)! - 1;
+      if (n > 0) this.supervisorWaits.set(workerId, n);
+      else this.supervisorWaits.delete(workerId);
+      const run = this.runs.get(workerId);
+      if (run) run.lastEventAt = Date.now();
+    }
+  }
+
   // ---------- Landing ----------
 
   /**
@@ -720,8 +747,7 @@ export class Supervisor {
    */
   land(workerId: string): Promise<{ ok: boolean; output: string }> {
     if (this.landing.has(workerId)) return Promise.reject(new SupervisorError("A land is already running for you; wait for its result"));
-    const p = this.doLand(workerId)
-      .then((r) => (r.landed ? this.rebaseAfterLand(workerId, r.output) : r))
+    const p = this.waitOn(workerId, () => this.doLand(workerId).then((r) => (r.landed ? this.rebaseAfterLand(workerId, r.output) : r)))
       .finally(() => this.landing.delete(workerId));
     this.landing.set(workerId, p);
     return p;
@@ -769,7 +795,6 @@ export class Supervisor {
     const missing = land.requiresEnv.filter((k) => !env[k]);
     if (missing.length > 0) return refuse(`Precondition: ${missing.join(", ")} must be set (the Postgres environment). Ask ${project.orchestrator}; the local database may be down.`);
 
-    const run = this.runs.get(workerId);
     const waiting = new AbortController();
     this.landWaits.set(workerId, waiting);
     let release: () => void;
@@ -796,7 +821,6 @@ export class Supervisor {
       return { ok, landed: ok, output: `${land.command.join(" ")} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
     } finally {
       release();
-      if (run) run.lastEventAt = Date.now();
     }
   }
 
@@ -807,7 +831,7 @@ export class Supervisor {
    */
   rebase(workerId: string): Promise<{ ok: boolean; output: string }> {
     if (this.landing.has(workerId)) return Promise.reject(new SupervisorError("A land or rebase is already running for you; wait for its result"));
-    const p = this.doRebase(workerId).finally(() => this.landing.delete(workerId));
+    const p = this.waitOn(workerId, () => this.doRebase(workerId)).finally(() => this.landing.delete(workerId));
     this.landing.set(workerId, p);
     return p;
   }
@@ -834,25 +858,20 @@ export class Supervisor {
     const fetched = await runCommand(["git", "fetch", rebase.remote, rebase.branch], worktree, env, 120_000);
     if (fetched.code !== 0) return refuse(`git fetch ${rebase.remote} ${rebase.branch} failed (exit ${fetched.code}):\n${fetched.output.slice(-2000)}`);
     const before = await git(worktree, ["rev-parse", "HEAD"]);
-    const run = this.runs.get(workerId);
-    try {
-      const r = await runCommand(["git", "rebase", onto], worktree, env, 300_000);
-      if (r.code !== 0) {
-        const conflicts = await git(worktree, ["diff", "--name-only", "--diff-filter=U"]).catch(() => "");
-        await runCommand(["git", "rebase", "--abort"], worktree, env, 60_000);
-        this.store.audit("supervisor", "rebase:failed", workerId, { code: r.code, head: before });
-        return {
-          ok: false,
-          output: `Not rebased: git rebase ${onto} ${r.timedOut ? "timed out" : `exited ${r.code}`}, so it was aborted and ${branch} is still at ${before.slice(0, 8)}.` +
-            `${conflicts ? `\nConflicts in:\n${conflicts}` : ""}\n\n${r.output.slice(-4000)}`,
-        };
-      }
-      const after = await git(worktree, ["rev-parse", "HEAD"]);
-      this.store.audit("supervisor", "rebase:ok", workerId, { before, after });
-      return { ok: true, output: `Rebased ${branch} onto ${onto}: ${before.slice(0, 8)} → ${after.slice(0, 8)}\n\n${r.output.slice(-2000)}` };
-    } finally {
-      if (run) run.lastEventAt = Date.now();
+    const r = await runCommand(["git", "rebase", onto], worktree, env, 300_000);
+    if (r.code !== 0) {
+      const conflicts = await git(worktree, ["diff", "--name-only", "--diff-filter=U"]).catch(() => "");
+      await runCommand(["git", "rebase", "--abort"], worktree, env, 60_000);
+      this.store.audit("supervisor", "rebase:failed", workerId, { code: r.code, head: before });
+      return {
+        ok: false,
+        output: `Not rebased: git rebase ${onto} ${r.timedOut ? "timed out" : `exited ${r.code}`}, so it was aborted and ${branch} is still at ${before.slice(0, 8)}.` +
+          `${conflicts ? `\nConflicts in:\n${conflicts}` : ""}\n\n${r.output.slice(-4000)}`,
+      };
     }
+    const after = await git(worktree, ["rev-parse", "HEAD"]);
+    this.store.audit("supervisor", "rebase:ok", workerId, { before, after });
+    return { ok: true, output: `Rebased ${branch} onto ${onto}: ${before.slice(0, 8)} → ${after.slice(0, 8)}\n\n${r.output.slice(-2000)}` };
   }
 
   // ---------- Listed runs ----------
@@ -866,7 +885,11 @@ export class Supervisor {
    * it): in the worker's worktree, with its environment, in a run slot. Only listed
    * commands, only arguments their pattern allows, and none that reach outside the tree.
    */
-  async runListed(workerId: string, name: string, args: string[]): Promise<{ ok: boolean; output: string }> {
+  runListed(workerId: string, name: string, args: string[]): Promise<{ ok: boolean; output: string }> {
+    return this.waitOn(workerId, () => this.doRunListed(workerId, name, args));
+  }
+
+  private async doRunListed(workerId: string, name: string, args: string[]): Promise<{ ok: boolean; output: string }> {
     const w = this.worker(workerId);
     const role = this.roleOf(w);
     const spec = this.runsFor(this.project(w.project), w.role).find((r) => r.name === name);
@@ -895,7 +918,6 @@ export class Supervisor {
         waits.delete(waiting);
       }
     }
-    const run = this.runs.get(workerId);
     this.store.audit("supervisor", "run:start", workerId, { name, args });
     try {
       const r = await runCommand([...spec.command, ...args], cwd, env, spec.timeoutMinutes * 60_000);
@@ -905,7 +927,6 @@ export class Supervisor {
       return { ok, output: `${name} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
     } finally {
       release();
-      if (run) run.lastEventAt = Date.now();
     }
   }
 
@@ -975,7 +996,7 @@ export class Supervisor {
     if (exited) this.roleStatus(this.roleOf(exited), this.activeRun(exited.project, exited.role));
     this.preapproved.delete(id);
     this.stallReported.delete(id);
-    for (const [toolUseId, call] of this.slotCalls) if (call.workerId === id) this.releaseCall(toolUseId);
+    this.releaseCalls(id);
     this.landWaits.get(id)?.abort();
     for (const c of this.runWaits.get(id) ?? []) c.abort();
     this.runWaits.delete(id);
@@ -1029,16 +1050,43 @@ export class Supervisor {
     this.schedule();
   }
 
+  /**
+   * Stuck is no progress, not a long run: a worker quiet for stall_minutes between tool calls,
+   * or for tool_stall_minutes in one, and waiting on nothing the supervisor knows of. A wait on
+   * the supervisor (a slot, a land, a request) is progress; if the slot's queue stops, its holder
+   * is the stuck one. A stuck worker is interrupted and asked for its handoff, and goes on.
+   */
   private checkStalls(): void {
-    const limit = this.config.stallMinutes * 60_000;
     for (const [id, run] of this.runs) {
-      if (this.stallReported.has(id) || run.toolsInFlight > 0 || this.router.isWaiting(id)) continue;
-      if (Date.now() - run.lastEventAt < limit) continue;
+      if (this.stallReported.has(id) || this.supervisorWaits.has(id) || this.router.isWaiting(id)) continue;
+      const inTool = run.toolsInFlight > 0;
+      const quiet = Date.now() - run.lastEventAt;
+      if (quiet < (inTool ? this.config.toolStallMinutes : this.config.stallMinutes) * 60_000) continue;
       this.stallReported.add(id);
       const w = this.store.worker(id)!;
-      this.store.audit("supervisor", "stalled", id, {});
-      this.notify(`${this.roleOf(w).name} (${id}) has produced no events for ${this.config.stallMinutes} minutes and isn't waiting on a tool or a request. Check tail_worker, or stop or reset it.`, w.project);
+      const minutes = Math.round(quiet / 60_000);
+      const what = inTool ? `a tool call ran ${minutes} minutes with no output` : `nothing happened for ${minutes} minutes`;
+      this.store.audit("supervisor", "stalled", id, { minutes, in_tool: inTool });
+      void run.nudge(
+        `The supervisor interrupted you because you looked stuck: ${what}${inTool ? "; that call was stopped" : ""}. ` +
+          `Write your checkpoint and your handoff (${this.handoffOf(w)}) now, saying what was stuck, then carry on if you can.`,
+      );
+      this.notify(`${this.roleOf(w).name} (${id}) looked stuck: ${what}. I interrupted it and asked for its checkpoint and handoff; it carries on if it can. If it doesn't recover, check tail_worker, then stop or reset it.`, w.project);
     }
+    // An interactive agent's slot has no run to watch: its orchestrator hears when it has held it long.
+    for (const e of this.slots.status().holders) {
+      const key = `${e.holder} ${e.since}`;
+      if (!e.holder.startsWith("interactive:") || this.longHolds.has(key)) continue;
+      if (Date.now() - Date.parse(e.since) < this.config.toolStallMinutes * 60_000) continue;
+      this.longHolds.add(key);
+      const name = e.holder.slice("interactive:".length);
+      const waiting = this.slots.status().queue.length;
+      this.notify(`${name} has held the run slot for ${this.config.toolStallMinutes}+ minutes (${e.label})${waiting ? `; ${waiting} wait behind it` : ""}. If it's done or stuck, free it with free_slot.`, this.interactive.get(name));
+    }
+  }
+
+  private handoffOf(w: WorkerRow): string {
+    return w.handoff ?? join(this.config.stateDir, "handoffs", w.project, `${w.id}.md`);
   }
 
   // ---------- Helpers ----------

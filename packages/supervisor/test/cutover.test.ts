@@ -215,6 +215,68 @@ describe("run slots and the hold", () => {
   });
 });
 
+describe("stuck workers", () => {
+  // The supervisor's own clock, wound on: a worker last heard from `minutes` ago, then the minute's check.
+  type Inner = { runs: Map<string, { lastEventAt: number }>; slots: { holders: Array<{ since: string }> }; checkStalls(): void };
+  const inner = (sup: Supervisor) => sup as unknown as Inner;
+  const quietFor = (sup: Supervisor, id: string, minutes: number) => {
+    inner(sup).runs.get(id)!.lastEventAt = Date.now() - minutes * 60_000;
+    inner(sup).checkStalls();
+  };
+  const toolUse = (s: { emit(m: SDKMessage): void }, id: string) =>
+    s.emit({ type: "assistant", message: { id: `msg_${id}`, content: [{ type: "tool_use", id, name: "Bash", input: {} }], usage: { input_tokens: 1, output_tokens: 1 } } } as unknown as SDKMessage);
+
+  it("interrupts a worker quiet past stall_minutes, asks for its handoff, tells the orchestrator, and lets it go on", async () => {
+    const { sup, broker, sessions } = await setup();
+    const w = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions[0]?.inputs.length === 1);
+    quietFor(sup, w.id, 14);
+    expect(sessions[0]!.interrupted).toBe(false);
+    quietFor(sup, w.id, 16);
+    await until(() => sessions[0]!.inputs.length === 2);
+    expect(sessions[0]!.inputs[1]).toMatch(/looked stuck: nothing happened for 16 minutes\. Write your checkpoint and your handoff \(.*\.md\)/);
+    expect(broker.toOrchestrator().at(-1)).toMatch(new RegExp(`^Bill \\(${w.id}\\) looked stuck: nothing happened for 16 minutes\\. I interrupted it`));
+    expect(sup.status(w.id).state).toBe("running");
+    expect(store.auditLog(5).find((a) => a.action === "stalled")?.detail).toBe(JSON.stringify({ minutes: 16, in_tool: false }));
+  });
+
+  it("gives a tool call tool_stall_minutes, and never counts a wait for the slot; the stuck holder's slot goes on", async () => {
+    const { sup, sessions } = await setup();
+    const bill = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    const homer = sup.spawn({ project: "helix", role: "homer", task: "t" });
+    await until(() => sessions.length === 2);
+    toolUse(sessions[0]!, "tu1");
+    await sessions[0]!.askCall("tu1", "Bash", { command: "pnpm test" });
+    toolUse(sessions[1]!, "tu2");
+    let homerGot = false;
+    void sessions[1]!.askCall("tu2", "Bash", { command: "pnpm test" }).then(() => (homerGot = true));
+    await tick(20);
+    quietFor(sup, homer.id, 120);
+    expect(sessions[1]!.interrupted).toBe(false);
+    quietFor(sup, bill.id, 30);
+    expect(sessions[0]!.interrupted).toBe(false);
+    quietFor(sup, bill.id, 50);
+    expect(sessions[0]!.interrupted).toBe(true);
+    await until(() => sessions[0]!.inputs.length === 2);
+    expect(sessions[0]!.inputs[1]).toMatch(/a tool call ran 50 minutes with no output; that call was stopped/);
+    // Its interrupted call gives up the slot, and Homer's quiet counts from when it got it.
+    await until(() => homerGot);
+    expect(Date.now() - inner(sup).runs.get(homer.id)!.lastEventAt).toBeLessThan(5_000);
+  });
+
+  it("tells the orchestrator once when an interactive agent has held the slot past tool_stall_minutes", async () => {
+    const { sup, broker } = await setup();
+    sup.takeSlot("helix", "Marvin", "e2e on staging");
+    await until(() => broker.toOrchestrator().some((b) => b.startsWith("Run slot given to Marvin")));
+    inner(sup).checkStalls();
+    expect(broker.toOrchestrator().some((b) => b.includes("has held the run slot"))).toBe(false);
+    inner(sup).slots.holders[0]!.since = new Date(Date.now() - 50 * 60_000).toISOString();
+    inner(sup).checkStalls();
+    inner(sup).checkStalls();
+    expect(broker.toOrchestrator().filter((b) => b.startsWith("Marvin has held the run slot for 45+ minutes (e2e on staging)"))).toHaveLength(1);
+  });
+});
+
 describe("land", () => {
   function repo(): { worktree: string; script: string } {
     const worktree = join(dir, "helix-homer");
