@@ -567,7 +567,9 @@ const KIND = { build: "var(--k-build)", design: "var(--k-design)", review: "var(
 const shortSession = (ss) => (ss.kind === "build" ? `b${ss.name.split(" ").at(-1)}` : ss.kind === "other" ? "other" : ss.kind.slice(0, 3));
 
 function sessionBars(b) {
-  const xs = b.sessions.slice(-state.last);
+  // Other work spans everything between sessions: as a bar it would set the scale for all the rest.
+  const sessions = b.sessions.filter((x) => x.kind !== "other");
+  const xs = sessions.slice(-state.last);
   const max = Math.max(1, ...xs.map((ss) => totalTokens(ss.tokens)));
   const step = niceStep(max), top = Math.ceil(max / step) * step;
   const yt = Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step);
@@ -601,12 +603,12 @@ function sessionBars(b) {
     g.addEventListener("pointerleave", hide); g.addEventListener("blur", hide);
     svg.append(g);
   });
-  const kinds = new Set(b.sessions.map((x) => x.kind));
+  const kinds = new Set(sessions.map((x) => x.kind));
   const pick = (n) => h("button", { type: "button", "aria-pressed": String(state.last === n), onclick: () => { state.last = n; render(); } }, `Last ${n}`);
-  wrap.append(h("div", { class: "bar-row", style: "margin:0" }, h("span", { class: "seg" }, pick(10), pick(20), pick(50)), h("span", { class: "muted" }, `${b.sessions.length} sessions on record`)),
+  wrap.append(h("div", { class: "bar-row", style: "margin:0" }, h("span", { class: "seg" }, pick(10), pick(20), pick(50)), h("span", { class: "muted" }, `${sessions.length} sessions on record`)),
     svg,
-    h("div", { class: "key" }, ["build", "design", "review", "retro", "other"].map((k) => h("span", { style: kinds.has(k) ? "" : "opacity:.55" }, h("i", { class: "band", style: `--k:${KIND[k]};opacity:1;width:10px;height:10px;border-radius:2px` }), k === "other" ? "other work" : k))),
-    h("div", { class: "note", style: "margin:0" }, "Each session's tokens, cache reads included. A worker belongs to the session its brief names, else to the one running when it started."), tip);
+    h("div", { class: "key" }, ["build", "design", "review", "retro"].map((k) => h("span", { style: kinds.has(k) ? "" : "opacity:.55" }, h("i", { class: "band", style: `--k:${KIND[k]};opacity:1;width:10px;height:10px;border-radius:2px` }), k))),
+    h("div", { class: "note", style: "margin:0" }, "Each session's tokens, cache reads included. A worker belongs to the session its brief names, else to the one running when it started; work outside any session isn't shown."), tip);
   return wrap;
 }
 

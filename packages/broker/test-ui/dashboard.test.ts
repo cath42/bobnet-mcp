@@ -326,6 +326,7 @@ describe("the orchestrator's usage", () => {
     const ws = FakeSocket.last;
     const next = structuredClone(board) as typeof board & { sessions: Array<Record<string, unknown>> };
     next.sessions[2]!.orchestrator = { name: "Bob", calls: 40, tokens: 7_000_000 };
+    next.sessions.unshift({ name: "Other work", kind: "other", started_at: iso(2000), ended_at: iso(1), workers: 0, calls: 9000, tokens: tokens(2_000_000_000), orchestrator: { name: "Bob", calls: 9000, tokens: 2_000_000_000 } });
     next.runs.push({ id: "orchestrator:LAND-41 build 3", name: "Bob", role: "Bob", session: "LAND-41 build 3", task_ref: null, model: "claude-opus-5-5", effort: null as never, started_at: iso(200), ended_at: iso(1), resumed: false, tokens: 7_000_000, ctx: [40000, 90000] });
     ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board: next });
     await go("#usage");
@@ -333,6 +334,9 @@ describe("the orchestrator's usage", () => {
     const bob = [...$("roles").querySelectorAll("tbody tr")].find((r) => r.textContent!.includes("Bob"))!;
     expect(bob.textContent).toContain("7.0M");
     expect(bob.querySelector('[data-label="Calls"]')!.textContent).toBe("2");
+    // Other work sets no scale: it has no bar.
+    expect(view().querySelectorAll('svg[aria-label="Tokens per session"] path')).toHaveLength(3);
+    expect(view().querySelector('svg[aria-label="Tokens per session"]')!.textContent).not.toContain("other");
     ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board });
     await settle();
   });
