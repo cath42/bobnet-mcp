@@ -211,8 +211,9 @@ function lanesOf(b, m, inc) {
     const key = ss.name.slice(prefix.length);
     for (const r of sessionRuns(b, ss.name)) for (const id of refsOf(r)) if (ks.some((k) => k.id === id) && !ks.find((k) => k.id === id).labels.some((v) => v.startsWith("build:"))) place.set(id, key);
   }
-  const order = (k) => (k === "design" ? -1 : Number(k.split(" ")[1]) || 0);
-  const keys = [...new Set(place.values())].sort((a, c) => order(a) - order(c));
+  // In the order the sessions started, design first; a lane only a build:<n> label names goes after them.
+  const order = (k) => (k === "design" ? "" : sessions.find((x) => x.name === `${prefix}${k}`)?.started_at ?? `~${k}`);
+  const keys = [...new Set(place.values())].sort((a, c) => (order(a) < order(c) ? -1 : order(a) > order(c) ? 1 : 0));
   const lanes = keys.map((key) => {
     const ids = ks.filter((k) => place.get(k.id) === key).map((k) => k.id);
     const ss = sessions.find((x) => x.name === `${prefix}${key}`);

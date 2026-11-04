@@ -32,7 +32,20 @@ export interface Session {
 
 const SESSION_RE = /\b([A-Z][A-Z0-9]*-\d+) (design|build|review|retro)\b(?: session)?(?: (\d+))?/i;
 
-/** The session a brief names: "LAND-41 build 3", "LAND-41 design session". A build with no number is build 1. */
+/** A session as a spawn declares it: its feature, kind and the label the orchestrator calls it by ("3", "B"). */
+export interface DeclaredSession {
+  feature: string;
+  kind: "design" | "build" | "review" | "retro";
+  label?: string;
+}
+
+/** A declared session's name, its label as given: "LAND-43 build B", "LAND-43 design". */
+export const sessionName = (d: DeclaredSession) => `${d.feature} ${d.kind}${d.label ? ` ${d.label}` : ""}`;
+
+/**
+ * The session a brief names: "LAND-41 build 3", "LAND-41 design session". A build with no number is
+ * build 1. Only for a worker spawned before spawns declared their session.
+ */
 export function namedSession(task: string): Session | null {
   const m = SESSION_RE.exec(task);
   if (!m) return null;
@@ -41,18 +54,26 @@ export function namedSession(task: string): Session | null {
   return { name: `${m[1]!.toUpperCase()} ${kind}${n ? ` ${n}` : ""}`, kind };
 }
 
+const OTHER: Session = { name: "Other work", kind: "other" };
+
 /**
- * Every worker's session. One whose brief names none (a consult, a fix between sessions) belongs to
- * the session that was last active in its project when it started, or to "Other work".
+ * Every worker's session: the one its spawn declared, or "Other work" for none. A worker spawned
+ * before spawns declared one keeps how it was read then: the session its brief names, else the one
+ * last active in its project when it started, else "Other work".
  */
 export function assignSessions(workers: WorkerRow[]): Map<string, Session> {
   const out = new Map<string, Session>();
   const last = new Map<string, { s: Session; at: number }>();
   for (const w of [...workers].sort((a, b) => a.created_at.localeCompare(b.created_at))) {
-    const named = namedSession(w.task);
     const at = Date.parse(w.created_at);
-    const prev = last.get(w.project);
-    const s = named ?? (prev && at - prev.at <= SESSION_GAP_MS ? prev.s : { name: "Other work", kind: "other" as const });
+    let s: Session;
+    if (w.declared_session !== null) {
+      const d = JSON.parse(w.declared_session) as DeclaredSession | null;
+      s = d ? { name: sessionName(d), kind: d.kind } : OTHER;
+    } else {
+      const prev = last.get(w.project);
+      s = namedSession(w.task) ?? (prev && at - prev.at <= SESSION_GAP_MS ? prev.s : OTHER);
+    }
     out.set(w.id, s);
     if (s.kind !== "other") last.set(w.project, { s, at: Math.max(at, Date.parse(w.ended_at ?? w.created_at)) });
   }

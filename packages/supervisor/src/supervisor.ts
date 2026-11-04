@@ -9,7 +9,7 @@ import type { PushFrame, RequestFrame } from "@bobnet/client/connection";
 import type { Logger } from "@bobnet/client/log";
 import type { OwnerCheck } from "./owner.ts";
 import { EFFORTS, type Effort, type ProjectConfig, type RoleConfig, type RunConfig, type SupervisorConfig } from "./config.ts";
-import { assignSessions, Boards, workerTasks } from "./board.ts";
+import { assignSessions, Boards, type DeclaredSession, workerTasks } from "./board.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
@@ -221,8 +221,22 @@ export class Supervisor {
 
   // ---------- Orchestrator API ----------
 
-  /** `tasks` null: not known, for a worker carried over from one spawned before spawns named them. */
-  spawn(opts: { project: string; role: string; task: string; tasks?: string[] | null; handoff?: string; resume_session?: string; model?: string; effort?: Effort }): WorkerRow & { note?: string } {
+  /**
+   * `tasks` null: not known, for a worker carried over from one spawned before spawns named them.
+   * `session` null: in none ("Other work"). `carrySession` is a carried-over worker's, as stored.
+   */
+  spawn(opts: {
+    project: string;
+    role: string;
+    task: string;
+    tasks?: string[] | null;
+    session?: DeclaredSession | null;
+    carrySession?: string | null;
+    handoff?: string;
+    resume_session?: string;
+    model?: string;
+    effort?: Effort;
+  }): WorkerRow & { note?: string } {
     const project = this.project(opts.project);
     const role = this.role(opts.project, opts.role);
     // The board shows a worker on the items its spawn names, and guesses none from the brief.
@@ -232,6 +246,17 @@ export class Supervisor {
     const bad = (opts.tasks ?? []).filter((t) => !TASK_ID.test(t));
     if (bad.length) throw new SupervisorError(`not backlog ids: ${bad.join(", ")} (e.g. LAND-41 or LAND-41.3)`);
     const tasks = opts.tasks ? [...new Set(opts.tasks.map((t) => t.toUpperCase()))] : null;
+    // The session is declared, never read from the brief: the board shows the worker in it.
+    if (opts.carrySession === undefined && opts.session === undefined && project.backlog) {
+      throw new SupervisorError(`${project.key} has a backlog: say which session this worker is in, session: { feature: "LAND-43", kind: "build", label: "B" } (kind design, build, review or retro; label as you call it), or null for none`);
+    }
+    const d = opts.session;
+    if (d) {
+      if (!FEATURE_ID.test(d.feature)) throw new SupervisorError(`session.feature ${JSON.stringify(d.feature)} isn't a feature id (e.g. LAND-43)`);
+      if (!SESSION_KINDS.includes(d.kind)) throw new SupervisorError(`session.kind is one of ${SESSION_KINDS.join(", ")}`);
+      if (d.label !== undefined && !SESSION_LABEL.test(d.label)) throw new SupervisorError(`session.label ${JSON.stringify(d.label)}: up to 20 letters, digits, . _ or -`);
+    }
+    const declared = opts.carrySession !== undefined ? opts.carrySession : JSON.stringify(d ? { feature: d.feature.toUpperCase(), kind: d.kind, ...(d.label ? { label: d.label } : {}) } : null);
     if (opts.model !== undefined && role.models && !role.models.includes(opts.model)) {
       throw new SupervisorError(`${role.name} may run on ${role.models.join(", ")}, not ${opts.model}`);
     }
@@ -248,8 +273,9 @@ export class Supervisor {
       priority: project.priority,
       resume_session: opts.resume_session ?? null,
       tasks,
+      declared_session: declared,
     });
-    this.store.audit("orchestrator", "spawn", w.id, { project: w.project, role: w.role, tasks, resume: w.resume_session, model: w.model, effort: w.effort });
+    this.store.audit("orchestrator", "spawn", w.id, { project: w.project, role: w.role, tasks, session: declared, resume: w.resume_session, model: w.model, effort: w.effort });
     this.schedule();
     const row = this.store.worker(w.id)!;
     const note = row.state === "queued" ? this.queuedBecause(row) : undefined;
@@ -286,7 +312,7 @@ export class Supervisor {
     if (this.runs.has(id) || w.state === "queued") await this.stop(id, "reset");
     const model = power.model ?? w.model ?? undefined;
     const effort = power.effort ?? (w.effort as Effort | null) ?? undefined;
-    return this.spawn({ project: w.project, role: w.role, task: w.task, tasks: storedTasks(w), ...(w.handoff ? { handoff: w.handoff } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
+    return this.spawn({ project: w.project, role: w.role, task: w.task, tasks: storedTasks(w), carrySession: w.declared_session, ...(w.handoff ? { handoff: w.handoff } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
   }
 
   /** Live workers (queued or running) unless `all`, tasks cut short: the full history is too big for a tool result. */
@@ -382,6 +408,7 @@ export class Supervisor {
       role: w.role,
       task: resumeTask(request, answer),
       tasks: storedTasks(w),
+      carrySession: w.declared_session,
       ...(w.handoff ? { handoff: w.handoff } : {}),
       resume_session: w.session_id,
     });
@@ -983,7 +1010,8 @@ export class Supervisor {
         this.runs.get(running)!.inject(ask);
         return;
       }
-      const w = this.store.createWorker({ project: project.key, role: roleKey, task: ask, handoff: null, priority: 0, resume_session: null });
+      // In the asker's session, on no items: nothing read from the question.
+      const w = this.store.createWorker({ project: project.key, role: roleKey, task: ask, handoff: null, priority: 0, resume_session: null, tasks: [], declared_session: this.worker(fromId).declared_session ?? "null" });
       c.target = w.id;
       this.launch(w, c);
     });
@@ -1522,6 +1550,9 @@ const MODEL_TIERS = ["haiku", "sonnet", "opus"];
 const modelTier = (m: string | null | undefined) => (m ? MODEL_TIERS.findIndex((t) => m.toLowerCase().includes(t)) : -1);
 
 const TASK_ID = /^[A-Z][A-Z0-9]*-\d+(\.\d+)*$/i;
+const FEATURE_ID = /^[A-Z][A-Z0-9]*-\d+$/i;
+const SESSION_KINDS: readonly string[] = ["design", "build", "review", "retro"];
+const SESSION_LABEL = /^[A-Za-z0-9][\w.-]{0,19}$/;
 
 /** The items a worker's spawn named, for a worker that carries on its task; null if its spawn named none. */
 const storedTasks = (w: WorkerRow): string[] | null => (w.tasks === null ? null : (JSON.parse(w.tasks) as string[]));

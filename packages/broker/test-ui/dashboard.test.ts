@@ -321,6 +321,33 @@ describe("a review session", () => {
   });
 });
 
+describe("build lanes", () => {
+  it("follow the order their sessions started, labels as declared", async () => {
+    const ws = FakeSocket.last;
+    const next = structuredClone(board) as typeof board & { sessions: Array<Record<string, unknown>> };
+    next.backlog.items.push(item("LAND-41.30", "Ready", { title: "a task of build A" }), item("LAND-41.31", "Ready", { title: "a task of build B" }));
+    next.sessions.push(
+      { name: "LAND-41 build A", kind: "build", started_at: iso(100), ended_at: iso(60), workers: 1, calls: 5, tokens: tokens(1_000_000) },
+      { name: "LAND-41 build B", kind: "build", started_at: iso(50), ended_at: null, workers: 1, calls: 5, tokens: tokens(1_000_000) },
+    );
+    next.runs.push(
+      { id: "w_b", name: "records-agent", role: "records", session: "LAND-41 build B", task_ref: "LAND-41.31", model: "opus", effort: "high", started_at: iso(50), ended_at: iso(40), resumed: false, tokens: 1, ctx: [1] },
+      { id: "w_a", name: "records-agent", role: "records", session: "LAND-41 build A", task_ref: "LAND-41.30", model: "opus", effort: "high", started_at: iso(100), ended_at: iso(60), resumed: false, tokens: 1, ctx: [1] },
+    );
+    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board: next });
+    await go("#feature");
+    const pick = $("inc-pick") as HTMLSelectElement;
+    pick.value = "LAND-41";
+    pick.dispatchEvent(new Event("change"));
+    await settle();
+    const titles = [...view().querySelectorAll(".lane-h b")].map((x) => x.textContent).filter((t) => /^Build/.test(t!));
+    // Build 4 is only a build:4 label, no session yet: after them.
+    expect(titles).toEqual(["Build 3", "Build A", "Build B", "Build 4"]);
+    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board });
+    await settle();
+  });
+});
+
 describe("the orchestrator's usage", () => {
   it("shows the orchestrator as a row beside its workers in the session", async () => {
     const ws = FakeSocket.last;

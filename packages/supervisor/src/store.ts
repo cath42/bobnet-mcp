@@ -37,6 +37,8 @@ export interface WorkerRow {
   ctx: string | null;
   /** JSON array: the backlog ids the spawner said it works on; null for a worker spawned before spawns said. */
   tasks: string | null;
+  /** JSON: the session its spawn declared ({ feature, kind, label? }), or "null" for none; SQL null for a worker spawned before spawns declared one. */
+  declared_session: string | null;
 }
 
 export type RequestKind = "approval" | "question";
@@ -112,6 +114,7 @@ export class Store {
     if (!cols.has("effort")) this.db.exec("ALTER TABLE workers ADD COLUMN effort TEXT");
     if (!cols.has("ctx")) this.db.exec("ALTER TABLE workers ADD COLUMN ctx TEXT");
     if (!cols.has("tasks")) this.db.exec("ALTER TABLE workers ADD COLUMN tasks TEXT");
+    if (!cols.has("declared_session")) this.db.exec("ALTER TABLE workers ADD COLUMN declared_session TEXT");
   }
 
   close(): void {
@@ -142,12 +145,14 @@ export class Store {
     model?: string | null;
     effort?: string | null;
     tasks?: string[] | null;
+    /** Already JSON, as stored. */
+    declared_session?: string | null;
   }): WorkerRow {
     const id = `w_${randomUUID().slice(0, 8)}`;
     this.run(
-      `INSERT INTO workers (id, project, role, task, handoff, state, priority, resume_session, model, effort, tasks, created_at)
-       VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
-      id, w.project, w.role, w.task, w.handoff, w.priority, w.resume_session, w.model ?? null, w.effort ?? null, w.tasks ? JSON.stringify(w.tasks) : null, now(),
+      `INSERT INTO workers (id, project, role, task, handoff, state, priority, resume_session, model, effort, tasks, declared_session, created_at)
+       VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
+      id, w.project, w.role, w.task, w.handoff, w.priority, w.resume_session, w.model ?? null, w.effort ?? null, w.tasks ? JSON.stringify(w.tasks) : null, w.declared_session ?? null, now(),
     );
     return this.worker(id)!;
   }

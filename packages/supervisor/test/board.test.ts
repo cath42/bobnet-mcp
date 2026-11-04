@@ -11,7 +11,7 @@ import { quiet } from "./fakes.ts";
 
 const row = (over: Partial<WorkerRow>): WorkerRow => ({
   id: "w_x", project: "helix", role: "homer", task: "", handoff: null, state: "done", priority: 1, resume_session: null, session_id: null,
-  checkpoint: null, error: null, created_at: "2026-10-31T10:00:00.000Z", started_at: null, ended_at: null, last_event_at: null, tasks: null,
+  checkpoint: null, error: null, created_at: "2026-10-31T10:00:00.000Z", started_at: null, ended_at: null, last_event_at: null, tasks: null, declared_session: null,
   usage: null, model: null, effort: null, ctx: null, ...over,
 });
 
@@ -22,6 +22,17 @@ describe("sessions", () => {
     expect(namedSession("Bob's brief, LAND-41 build (2026-10-31). Fresh worker.")).toEqual({ name: "LAND-41 build 1", kind: "build" });
     expect(namedSession("land-42 review session: tier 3")).toEqual({ name: "LAND-42 review", kind: "review" });
     expect(namedSession("Fix the red main")).toBeNull();
+  });
+
+  it("puts a worker in the session its spawn declared, whatever its brief says; none is Other work", () => {
+    const ws = [
+      row({ id: "a", task: "LAND-43 build A, then on to build 3", declared_session: JSON.stringify({ feature: "LAND-43", kind: "build", label: "B" }), created_at: "2026-11-04T00:00:00Z" }),
+      row({ id: "b", task: "LAND-43 design session", declared_session: JSON.stringify({ feature: "LAND-43", kind: "design" }), created_at: "2026-11-04T00:01:00Z" }),
+      // Declared none: not the session last active, not what its brief names.
+      row({ id: "c", task: "LAND-43 build B fix", declared_session: "null", created_at: "2026-11-04T00:02:00Z" }),
+    ];
+    const s = assignSessions(ws);
+    expect([...s.entries()].map(([id, x]) => `${id}:${x.name}:${x.kind}`)).toEqual(["a:LAND-43 build B:build", "b:LAND-43 design:design", "c:Other work:other"]);
   });
 
   it("puts a worker whose brief names none in the session last active in its project", () => {

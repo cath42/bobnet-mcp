@@ -18,6 +18,7 @@ const Spawn = z.object({
   role: z.string(),
   task: z.string().min(1),
   tasks: z.array(z.string()).max(50).optional(),
+  session: z.object({ feature: z.string(), kind: z.enum(["design", "build", "review", "retro"]), label: z.string().optional() }).nullable().optional(),
   handoff: z.string().optional(),
   resume_session: z.string().optional(),
   model: z.string().optional(),
@@ -69,6 +70,18 @@ const TOOLS = [
           items: { type: "string" },
           description:
             "The backlog items it builds, fixes or reviews, e.g. [\"LAND-41.3\", \"LAND-41.32\"]; a feature id (\"LAND-41\") for work on the feature as a whole, [] for none. Required for a project with a backlog: the dashboard shows the worker on these cards and guesses nothing from the brief.",
+        },
+        session: {
+          type: ["object", "null"],
+          properties: {
+            feature: { type: "string", description: "The feature's id, e.g. LAND-43." },
+            kind: { type: "string", enum: ["design", "build", "review", "retro"] },
+            label: { type: "string", description: "What you call it, shown as given: \"B\", \"3\". Sessions of a kind with different labels are apart." },
+          },
+          required: ["feature", "kind"],
+          additionalProperties: false,
+          description:
+            "The session it works in, e.g. { feature: \"LAND-43\", kind: \"build\", label: \"B\" }; null for none (a consult, a fix between sessions: Other work). Required for a project with a backlog: the dashboard groups workers, tokens and build lanes by it and reads nothing from the brief.",
         },
         handoff: { type: "string", description: "Handoff file path to read first and write before finishing." },
         resume_session: { type: "string", description: "Resume this session id instead of starting fresh (review-to-build fix loops)." },
@@ -144,6 +157,7 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
         role: s.role,
         task: s.task,
         ...(s.tasks ? { tasks: s.tasks } : {}),
+        ...(s.session !== undefined ? { session: s.session ? { feature: s.session.feature, kind: s.session.kind, ...(s.session.label ? { label: s.session.label } : {}) } : null } : {}),
         ...(s.handoff ? { handoff: s.handoff } : {}),
         ...(s.resume_session ? { resume_session: s.resume_session } : {}),
         ...(s.model ? { model: s.model } : {}),

@@ -524,7 +524,7 @@ describe("usage and snapshots", () => {
 
   it("records the context of each call, once per response, leaving out a subagent's", async () => {
     const { sup, sessions } = await setup();
-    const w = sup.spawn({ project: "helix", role: "bill", task: "Bob's brief, LAND-41 build 3. Your task: LAND-41.16" });
+    const w = sup.spawn({ project: "helix", role: "bill", task: "Bob's brief, LAND-41 build 3.", tasks: ["LAND-41.16"], session: { feature: "LAND-41", kind: "build", label: "3" } });
     await until(() => sessions.length === 1);
     const call = (id: string, cached: number, parent: string | null = null) =>
       sessions[0]!.emit({ type: "assistant", parent_tool_use_id: parent, message: { id, content: [{ type: "text", text: "x" }], usage: { input_tokens: 5, output_tokens: 1, cache_read_input_tokens: cached, cache_creation_input_tokens: 1000 } } } as never);
@@ -543,12 +543,22 @@ describe("usage and snapshots", () => {
 
   it("asks a spawn in a project with a backlog which items the worker is on, and keeps them on a reset", async () => {
     const { sup } = await setup(`  books:\n    path: /work/books\n    backlog: { dir: product/backlog }\n    roles:\n      ann: { dir: /work/books/ann }\n`);
-    expect(() => sup.spawn({ project: "books", role: "ann", task: "LAND-41 review 1" })).toThrow(/has a backlog: say which items/);
-    expect(() => sup.spawn({ project: "books", role: "ann", task: "x", tasks: ["the review"] })).toThrow(/not backlog ids: the review/);
-    const w = sup.spawn({ project: "books", role: "ann", task: "LAND-41 review 1", tasks: ["land-41.3", "LAND-41.32", "LAND-41.3"] });
-    expect(sup.snapshot().workers.find((x) => x.id === w.id)).toMatchObject({ task_ref: "LAND-41.3", task_refs: ["LAND-41.3", "LAND-41.32"] });
+    const review = { feature: "LAND-41", kind: "review" as const, label: "1" };
+    expect(() => sup.spawn({ project: "books", role: "ann", task: "LAND-41 review 1", session: review })).toThrow(/has a backlog: say which items/);
+    expect(() => sup.spawn({ project: "books", role: "ann", task: "x", tasks: ["the review"], session: review })).toThrow(/not backlog ids: the review/);
+    expect(() => sup.spawn({ project: "books", role: "ann", task: "LAND-41 review 1", tasks: [] })).toThrow(/say which session this worker is in/);
+    expect(() => sup.spawn({ project: "books", role: "ann", task: "x", tasks: [], session: { feature: "LAND-41.3", kind: "build" } })).toThrow(/isn't a feature id/);
+    expect(() => sup.spawn({ project: "books", role: "ann", task: "x", tasks: [], session: { feature: "LAND-41", kind: "build", label: "B two" } })).toThrow(/session.label/);
+    const w = sup.spawn({ project: "books", role: "ann", task: "LAND-41 review 1, after build 3", tasks: ["land-41.3", "LAND-41.32", "LAND-41.3"], session: review });
+    expect(sup.snapshot().workers.find((x) => x.id === w.id)).toMatchObject({ task_ref: "LAND-41.3", task_refs: ["LAND-41.3", "LAND-41.32"], session: "LAND-41 review 1" });
     const fresh = await sup.reset(w.id);
     expect(JSON.parse(store.worker(fresh.id)!.tasks!)).toEqual(["LAND-41.3", "LAND-41.32"]);
+    expect(JSON.parse(store.worker(fresh.id)!.declared_session!)).toEqual({ feature: "LAND-41", kind: "review", label: "1" });
+    // Its label is as given, never read from words: a brief that says "build B" is in the session declared.
+    const b = sup.spawn({ project: "books", role: "ann", task: "LAND-43 build B (Bob's plan)", tasks: [], session: { feature: "land-43", kind: "build", label: "B" } });
+    expect(sup.snapshot().workers.find((x) => x.id === b.id)!.session).toBe("LAND-43 build B");
+    const none = sup.spawn({ project: "books", role: "ann", task: "Fix the red main, mid LAND-43 build B", tasks: [], session: null });
+    expect(sup.snapshot().workers.find((x) => x.id === none.id)!.session).toBe("Other work");
     // A project with no backlog needs none.
     expect(sup.spawn({ project: "games", role: "mario", task: "x" }).tasks).toBeNull();
   });
