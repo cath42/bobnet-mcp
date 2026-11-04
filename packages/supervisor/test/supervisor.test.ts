@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseSupervisorConfig } from "../src/config.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
-import { landSummary, powerNote, Supervisor, taskRef } from "../src/supervisor.ts";
+import { landSummary, powerNote, savedOutputCheck, Supervisor, taskRef } from "../src/supervisor.ts";
 import { gitWriteDirs, WORKER_TOOLS } from "../src/worker.ts";
 import { FakeBroker, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 
@@ -58,6 +58,21 @@ const msg = (over: Partial<Envelope> = {}): Envelope => ({
   created_at: "2026-10-30T00:00:00Z",
   expires_at: "2026-11-30T00:00:00Z",
   ...over,
+});
+
+describe("saved tool output", () => {
+  it("refuses a Read that would take back more than 20 KB of it, and lets Grep or a small range go on", () => {
+    const big = Array.from({ length: 1000 }, (_, i) => `line ${String(i).padStart(3, "0")} ${"x".repeat(40)}`).join("\n");
+    const read = () => big;
+    const p = "/Users/ct/.claude/projects/-x/s1/tool-results/b1.txt";
+    expect(savedOutputCheck("Read", { file_path: p }, read)?.reason).toMatch(/would take back 50 KB of a saved tool output \(at most 20 KB\)\. Re-run the command narrower/);
+    expect(savedOutputCheck("Read", { file_path: p, offset: 1, limit: 100 }, read)).toBeNull();
+    expect(savedOutputCheck("Read", { file_path: p, offset: 500, limit: 600 }, read)).not.toBeNull();
+    expect(savedOutputCheck("Read", { file_path: p, offset: 900 }, read)).toBeNull();
+    expect(savedOutputCheck("Grep", { path: p, pattern: "x" }, read)).toBeNull();
+    expect(savedOutputCheck("Read", { file_path: "/work/src/big.ts" }, read)).toBeNull();
+    expect(savedOutputCheck("Read", { file_path: "/gone/tool-results/x.txt" })).toBeNull();
+  });
 });
 
 describe("config", () => {
@@ -265,11 +280,19 @@ describe("lifecycle", () => {
     // Its sandbox never reads the supervisor's folder; localhost only when the role asks for it.
     expect(o.sandbox).toMatchObject({ filesystem: { denyRead: [expect.stringMatching(/\.config\/bobnet$/)] } });
     expect(o.sandbox!.network).toBeUndefined();
-    // A worker in default mode gets no preflight.
+    // A worker in default mode gets no preflight, only the check on saved tool output.
     sup.spawn({ project: "helix", role: "homer", task: "t" });
     await until(() => sessions.length === 2);
     expect(sessions[1]!.options).toMatchObject({ permissionMode: "default" });
-    expect(sessions[1]!.options.hooks).toBeUndefined();
+    const saved = join(dir, "s1", "tool-results", "b1.txt");
+    mkdirSync(join(dir, "s1", "tool-results"), { recursive: true });
+    writeFileSync(saved, "x".repeat(40_000));
+    const homerHook = sessions[1]!.options.hooks!.PreToolUse![0]!.hooks[0]!;
+    const homerPre = async (tool_name: string, tool_input: Record<string, unknown>) =>
+      ((await homerHook({ hook_event_name: "PreToolUse", tool_name, tool_input, tool_use_id: "t2" } as never, "t2", { signal: new AbortController().signal })) as { hookSpecificOutput?: { permissionDecision: string } }).hookSpecificOutput?.permissionDecision;
+    expect(await homerPre("Read", { file_path: saved })).toBe("deny");
+    expect(await homerPre("Bash", { command: "rm -rf /tmp/x" })).toBeUndefined();
+    expect(await pre("Read", { file_path: saved })).toBe("deny");
     config.projects.get("helix")!.roles.get("marvin")!.sandboxLocalhost = true;
     sessions[0]!.finish();
     sup.spawn({ project: "helix", role: "marvin", task: "t" });
@@ -528,6 +551,24 @@ describe("usage and snapshots", () => {
     expect(JSON.parse(store.worker(fresh.id)!.tasks!)).toEqual(["LAND-41.3", "LAND-41.32"]);
     // A project with no backlog needs none.
     expect(sup.spawn({ project: "games", role: "mario", task: "x" }).tasks).toBeNull();
+  });
+
+  it("lists the newest workers when asked for all, since a time if given, and cuts a long brief unless asked in full", async () => {
+    const { sup, sessions } = await setup();
+    for (let i = 0; i < 25; i++) {
+      const w = store.createWorker({ project: "helix", role: "marvin", task: `old ${i}`, handoff: null, priority: 1, resume_session: null });
+      store.updateWorker(w.id, { state: "done", created_at: `2026-10-${String(1 + i).padStart(2, "0")}T00:00:00.000Z`, ended_at: `2026-10-${String(1 + i).padStart(2, "0")}T01:00:00.000Z` });
+    }
+    const live = sup.spawn({ project: "helix", role: "bill", task: "y".repeat(2000) });
+    await until(() => sessions.length === 1);
+    expect(sup.list("helix", true)).toHaveLength(20);
+    expect(sup.list("helix", true).at(-1)!.id).toBe(live.id);
+    expect(sup.list("helix", true, { limit: 3 }).map((w) => w.task.slice(0, 6))).toEqual(["old 23", "old 24", "yyyyyy"]);
+    expect(sup.list("helix", true, { since: "2026-10-24T00:00:00.000Z" }).map((w) => w.task.slice(0, 6))).toEqual(["old 23", "old 24", "yyyyyy"]);
+    expect(sup.list("helix")).toHaveLength(1);
+    expect(sup.status(live.id).task).toMatch(/^y{499}… \(2000 characters; full: true for all\)$/);
+    expect(sup.status(live.id, true).task).toHaveLength(2000);
+    expect(sessions[0]!.options.systemPrompt).toMatchObject({ append: expect.stringContaining("re-run the command narrower") });
   });
 
   it("counts only the new part of a resumed session", async () => {

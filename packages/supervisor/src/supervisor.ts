@@ -1,6 +1,6 @@
 import { execFile, spawn as spawnProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync, renameSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import { findSecret, type Envelope, type LaptopSnapshot, type PeerInfo, type ServerFrame, type TokenCounts, type WorkerSnapshot } from "@bobnet/protocol";
@@ -43,6 +43,14 @@ const USAGE_DAYS = 14;
 const LAND_OUTPUT_MAX = 20_000;
 /** How much of a task list_workers shows. */
 const LIST_TASK_MAX = 100;
+/** list_workers with all: the newest this many, unless asked for more. */
+const LIST_ALL_DEFAULT = 20;
+/** worker_status's brief, unless asked for in full. */
+const STATUS_TASK_MAX = 500;
+/** The most of a saved tool output a Read may take back; past it the command is re-run narrower. */
+const SAVED_READ_MAX = 20_000;
+/** Read's window when it names no limit, in lines. */
+const READ_DEFAULT_LINES = 2000;
 const FILE_WRITE_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 /** How often hold files are re-read, to notice a hold set or released. */
 const HOLD_CHECK_MS = 5_000;
@@ -282,21 +290,28 @@ export class Supervisor {
   }
 
   /** Live workers (queued or running) unless `all`, tasks cut short: the full history is too big for a tool result. */
-  list(project?: string, all = false): Array<WorkerRow & { name: string }> {
+  /** With `all`, the newest `limit` (default 20); `since` keeps those that started or ended at or after it. */
+  list(project?: string, all = false, opts: { limit?: number; since?: string } = {}): Array<WorkerRow & { name: string }> {
     const filter = { ...(project ? { project } : {}), ...(all ? {} : { states: ["queued", ...ACTIVE_STATES] as const }) };
-    return this.store.workers(filter).map((w) => ({
+    let ws = this.store.workers(filter);
+    if (opts.since) ws = ws.filter((w) => w.created_at >= opts.since! || !w.ended_at || w.ended_at >= opts.since!);
+    const limit = opts.limit ?? (all ? LIST_ALL_DEFAULT : undefined);
+    if (limit !== undefined) ws = ws.slice(-limit);
+    return ws.map((w) => ({
       ...w,
       task: w.task.length > LIST_TASK_MAX ? `${w.task.slice(0, LIST_TASK_MAX - 1)}…` : w.task,
       name: this.roleOf(w).name,
     }));
   }
 
-  status(id: string) {
+  /** A worker's state; its brief cut short unless `full`. */
+  status(id: string, full = false) {
     const w = this.worker(id);
     const run = this.runs.get(id);
     const role = this.roleOf(w);
     return {
       ...w,
+      task: full || w.task.length <= STATUS_TASK_MAX ? w.task : `${w.task.slice(0, STATUS_TASK_MAX - 1)}… (${w.task.length} characters; full: true for all)`,
       name: role.name,
       cwd: role.dir,
       session_id: run?.sessionId ?? w.session_id,
@@ -580,7 +595,8 @@ export class Supervisor {
       canUseTool: consult
         ? this.readOnly(this.router.forWorker(w.id, role))
         : this.whileLanding(w.id, this.withPreapprovals(w.id, handoff, role.dir, this.router.forWorker(w.id, role))),
-      ...(role.permissionMode === "auto" ? { preToolUse: this.preflight(w.id, role, handoff, consult !== undefined) } : {}),
+      // Every worker: a saved output's Read is refused in any mode, as no permission prompt may ask about it.
+      preToolUse: role.permissionMode === "auto" ? this.preflight(w.id, role, handoff, consult !== undefined) : async (tool, input) => savedOutputCheck(tool, input),
       mcpServers: {
         [WORKER_SERVER]: workerTools({
           name: role.name,
@@ -669,6 +685,8 @@ export class Supervisor {
   private preflight(workerId: string, role: RoleConfig, handoff: string, consult: boolean): NonNullable<WorkerRunOptions["preToolUse"]> {
     return async (tool, input, server, toolUseId, signal) => {
       if (server === WORKER_SERVER) return { decision: "allow", reason: "the supervisor's own tool" };
+      const saved = savedOutputCheck(tool, input);
+      if (saved) return saved;
       if (consult && FILE_WRITE_TOOLS.includes(tool)) return { decision: "deny", reason: "A consult only reads and answers; the owner records anything in their own session." };
       const landing = this.landing.get(workerId);
       if (landing && (FILE_WRITE_TOOLS.includes(tool) || tool === "Bash")) await landing.catch(() => {});
@@ -1414,7 +1432,32 @@ function systemAppend(role: RoleConfig, orchestrator: string): string {
     `Permission requests and AskUserQuestion go to the orchestrator (${orchestrator}) and may take a while or be denied. When a denial carries an instruction, follow it.`,
     "Questions you can't get answered go in your handoff file under Open questions; don't wait on them.",
     "Your state lives in files: anything you decide or learn that matters later goes in the handoff file or the files your role owns.",
+    `When a tool's output is too large and saved to a file, don't read the file back, whatever its notice says: re-run the command narrower (grep, head, tail, a filter) or Grep the file. A Read of it over ${SAVED_READ_MAX / 1000} KB is refused.`,
   ].join("\n");
+}
+
+/**
+ * A Read of a tool output Claude Code saved to a file (its tool-results folder), refused when it
+ * would take back more than SAVED_READ_MAX: no range on a big file, or a range that big. Grep, or a
+ * small range, goes on. Null for any other call.
+ */
+export function savedOutputCheck(tool: string, input: Record<string, unknown>, read = (p: string) => readFileSync(p, "utf8")): { decision: "deny"; reason: string } | null {
+  const file = input["file_path"];
+  if (tool !== "Read" || typeof file !== "string" || !/[/\\]tool-results[/\\]/.test(file)) return null;
+  let text: string;
+  try {
+    text = read(file);
+  } catch {
+    return null;
+  }
+  const offset = typeof input["offset"] === "number" ? Math.max(1, input["offset"]) : 1;
+  const limit = typeof input["limit"] === "number" ? input["limit"] : READ_DEFAULT_LINES;
+  const bytes = Buffer.byteLength(text.split("\n").slice(offset - 1, offset - 1 + limit).join("\n"));
+  if (bytes <= SAVED_READ_MAX) return null;
+  return {
+    decision: "deny",
+    reason: `That Read would take back ${Math.round(bytes / 1000)} KB of a saved tool output (at most ${SAVED_READ_MAX / 1000} KB). Re-run the command narrower (grep, head, tail, a filter), or Grep this file, or Read a smaller range.`,
+  };
 }
 
 function resumeTask(req: RequestRow, answer: Answer): string {

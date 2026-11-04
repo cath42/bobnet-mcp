@@ -29,7 +29,8 @@ const TakeSlot = z.object({ project: z.string(), name: z.string().min(1), label:
 const FreeSlot = z.object({ name: z.string().min(1) });
 const OrderQueue = z.object({ names: z.array(z.string()).min(1) });
 const Tail = z.object({ id: z.string(), n: z.number().int().positive().max(500).default(40) });
-const ListArgs = z.object({ project: z.string().optional(), all: z.boolean().default(false) });
+const ListArgs = z.object({ project: z.string().optional(), all: z.boolean().default(false), limit: z.number().int().positive().max(500).optional(), since: z.string().optional() });
+const StatusArgs = z.object({ id: z.string(), full: z.boolean().default(false) });
 const AnswerArgs = z.object({
   id: z.string(),
   decision: z.enum(["allow", "deny", "answer"]),
@@ -82,8 +83,21 @@ const TOOLS = [
     description: "Stop a worker and queue a fresh one for the same role and task, with no prior context, on what it ran on unless you set model or effort (a retry that failed for lack of power).",
     inputSchema: obj({ id: { type: "string" }, ...POWER }, ["id"]),
   },
-  { name: "list_workers", description: "Live workers (queued or running) and their states, tasks cut short, optionally for one project. all: true includes finished ones.", inputSchema: obj({ project: { type: "string" }, all: { type: "boolean", description: "Include finished workers (the whole history)." } }) },
-  { name: "worker_status", description: "A worker's state, task, last activity, session id and how to open its transcript.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
+  {
+    name: "list_workers",
+    description: "Live workers (queued or running) and their states, tasks cut short, optionally for one project. all: true includes finished ones, the newest 20 unless limit says otherwise.",
+    inputSchema: obj({
+      project: { type: "string" },
+      all: { type: "boolean", description: "Include finished workers." },
+      limit: { type: "number", description: "The newest this many (all: true defaults to 20; at most 500)." },
+      since: { type: "string", description: "ISO time: only workers that started or ended at or after it." },
+    }),
+  },
+  {
+    name: "worker_status",
+    description: "A worker's state, task (its first 500 characters unless full), last activity, session id and how to open its transcript.",
+    inputSchema: obj({ id: { type: "string" }, full: { type: "boolean", description: "The whole brief." } }, ["id"]),
+  },
   { name: "tail_worker", description: "The worker's last n events, one line each.", inputSchema: obj({ id: { type: "string" }, n: { type: "number" } }, ["id"]) },
   { name: "worker_summary", description: "A short digest of what a worker has done: tools used, files changed, last message, result.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
   { name: "pending_requests", description: "Open approvals and questions across all workers (including ones orphaned by a restart), one line each. request_detail gives one in full.", inputSchema: obj({}) },
@@ -143,9 +157,12 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
     },
     list_workers: (a) => {
       const l = ListArgs.parse(a);
-      return sup.list(l.project, l.all);
+      return sup.list(l.project, l.all, { ...(l.limit ? { limit: l.limit } : {}), ...(l.since ? { since: l.since } : {}) });
     },
-    worker_status: (a) => sup.status(Id.parse(a).id),
+    worker_status: (a) => {
+      const s = StatusArgs.parse(a);
+      return sup.status(s.id, s.full);
+    },
     tail_worker: (a) => {
       const t = Tail.parse(a);
       return sup.tail(t.id, t.n).join("\n") || "(no events yet)";
