@@ -103,7 +103,8 @@ export class Supervisor {
   /** A worker's land in progress: its file tools and Bash wait for it (ADR 0094 §1). */
   private readonly landing = new Map<string, Promise<unknown>>();
   /** HEAD of each worktree whose last land was refused: the same HEAD isn't tried again. */
-  private readonly refusedHeads = new Map<string, string>();
+  /** Each worktree's last failed HEAD, and whether it still has its one more run (a flaky failure's). */
+  private readonly refusedHeads = new Map<string, { head: string; oneMore: boolean }>();
   /** A run's land results, told to the orchestrator in its one end-of-run message. */
   private readonly landResults = new Map<string, string[]>();
   /** Interactive agents queued for a slot by their orchestrator: name → project. */
@@ -827,7 +828,9 @@ export class Supervisor {
     const dirty = await git(worktree, ["status", "--porcelain"]);
     if (dirty) return refuse(`Precondition: a clean tree. ${worktree} has uncommitted changes; commit or remove them:\n${dirty}`);
     const head = await git(worktree, ["rev-parse", "HEAD"]);
-    if (this.refusedHeads.get(worktree) === head) {
+    const before = this.refusedHeads.get(worktree);
+    const again = before?.head === head;
+    if (again && !before.oneMore) {
       return refuse(`Nothing has changed since your last land was refused at ${head.slice(0, 8)}. Fix the cause and commit first; no retry loop (ADR 0093 §4). If you think it was a fluke, say so to ${project.orchestrator} in your handoff.`);
     }
 
@@ -854,15 +857,22 @@ export class Supervisor {
       const output = r.output.length > LAND_OUTPUT_MAX ? `…${r.output.slice(-LAND_OUTPUT_MAX)}` : r.output;
       const ok = r.code === 0;
       const held = !ok && !r.timedOut && land.heldExit !== undefined && r.code === land.heldExit;
+      const flaky = !ok && !r.timedOut && land.flakyExit !== undefined && r.code === land.flakyExit;
+      // A flaky failure gives the same HEAD one more run, once: a second failure is a refusal (no retry loop).
+      const oneMore = flaky && !again;
       if (ok || held) this.refusedHeads.delete(worktree);
-      else this.refusedHeads.set(worktree, head);
-      this.store.audit("supervisor", ok ? "land:ok" : held ? "land:held" : "land:failed", workerId, { code: r.code, head });
+      else this.refusedHeads.set(worktree, { head, oneMore });
+      this.store.audit("supervisor", ok ? "land:ok" : held ? "land:held" : flaky ? "land:flaky" : "land:failed", workerId, { code: r.code, head });
       const last = landSummary(r.output);
-      const result = ok ? `landed: ${last}` : held ? `held, lands after the hold: ${last}` : `could not land (${r.timedOut ? "timed out" : `exit ${r.code}`}): ${last}`;
-      this.progress(w, ok ? `landed: ${last}` : held ? "held: lands after the hold" : `could not land (${r.timedOut ? "timed out" : `exit ${r.code}`})`);
+      const failed = `${flaky ? "flaky" : "could not land"} (${r.timedOut ? "timed out" : `exit ${r.code}`})`;
+      const result = ok ? `landed: ${last}` : held ? `held, lands after the hold: ${last}` : `${failed}: ${last}`;
+      this.progress(w, ok ? `landed: ${last}` : held ? "held: lands after the hold" : failed);
       // Told with the run's end, not now: one wake per worker for the orchestrator.
       this.landResults.set(workerId, [...(this.landResults.get(workerId) ?? []), result]);
       if (held) return { ok: true, output: `Held, not refused: your tip waits and lands when the hold is released; don't land again.\n\n${output}` };
+      if (oneMore) {
+        return { ok: false, landed: false, output: `Flaky, not refused (exit ${r.code}): nothing of yours is wrong, so this same commit may land once more (ADR 0093 §4 (d)). Land again now; if it fails again, it is refused and goes in your handoff.\n\n${output}` };
+      }
       return { ok, landed: ok, output: `${land.command.join(" ")} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
     } finally {
       release();

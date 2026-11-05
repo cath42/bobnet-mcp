@@ -369,6 +369,26 @@ projects:
     expect(broker.toOrchestrator().at(-1)).toMatch(/Land: held, lands after the hold: .*; held, lands after the hold/);
   });
 
+  it("gives a flaky failure one more run of the same commit, and refuses a second failure (no retry loop)", async () => {
+    const { worktree, script } = repo();
+    const config = landConfig(worktree, script);
+    config.projects.get("helix")!.land!.flakyExit = 3;
+    const { sup, broker, sessions } = await setup("", config);
+    const w = sup.spawn({ project: "helix", role: "homer", task: "t" });
+    await until(() => sessions.length === 1);
+    writeFileSync(join(worktree, "FAIL"), "");
+    execFileSync("git", ["-C", worktree, "add", "."]);
+    execFileSync("git", ["-C", worktree, "-c", "user.name=Homer", "-c", "user.email=h@x", "commit", "-qm", "f"]);
+    await expect(sup.land(w.id)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(/^Flaky, not refused \(exit 3\): .*may land once more/) });
+    // The one more run: it runs, fails again, and is the last.
+    await expect(sup.land(w.id)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(/exited 3/) });
+    await expect(sup.land(w.id)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(/^Not landed\. Nothing has changed since your last land was refused/) });
+    expect(store.auditLog(20).filter((a) => a.action === "land:flaky")).toHaveLength(2);
+    sessions[0]!.finish("ok");
+    await until(() => broker.toOrchestrator().some((b) => b.startsWith("Homer")));
+    expect(broker.toOrchestrator().at(-1)).toMatch(/Land: flaky \(exit 3\): .*; flaky \(exit 3\)/);
+  });
+
   it("refuses, naming it, when the Postgres environment can't be had", async () => {
     const { worktree, script } = repo();
     const { sup, sessions } = await setup("", landConfig(worktree, script));
@@ -549,7 +569,7 @@ projects:
     writeFileSync(land, `#!/bin/sh\nset -e\ncd ${seed}\ngit pull -q --rebase=false origin main\ngit fetch -q "$OLDPWD" HEAD\ngit -c user.name=Main -c user.email=m@x cherry-pick FETCH_HEAD >/dev/null\ngit push -q origin HEAD:main\necho "landed: main $(git rev-parse --short HEAD)"\n`);
     chmodSync(land, 0o755);
     const c = config(worktree);
-    c.projects.get("helix")!.land = { command: [land], timeoutMinutes: 1, envCommand: undefined, requiresEnv: [], heldExit: undefined };
+    c.projects.get("helix")!.land = { command: [land], timeoutMinutes: 1, envCommand: undefined, requiresEnv: [], heldExit: undefined, flakyExit: undefined };
     const { sup, sessions } = await setup("", c);
     const w = sup.spawn({ project: "helix", role: "homer", task: "t" });
     await until(() => sessions.length === 1);

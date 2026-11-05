@@ -127,6 +127,8 @@ const Project = z.object({
       requires_env: z.array(z.string()).default([]),
       /** The exit code meaning "held": the tip waits and lands after the hold, so it isn't a refusal. */
       held_exit: z.number().int().optional(),
+      /** The exit code meaning "flaky": nothing of the author's is wrong (ADR 0093 §4 (d)), so the same tip may land once more. */
+      flaky_exit: z.number().int().optional(),
     })
     .optional(),
   /**
@@ -225,7 +227,7 @@ export interface ProjectConfig {
   team: string | undefined;
   orchestrator: string;
   orchestratorDir: string | undefined;
-  land: { command: string[]; timeoutMinutes: number; envCommand: string[] | undefined; requiresEnv: string[]; heldExit: number | undefined } | undefined;
+  land: { command: string[]; timeoutMinutes: number; envCommand: string[] | undefined; requiresEnv: string[]; heldExit: number | undefined; flakyExit: number | undefined } | undefined;
   rebase: { remote: string; branch: string } | undefined;
   runs: Map<string, RunConfig>;
   holdFile: string | undefined;
@@ -334,7 +336,7 @@ export function parseSupervisorConfig(
       orchestrator: p.orchestrator ?? file.orchestrator,
       orchestratorDir: p.orchestrator_dir,
       land: p.land
-        ? { command: p.land.command, timeoutMinutes: p.land.timeout_minutes, envCommand: p.land.env_command, requiresEnv: p.land.requires_env, heldExit: p.land.held_exit }
+        ? { command: p.land.command, timeoutMinutes: p.land.timeout_minutes, envCommand: p.land.env_command, requiresEnv: p.land.requires_env, heldExit: p.land.held_exit, flakyExit: p.land.flaky_exit }
         : undefined,
       rebase: p.rebase ? { remote: p.rebase.onto.split("/")[0]!, branch: p.rebase.onto.slice(p.rebase.onto.indexOf("/") + 1) } : undefined,
       runs,
