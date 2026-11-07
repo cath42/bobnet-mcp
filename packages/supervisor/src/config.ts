@@ -190,6 +190,17 @@ const SupervisorFile = z.object({
   consult_effort: EffortLevel.optional(),
   /** More paths every sandboxed worker may write, e.g. fnm's multishell folder. */
   sandbox_write: z.array(path).default([]),
+  /**
+   * Who may ask this supervisor, over BobNet, to spawn: a sender's address (name@laptop, as the
+   * broker stamps it) to the roles it may spawn, by project. It may follow and stop only what it
+   * spawned; it answers no request and changes no policy or role. Anyone else is refused.
+   */
+  remote: z
+    .record(
+      z.string().refine((a) => a.split("@").length === 2 && a.split("@").every(isValidSegment), "must be name@laptop"),
+      z.object({ spawn: z.record(z.string(), z.array(z.string()).min(1)) }),
+    )
+    .default({}),
   projects: z.record(z.string(), Project),
 });
 
@@ -265,6 +276,8 @@ export interface SupervisorConfig {
   consultModel: string | undefined;
   consultEffort: Effort | undefined;
   sandboxWrite: string[];
+  /** Remote requesters, by lowercase address: project → roles each may spawn. */
+  remote: Map<string, Map<string, Set<string>>>;
   projects: Map<string, ProjectConfig>;
 }
 
@@ -370,6 +383,18 @@ export function parseSupervisorConfig(
     });
   }
 
+  const remote = new Map<string, Map<string, Set<string>>>();
+  for (const [address, r] of Object.entries(file.remote)) {
+    const may = new Map<string, Set<string>>();
+    for (const [pKey, roles] of Object.entries(r.spawn)) {
+      const p = projects.get(pKey);
+      if (!p) throw new Error(`remote.${address}: no project ${pKey}`);
+      for (const role of roles) if (!p.roles.has(role)) throw new Error(`remote.${address}: no role ${role} in ${pKey}`);
+      may.set(pKey, new Set(roles));
+    }
+    remote.set(address.toLowerCase(), may);
+  }
+
   return {
     orchestrator: file.orchestrator,
     name: file.name,
@@ -385,6 +410,7 @@ export function parseSupervisorConfig(
     consultModel: file.consult_model,
     consultEffort: file.consult_effort,
     sandboxWrite: file.sandbox_write,
+    remote,
     projects,
   };
 }

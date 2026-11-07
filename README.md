@@ -90,6 +90,27 @@ node packages/supervisor/src/bin.ts install-launchd
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.bobnet.supervisor.plist
 ```
 
+On Linux, install it as a systemd user service instead. There's no Keychain, so put the laptop's service token in `~/.config/bobnet/supervisor.env` (mode 0600) as `BOBNET_ACCESS_CLIENT_ID=…` and `BOBNET_ACCESS_CLIENT_SECRET=…`, and leave `keychain` out of `config.json`. Workers never get those variables, and they can't read the supervisor's folder.
+
+```sh
+node packages/supervisor/src/bin.ts install-systemd
+systemctl --user daemon-reload && systemctl --user enable --now bobnet-supervisor
+loginctl enable-linger $USER   # keep it running while you're logged out
+```
+
+Another laptop's orchestrator can ask this supervisor to spawn. List it in `supervisor.yaml` under `remote`, by address, with the roles it may spawn:
+
+```yaml
+remote:
+  poe@ubu1: { spawn: { helix: [bob] } }
+```
+
+It sends `supervisor@<laptop>` a BobNet message whose body is one JSON request, and gets one JSON answer back:
+- `{"op":"spawn","project":…,"role":…,"task":…,"tasks":[…],"session":{…}}`, optionally with `model` and `effort`;
+- `{"op":"status","id":…}`, `{"op":"stop","id":…}` and `{"op":"list"}`, which reach only workers it spawned.
+
+It also hears when each of its workers' Remote Control session is ready and when the worker ends. It can't answer requests, change policy or roles, or resume a session. The broker's word on who sent a message is trusted (Casper, 2026-11-07), so the list is the whole guard: keep it narrow.
+
 ### 3. The orchestrator
 
 Make a folder with a `CLAUDE.md` describing the workflow, and a `.mcp.json` with two servers:

@@ -12,6 +12,7 @@ import { EFFORTS, type Effort, type ProjectConfig, type RoleConfig, type RunConf
 import { assignSessions, Boards, type DeclaredSession, sessionName, workerTasks } from "./board.ts";
 import { Inbox } from "@bobnet/client/inbox";
 import { LEAD_SERVER, leadTools } from "./lead-tools.ts";
+import { readRequest, type RemoteRequest, reply } from "./remote.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
@@ -533,7 +534,7 @@ export class Supervisor {
 
     if (toName === this.config.name.toLowerCase()) {
       this.log.info("message to the supervisor", { from: msg.from, id: msg.id });
-      ack();
+      void this.onRemote(msg).finally(ack);
       return;
     }
     const role = this.roles().find((r) => r.name.toLowerCase() === toName);
@@ -563,6 +564,94 @@ export class Supervisor {
         .catch(() => {});
     }
     ack();
+  }
+
+  // ---------- Remote requests (remote.ts) ----------
+
+  /** A message to the supervisor: a remote request is answered; anything else is only logged. */
+  private async onRemote(msg: Envelope): Promise<void> {
+    const read = readRequest(msg.body);
+    if (!read) return;
+    const prior = this.store.remoteReply(msg.id);
+    if (prior !== null) return this.toRemote(msg.from, prior, msg.id);
+    const op = "request" in read ? read.request.op : "invalid";
+    let out: Record<string, unknown>;
+    try {
+      if ("error" in read) throw new SupervisorError(read.error);
+      out = { ok: true, op, ...(await this.remoteDo(msg.from, read.request)) };
+    } catch (err) {
+      out = { ok: false, op, error: (err as Error).message };
+    }
+    const text = reply(out);
+    this.store.recordRemote(msg.id, msg.from, op, text);
+    this.store.audit(msg.from, out["ok"] ? `remote:${op}` : "remote:refused", (out["worker"] as { id?: string } | undefined)?.id ?? null, { message: msg.id, ...(out["ok"] ? {} : { error: out["error"] }) });
+    this.toRemote(msg.from, text, msg.id);
+  }
+
+  private async remoteDo(from: string, req: RemoteRequest): Promise<Record<string, unknown>> {
+    const may = this.config.remote.get(from.toLowerCase());
+    if (!may) throw new SupervisorError(`${from} may not make requests here: it isn't in this supervisor's remote list`);
+    const own = (id: string): WorkerRow => {
+      const w = this.store.worker(id);
+      if (!w || w.spawned_by?.toLowerCase() !== from.toLowerCase()) throw new SupervisorError(`${id} isn't a worker ${from} spawned`);
+      return w;
+    };
+    switch (req.op) {
+      case "spawn": {
+        if (!may.get(req.project)?.has(req.role)) {
+          const listed = [...may].flatMap(([p, rs]) => [...rs].map((r) => `${p}/${r}`)).join(", ");
+          throw new SupervisorError(`${from} may not spawn ${req.project}/${req.role}; it may spawn ${listed || "nothing"}`);
+        }
+        const w = this.spawn({
+          project: req.project,
+          role: req.role,
+          task: req.task,
+          ...(req.tasks ? { tasks: req.tasks } : {}),
+          ...(req.session !== undefined ? { session: req.session ? { feature: req.session.feature, kind: req.session.kind, ...(req.session.label ? { label: req.session.label } : {}) } : null } : {}),
+          ...(req.model ? { model: req.model } : {}),
+          ...(req.effort ? { effort: req.effort } : {}),
+          spawnedBy: from,
+        });
+        return { worker: { ...this.remoteView(w), ...(w.note ? { note: w.note } : {}) } };
+      }
+      case "status":
+        return { worker: this.remoteView(own(req.id)) };
+      case "stop":
+        return { worker: this.remoteView(await this.stop(own(req.id).id, `stopped by ${from}`)) };
+      case "list":
+        return { workers: this.store.workers().filter((w) => w.spawned_by?.toLowerCase() === from.toLowerCase()).slice(-20).map((w) => this.remoteView(w)) };
+    }
+  }
+
+  /** What a requester sees of a worker it spawned: its state and session, not its brief. */
+  private remoteView(w: WorkerRow): Record<string, unknown> {
+    const run = this.runs.get(w.id);
+    const d = w.declared_session ? (JSON.parse(w.declared_session) as DeclaredSession | null) : null;
+    return {
+      id: w.id,
+      project: w.project,
+      role: w.role,
+      name: this.roleOf(w).name,
+      state: w.state,
+      session: d ? sessionName(d) : null,
+      checkpoint: this.checkpoints.get(w.id) ?? w.checkpoint,
+      error: w.error,
+      started_at: w.started_at,
+      ended_at: w.ended_at,
+      remote_url: run?.remote && "url" in run.remote ? run.remote.url : null,
+    };
+  }
+
+  private toRemote(to: string, body: string, inReplyTo?: string): void {
+    this.broker
+      .request({ t: "send", as: this.config.name, to: [to], body, ...(inReplyTo ? { in_reply_to: inReplyTo } : {}) })
+      .catch((err: Error) => this.log.warn("could not answer a remote request", { to, err: err.message }));
+  }
+
+  /** Tells a remote requester about a worker it spawned: its Remote Control URL, its end. */
+  private remoteEvent(w: WorkerRow, event: Record<string, unknown>): void {
+    if (!w.spawned_by?.includes("@")) return;
+    this.toRemote(w.spawned_by, reply({ event: event["event"], worker: w.id, ...event }));
   }
 
   /** A dashboard action: only after the owner's own token checks out. */
@@ -675,6 +764,7 @@ export class Supervisor {
             remoteControl: remoteName(role, w),
             onRemoteControl: (rc) => {
               this.store.audit("supervisor", "url" in rc ? "remote-control" : "remote-control:failed", w.id, rc);
+              if ("url" in rc) this.remoteEvent(w, { event: "remote_control", url: rc.url });
               if ("error" in rc) this.notify(`${role.name} (${w.id}) runs without Remote Control: ${rc.error}.`, w.project);
               this.report();
             },
@@ -1125,6 +1215,7 @@ export class Supervisor {
       last_event_at: run ? new Date(run.lastEventAt).toISOString() : w.last_event_at,
     });
     this.store.audit("supervisor", `exit:${outcome.state}`, id, {});
+    this.remoteEvent(this.store.worker(id)!, { event: "exit", state: outcome.state, checkpoint, ...(outcome.state === "done" ? {} : { error: outcome.state === "failed" ? outcome.error : outcome.reason }) });
     void this.boards?.refresh();
 
     const role = this.roleOf(w);

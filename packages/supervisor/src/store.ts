@@ -97,6 +97,9 @@ CREATE TABLE IF NOT EXISTS audit (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL,
   worker_id TEXT, detail TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS remote_requests (
+  message_id TEXT PRIMARY KEY, sender TEXT NOT NULL, op TEXT NOT NULL, reply TEXT NOT NULL, at TEXT NOT NULL
+);
 `;
 
 const now = () => new Date().toISOString();
@@ -278,6 +281,17 @@ export class Store {
   }
 
   // ---------- Audit ----------
+
+  // ---------- Remote requests ----------
+
+  /** The reply already sent to this message, if it was handled: a redelivery is answered, not acted on twice. */
+  remoteReply(messageId: string): string | null {
+    return this.one<{ reply: string }>("SELECT reply FROM remote_requests WHERE message_id = ?", messageId)?.reply ?? null;
+  }
+
+  recordRemote(messageId: string, sender: string, op: string, reply: string): void {
+    this.run("INSERT OR IGNORE INTO remote_requests (message_id, sender, op, reply, at) VALUES (?, ?, ?, ?, ?)", messageId, sender, op, reply, now());
+  }
 
   audit(actor: string, action: string, workerId: string | null, detail: Record<string, unknown> = {}): void {
     this.run(

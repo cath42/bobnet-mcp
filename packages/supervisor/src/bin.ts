@@ -7,6 +7,7 @@ import { BrokerConnection } from "@bobnet/client/connection";
 import { createLogger } from "@bobnet/client/log";
 import { configDir, loadSupervisorConfig } from "./config.ts";
 import { installLaunchAgent } from "./launchd.ts";
+import { installSystemdUnit } from "./systemd.ts";
 import { ensureToken, serveMcp } from "./mcp.ts";
 import { type AccessConfig, ownerCheck } from "./owner.ts";
 import { Policy } from "./policy.ts";
@@ -18,6 +19,12 @@ const dir = configDir();
 
 if (process.argv[2] === "install-launchd") {
   console.log(`Installed ${installLaunchAgent(new URL(import.meta.url).pathname)}`);
+  process.exit(0);
+}
+if (process.argv[2] === "install-systemd") {
+  console.log(`Installed ${installSystemdUnit(new URL(import.meta.url).pathname)}`);
+  console.log("Start it: systemctl --user daemon-reload && systemctl --user enable --now bobnet-supervisor");
+  console.log("Keep it running when you're logged out: loginctl enable-linger $USER");
   process.exit(0);
 }
 

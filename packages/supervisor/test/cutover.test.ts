@@ -59,6 +59,10 @@ describe("billing guard", () => {
     expect(env).toEqual({ PATH: "/bin", HOME: "/h" });
   });
 
+  it("never hands a worker the laptop's broker credentials (Linux keeps them in the supervisor's environment)", () => {
+    expect(workerEnv({ PATH: "/bin", BOBNET_ACCESS_CLIENT_ID: "a.access", BOBNET_ACCESS_CLIENT_SECRET: "s" })).toEqual({ PATH: "/bin" });
+  });
+
   it("refuses a key in a role's or a project's env", () => {
     const base = (env: string) =>
       `orchestrator: Bob\nprojects:\n  a:\n    path: /a\n    ${env}\n    roles: { bill: { dir: /a/b } }`;

@@ -435,9 +435,12 @@ const inside = (root: string, p: string) => {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 };
 
-/** The supervisor's environment without anything that would move billing off the subscription. */
+/** The laptop's broker credentials, in the supervisor's environment where there's no Keychain (Linux): never a worker's. */
+const BROKER_CREDENTIALS = ["BOBNET_ACCESS_CLIENT_ID", "BOBNET_ACCESS_CLIENT_SECRET"];
+
+/** The supervisor's environment without anything that would move billing off the subscription, or the laptop's broker credentials. */
 export function workerEnv(env: NodeJS.ProcessEnv): Record<string, string> {
-  const blocked = new Set<string>(BILLING_ENV);
+  const blocked = new Set<string>([...BILLING_ENV, ...BROKER_CREDENTIALS]);
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) if (v !== undefined && !blocked.has(k)) out[k] = v;
   return out;
