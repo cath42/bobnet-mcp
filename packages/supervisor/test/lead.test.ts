@@ -81,6 +81,15 @@ const pushMsg = (to: string, wake: boolean, body: string, id = `m_${Math.random(
   }) as never;
 
 describe("config", () => {
+  it("runs a lead in auto mode unless its role or project says otherwise; other roles stay on default", () => {
+    const roles = testConfig(dir, STUDIO).projects.get("studio")!.roles;
+    expect(roles.get("bob")!.permissionMode).toBe("auto");
+    expect(roles.get("ann")!.permissionMode).toBe("default");
+    const set = (role: string, project = "") => testConfig(dir, `  studio:\n    path: /s\n${project}    roles:\n      bob: { dir: /s/b, lead: true${role} }\n`).projects.get("studio")!.roles.get("bob")!.permissionMode;
+    expect(set(", permission_mode: default")).toBe("default");
+    expect(set("", "    permission_mode: default\n")).toBe("default");
+  });
+
   it("names a lead as its project's orchestrator, one per project", () => {
     expect(testConfig(dir, STUDIO).projects.get("studio")!.roles.get("bob")).toMatchObject({ name: "Bob", lead: true, remoteControl: true });
     expect(() => testConfig(dir, "  studio:\n    path: /s\n    roles:\n      ann: { dir: /s/a, lead: true }\n")).toThrow(/a lead role is named as the project's orchestrator \(Bob\), not Ann/);

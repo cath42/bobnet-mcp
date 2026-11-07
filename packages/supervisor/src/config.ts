@@ -348,7 +348,9 @@ export function parseSupervisorConfig(
         effort: r.effort ?? p.effort,
         models: r.models ?? p.models,
         maxEffort: r.max_effort ?? p.max_effort,
-        permissionMode: r.permission_mode ?? p.permission_mode ?? "default",
+        // A lead runs as the interactive orchestrator does, in auto mode, unless told otherwise: policy doesn't
+        // settle its calls, so in "default" every one would go to Casper (Phelps on ubu1, 2026-11-07).
+        permissionMode: r.permission_mode ?? p.permission_mode ?? (r.lead ? "auto" : "default"),
         sandboxLocalhost: r.sandbox_localhost ?? p.sandbox_localhost ?? false,
         allowedTools: r.allowed_tools,
         disallowedTools: r.disallowed_tools,
