@@ -106,6 +106,8 @@ export const WorkerSnapshot = z.object({
   context: z.number().int().nonnegative().nullable().default(null),
   /** Context per call, for a worker that is running; a past run's is on its project's board. */
   ctx: z.array(z.number().int().nonnegative()).max(400).default([]),
+  /** Its Remote Control session on claude.ai, while it runs with one. */
+  remote_url: z.string().url().startsWith("https://claude.ai/").max(200).nullable().default(null),
 });
 export type WorkerSnapshot = z.infer<typeof WorkerSnapshot>;
 

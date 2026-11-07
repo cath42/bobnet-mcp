@@ -7,13 +7,24 @@ import { BILLING_ENV, configDir, type RoleConfig } from "./config.ts";
 
 // One headless Claude Code session per worker, on the Agent SDK. Input is a
 // stream, so the supervisor can hand a running worker a message mid-task; the
-// worker ends when its turn produces a result and the input is closed.
+// worker ends when its turn produces a result and the input is closed. A
+// long-lived worker (a lead) instead waits for its next message after a
+// result, and ends only when stopped.
 
 /** The subset of the SDK's Query the supervisor drives. */
 export interface QueryHandle extends AsyncIterable<SDKMessage> {
   interrupt(): Promise<unknown>;
   close(): void;
+  /**
+   * Turns Remote Control on or off. Not in the SDK's types (0.3.312): it sends the CLI a
+   * remote_control request and returns the bridge's answer, session_url among it. Pinned,
+   * and checked for at run time.
+   */
+  enableRemoteControl?(enabled: boolean, name?: string): Promise<unknown>;
 }
+
+/** Remote Control as the worker got it: the session's URL, or why it has none. */
+export type RemoteControl = { url: string } | { error: string };
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => QueryHandle;
 
 /** Cumulative usage as the SDK reports it for this session (a resumed one includes its past). */
@@ -97,6 +108,11 @@ export interface WorkerRunOptions {
     signal: AbortSignal,
   ) => Promise<{ decision: "allow" | "deny" | "ask"; reason: string } | null>;
   mcpServers: Record<string, McpServerConfig>;
+  /** Turns Remote Control on at the session's start, under this name. */
+  remoteControl?: string;
+  onRemoteControl?: (rc: RemoteControl) => void;
+  /** A result leaves it waiting for its next message; only a stop ends it. */
+  longLived?: boolean;
   onEvent: (msg: SDKMessage) => void;
   /** A tool call has returned (or failed). */
   onToolResult?: (toolUseId: string) => void;
@@ -120,6 +136,10 @@ export class WorkerRun {
   private readonly counted = new Map<string, TokenCounts>();
   /** Context each model call carried (its input, cached or not), in call order. */
   readonly ctx: number[] = [];
+  /** Remote Control once asked for: its URL, or why it has none. */
+  remote: RemoteControl | null = null;
+  /** A long-lived worker between turns: waiting for a message, not stuck. */
+  idle = false;
   private lastCallId: string | null = null;
 
   private readonly opts: WorkerRunOptions;
@@ -203,6 +223,7 @@ export class WorkerRun {
 
   /** Hands the running worker a message, as its next user turn. */
   inject(text: string): void {
+    this.idle = false;
     this.input.push(text);
   }
 
@@ -230,6 +251,8 @@ export class WorkerRun {
   }
 
   private async interruptWith(text: string): Promise<void> {
+    // Between turns there is nothing to interrupt: the message is simply the next turn.
+    if (this.idle) return this.inject(text);
     this.nextTurn = text;
     try {
       await this.query?.interrupt();
@@ -260,7 +283,12 @@ export class WorkerRun {
         this.write(msg);
         this.track(msg);
         this.opts.onEvent(msg);
-        if (msg.type === "result" && this.nextTurn !== null) {
+        if (msg.type === "system" && msg.subtype === "init" && this.opts.remoteControl && !this.remote) void this.startRemoteControl();
+        if (msg.type === "result" && this.opts.longLived && !this.stopReason && this.nextTurn === null) {
+          // A lead's turn is over, not its work: it waits for its next message.
+          this.idle = true;
+          this.toolsInFlight = 0;
+        } else if (msg.type === "result" && this.nextTurn !== null) {
           // The interrupted turn's end: its tool calls are over, and the worker gets the message.
           this.input.push(this.nextTurn);
           this.nextTurn = null;
@@ -285,6 +313,27 @@ export class WorkerRun {
         : (this.result ?? { state: "failed", error: "session ended without a result" });
       this.opts.onExit(outcome);
     }
+  }
+
+  /**
+   * Once per session (the SDK sends an init every turn). A failure is reported, not fatal:
+   * the worker goes on unwatched.
+   */
+  private async startRemoteControl(): Promise<void> {
+    const q = this.query!;
+    if (typeof q.enableRemoteControl !== "function") {
+      this.remote = { error: "this Agent SDK has no enableRemoteControl (it was in 0.3.312, undocumented); the worker runs without Remote Control" };
+    } else {
+      this.remote = { error: "connecting" };
+      try {
+        const r = (await q.enableRemoteControl(true, this.opts.remoteControl)) as { session_url?: unknown } | undefined;
+        this.remote = typeof r?.session_url === "string" ? { url: r.session_url } : { error: `Remote Control answered without a session_url: ${JSON.stringify(r)?.slice(0, 200)}` };
+      } catch (err) {
+        this.remote = { error: `Remote Control failed: ${(err as Error).message}` };
+      }
+    }
+    this.write({ type: "remote_control", ...this.remote });
+    this.opts.onRemoteControl?.(this.remote);
   }
 
   private track(msg: SDKMessage): void {

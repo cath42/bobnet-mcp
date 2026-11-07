@@ -83,6 +83,18 @@ const Role = z.object({
   /** Claude Code's OS sandbox for Bash; off only for roles that truly need it off. */
   sandbox: z.boolean().optional(),
   purpose: z.string().optional(),
+  /**
+   * Turns on Remote Control when a worker starts: the session shows in claude.ai/code under the
+   * worker's name, and Casper can follow it and type to it there. Its URL is in worker_status.
+   */
+  remote_control: z.boolean().default(false),
+  /**
+   * The project's lead, run as a worker: named as the project's orchestrator, it stays alive
+   * between turns (a result doesn't end it; a stop does), holds no worker slot, and gets the lead
+   * tools, which act only in its own project and answer only its own workers' orchestrator-tier
+   * requests. Its own requests go to Casper.
+   */
+  lead: z.boolean().default(false),
 });
 
 /** A command a worker may have the supervisor run outside the sandbox: one a browser needs, say. */
@@ -206,6 +218,8 @@ export interface RoleConfig {
   writeRoots: string[];
   sandbox: boolean;
   purpose: string | undefined;
+  remoteControl: boolean;
+  lead: boolean;
 }
 
 export interface RunConfig {
@@ -292,10 +306,17 @@ export function parseSupervisorConfig(
 
   for (const [pKey, p] of Object.entries(file.projects)) {
     const roles = new Map<string, RoleConfig>();
+    const orchestrator = p.orchestrator ?? file.orchestrator;
+    const leads = Object.entries(p.roles).filter(([, r]) => r.lead);
+    if (leads.length > 1) throw new Error(`${pKey}: one lead role at most, not ${leads.map(([k]) => k).join(", ")}`);
     for (const [rKey, r] of Object.entries(p.roles)) {
       const name = r.name ?? capitalize(rKey);
       if (!isValidSegment(name)) throw new Error(`${pKey}.${rKey}: "${name}" is not a valid BobNet name`);
-      const clash = names.get(name.toLowerCase());
+      // The lead is the project's orchestrator, run as a worker: the orchestrator's name is its own.
+      if (r.lead && name.toLowerCase() !== orchestrator.toLowerCase()) {
+        throw new Error(`${pKey}.${rKey}: a lead role is named as the project's orchestrator (${orchestrator}), not ${name}`);
+      }
+      const clash = r.lead ? undefined : names.get(name.toLowerCase());
       if (clash) throw new Error(`${pKey}.${rKey}: BobNet name ${name} is already used by ${clash}`);
       names.set(name.toLowerCase(), `${pKey}.${rKey}`);
       const dir = isAbsolute(r.dir) ? r.dir : resolve(p.path, r.dir);
@@ -320,6 +341,8 @@ export function parseSupervisorConfig(
         writeRoots: r.write_roots ?? [resolveRoot(dir)],
         sandbox: r.sandbox ?? p.sandbox ?? true,
         purpose: r.purpose,
+        remoteControl: r.remote_control,
+        lead: r.lead,
       });
     }
     for (const c of p.consult) if (!roles.has(c)) throw new Error(`${pKey}.consult: no role ${c}`);
@@ -333,7 +356,7 @@ export function parseSupervisorConfig(
       path: p.path,
       priority: p.priority,
       team: p.team,
-      orchestrator: p.orchestrator ?? file.orchestrator,
+      orchestrator,
       orchestratorDir: p.orchestrator_dir,
       land: p.land
         ? { command: p.land.command, timeoutMinutes: p.land.timeout_minutes, envCommand: p.land.env_command, requiresEnv: p.land.requires_env, heldExit: p.land.held_exit, flakyExit: p.land.flaky_exit }

@@ -16,6 +16,13 @@ export class FakeSession implements QueryHandle {
   private wake: (() => void) | null = null;
   private ended = false;
   interrupted = false;
+  /** Remote Control calls, as [enabled, name]. */
+  readonly remoteCalls: Array<[boolean, string | undefined]> = [];
+  /** As the SDK's undocumented method; deleted to play an SDK without it. */
+  enableRemoteControl?: (enabled: boolean, name?: string) => Promise<unknown> = async (enabled, name) => {
+    this.remoteCalls.push([enabled, name]);
+    return { session_url: "https://claude.ai/code/session_test", bridge_session_id: "cse_test", bridge_epoch: 1 };
+  };
 
   constructor(params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) {
     this.options = params.options;
@@ -62,6 +69,16 @@ export class FakeSession implements QueryHandle {
     this.end();
   }
 
+  /** A turn's result with the session left open, as the SDK does while its input is: a lead's next turn may follow. */
+  turnDone(result = "turn done"): void {
+    this.emit({ type: "result", subtype: "success", result, modelUsage: { "claude-sonnet-5-5": this.totals }, total_cost_usd: this.totals.costUSD } as unknown as SDKMessage);
+  }
+
+  /** The SDK sends an init at every turn. */
+  init(): void {
+    this.emit({ type: "system", subtype: "init", session_id: "sess-again" } as unknown as SDKMessage);
+  }
+
   fail(subtype = "error_during_execution"): void {
     this.emit({ type: "result", subtype, modelUsage: {}, total_cost_usd: 0 } as unknown as SDKMessage);
     this.end();
@@ -94,12 +111,13 @@ export class FakeSession implements QueryHandle {
   }
 }
 
-export function fakeQuery(): { queryFn: QueryFn; sessions: FakeSession[] } {
+export function fakeQuery(opts: { remoteControl?: boolean } = {}): { queryFn: QueryFn; sessions: FakeSession[] } {
   const sessions: FakeSession[] = [];
   return {
     sessions,
     queryFn: (params) => {
       const s = new FakeSession(params);
+      if (opts.remoteControl === false) delete s.enableRemoteControl;
       sessions.push(s);
       return s;
     },

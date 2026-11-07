@@ -9,7 +9,8 @@ import type { PushFrame, RequestFrame } from "@bobnet/client/connection";
 import type { Logger } from "@bobnet/client/log";
 import type { OwnerCheck } from "./owner.ts";
 import { EFFORTS, type Effort, type ProjectConfig, type RoleConfig, type RunConfig, type SupervisorConfig } from "./config.ts";
-import { assignSessions, Boards, type DeclaredSession, workerTasks } from "./board.ts";
+import { assignSessions, Boards, type DeclaredSession, sessionName, workerTasks } from "./board.ts";
+import { LEAD_SERVER, leadTools, type LeadToolDeps } from "./lead-tools.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
@@ -237,6 +238,8 @@ export class Supervisor {
     resume_session?: string;
     model?: string;
     effort?: Effort;
+    /** Who asks: the orchestrator unless said (a lead's worker id, a remote requester's address). */
+    spawnedBy?: string;
   }): WorkerRow & { note?: string } {
     const project = this.project(opts.project);
     const role = this.role(opts.project, opts.role);
@@ -275,8 +278,9 @@ export class Supervisor {
       resume_session: opts.resume_session ?? null,
       tasks,
       declared_session: declared,
+      spawned_by: opts.spawnedBy ?? "orchestrator",
     });
-    this.store.audit("orchestrator", "spawn", w.id, { project: w.project, role: w.role, tasks, session: declared, resume: w.resume_session, model: w.model, effort: w.effort });
+    this.store.audit(opts.spawnedBy ?? "orchestrator", "spawn", w.id, { project: w.project, role: w.role, tasks, session: declared, resume: w.resume_session, model: w.model, effort: w.effort });
     this.schedule();
     const row = this.store.worker(w.id)!;
     const note = row.state === "queued" ? this.queuedBecause(row) : undefined;
@@ -286,7 +290,7 @@ export class Supervisor {
   /** Why a queued worker hasn't started, so a spawn that waits says so. */
   private queuedBecause(w: WorkerRow): string {
     if (this.activeRun(w.project, w.role)) return `queued: ${this.roleOf(w).name} already has a worker running; it starts after that one ends`;
-    if (this.runs.size >= this.config.concurrency) return `queued: ${this.runs.size} workers running, the laptop's limit; it starts when one ends`;
+    if (this.workersRunning() >= this.config.concurrency) return `queued: ${this.workersRunning()} workers running, the laptop's limit; it starts when one ends`;
     return "queued";
   }
 
@@ -308,12 +312,13 @@ export class Supervisor {
 
   /** Stops a worker and queues a fresh one, no prior context, for the same task. */
   /** Stops a worker and starts its task afresh, on what it ran on unless told otherwise (a retry may need more). */
-  async reset(id: string, power: { model?: string; effort?: Effort } = {}): Promise<WorkerRow> {
+  async reset(id: string, power: { model?: string; effort?: Effort } = {}, by?: string): Promise<WorkerRow> {
     const w = this.worker(id);
     if (this.runs.has(id) || w.state === "queued") await this.stop(id, "reset");
     const model = power.model ?? w.model ?? undefined;
     const effort = power.effort ?? (w.effort as Effort | null) ?? undefined;
-    return this.spawn({ project: w.project, role: w.role, task: w.task, tasks: storedTasks(w), carrySession: w.declared_session, ...(w.handoff ? { handoff: w.handoff } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
+    const spawnedBy = by ?? w.spawned_by ?? undefined;
+    return this.spawn({ project: w.project, role: w.role, task: w.task, tasks: storedTasks(w), carrySession: w.declared_session, ...(w.handoff ? { handoff: w.handoff } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(spawnedBy ? { spawnedBy } : {}) });
   }
 
   /** Live workers (queued or running) unless `all`, tasks cut short: the full history is too big for a tool result. */
@@ -346,6 +351,7 @@ export class Supervisor {
       tools_in_flight: run?.toolsInFlight ?? 0,
       checkpoint: this.checkpoints.get(id) ?? w.checkpoint,
       transcript: (run?.sessionId ?? w.session_id) ? `cd ${role.dir} && claude --resume ${run?.sessionId ?? w.session_id}` : null,
+      remote_control: run?.remote ?? null,
       log: this.logPath(w),
     };
   }
@@ -412,6 +418,7 @@ export class Supervisor {
       carrySession: w.declared_session,
       ...(w.handoff ? { handoff: w.handoff } : {}),
       resume_session: w.session_id,
+      ...(w.spawned_by ? { spawnedBy: w.spawned_by } : {}),
     });
     if (answer.decision === "allow") this.preapproved.set(resumed.id, [{ tool: request.tool, input: request.input }]);
     return { request, resumed };
@@ -584,7 +591,8 @@ export class Supervisor {
   // A hold stops neither a spawn nor a slot: only the land command answers "held" (ADR 0093).
   private schedule(): void {
     for (const w of this.store.queued()) {
-      if (this.runs.size >= this.config.concurrency) break;
+      // A lead holds no worker slot, so it never waits behind its own builders.
+      if (!this.roleOf(w).lead && this.workersRunning() >= this.config.concurrency) continue;
       const busy = [...this.runs.keys()].some((id) => {
         const r = this.store.worker(id);
         return r?.project === w.project && r.role === w.role;
@@ -616,7 +624,7 @@ export class Supervisor {
       id: w.id,
       role: { ...role, writeRoots: [...role.writeRoots, join(this.config.stateDir, "handoffs"), ...this.config.sandboxWrite] },
       prompt: consult ? w.task : buildPrompt(w.task, handoff, waiting),
-      systemAppend: systemAppend(role, project.orchestrator),
+      systemAppend: role.lead ? leadAppend(role) : systemAppend(role, project.orchestrator),
       resumeSession: w.resume_session,
       logPath: this.logPath(w),
       queryFn: this.queryFn,
@@ -644,7 +652,19 @@ export class Supervisor {
           consult: (r, question) => this.consult(w.id, r, question),
           answerConsult: (id, answer) => this.answerConsult(w.id, id, answer),
         }),
+        ...(role.lead && !consult ? { [LEAD_SERVER]: leadTools(this.leadScope(w.id, role)) } : {}),
       },
+      ...(role.remoteControl && !consult
+        ? {
+            remoteControl: remoteName(role, w),
+            onRemoteControl: (rc) => {
+              this.store.audit("supervisor", "url" in rc ? "remote-control" : "remote-control:failed", w.id, rc);
+              if ("error" in rc) this.notify(`${role.name} (${w.id}) runs without Remote Control: ${rc.error}.`, w.project);
+              this.report();
+            },
+          }
+        : {}),
+      longLived: role.lead && !consult,
       onEvent: (msg) => {
         if (msg.type === "system" && msg.subtype === "init") this.store.updateWorker(w.id, { session_id: msg.session_id });
         this.stallReported.delete(w.id);
@@ -712,7 +732,7 @@ export class Supervisor {
    */
   private preflight(workerId: string, role: RoleConfig, handoff: string, consult: boolean): NonNullable<WorkerRunOptions["preToolUse"]> {
     return async (tool, input, server, toolUseId, signal) => {
-      if (server === WORKER_SERVER) return { decision: "allow", reason: "the supervisor's own tool" };
+      if (server === WORKER_SERVER || (role.lead && server === LEAD_SERVER)) return { decision: "allow", reason: "the supervisor's own tool" };
       const saved = savedOutputCheck(tool, input);
       if (saved) return saved;
       if (consult && FILE_WRITE_TOOLS.includes(tool)) return { decision: "deny", reason: "A consult only reads and answers; the owner records anything in their own session." };
@@ -1114,7 +1134,7 @@ export class Supervisor {
    */
   private checkStalls(): void {
     for (const [id, run] of this.runs) {
-      if (this.stallReported.has(id) || this.supervisorWaits.has(id) || this.router.isWaiting(id)) continue;
+      if (run.idle || this.stallReported.has(id) || this.supervisorWaits.has(id) || this.router.isWaiting(id)) continue;
       const inTool = run.toolsInFlight > 0;
       const quiet = Date.now() - run.lastEventAt;
       if (quiet < (inTool ? this.config.toolStallMinutes : this.config.stallMinutes) * 60_000) continue;
@@ -1141,6 +1161,77 @@ export class Supervisor {
     }
   }
 
+  /** Workers holding a slot of the laptop's cap: a lead holds none. */
+  private workersRunning(): number {
+    let n = 0;
+    for (const id of this.runs.keys()) {
+      const w = this.store.worker(id);
+      if (w && !this.roleOf(w).lead) n++;
+    }
+    return n;
+  }
+
+  /**
+   * A lead's tools: its own project only, never another lead, and answers only for workers it
+   * spawned. A tier-human request is refused here, and the router would refuse it anyway: only
+   * Casper's own decision settles one.
+   */
+  private leadScope(leadId: string, lead: RoleConfig): LeadToolDeps {
+    const project = lead.project;
+    const own = (id: string): WorkerRow => {
+      const w = this.worker(id);
+      if (w.project !== project) throw new SupervisorError(`${id} is ${w.project}'s; your tools act in ${project} only`);
+      return w;
+    };
+    const notLead = (w: WorkerRow): WorkerRow => {
+      if (w.id === leadId || this.roleOf(w).lead) throw new SupervisorError(`${w.id} is the lead; only Casper stops or resets it`);
+      return w;
+    };
+    const mine = (r: RequestRow) => r.worker_id !== leadId && this.store.worker(r.worker_id)?.project === project;
+    // A slot holder is the project's when it's one of its workers, one of its roles by name, or an interactive agent taken for it.
+    const holderOf = (name: string): string => {
+      const w = this.store.worker(name);
+      const ours = w ? w.project === project : this.project(project).roles.has(name.toLowerCase()) || [...this.project(project).roles.values()].some((r) => r.name.toLowerCase() === name.toLowerCase()) || this.interactive.get(name) === project;
+      if (!ours) throw new SupervisorError(`${name} isn't ${project}'s; your tools act in ${project} only`);
+      return name;
+    };
+    return {
+      project,
+      spawn: (a) => {
+        if (this.role(project, a.role).lead) throw new SupervisorError(`${a.role} is the lead's own role`);
+        return this.spawn({ ...a, project, spawnedBy: leadId });
+      },
+      stop: async (id) => this.stop(notLead(own(id)).id, `stopped by ${lead.name}`),
+      reset: async (id, power) => this.reset(notLead(own(id)).id, power, leadId),
+      list: (all, opts) => this.list(project, all, opts),
+      status: (id, full) => this.status(own(id).id, full),
+      tail: (id, n) => this.tail(own(id).id, n),
+      summary: (id) => this.summary(own(id).id),
+      pending: () =>
+        this.pending()
+          .filter((r) => r.project === project && r.worker_id !== leadId)
+          .map((r) => ({ ...r, decides: r.tier === "human" ? "Casper" : this.store.worker(r.worker_id)?.spawned_by === leadId ? "you" : "the orchestrator that spawned it" })),
+      detail: (id) => {
+        const r = this.requestDetail(id);
+        if (!mine(r)) throw new SupervisorError(`${id} isn't one of ${project}'s workers' requests`);
+        return r;
+      },
+      answer: (id, answer) => {
+        const r = this.requestDetail(id);
+        if (!mine(r)) throw new SupervisorError(`${id} isn't one of ${project}'s workers' requests`);
+        if (r.tier === "human") throw new SupervisorError(`${id} is Casper's to decide (tier human): he answers it on the dashboard or in your Remote Control session`);
+        if (this.store.worker(r.worker_id)?.spawned_by !== leadId) throw new SupervisorError(`${id} is from a worker you didn't spawn; its own orchestrator answers it`);
+        const out = this.answer(id, answer, "orchestrator");
+        return { id: out.request.id, state: out.request.state, decision: out.request.decision, ...(out.resumed ? { resumed: out.resumed.id } : {}) };
+      },
+      project_info: () => this.projects().find((p) => p.key === project),
+      runSlots: () => this.slotStatus(),
+      takeSlot: (name, label) => this.takeSlot(project, name, label),
+      freeSlot: (name) => this.freeSlot(holderOf(name)),
+      orderRunQueue: (names) => this.orderRunQueue(names.map(holderOf)),
+    };
+  }
+
   private handoffOf(w: WorkerRow): string {
     return w.handoff ?? join(this.config.stateDir, "handoffs", w.project, `${w.id}.md`);
   }
@@ -1148,6 +1239,12 @@ export class Supervisor {
   // ---------- Helpers ----------
 
   private announce(req: RequestRow, workerName: string): void {
+    const w = this.store.worker(req.worker_id);
+    // A lead's own request is Casper's (on the dashboard); announcing it would only message the lead itself.
+    if (w && this.roleOf(w).lead) {
+      this.writeStatus();
+      return;
+    }
     const what =
       req.kind === "question"
         ? `${workerName} asks a question (${req.id})`
@@ -1311,6 +1408,7 @@ export class Supervisor {
         task_ref: workerTasks(w)[0] ?? null,
         task_refs: workerTasks(w),
         ...this.callsOf(w, run),
+        remote_url: run?.remote && "url" in run.remote ? run.remote.url : null,
       };
     });
 
@@ -1462,6 +1560,24 @@ function buildPrompt(task: string, handoff: string, waiting: Envelope[]): string
   ];
   if (waiting.length > 0) parts.push(`Messages that arrived for you while no worker was running:\n\n${waiting.map(formatInbound).join("\n\n---\n\n")}`);
   return parts.join("\n\n");
+}
+
+/** A lead runs headless too, but Casper may be following it in Remote Control, and it stays alive between turns. */
+function leadAppend(role: RoleConfig): string {
+  return [
+    `You are ${role.name}, the lead for project ${role.project}, running as a worker under the BobNet supervisor. Casper may be following this session in Remote Control and typing to you there.`,
+    `Your supervisor tools (mcp__${LEAD_SERVER}__*) spawn and follow ${role.project}'s workers and answer their orchestrator-tier requests. Requests Casper decides are his: he answers them on the dashboard or here.`,
+    "Your own permission requests go to Casper and may take a while or be denied. When a denial carries an instruction, follow it.",
+    "Ending a turn doesn't end you: you wait for the next message (a worker's completion, an escalation, a BobNet message, or Casper typing), and you end only when stopped.",
+    "Your state lives in files: anything you decide or learn that matters later goes in the files your role owns.",
+    `When a tool's output is too large and saved to a file, don't read the file back, whatever its notice says: re-run the command narrower (grep, head, tail, a filter) or Grep the file. A Read of it over ${SAVED_READ_MAX / 1000} KB is refused.`,
+  ].join("\n");
+}
+
+/** The name a worker's Remote Control session shows: its role, then its session or project. */
+function remoteName(role: RoleConfig, w: WorkerRow): string {
+  const d = w.declared_session ? (JSON.parse(w.declared_session) as DeclaredSession | null) : null;
+  return `${role.name} · ${d ? sessionName(d) : w.project}`;
 }
 
 function systemAppend(role: RoleConfig, orchestrator: string): string {

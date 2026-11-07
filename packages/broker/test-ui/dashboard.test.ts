@@ -131,6 +131,21 @@ describe("Now", () => {
     expect(row).toContain("61k · 3 calls");
     expect(view().textContent).toContain("Waiting on CI");
     expect(view().textContent).not.toMatch(/\$\d/);
+    expect($("running").querySelector("a")).toBeNull();
+  });
+
+  it("links a worker running with Remote Control to its session", async () => {
+    const ws = FakeSocket.last;
+    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+    snap.workers = snap.workers.map((w) => (w.state === "running" ? { ...w, remote_url: "https://claude.ai/code/session_abc" } : w)) as never;
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    await settle();
+    const link = $("running").querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("https://claude.ai/code/session_abc");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.textContent).toBe("Open in Claude ↗");
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
+    await settle();
   });
 
   it("sends actions for pending requests and running workers, confirming the risky ones", async () => {

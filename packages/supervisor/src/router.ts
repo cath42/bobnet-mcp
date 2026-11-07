@@ -1,4 +1,5 @@
 import type { CanUseTool, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
+import { LEAD_SERVER } from "./lead-tools.ts";
 import { WORKER_SERVER } from "./worker-tools.ts";
 import type { RoleConfig } from "./config.ts";
 import type { Policy, Tier } from "./policy.ts";
@@ -50,11 +51,14 @@ export class Router {
     return async (toolName, input, { signal, mcpServer, toolUseID }) => {
       const { store, policy } = this.deps;
 
-      // The supervisor's own BobNet tools, served in-process: always allowed.
-      if (mcpServer?.source === "sdk" && mcpServer.name === WORKER_SERVER) return { behavior: "allow", updatedInput: input };
+      // The supervisor's own tools, served in-process: always allowed (a lead's check their own scope).
+      if (mcpServer?.source === "sdk" && (mcpServer.name === WORKER_SERVER || (role.lead && mcpServer.name === LEAD_SERVER))) {
+        return { behavior: "allow", updatedInput: input };
+      }
 
+      // A lead is the orchestrator: what it would ask one goes to Casper.
       if (toolName === "AskUserQuestion") {
-        return this.escalate(workerId, role, toolName, input, "question", "orchestrator", "ask-user-question", "The worker asked a question", signal);
+        return this.escalate(workerId, role, toolName, input, "question", role.lead ? "human" : "orchestrator", "ask-user-question", "The worker asked a question", signal);
       }
 
       const verdict = policy.evaluate(toolName, input, {
@@ -71,7 +75,7 @@ export class Router {
           ? slotted({ behavior: "allow", updatedInput: input })
           : { behavior: "deny", message: `Denied by policy (${verdict.rule}): ${verdict.reason}` };
       }
-      return slotted(await this.escalate(workerId, role, toolName, input, "approval", verdict.tier, verdict.rule, verdict.reason, signal));
+      return slotted(await this.escalate(workerId, role, toolName, input, "approval", role.lead ? "human" : verdict.tier, verdict.rule, verdict.reason, signal));
     };
   }
 

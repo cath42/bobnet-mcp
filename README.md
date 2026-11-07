@@ -102,6 +102,8 @@ Start it, then run `/remote-control`:
 claude --dangerously-load-development-channels server:bobnet
 ```
 
+Or run the orchestrator as a worker. A role with `lead: true`, named as its project's orchestrator, stays alive between turns and wakes on each message: a worker's completion, an escalation, a BobNet message, or you typing. It ends only when stopped and holds none of the laptop's worker slots. In place of the supervisor's MCP server it gets the lead tools, in-process, so no token reaches it. They act in its own project only and answer only the orchestrator-tier requests of workers it spawned. Its own requests, and every tier-human one, come to you on the dashboard. Any role with `remote_control: true` starts with Remote Control on, named for its session: follow it and type to it in claude.ai/code, through the link in `worker_status` and on the dashboard. That uses the Agent SDK's `enableRemoteControl`, which isn't in its types, so the SDK is pinned; without it, the worker runs on and says why.
+
 Channels are a research preview, so a self-written channel server needs that flag. It must also be defined in a `.mcp.json`: `--mcp-config` doesn't register channels. Stay on MCP SDK 1.x: a server that speaks protocol revision 2026-07-28 isn't registered as a channel. A test fails if that changes.
 
 ## License

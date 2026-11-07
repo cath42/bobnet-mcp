@@ -262,7 +262,8 @@ function viewNow() {
             const xs = refsOf(w).map((id) => boardOf(w)?.backlog?.items.find((i) => i.id === id)).filter(Boolean), x = xs.length === 1 ? xs[0] : null;
             const head = headlineOf(w.task);
             return h("tr", { class: "pick", tabindex: "0", title: "Show its context per call", onclick: () => showRun(w), onkeydown: (e) => e.key === "Enter" && showRun(w) },
-              h("td", null, h("b", null, w.name), h("div", { class: "cp" }, w.session ?? w.project), w.state !== "running" ? h("div", null, h("span", { class: "badge", dataset: { state: w.state } }, w.state)) : null),
+              h("td", null, h("b", null, w.name), h("div", { class: "cp" }, w.session ?? w.project), w.state !== "running" ? h("div", null, h("span", { class: "badge", dataset: { state: w.state } }, w.state)) : null,
+                w.remote_url ? h("div", null, h("a", { href: w.remote_url, target: "_blank", rel: "noopener", title: "Follow it and type to it in Claude", onclick: (e) => e.stopPropagation() }, "Open in Claude ↗")) : null),
               h("td", { class: "wide" },
                 head ? [h("span", { class: "title" }, head), x ? h("div", { class: "cp" }, "about ", chip(x.id), x.title) : xs.length ? h("div", { class: "cp" }, "about ", xs.map((i) => chip(i.id))) : null]
                   : x ? [chip(x.id), " ", h("span", { class: "title" }, x.title)] : [xs.map((i) => chip(i.id)), h("span", { class: "title" }, w.task)],
