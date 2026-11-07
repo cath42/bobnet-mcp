@@ -305,6 +305,11 @@ describe("a review session", () => {
       worker({ id: "w_h", name: "Homer", role: "homer", task: "LAND-41 review 1: QUICK fix of R1-1", session: "LAND-41 review 1", task_ref: "LAND-41.1", task_refs: ["LAND-41.1", "LAND-41.16"] }),
     ] as never;
     ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    await go("#now");
+    // Two items and no headline: a chip each, never a stringified array.
+    const homer = [...$("running").querySelectorAll("tbody tr")].find((r) => r.textContent!.includes("Homer"))!;
+    expect(homer.textContent).not.toContain("[object");
+    expect(homer.querySelectorAll(".chip")).toHaveLength(2);
     await go("#feature");
     const pick = $("inc-pick") as HTMLSelectElement;
     pick.value = "LAND-41";
