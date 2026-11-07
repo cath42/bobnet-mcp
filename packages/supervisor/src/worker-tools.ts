@@ -22,6 +22,12 @@ export interface WorkerToolDeps {
   consultable: string[];
   consult: (role: string, question: string) => Promise<string>;
   answerConsult: (id: string, answer: string) => void;
+  /** A lead's, as the interactive orchestrator has them: broadcasts, feed updates and its own status. */
+  lead?: {
+    broadcast: (body: string, scope: "team" | "all", urgent: boolean | undefined) => Promise<unknown>;
+    update: (text: string) => Promise<unknown>;
+    status: (status: string | null) => Promise<unknown>;
+  };
 }
 
 const text = (value: unknown) => ({
@@ -149,6 +155,41 @@ export function workerTools(deps: WorkerToolDeps) {
           return failed(err);
         }
       }),
+      ...(deps.lead
+        ? [
+            tool(
+              "broadcast",
+              'Message your team (default) or everyone (scope "all"). Queued for readers unless urgent; use urgent only for holds and stop-work notices.',
+              { body: z.string(), scope: z.enum(["team", "all"]).optional(), urgent: z.boolean().optional() },
+              async (a) => {
+                try {
+                  return text(await deps.lead!.broadcast(a.body, a.scope ?? "team", a.urgent));
+                } catch (err) {
+                  return failed(err);
+                }
+              },
+            ),
+            tool(
+              "post_update",
+              "Post a one-line session update to Casper's BobNet dashboard feed. For milestones only: wakes nobody, and is not a message to anyone.",
+              { text: z.string().min(1).max(500) },
+              async (a) => {
+                try {
+                  return text(await deps.lead!.update(a.text));
+                } catch (err) {
+                  return failed(err);
+                }
+              },
+            ),
+            tool("update_status", "Set a short free-text status (null clears it). Silent: others read it with list_peers.", { status: z.string().nullable() }, async (a) => {
+              try {
+                return text(await deps.lead!.status(a.status));
+              } catch (err) {
+                return failed(err);
+              }
+            }),
+          ]
+        : []),
       tool(
         "checkpoint",
         "Record a one-line phase checkpoint, e.g. \"F12-b · story 3 · review passed · 2 issues fixed\". The orchestrator sees it when you finish.",

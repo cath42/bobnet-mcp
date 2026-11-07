@@ -3,18 +3,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LaptopSnapshot } from "@bobnet/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { LeadToolDeps } from "../src/lead-tools.ts";
+import { callTool, handlers } from "../src/mcp.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
 import { Supervisor } from "../src/supervisor.ts";
 import { FakeBroker, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 
-const POLICY = new Policy(`
+const POLICY_TEXT = `
 rules:
   - { id: read, tools: [Read], decision: allow }
-  - { id: push, tools: [Bash], command: "^git push", decision: escalate, tier: human }
+  - { id: no-push, tools: [Bash], command: "^git push", decision: deny, reason: "Workers don't push" }
   - { id: fetch, tools: [WebFetch], decision: escalate, tier: orchestrator }
-`);
+  - { id: tests, tools: [Bash], command: "^pnpm test( |$)", decision: allow, slot: true }
+`;
+const SUPERVISOR_DIR = "/home/x/.config/bobnet";
+const POLICY = new Policy(POLICY_TEXT, { protect: [SUPERVISOR_DIR] });
 
 // A project led by Bob as a worker, beside helix and games (whose orchestrator Bob stays interactive).
 const STUDIO = `  studio:
@@ -48,11 +51,33 @@ async function setup(opts: { remoteControl?: boolean } = {}) {
   return { sup, broker, sessions };
 }
 
-/** The lead's tools as the supervisor scopes them. */
-const scope = (sup: Supervisor, leadId: string): LeadToolDeps =>
-  (sup as unknown as { leadScope: (id: string, role: unknown) => LeadToolDeps }).leadScope(leadId, testConfig(dir, STUDIO).projects.get("studio")!.roles.get("bob"));
+/** Starts the lead and returns its tools, as its in-process server runs them. */
+async function withLead() {
+  const s = await setup();
+  const lead = s.sup.spawn({ project: "studio", role: "bob", task: "Lead LAND-42 build 2" });
+  await until(() => s.sessions.length === 1);
+  const h = handlers(s.sup, { lead: lead.id });
+  const call = async (name: string, args: Record<string, unknown> = {}) => {
+    const r = await callTool(h, name, args);
+    const text = r.content[0]!.text;
+    if (r.isError) throw new Error(text);
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  };
+  return { ...s, lead, call, leadSession: s.sessions[0]! };
+}
 
 const snapshot = (sup: Supervisor) => (sup as unknown as { snapshot: () => LaptopSnapshot }).snapshot();
+const pushMsg = (to: string, wake: boolean, body: string, id = `m_${Math.random().toString(36).slice(2, 7)}`) =>
+  ({
+    t: "message",
+    to,
+    wake,
+    msg: { id, type: wake ? "message" : "broadcast", from: "Riker@mbp-1", to: [to], team: "land", laptop: "mbp-1", in_reply_to: null, urgent: false, body, created_at: "2026-11-07T00:00:00Z", expires_at: "2026-12-07T00:00:00Z" },
+  }) as never;
 
 describe("config", () => {
   it("names a lead as its project's orchestrator, one per project", () => {
@@ -98,33 +123,36 @@ describe("Remote Control", () => {
 });
 
 describe("a lead", () => {
-  it("waits for its next message after a result, isn't stalled while it waits, and ends only when stopped", async () => {
-    const { sup, sessions } = await setup();
-    const lead = sup.spawn({ project: "studio", role: "bob", task: "Lead LAND-42 build 2" });
-    await until(() => sessions.length === 1);
-    sessions[0]!.turnDone("planned");
+  it("waits for its next message after a result and ends only when stopped", async () => {
+    const { sup, lead, leadSession: s } = await withLead();
+    s.turnDone("planned");
     await tick(20);
     expect(sup.status(lead.id).state).toBe("running");
-    const run = (sup as unknown as { runs: Map<string, { idle: boolean; lastEventAt: number }> }).runs.get(lead.id)!;
+    const run = (sup as unknown as { runs: Map<string, { idle: boolean }> }).runs.get(lead.id)!;
     expect(run.idle).toBe(true);
-    // Quiet for an hour between turns is waiting, not stuck.
-    run.lastEventAt = Date.now() - 3600_000;
-    (sup as unknown as { checkStalls: () => void }).checkStalls();
-    expect(sessions[0]!.interrupted).toBe(false);
     // A message to Bob is its next turn.
-    sup.onPush({ t: "message", to: "Bob@mbp-1", wake: true, msg: { id: "m_1", type: "message", from: "Riker@mbp-1", to: ["Bob@mbp-1"], team: "land", laptop: "mbp-1", in_reply_to: null, urgent: false, body: "LAND-42.3 is Ready", created_at: "2026-11-07T00:00:00Z", expires_at: "2026-12-07T00:00:00Z" } } as never);
-    await until(() => sessions[0]!.inputs.length === 2);
-    expect(sessions[0]!.inputs[1]).toContain("LAND-42.3 is Ready");
+    sup.onPush(pushMsg("Bob@mbp-1", true, "LAND-42.3 is Ready"));
+    await until(() => s.inputs.length === 2);
+    expect(s.inputs[1]).toContain("LAND-42.3 is Ready");
     expect(run.idle).toBe(false);
-    sessions[0]!.turnDone("answered");
+    s.turnDone("answered");
     await tick(20);
     // Stopped between turns: its last turn runs, then it ends.
     const stopping = sup.stop(lead.id);
-    await until(() => sessions[0]!.inputs.length === 3);
-    expect(sessions[0]!.inputs[2]).toMatch(/You are being stopped/);
-    sessions[0]!.turnDone("handoff written");
+    await until(() => s.inputs.length === 3);
+    expect(s.inputs[2]).toMatch(/You are being stopped/);
+    s.turnDone("handoff written");
     await stopping;
     await until(() => sup.status(lead.id).state === "stopped");
+  });
+
+  it("is never stalled by the clock, idle or in a long call", async () => {
+    const { sup, lead, leadSession: s } = await withLead();
+    const run = (sup as unknown as { runs: Map<string, { lastEventAt: number; toolsInFlight: number }> }).runs.get(lead.id)!;
+    run.toolsInFlight = 1;
+    run.lastEventAt = Date.now() - 5 * 3600_000;
+    (sup as unknown as { checkStalls: () => void }).checkStalls();
+    expect(s.interrupted).toBe(false);
   });
 
   it("holds no worker slot: it starts past the cap, and its builders don't wait behind it", async () => {
@@ -137,85 +165,93 @@ describe("a lead", () => {
     expect(sup.spawn({ project: "studio", role: "ann", task: "c" }).note).toMatch(/2 workers running, the laptop's limit/);
   });
 
-  it("sends its own requests to Casper, and doesn't message itself about them", async () => {
-    const { sup, broker, sessions } = await setup();
-    const lead = sup.spawn({ project: "studio", role: "bob", task: "lead" });
-    await until(() => sessions.length === 1);
-    void sessions[0]!.ask("WebFetch", { url: "https://example.com" });
+  it("has no rules but the two guards: the supervisor's folder and the hooks", async () => {
+    const { sup, leadSession: s, sessions } = await withLead();
+    const lead = { project: "studio", role: "bob", writeRoots: ["/work/studio-bob"], cwd: "/work/studio-bob", lead: true };
+    // A builder's deny rule doesn't bind it; auto mode judges the call, as for the interactive orchestrator.
+    expect(POLICY.preflight("Bash", { command: "git push -q origin HEAD:main" }, lead)).toBeNull();
+    expect(POLICY.preflight("Bash", { command: "git push" }, { ...lead, lead: false })).toMatchObject({ decision: "deny", rule: "no-push" });
+    // No slot either: it ran none as the interactive orchestrator.
+    expect(POLICY.preflight("Bash", { command: "pnpm test" }, lead)).toBeNull();
+    // Writes anywhere, as before.
+    expect(POLICY.preflight("Write", { file_path: "/work/helix/lead/notes.md" }, lead)).toBeNull();
+    expect(POLICY.preflight("Bash", { command: `cat ${SUPERVISOR_DIR}/supervisor.token` }, lead)).toMatchObject({ decision: "deny", rule: "builtin:supervisor" });
+    expect(POLICY.preflight("Bash", { command: "git commit --no-verify -m x" }, lead)).toMatchObject({ decision: "deny", rule: "builtin:no-verify" });
+    // What auto mode leaves open is Casper's, and waits for him: no timeout.
+    void s.ask("Bash", { command: "rm -rf build" });
     await until(() => sup.pending().length === 1);
-    expect(sup.pending()[0]).toMatchObject({ worker_id: lead.id, tier: "human" });
-    void sessions[0]!.ask("AskUserQuestion", { questions: [] });
-    await until(() => sup.pending().length === 2);
-    expect(sup.pending()[1]).toMatchObject({ kind: "question", tier: "human" });
-    expect(broker.toOrchestrator().filter((b) => b.includes("needs approval") || b.includes("asks a question"))).toEqual([]);
+    expect(sup.pending()[0]).toMatchObject({ tier: "human", rule: "lead" });
+    expect((sup as unknown as { router: { waiting: Map<string, { timer: unknown }> } }).router.waiting.values().next().value!.timer).toBeNull();
+    expect(sessions.length).toBe(1);
   });
 
-  it("gets its tools in-process, never the token, and other workers get none", async () => {
-    const { sup, sessions } = await setup();
-    sup.spawn({ project: "studio", role: "bob", task: "lead" });
+  it("asks Casper in its own session, not through a request", async () => {
+    const { sup, broker, leadSession: s } = await withLead();
+    const r = await s.ask("AskUserQuestion", { questions: [] });
+    expect(r).toMatchObject({ behavior: "deny", message: expect.stringMatching(/Ask Casper in your reply.*Remote Control session/s) });
+    expect(sup.pending()).toEqual([]);
+    expect(broker.toOrchestrator().filter((b) => b.includes("asks a question"))).toEqual([]);
+  });
+
+  it("has the orchestrator's BobNet tools and keeps its own status", async () => {
+    const { sup, broker, leadSession: s, sessions } = await withLead();
     sup.spawn({ project: "studio", role: "ann", task: "x" });
     await until(() => sessions.length === 2);
-    expect(Object.keys(sessions[0]!.options.mcpServers!)).toEqual(["bobnet", "supervisor"]);
+    expect(Object.keys(s.options.mcpServers!)).toEqual(["bobnet", "supervisor"]);
     expect(Object.keys(sessions[1]!.options.mcpServers!)).toEqual(["bobnet"]);
-    expect(sessions[0]!.options.systemPrompt).toMatchObject({ append: expect.stringMatching(/Ending a turn doesn't end you/) });
+    const tools = (srv: unknown) => Object.keys((srv as { instance: { _registeredTools: Record<string, unknown> } }).instance._registeredTools);
+    expect(tools(s.options.mcpServers!["bobnet"])).toEqual(expect.arrayContaining(["send_message", "broadcast", "post_update", "update_status"]));
+    expect(tools(sessions[1]!.options.mcpServers!["bobnet"])).not.toContain("broadcast");
+    expect(tools(s.options.mcpServers!["supervisor"])).toEqual(expect.arrayContaining(["spawn_worker", "answer_request", "audit_log", "take_slot", "order_run_queue"]));
+    // The supervisor sets Bob's idle status at its start, never "worker … running" over the lead's own.
+    expect(broker.statuses.filter((x) => x.as === "Bob").map((x) => x.status)).toEqual(["role · no worker running (messages wait for the next one)"]);
+    expect(s.options.systemPrompt).toMatchObject({ append: expect.stringMatching(/Ending a turn doesn't end you/) });
+  });
+
+  it("gets the info-only news with its next message, as the interactive orchestrator did", async () => {
+    const { sup, leadSession: s } = await withLead();
+    sup.onPush({ t: "presence", event: "joined", peer: { address: "poe@ubu1", name: "poe", laptop: "ubu1", team: "portfolio", purpose: "Portfolio orchestrator", expertise: [], status: null, online: true, last_seen: "2026-11-07T00:00:00Z" } } as never);
+    sup.onPush(pushMsg("Bob@mbp-1", false, "release cut"));
+    await tick(20);
+    expect(s.inputs.length).toBe(1);
+    sup.onPush(pushMsg("Bob@mbp-1", true, "LAND-42.3 is Ready"));
+    await until(() => s.inputs.length === 2);
+    expect(s.inputs[1]).toMatch(/LAND-42\.3 is Ready[\s\S]*Queued BobNet updates[\s\S]*broadcast: release cut[\s\S]*poe@ubu1 \[team: portfolio\] joined/);
   });
 });
 
 describe("the lead's tools", () => {
-  it("spawn and act in its own project only, never on a lead", async () => {
-    const { sup, sessions } = await setup();
-    const lead = sup.spawn({ project: "studio", role: "bob", task: "lead" });
-    await until(() => sessions.length === 1);
-    const t = scope(sup, lead.id);
-    const ann = t.spawn({ role: "ann", task: "draw" }) as { id: string; project: string; spawned_by: string };
+  it("are the orchestrator's, in every project, its spawns its own", async () => {
+    const { lead, call } = await withLead();
+    const ann = await call("spawn_worker", { project: "studio", role: "ann", task: "draw" });
     expect(ann).toMatchObject({ project: "studio", spawned_by: lead.id });
     expect(store.auditLog(10).find((x) => x.action === "spawn" && x.worker_id === ann.id)!.actor).toBe(lead.id);
-    expect(() => t.spawn({ role: "bill", task: "x" })).toThrow(/No role bill in studio/);
-    expect(() => t.spawn({ role: "bob", task: "x" })).toThrow(/the lead's own role/);
-    const helix = sup.spawn({ project: "helix", role: "bill", task: "x" });
-    expect(() => t.status(helix.id, false)).toThrow(/is helix's; your tools act in studio only/);
-    await expect(t.stop(helix.id)).rejects.toThrow(/studio only/);
-    await expect(t.stop(lead.id)).rejects.toThrow(/only Casper stops or resets it/);
-    expect((t.list(false, {}) as Array<{ id: string }>).map((w) => w.id).sort()).toEqual([ann.id, lead.id].sort());
-    expect(t.project_info()).toMatchObject({ key: "studio", roles: [{ key: "bob" }, { key: "ann" }, { key: "cy" }] });
-    expect(t.takeSlot("Dee", "e2e")).toMatchObject({ queued: true });
-    expect(() => t.freeSlot("Bill")).toThrow(/Bill isn't studio's/);
-    expect(() => t.orderRunQueue(["Dee", "Marvin"])).toThrow(/Marvin isn't studio's/);
-    expect(t.freeSlot("Dee")).toBe("Dee's slot freed");
+    const bill = await call("spawn_worker", { project: "helix", role: "bill", task: "x" });
+    expect(bill).toMatchObject({ project: "helix", spawned_by: lead.id });
+    expect((await call("list_projects")).map((p: { key: string }) => p.key)).toEqual(["helix", "games", "studio"]);
+    await expect(call("stop_worker", { id: lead.id })).rejects.toThrow(/can't stop yourself/);
+    await expect(call("reset_worker", { id: lead.id })).rejects.toThrow(/can't reset yourself/);
     // A reset by the lead makes the fresh worker the lead's.
-    const fresh = (await t.reset(ann.id, {})) as { spawned_by: string };
+    const fresh = await call("reset_worker", { id: ann.id });
     expect(fresh.spawned_by).toBe(lead.id);
   });
 
-  it("answer only its own workers' orchestrator-tier requests", async () => {
-    const { sup, sessions } = await setup();
-    const lead = sup.spawn({ project: "studio", role: "bob", task: "lead" });
-    await until(() => sessions.length === 1);
-    const t = scope(sup, lead.id);
-    const ann = t.spawn({ role: "ann", task: "x" }) as { id: string };
+  it("answer any worker's request, a human-tier one only with Casper's word, never its own", async () => {
+    const { sup, call, leadSession: s, sessions } = await withLead();
     const cy = sup.spawn({ project: "studio", role: "cy", task: "y" }); // the interactive orchestrator's
-    const bill = sup.spawn({ project: "helix", role: "bill", task: "z" });
-    await until(() => sessions.length === 3);
-    const [, annS, cyS] = sessions;
-    const allowed = annS!.ask("WebFetch", { url: "https://a" });
-    void annS!.ask("Bash", { command: "git push" });
-    void cyS!.ask("WebFetch", { url: "https://c" });
-    await until(() => sup.pending().length === 3);
-    const req = (worker: string, tool: string) => sup.pending().find((r) => r.worker_id === worker && r.tool === tool)!.id;
-
-    expect((t.pending() as Array<{ id: string; decides: string }>).map((r) => r.decides).sort()).toEqual(["Casper", "the orchestrator that spawned it", "you"]);
-    expect(() => t.answer(req(ann.id, "Bash"), { decision: "allow" })).toThrow(/Casper's to decide/);
-    expect(() => t.answer(req(cy.id, "WebFetch"), { decision: "allow" })).toThrow(/a worker you didn't spawn/);
-    expect(t.answer(req(ann.id, "WebFetch"), { decision: "allow" })).toMatchObject({ state: "answered", decision: "allow" });
+    await until(() => sessions.length === 2);
+    const allowed = sessions[1]!.ask("WebFetch", { url: "https://c" });
+    await until(() => sup.pending().length === 1);
+    const req = sup.pending()[0]!.id;
+    expect(await call("answer_request", { id: req, decision: "allow" })).toMatchObject({ state: "answered" });
     await expect(allowed).resolves.toMatchObject({ behavior: "allow" });
+    expect(cy.spawned_by).toBe("orchestrator");
 
-    // Another project's requests aren't even listed. Bill starts once Cy's slot is free.
-    void sup.stop(cy.id);
-    cyS!.finish();
-    await until(() => sessions.length === 4);
-    void sessions[3]!.ask("WebFetch", { url: "https://b" });
-    await until(() => sup.pending().some((r) => r.worker_id === bill.id));
-    expect((t.pending() as Array<{ worker_id: string }>).some((r) => r.worker_id === bill.id)).toBe(false);
-    expect(() => t.detail(req(bill.id, "WebFetch"))).toThrow(/isn't one of studio's workers' requests/);
+    // Its own request: Casper's, even with user_decided.
+    void s.ask("Bash", { command: "rm -rf build" });
+    await until(() => sup.pending().length === 1);
+    const own = sup.pending()[0]!.id;
+    await expect(call("answer_request", { id: own, decision: "allow", user_decided: true })).rejects.toThrow(/your own request; Casper answers it/);
+    expect(sup.pending().map((r) => r.id)).toEqual([own]);
   });
 });

@@ -266,5 +266,14 @@ describe("the orchestrator's usage", () => {
     writeFileSync(main, call("b3", "2026-10-31T14:50:00Z", 5) + "\n", { flag: "a" });
     await boards.refresh();
     expect(sent.at(-1)!.sessions[1]!.orchestrator).toEqual({ name: "Bob", calls: 3, tokens: 4 * each });
+
+    // A lead worker runs in the orchestrator's folder: its session is its own run's usage, not the orchestrator's.
+    writeFileSync(join(folder, "lead1.jsonl"), call("l1", "2026-10-31T14:45:00Z", 5) + "\n");
+    mkdirSync(join(folder, "lead1", "subagents"), { recursive: true });
+    writeFileSync(join(folder, "lead1", "subagents", "agent-b.jsonl"), call("l2", "2026-10-31T14:46:00Z", 5) + "\n");
+    const lead = store.createWorker({ project: "helix", role: "changesets", task: "lead", handoff: null, priority: 1, resume_session: null });
+    store.updateWorker(lead.id, { state: "done", session_id: "lead1", started_at: "2026-10-31T14:44:00Z", ended_at: "2026-10-31T14:47:00Z" });
+    await boards.refresh();
+    expect(sent.at(-1)!.sessions.find((x) => x.name === "LAND-41 build 2")!.orchestrator).toEqual({ name: "Bob", calls: 3, tokens: 4 * each });
   });
 });

@@ -72,6 +72,12 @@ export interface PolicyContext {
   role: string;
   writeRoots: string[];
   cwd: string;
+  /**
+   * Its project's lead (the orchestrator, run as a worker): as the interactive orchestrator, it
+   * has only the two guards no rule lifts, its folder's token and the hooks; auto mode judges the
+   * rest, and what that leaves open is Casper's.
+   */
+  lead?: boolean;
 }
 
 const FILE_WRITE_TOOLS = new Set(["Edit", "Write", "NotebookEdit", "MultiEdit"]);
@@ -286,6 +292,11 @@ export class Policy {
     }
     if (tool === "Bash" && /\bgit\b[^\n]*--no-verify\b/.test(String(input["command"] ?? ""))) {
       return { decision: "deny", rule: "builtin:no-verify", tier: "human", reason: "Hooks are never skipped", slot: false };
+    }
+    if (ctx.lead) {
+      return unmatchedPasses
+        ? { decision: "allow", rule: "default", tier: "human", reason: "A lead has no rules but the guards", slot: false }
+        : { decision: "escalate", rule: "lead", tier: "human", reason: "The lead's call: Casper decides", slot: false };
     }
     if (FILE_WRITE_TOOLS.has(tool) && absPath !== undefined && !ctx.writeRoots.some((r) => inside(r, absPath))) {
       return {

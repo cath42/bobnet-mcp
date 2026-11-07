@@ -55,7 +55,7 @@ const POWER = {
   effort: { type: "string", enum: [...EFFORTS], description: "Override the role's default effort: less for routine work, more for hard design; capped by the role's max_effort." },
 };
 
-const TOOLS = [
+export const TOOLS = [
   {
     name: "spawn_worker",
     description:
@@ -148,7 +148,15 @@ const TOOLS = [
   { name: "run_slots", description: "The run slot: the hold if any (read from the projects' hold files, e.g. pnpm integrate hold), who holds the slot and for what, and who is waiting, in order.", inputSchema: obj({}) },
 ] as const;
 
-function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<unknown> | unknown> {
+/**
+ * The tools' bodies. With `lead`, they run for a lead worker (its project's orchestrator, run as a
+ * worker): its spawns are its own, and it never stops, resets or answers for itself.
+ */
+export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<string, (args: unknown) => Promise<unknown> | unknown> {
+  const notSelf = (id: string, what: string) => {
+    if (opts.lead && id === opts.lead) throw new SupervisorError(`You can't ${what} yourself; Casper does that from the dashboard`);
+    return id;
+  };
   return {
     spawn_worker: (a) => {
       const s = Spawn.parse(a);
@@ -162,12 +170,13 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
         ...(s.resume_session ? { resume_session: s.resume_session } : {}),
         ...(s.model ? { model: s.model } : {}),
         ...(s.effort ? { effort: s.effort } : {}),
+        ...(opts.lead ? { spawnedBy: opts.lead } : {}),
       });
     },
-    stop_worker: (a) => sup.stop(Id.parse(a).id),
+    stop_worker: (a) => sup.stop(notSelf(Id.parse(a).id, "stop")),
     reset_worker: (a) => {
       const r = Reset.parse(a);
-      return sup.reset(r.id, { ...(r.model ? { model: r.model } : {}), ...(r.effort ? { effort: r.effort } : {}) });
+      return sup.reset(notSelf(r.id, "reset"), { ...(r.model ? { model: r.model } : {}), ...(r.effort ? { effort: r.effort } : {}) }, opts.lead);
     },
     list_workers: (a) => {
       const l = ListArgs.parse(a);
@@ -187,6 +196,8 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
     answer_request: (a) => {
       const x = AnswerArgs.parse(a);
       if (x.decision === "answer" && !x.answers) throw new AnswerError("decision \"answer\" needs answers");
+      // A lead's own requests are Casper's: it never approves its own call.
+      if (opts.lead && sup.requestDetail(x.id).worker_id === opts.lead) throw new AnswerError(`${x.id} is your own request; Casper answers it`);
       const answer =
         x.decision === "answer"
           ? { decision: "answer" as const, answers: x.answers!, ...(x.message ? { message: x.message } : {}) }
@@ -207,36 +218,35 @@ function handlers(sup: Supervisor): Record<string, (args: unknown) => Promise<un
   };
 }
 
+export const INSTRUCTIONS =
+  "Controls the headless workers on this laptop. Spawn a fresh worker per story phase; read worker_summary and handoff files, not raw logs. " +
+  "Escalations and worker completions arrive as BobNet messages from the supervisor; answer with answer_request. " +
+  "Surface to the user anything you can't decide, and every tier-\"human\" request.";
+
+/** Runs one tool, its result or refusal as the tool's text. */
+export async function callTool(h: ReturnType<typeof handlers>, name: string, args: unknown): Promise<{ isError?: true; content: Array<{ type: "text"; text: string }> }> {
+  const fn = h[name];
+  if (!fn) return { isError: true, content: [{ type: "text", text: `Unknown tool ${name}` }] };
+  try {
+    const result = await fn(args ?? {});
+    return { content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result, null, 2) }] };
+  } catch (err) {
+    const known = err instanceof SupervisorError || err instanceof AnswerError;
+    const text =
+      err instanceof z.ZodError
+        ? `bad_arguments: ${err.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}`
+        : known
+          ? (err as Error).message
+          : `error: ${(err as Error).message}`;
+    return { isError: true, content: [{ type: "text", text }] };
+  }
+}
+
 function mcpServer(sup: Supervisor): Server {
-  const server = new Server(
-    { name: "bobnet-supervisor", version: "0.2.0" },
-    {
-      capabilities: { tools: {} },
-      instructions:
-        "Controls the headless workers on this laptop. Spawn a fresh worker per story phase; read worker_summary and handoff files, not raw logs. " +
-        "Escalations and worker completions arrive as BobNet messages from the supervisor; answer with answer_request. " +
-        "Surface to the user anything you can't decide, and every tier-\"human\" request.",
-    },
-  );
+  const server = new Server({ name: "bobnet-supervisor", version: "0.2.0" }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
   const h = handlers(sup);
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOLS] }));
-  server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const fn = h[req.params.name];
-    if (!fn) return { isError: true, content: [{ type: "text", text: `Unknown tool ${req.params.name}` }] };
-    try {
-      const result = await fn(req.params.arguments ?? {});
-      return { content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result, null, 2) }] };
-    } catch (err) {
-      const known = err instanceof SupervisorError || err instanceof AnswerError;
-      const text =
-        err instanceof z.ZodError
-          ? `bad_arguments: ${err.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}`
-          : known
-            ? (err as Error).message
-            : `error: ${(err as Error).message}`;
-      return { isError: true, content: [{ type: "text", text }] };
-    }
-  });
+  server.setRequestHandler(CallToolRequestSchema, async (req) => callTool(h, req.params.name, req.params.arguments));
   return server;
 }
 

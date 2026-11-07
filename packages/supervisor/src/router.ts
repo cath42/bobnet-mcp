@@ -31,7 +31,8 @@ export interface RouterDeps {
 
 interface Waiter {
   resolve: (r: PermissionResult) => void;
-  timer: NodeJS.Timeout;
+  /** None for a lead's request: like a terminal's prompt, it waits for Casper. */
+  timer: NodeJS.Timeout | null;
   input: Record<string, unknown>;
   workerId: string;
 }
@@ -56,9 +57,18 @@ export class Router {
         return { behavior: "allow", updatedInput: input };
       }
 
-      // A lead is the orchestrator: what it would ask one goes to Casper.
+      // A lead asks Casper the way it would in a terminal: in its own session, which he follows in Remote Control.
+      if (toolName === "AskUserQuestion" && role.lead) {
+        store.audit("router", "lead-question", workerId, {});
+        return {
+          behavior: "deny",
+          message:
+            "Questions don't open a dialog here. Ask Casper in your reply, plainly, with the options you'd have offered, and end your turn: " +
+            "he answers by typing in your Remote Control session, and his answer is your next message.",
+        };
+      }
       if (toolName === "AskUserQuestion") {
-        return this.escalate(workerId, role, toolName, input, "question", role.lead ? "human" : "orchestrator", "ask-user-question", "The worker asked a question", signal);
+        return this.escalate(workerId, role, toolName, input, "question", "orchestrator", "ask-user-question", "The worker asked a question", signal);
       }
 
       const verdict = policy.evaluate(toolName, input, {
@@ -66,6 +76,7 @@ export class Router {
         role: role.key,
         writeRoots: role.writeRoots,
         cwd: role.dir,
+        ...(role.lead ? { lead: true } : {}),
       });
       const slotted = (result: PermissionResult): Promise<PermissionResult> | PermissionResult =>
         verdict.slot && result.behavior === "allow" ? this.inSlot(workerId, authorOf(role), toolUseID, input, signal) : result;
@@ -123,7 +134,7 @@ export class Router {
 
     const waiter = this.waiting.get(requestId);
     if (waiter) {
-      clearTimeout(waiter.timer);
+      if (waiter.timer) clearTimeout(waiter.timer);
       this.waiting.delete(requestId);
       this.deps.setWorkerState(waiter.workerId, "running");
       waiter.resolve(toResult(answer, waiter.input));
@@ -155,7 +166,7 @@ export class Router {
     this.deps.announce(req, role.name);
 
     return new Promise<PermissionResult>((resolve) => {
-      const timer = setTimeout(() => {
+      const timer = role.lead ? null : setTimeout(() => {
         this.waiting.delete(req.id);
         store.settleRequest(req.id, {
           state: "expired",
@@ -173,7 +184,7 @@ export class Router {
             "Write this under Open questions in your handoff file and continue with other work, or stop cleanly.",
         });
       }, this.deps.timeoutMs);
-      timer.unref();
+      timer?.unref();
       this.waiting.set(req.id, { resolve, timer, input, workerId });
 
       signal.addEventListener(
@@ -181,7 +192,7 @@ export class Router {
         () => {
           const w = this.waiting.get(req.id);
           if (!w) return;
-          clearTimeout(w.timer);
+          if (w.timer) clearTimeout(w.timer);
           this.waiting.delete(req.id);
           resolve({ behavior: "deny", message: "Worker stopped", interrupt: true });
         },

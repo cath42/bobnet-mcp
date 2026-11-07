@@ -7,7 +7,8 @@
   "exports": {
     "./connection": "./src/connection.ts",
     "./config": "./src/config.ts",
-    "./log": "./src/log.ts"
+    "./log": "./src/log.ts",
+    "./inbox": "./src/inbox.ts"
   },
   "bin": {
     "bobnet": "./src/bin.ts"

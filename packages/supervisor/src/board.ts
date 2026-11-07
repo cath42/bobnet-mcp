@@ -387,12 +387,15 @@ export class Boards {
   /**
    * The orchestrator's calls, from its folder's transcripts and their subagents', once each; a file is
    * read on only from where it grew. The first read can be hundreds of MB: it yields between files.
+   * A worker's session in the same folder (a lead runs in the orchestrator's) is the worker's usage, not this.
    */
   private async orchestratorCalls(dir: string): Promise<TranscriptCall[]> {
     const folder = transcriptFolder(this.transcriptsRoot, dir);
+    const workers = new Set(this.deps.store.workers().flatMap((w) => (w.session_id ? [w.session_id] : [])));
     const files: Array<[string, boolean]> = [];
     try {
       for (const f of readdirSync(folder)) {
+        if (workers.has(f.replace(/\.jsonl$/, ""))) continue;
         if (f.endsWith(".jsonl")) files.push([join(folder, f), false]);
         else {
           try {
