@@ -307,7 +307,10 @@ export class WorkerRun {
     } finally {
       if (this.runtimeTimer) clearTimeout(this.runtimeTimer);
       this.query?.close();
-      this.log?.end();
+      // The exit is reported once the log is on disk, so a summary read at "done" sees the result.
+      // close follows a finished flush or a failed one, so a broken log can't hold the exit.
+      const log = this.log;
+      if (log && !log.closed) await new Promise<void>((r) => log.once("close", () => r()).end());
       const outcome: Outcome = this.stopReason
         ? { state: "stopped", reason: this.stopReason }
         : (this.result ?? { state: "failed", error: "session ended without a result" });

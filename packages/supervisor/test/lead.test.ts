@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LaptopSnapshot } from "@bobnet/protocol";
@@ -7,6 +7,7 @@ import { callTool, handlers } from "../src/mcp.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
 import { remoteName, Supervisor } from "../src/supervisor.ts";
+import { WorkerRun } from "../src/worker.ts";
 import { FakeBroker, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 
 const POLICY_TEXT = `
@@ -269,5 +270,30 @@ describe("the lead's tools", () => {
     const own = sup.pending()[0]!.id;
     await expect(call("answer_request", { id: own, decision: "allow", user_decided: true })).rejects.toThrow(/your own request; Casper answers it/);
     expect(sup.pending().map((r) => r.id)).toEqual([own]);
+  });
+});
+
+describe("a worker's exit", () => {
+  it("is reported once its log is on disk, so a summary at done reads the result", async () => {
+    const logPath = join(dir, "logs", "w_flush.jsonl");
+    const role = testConfig(dir, STUDIO).projects.get("studio")!.roles.get("cy")!;
+    const { queryFn, sessions } = fakeQuery();
+    let atExit = "";
+    const exited = new Promise<void>((resolve) => {
+      const run = new WorkerRun({
+        id: "w_flush", role, prompt: "go", systemAppend: "", resumeSession: null, logPath, queryFn,
+        canUseTool: async (_t, input) => ({ behavior: "allow", updatedInput: input }), mcpServers: {},
+        onEvent: () => {},
+        onExit: () => {
+          atExit = readFileSync(logPath, "utf8");
+          resolve();
+        },
+      });
+      run.start();
+    });
+    sessions[0]!.say("Wrote the ADR.");
+    sessions[0]!.finish("all done");
+    await exited;
+    expect(atExit).toContain('"result":"all done"');
   });
 });
