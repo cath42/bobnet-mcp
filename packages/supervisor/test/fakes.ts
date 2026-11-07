@@ -16,6 +16,8 @@ export class FakeSession implements QueryHandle {
   private wake: (() => void) | null = null;
   private ended = false;
   interrupted = false;
+  /** A background command still running: the session outlives its closed input until closed. */
+  background = false;
   /** Remote Control calls, as [enabled, name]. */
   readonly remoteCalls: Array<[boolean, string | undefined]> = [];
   /** As the SDK's undocumented method; deleted to play an SDK without it. */
@@ -31,8 +33,8 @@ export class FakeSession implements QueryHandle {
         const c = m.message.content;
         this.inputs.push(typeof c === "string" ? c : JSON.stringify(c));
       }
-      // As the SDK: with its input closed, the session ends.
-      this.end();
+      // As the SDK: with its input closed, the session ends, unless a background command holds it open.
+      if (!this.background) this.end();
     })();
     this.emit({ type: "system", subtype: "init", session_id: `sess-${Math.random().toString(36).slice(2, 8)}` } as unknown as SDKMessage);
   }
@@ -95,7 +97,12 @@ export class FakeSession implements QueryHandle {
     if (!this.ended) this.emit({ type: "result", subtype: "error_during_execution", modelUsage: {}, total_cost_usd: 0 } as unknown as SDKMessage);
   }
 
-  close(): void {}
+  closed = false;
+  /** As the SDK: closing ends the session, background commands and all. */
+  close(): void {
+    this.closed = true;
+    this.end();
+  }
 
   async *[Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
     for (;;) {

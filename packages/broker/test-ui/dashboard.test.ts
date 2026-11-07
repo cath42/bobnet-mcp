@@ -134,6 +134,18 @@ describe("Now", () => {
     expect($("running").querySelector("a")).toBeNull();
   });
 
+  it("flags a running worker quiet for 15 minutes or more, for Casper to judge", async () => {
+    expect($("running").querySelector(".quiet")).toBeNull();
+    const ws = FakeSocket.last;
+    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+    snap.workers = snap.workers.map((w) => (w.state === "running" ? { ...w, last_event_at: iso(16) } : w)) as never;
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    await settle();
+    expect($("running").querySelector(".quiet")!.textContent).toBe("quiet 16 min");
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
+    await settle();
+  });
+
   it("links a worker running with Remote Control to its session", async () => {
     const ws = FakeSocket.last;
     const snap = structuredClone(dashboard.laptops[0]!.snapshot);

@@ -297,3 +297,35 @@ describe("a worker's exit", () => {
     expect(atExit).toContain('"result":"all done"');
   });
 });
+
+describe("a worker whose turn is done", () => {
+  it("ends at its result, background commands and all, and later messages wait in its inbox (Luke, 2026-11-07)", async () => {
+    const { sup, sessions } = await setup();
+    const w = sup.spawn({ project: "studio", role: "ann", task: "x" });
+    await until(() => sessions.length === 1);
+    // A result with the session still open, as a background command keeps it.
+    sessions[0]!.background = true;
+    sessions[0]!.turnDone("blocked on Marvin");
+    await until(() => sup.status(w.id).state === "done");
+    expect(sessions[0]!.closed).toBe(true);
+    // A message for Ann now waits for her next worker instead of vanishing.
+    sup.onPush(pushMsg("Ann@mbp-1", true, "here is the signed-in run"));
+    await tick(20);
+    const next = sup.spawn({ project: "studio", role: "ann", task: "go on" });
+    await until(() => sessions[1]?.inputs.length === 1);
+    expect(sessions[1]!.inputs[0]).toMatch(/Messages that arrived for you while no worker was running[\s\S]*here is the signed-in run/);
+    expect(next.id).not.toBe(w.id);
+  });
+
+  it("never drops a message into a session whose input has closed", async () => {
+    const { sup, sessions } = await setup();
+    sup.spawn({ project: "studio", role: "ann", task: "x" });
+    await until(() => sessions.length === 1);
+    const run = (sup as unknown as { runs: Map<string, { inject: (t: string) => boolean }> }).runs.values().next().value!;
+    (run as unknown as { input: { end: () => void } }).input.end();
+    expect(run.inject("anyone there?")).toBe(false);
+    sup.onPush(pushMsg("Ann@mbp-1", true, "the answer"));
+    await tick(20);
+    expect(store.waiting("studio", "ann").map((m) => m.body)).toEqual(["the answer"]);
+  });
+});

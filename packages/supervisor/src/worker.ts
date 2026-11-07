@@ -59,10 +59,12 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
   private wake: (() => void) | null = null;
   private ended = false;
 
-  push(text: string): void {
-    if (this.ended) return;
+  /** False once the input has closed: nothing will read it. */
+  push(text: string): boolean {
+    if (this.ended) return false;
     this.items.push({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null, priority: "next" });
     this.wake?.();
+    return true;
   }
 
   end(): void {
@@ -221,10 +223,11 @@ export class WorkerRun {
     };
   }
 
-  /** Hands the running worker a message, as its next user turn. */
-  inject(text: string): void {
+  /** Hands the running worker a message, as its next user turn; false if its input has closed. */
+  inject(text: string): boolean {
+    if (!this.input.push(text)) return false;
     this.idle = false;
-    this.input.push(text);
+    return true;
   }
 
   /**
@@ -252,7 +255,10 @@ export class WorkerRun {
 
   private async interruptWith(text: string): Promise<void> {
     // Between turns there is nothing to interrupt: the message is simply the next turn.
-    if (this.idle) return this.inject(text);
+    if (this.idle) {
+      this.inject(text);
+      return;
+    }
     this.nextTurn = text;
     try {
       await this.query?.interrupt();
@@ -300,6 +306,9 @@ export class WorkerRun {
               ? { state: "done", result: msg.result }
               : { state: "failed", error: msg.subtype };
           this.input.end();
+          // Its work is over: a background command it left running would hold the session open,
+          // and the worker with it, past its result.
+          this.query?.close();
         }
       }
     } catch (err) {

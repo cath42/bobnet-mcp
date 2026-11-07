@@ -557,9 +557,10 @@ export class Supervisor {
       ack();
       return;
     }
-    if (active) {
-      const digest = news?.takeDigest();
-      active[1].inject(digest ? `${formatInbound(msg)}\n\n${digest}` : formatInbound(msg));
+    const digest = active ? news?.takeDigest() : undefined;
+    // A session whose input has closed (its turn done, a background command keeping it open) can't take
+    // a message: it waits in the inbox for the role's next worker, as with no worker running.
+    if (active && active[1].inject(digest ? `${formatInbound(msg)}\n\n${digest}` : formatInbound(msg))) {
       this.store.audit("broker", "inject", active[0], { message: msg.id, from: msg.from });
     } else if (this.store.addInbox(role.project, role.key, msg)) {
       // An update, not a message: it reaches the orchestrator's digest without waking it.
@@ -1240,39 +1241,30 @@ export class Supervisor {
   }
 
   /**
-   * Stuck is no progress, not a long run: a worker quiet for stall_minutes between tool calls,
-   * or for tool_stall_minutes in one, and waiting on nothing the supervisor knows of. A wait on
-   * the supervisor (a slot, a land, a request) is progress; if the slot's queue stops, its holder
-   * is the stuck one. A stuck worker is interrupted and asked for its handoff, and goes on.
+   * Stuck is no progress, not a long run: a worker quiet for stall_minutes between tool calls, or
+   * for tool_stall_minutes in one, and waiting on nothing the supervisor knows of. It is recorded
+   * and shown on the dashboard, never acted on: the supervisor neither interrupts a worker nor
+   * messages anyone about it (Casper, 2026-11-07). He or the lead stops or resets it.
    */
   private checkStalls(): void {
     for (const [id, run] of this.runs) {
+      const w = this.store.worker(id);
       // A lead is never stuck by the clock: it waits on messages, and watches CI as long as it takes.
-      const lw = this.store.worker(id);
-      if ((lw && this.roleOf(lw).lead) || this.stallReported.has(id) || this.supervisorWaits.has(id) || this.router.isWaiting(id)) continue;
+      if (!w || this.roleOf(w).lead || this.stallReported.has(id) || this.supervisorWaits.has(id) || this.router.isWaiting(id)) continue;
       const inTool = run.toolsInFlight > 0;
       const quiet = Date.now() - run.lastEventAt;
       if (quiet < (inTool ? this.config.toolStallMinutes : this.config.stallMinutes) * 60_000) continue;
       this.stallReported.add(id);
-      const w = this.store.worker(id)!;
-      const minutes = Math.round(quiet / 60_000);
-      const what = inTool ? `a tool call ran ${minutes} minutes with no output` : `nothing happened for ${minutes} minutes`;
-      this.store.audit("supervisor", "stalled", id, { minutes, in_tool: inTool });
-      void run.nudge(
-        `The supervisor interrupted you because you looked stuck: ${what}${inTool ? "; that call was stopped" : ""}. ` +
-          `Write your checkpoint and your handoff (${this.handoffOf(w)}) now, saying what was stuck, then carry on if you can.`,
-      );
-      this.notify(`${this.roleOf(w).name} (${id}) looked stuck: ${what}. I interrupted it and asked for its checkpoint and handoff; it carries on if it can. If it doesn't recover, check tail_worker, then stop or reset it.`, w.project);
+      this.store.audit("supervisor", "stalled", id, { minutes: Math.round(quiet / 60_000), in_tool: inTool });
+      this.report();
     }
-    // An interactive agent's slot has no run to watch: its orchestrator hears when it has held it long.
+    // An interactive agent's long hold on the slot: recorded, and shown with the slot.
     for (const e of this.slots.status().holders) {
       const key = `${e.holder} ${e.since}`;
       if (!e.holder.startsWith("interactive:") || this.longHolds.has(key)) continue;
       if (Date.now() - Date.parse(e.since) < this.config.toolStallMinutes * 60_000) continue;
       this.longHolds.add(key);
-      const name = e.holder.slice("interactive:".length);
-      const waiting = this.slots.status().queue.length;
-      this.notify(`${name} has held the run slot for ${this.config.toolStallMinutes}+ minutes (${e.label})${waiting ? `; ${waiting} wait behind it` : ""}. If it's done or stuck, free it with free_slot.`, this.interactive.get(name));
+      this.store.audit("supervisor", "slot:long-hold", null, { holder: e.holder, label: e.label });
     }
   }
 
