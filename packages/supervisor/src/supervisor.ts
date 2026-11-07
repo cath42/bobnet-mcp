@@ -35,6 +35,8 @@ export interface BrokerLink {
 export class SupervisorError extends Error {}
 
 const STALL_CHECK_MS = 60_000;
+/** How long a shutdown waits for its workers' exits to be recorded: past a stop's grace period and kill. */
+const SHUTDOWN_WAIT_MS = 15_000;
 const REGISTER_RETRY_MS = 5_000;
 /** Longer than the broker's silence window, so a stale holder of our names has been replaced. */
 const REGISTER_GIVE_UP_MS = 120_000;
@@ -114,6 +116,9 @@ export class Supervisor {
   private readonly interactive = new Map<string, string>();
   /** This laptop's id on BobNet, once the supervisor has registered. */
   private laptop: string | null = null;
+  private readonly sandboxCheck: () => Promise<string | null>;
+  /** Why the sandbox can't run on this machine, from the check at start; null when it can (or nothing needs it). */
+  private sandboxBroken: string | null = null;
   /** Each running lead's info-only news (joins, leaves, statuses, quiet broadcasts), as the interactive orchestrator's digest. */
   private readonly leadNews = new Map<string, Inbox>();
   private holdTimer: NodeJS.Timeout | null = null;
@@ -131,8 +136,11 @@ export class Supervisor {
     ownerCheck?: OwnerCheck;
     /** Sends each project's board (backlog, sessions, past runs) to the dashboard; off unless asked for. */
     boards?: { transcriptsDir?: string };
+    /** Whether Claude Code's sandbox can run here: null if it can, else why not. Default: sandboxProblem. */
+    sandboxCheck?: () => Promise<string | null>;
   }) {
     this.ownerCheck = deps.ownerCheck ?? null;
+    this.sandboxCheck = deps.sandboxCheck ?? sandboxProblem;
     this.config = deps.config;
     this.policy = deps.policy;
     this.store = deps.store;
@@ -172,6 +180,14 @@ export class Supervisor {
 
   /** Reconciles state left by a previous run, joins BobNet, and starts scheduling. */
   async start(): Promise<void> {
+    // A sandboxed role's workers fail at once where the sandbox can't run (stock Ubuntu 24.04): said at start, not at the first spawn.
+    if (this.roles().some((r) => r.sandbox)) {
+      this.sandboxBroken = await this.sandboxCheck();
+      if (this.sandboxBroken) {
+        this.log.error("Claude Code's sandbox can't run here: sandboxed roles won't start", { why: this.sandboxBroken });
+        this.store.audit("supervisor", "sandbox:unavailable", null, { why: this.sandboxBroken });
+      }
+    }
     const orphaned = this.store.workers({ states: ACTIVE_STATES });
     for (const w of orphaned) {
       this.store.updateWorker(w.id, { state: "failed", error: "supervisor restarted", ended_at: new Date().toISOString() });
@@ -226,7 +242,10 @@ export class Supervisor {
     if (this.stallTimer) clearInterval(this.stallTimer);
     if (this.holdTimer) clearInterval(this.holdTimer);
     if (this.reportTimer) clearTimeout(this.reportTimer);
-    await Promise.all([...this.runs.values()].map((r) => r.stop("supervisor shutting down")));
+    const runs = [...this.runs.values()];
+    await Promise.all(runs.map((r) => r.stop("supervisor shutting down")));
+    // Each exit is recorded before the caller closes the store; a stop kills a session after its grace period.
+    await Promise.race([Promise.all(runs.map((r) => r.exited)), new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS).unref())]);
   }
 
   // ---------- Orchestrator API ----------
@@ -251,6 +270,9 @@ export class Supervisor {
   }): WorkerRow & { note?: string } {
     const project = this.project(opts.project);
     const role = this.role(opts.project, opts.role);
+    if (role.sandbox && this.sandboxBroken) {
+      throw new SupervisorError(`${role.name} runs in Claude Code's sandbox, which can't run on this machine: ${this.sandboxBroken}`);
+    }
     // The board shows a worker on the items its spawn names, and guesses none from the brief.
     if (opts.tasks === undefined && project.backlog) {
       throw new SupervisorError(`${project.key} has a backlog: say which items this worker works on or reviews, tasks: ["LAND-41.3", …] (a feature id for the feature as a whole; [] for none)`);
@@ -1607,6 +1629,23 @@ function buildPrompt(task: string, handoff: string, waiting: Envelope[]): string
   ];
   if (waiting.length > 0) parts.push(`Messages that arrived for you while no worker was running:\n\n${waiting.map(formatInbound).join("\n\n---\n\n")}`);
   return parts.join("\n\n");
+}
+
+/**
+ * Why Claude Code's sandbox can't run on this machine, or null. On Linux it is bubblewrap: missing, or
+ * kept from user namespaces, as Ubuntu 24.04 does unless bwrap has its own AppArmor profile (README).
+ * A Mac's sandbox is built in.
+ */
+export function sandboxProblem(platform = process.platform): Promise<string | null> {
+  if (platform !== "linux") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    execFile("bwrap", ["--ro-bind", "/", "/", "--unshare-net", "true"], { timeout: 10_000 }, (err, _out, stderr) => {
+      if (!err) return resolve(null);
+      const why = (stderr || err.message).trim().split("\n").pop() ?? "";
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return resolve("bubblewrap (bwrap) isn't installed: apt install bubblewrap socat");
+      resolve(`bwrap fails (${why}); on Ubuntu 24.04 give /usr/bin/bwrap an AppArmor profile with userns (README, Linux)`);
+    });
+  });
 }
 
 /** A lead runs headless too, but Casper may be following it in Remote Control, and it stays alive between turns. */

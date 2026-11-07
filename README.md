@@ -90,7 +90,25 @@ node packages/supervisor/src/bin.ts install-launchd
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.bobnet.supervisor.plist
 ```
 
-On Linux, install it as a systemd user service instead. There's no Keychain, so put the laptop's service token in `~/.config/bobnet/supervisor.env` (mode 0600) as `BOBNET_ACCESS_CLIENT_ID=…` and `BOBNET_ACCESS_CLIENT_SECRET=…`, and leave `keychain` out of `config.json`. Workers never get those variables, and they can't read the supervisor's folder.
+On Linux, workers run in Claude Code's sandbox, which is bubblewrap there: `apt install bubblewrap socat`. Ubuntu 24.04 keeps bubblewrap from creating user namespaces (`kernel.apparmor_restrict_unprivileged_userns=1`), so the sandbox fails with `loopback: Failed RTM_NEWADDR: Operation not permitted`. Give bwrap alone its own AppArmor profile; the rest of the system stays as it is:
+
+```sh
+sudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap>
+}
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/bwrap
+bwrap --ro-bind / / --unshare-net true && echo sandbox ok
+```
+
+The supervisor runs the same check when it starts. If it fails, the supervisor logs why and refuses to spawn sandboxed roles, saying why, instead of letting a worker die at its first call.
+
+Install it as a systemd user service instead of the LaunchAgent. There's no Keychain, so put the laptop's service token in `~/.config/bobnet/supervisor.env` (mode 0600) as `BOBNET_ACCESS_CLIENT_ID=…` and `BOBNET_ACCESS_CLIENT_SECRET=…`, and leave `keychain` out of `config.json`. Workers never get those variables, and they can't read the supervisor's folder.
 
 ```sh
 node packages/supervisor/src/bin.ts install-systemd

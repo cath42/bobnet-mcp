@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { callTool, handlers } from "../src/mcp.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
-import { remoteName, Supervisor } from "../src/supervisor.ts";
+import { remoteName, sandboxProblem, Supervisor } from "../src/supervisor.ts";
 import { WorkerRun } from "../src/worker.ts";
 import { FakeBroker, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 
@@ -46,7 +46,7 @@ afterEach(async () => {
 async function setup(opts: { remoteControl?: boolean } = {}) {
   const broker = new FakeBroker();
   const { queryFn, sessions } = fakeQuery(opts);
-  const sup = new Supervisor({ config: testConfig(dir, STUDIO), policy: POLICY, store, broker, queryFn, log: quiet, ownerCheck: async () => false });
+  const sup = new Supervisor({ config: testConfig(dir, STUDIO), policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async () => false });
   await sup.start();
   running.push(sup);
   return { sup, broker, sessions };
@@ -327,5 +327,38 @@ describe("a worker whose turn is done", () => {
     sup.onPush(pushMsg("Ann@mbp-1", true, "the answer"));
     await tick(20);
     expect(store.waiting("studio", "ann").map((m) => m.body)).toEqual(["the answer"]);
+  });
+});
+
+describe("a shutdown", () => {
+  it("returns once every worker's exit is recorded, so the store can close after it", async () => {
+    const { sup, sessions } = await setup();
+    const w = sup.spawn({ project: "studio", role: "ann", task: "x" });
+    await until(() => sessions.length === 1);
+    // A shutdown ends sessions at once, no last turn; it returns after the exit is written.
+    await sup.shutdown();
+    running.splice(running.indexOf(sup), 1);
+    expect(store.worker(w.id)).toMatchObject({ state: "stopped", error: "supervisor shutting down" });
+  });
+});
+
+describe("the sandbox check", () => {
+  it("says at start when the sandbox can't run, and refuses a sandboxed role's spawn with the reason", async () => {
+    const broker = new FakeBroker();
+    const { queryFn, sessions } = fakeQuery();
+    const why = "bwrap fails (loopback: Failed RTM_NEWADDR: Operation not permitted)";
+    const unsandboxed = `${STUDIO}      dee: { dir: /work/studio-dee, sandbox: false }\n`;
+    const sup = new Supervisor({ config: testConfig(dir, unsandboxed), policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => why, ownerCheck: async () => false });
+    await sup.start();
+    running.push(sup);
+    expect(store.auditLog(20).find((a) => a.action === "sandbox:unavailable")!.detail).toBe(JSON.stringify({ why }));
+    expect(() => sup.spawn({ project: "studio", role: "ann", task: "x" })).toThrow(`Ann runs in Claude Code's sandbox, which can't run on this machine: ${why}`);
+    // A role without the sandbox still runs.
+    sup.spawn({ project: "studio", role: "dee", task: "x" });
+    await until(() => sessions.length === 1);
+  });
+
+  it("is a Mac's built-in sandbox there, and bubblewrap on Linux", async () => {
+    expect(await sandboxProblem("darwin")).toBeNull();
   });
 });

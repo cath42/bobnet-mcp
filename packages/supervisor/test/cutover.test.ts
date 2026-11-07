@@ -47,7 +47,7 @@ function hold(sup: Supervisor, reason: string | null, allow: string[] = []) {
 async function setup(over = "", config = testConfig(dir, over)) {
   const broker = new FakeBroker();
   const { queryFn, sessions } = fakeQuery();
-  const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet });
+  const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null });
   await sup.start();
   running.push(sup);
   return { sup, broker, sessions };

@@ -142,6 +142,9 @@ export class WorkerRun {
   remote: RemoteControl | null = null;
   /** A long-lived worker between turns: waiting for a message, not stuck. */
   idle = false;
+  /** Resolves once the worker's exit is reported and recorded: a shutdown waits for it before closing the store. */
+  readonly exited: Promise<void>;
+  private markExited!: () => void;
   private lastCallId: string | null = null;
 
   private readonly opts: WorkerRunOptions;
@@ -159,6 +162,7 @@ export class WorkerRun {
   constructor(opts: WorkerRunOptions) {
     this.opts = opts;
     this.id = opts.id;
+    this.exited = new Promise((r) => (this.markExited = r));
   }
 
   start(): void {
@@ -323,7 +327,11 @@ export class WorkerRun {
       const outcome: Outcome = this.stopReason
         ? { state: "stopped", reason: this.stopReason }
         : (this.result ?? { state: "failed", error: "session ended without a result" });
-      this.opts.onExit(outcome);
+      try {
+        this.opts.onExit(outcome);
+      } finally {
+        this.markExited();
+      }
     }
   }
 

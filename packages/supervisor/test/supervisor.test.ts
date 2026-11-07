@@ -39,7 +39,7 @@ const ownerCheck = async (token: string, email: string) => token === "good-token
 async function setup(over = "", s = store) {
   const broker = new FakeBroker();
   const { queryFn, sessions } = fakeQuery();
-  const sup = new Supervisor({ config: testConfig(dir, over), policy: POLICY, store: s, broker, queryFn, log: quiet, ownerCheck });
+  const sup = new Supervisor({ config: testConfig(dir, over), policy: POLICY, store: s, broker, queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck });
   await sup.start();
   running.push(sup);
   return { sup, broker, sessions };
@@ -130,7 +130,7 @@ describe("lean workers", () => {
       `orchestrator: Bob\nstate_dir: ${dir}\nprojects:\n  games:\n    path: ${project}\n    roles:\n      mario: { dir: ${project}, mcp: [backlog], memory_dir: /mem/m }\n`,
       (d) => d,
     );
-    const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, ownerCheck });
+    const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck });
     await sup.start();
     running.push(sup);
     sup.spawn({ project: "games", role: "mario", task: "x" });
@@ -229,7 +229,7 @@ describe("lifecycle", () => {
     Object.assign(bill, { model: "opus", effort: "high", models: ["opus", "sonnet"], maxEffort: "xhigh" });
     const broker = new FakeBroker();
     const { queryFn, sessions } = fakeQuery();
-    const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, ownerCheck });
+    const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck });
     await sup.start();
     running.push(sup);
     const w = sup.spawn({ project: "helix", role: "bill", task: "LAND-41.1 · the ADR" });
@@ -257,7 +257,7 @@ describe("lifecycle", () => {
     bill.permissionMode = "auto";
     const broker = new FakeBroker();
     const { queryFn, sessions } = fakeQuery();
-    const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, ownerCheck });
+    const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck });
     await sup.start();
     running.push(sup);
     sup.spawn({ project: "helix", role: "bill", task: "t" });
@@ -641,7 +641,7 @@ describe("notifications", () => {
       return realRegister(id);
     };
     const { queryFn } = fakeQuery();
-    const sup = new Supervisor({ config: testConfig(dir), policy: POLICY, store, broker, queryFn, log: quiet });
+    const sup = new Supervisor({ config: testConfig(dir), policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null });
     running.push(sup);
     await sup.start();
     expect(broker.registered.map((r) => r.name)).toContain("supervisor");
@@ -696,7 +696,7 @@ describe("dashboard actions", () => {
   it("refuses actions when the laptop has no Access settings", async () => {
     const broker = new FakeBroker();
     const { queryFn } = fakeQuery();
-    const sup = new Supervisor({ config: testConfig(dir), policy: POLICY, store, broker, queryFn, log: quiet });
+    const sup = new Supervisor({ config: testConfig(dir), policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null });
     running.push(sup);
     await sup.start();
     sup.onPush(action({ kind: "stop", worker: "w_x" }));

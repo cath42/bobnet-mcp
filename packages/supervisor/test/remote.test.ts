@@ -37,7 +37,7 @@ const testConfigWithRemote = () => testConfig(dir, `${OVER}${REMOTE}`);
 async function setup() {
   const broker = new FakeBroker();
   const { queryFn, sessions } = fakeQuery();
-  const sup = new Supervisor({ config: testConfigWithRemote(), policy: POLICY, store, broker, queryFn, log: quiet, ownerCheck: async () => false });
+  const sup = new Supervisor({ config: testConfigWithRemote(), policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async () => false });
   await sup.start();
   running.push(sup);
   let n = 0;

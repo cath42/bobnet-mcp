@@ -32,6 +32,7 @@ beforeEach(async () => {
     broker: new FakeBroker(),
     queryFn: fq.queryFn,
     log: quiet,
+    sandboxCheck: async () => null,
   });
   await sup.start();
   http = await serveMcp(sup, { port: 0, token: TOKEN, log: quiet });
