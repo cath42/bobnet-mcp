@@ -747,7 +747,7 @@ export class Supervisor {
       id: w.id,
       role: { ...role, writeRoots: [...role.writeRoots, join(this.config.stateDir, "handoffs"), ...this.config.sandboxWrite] },
       prompt: consult ? w.task : buildPrompt(w.task, handoff, waiting),
-      systemAppend: role.lead ? leadAppend(role) : systemAppend(role, project.orchestrator),
+      systemAppend: role.lead ? leadAppend(role, project.orchestrator) : systemAppend(role, project.orchestrator),
       resumeSession: w.resume_session,
       logPath: this.logPath(w),
       queryFn: this.queryFn,
@@ -784,7 +784,7 @@ export class Supervisor {
               }
             : {}),
         }),
-        ...(role.lead && !consult ? { [LEAD_SERVER]: leadTools(this, w.id) } : {}),
+        ...(role.orchestrator && !consult ? { [LEAD_SERVER]: leadTools(this, w.id) } : {}),
       },
       ...(role.remoteControl && !consult
         ? {
@@ -866,7 +866,7 @@ export class Supervisor {
    */
   private preflight(workerId: string, role: RoleConfig, handoff: string, consult: boolean): NonNullable<WorkerRunOptions["preToolUse"]> {
     return async (tool, input, server, toolUseId, signal) => {
-      if (server === WORKER_SERVER || (role.lead && server === LEAD_SERVER)) return { decision: "allow", reason: "the supervisor's own tool" };
+      if (server === WORKER_SERVER || (role.orchestrator && server === LEAD_SERVER)) return { decision: "allow", reason: "the supervisor's own tool" };
       const saved = savedOutputCheck(tool, input);
       if (saved) return saved;
       if (consult && FILE_WRITE_TOOLS.includes(tool)) return { decision: "deny", reason: "A consult only reads and answers; the owner records anything in their own session." };
@@ -874,7 +874,7 @@ export class Supervisor {
       if (landing && (FILE_WRITE_TOOLS.includes(tool) || tool === "Bash")) await landing.catch(() => {});
       const fp = input["file_path"];
       if ((tool === "Write" || tool === "Edit") && typeof fp === "string" && resolve(role.dir, fp) === resolve(handoff)) return null;
-      const v = this.policy.preflight(tool, input, { project: role.project, role: role.key, writeRoots: role.writeRoots, cwd: role.dir, ...(role.lead ? { lead: true } : {}) });
+      const v = this.policy.preflight(tool, input, { project: role.project, role: role.key, writeRoots: role.writeRoots, cwd: role.dir, ...(role.orchestrator ? { orchestrator: true } : {}) });
       if (!v) return null;
       if (v.decision === "allow") {
         if (input["run_in_background"] === true) {
@@ -1308,8 +1308,8 @@ export class Supervisor {
 
   private announce(req: RequestRow, workerName: string): void {
     const w = this.store.worker(req.worker_id);
-    // A lead's own request is Casper's (on the dashboard); announcing it would only message the lead itself.
-    if (w && this.roleOf(w).lead) {
+    // The orchestrator's own request is Casper's (on the dashboard); announcing it would only message itself.
+    if (w && this.roleOf(w).orchestrator) {
       this.writeStatus();
       return;
     }
@@ -1648,13 +1648,20 @@ export function sandboxProblem(platform = process.platform): Promise<string | nu
   });
 }
 
-/** A lead runs headless too, but Casper may be following it in Remote Control, and it stays alive between turns. */
-function leadAppend(role: RoleConfig): string {
+/**
+ * A lead runs headless too, but Casper may be following it in Remote Control, and it stays alive
+ * between turns. The one named as the orchestrator also has the orchestrator's tools and no rules.
+ */
+function leadAppend(role: RoleConfig, orchestrator: string): string {
   return [
-    `You are ${role.name}, the lead for project ${role.project}, running as a worker under the BobNet supervisor. Casper may be following this session in Remote Control and typing to you there.`,
-    `Your supervisor tools (mcp__${LEAD_SERVER}__*) are the orchestrator's: spawn and follow workers, and answer their requests. A tier-human request needs Casper's own decision: set user_decided only when he gave that exact decision in this session, never on your own judgement.`,
-    "Your own permission requests are Casper's, never yours to answer; they wait for him and may be denied. When a denial carries an instruction, follow it.",
-    "Ending a turn doesn't end you: you wait for the next message (a worker's completion, an escalation, a BobNet message, or Casper typing), and you end only when stopped.",
+    `You are ${role.name}, a lead for project ${role.project}, running as a worker under the BobNet supervisor. Casper may be following this session in Remote Control and typing to you there.`,
+    ...(role.orchestrator
+      ? [
+          `You are the project's orchestrator. Your supervisor tools (mcp__${LEAD_SERVER}__*) are the orchestrator's: spawn and follow workers, and answer their requests. A tier-human request needs Casper's own decision: set user_decided only when he gave that exact decision in this session, never on your own judgement.`,
+          "Your own permission requests are Casper's, never yours to answer; they wait for him and may be denied. When a denial carries an instruction, follow it.",
+        ]
+      : [`${orchestrator} is the project's orchestrator: your permission requests go to it (or to Casper) and may take a while or be denied. When a denial carries an instruction, follow it.`]),
+    "Ending a turn doesn't end you: you wait for the next message (a BobNet message, a worker's news, or Casper typing), and you end only when stopped.",
     "Your state lives in files: anything you decide or learn that matters later goes in the files your role owns.",
     `When a tool's output is too large and saved to a file, don't read the file back, whatever its notice says: re-run the command narrower (grep, head, tail, a filter) or Grep the file. A Read of it over ${SAVED_READ_MAX / 1000} KB is refused.`,
   ].join("\n");

@@ -31,7 +31,7 @@ export interface RouterDeps {
 
 interface Waiter {
   resolve: (r: PermissionResult) => void;
-  /** None for a lead's request: like a terminal's prompt, it waits for Casper. */
+  /** None for the orchestrator's own request: like a terminal's prompt, it waits for Casper. */
   timer: NodeJS.Timeout | null;
   input: Record<string, unknown>;
   workerId: string;
@@ -52,8 +52,8 @@ export class Router {
     return async (toolName, input, { signal, mcpServer, toolUseID }) => {
       const { store, policy } = this.deps;
 
-      // The supervisor's own tools, served in-process: always allowed (a lead's check their own scope).
-      if (mcpServer?.source === "sdk" && (mcpServer.name === WORKER_SERVER || (role.lead && mcpServer.name === LEAD_SERVER))) {
+      // The supervisor's own tools, served in-process: always allowed (the orchestrator's check their own scope).
+      if (mcpServer?.source === "sdk" && (mcpServer.name === WORKER_SERVER || (role.orchestrator && mcpServer.name === LEAD_SERVER))) {
         return { behavior: "allow", updatedInput: input };
       }
 
@@ -76,7 +76,7 @@ export class Router {
         role: role.key,
         writeRoots: role.writeRoots,
         cwd: role.dir,
-        ...(role.lead ? { lead: true } : {}),
+        ...(role.orchestrator ? { orchestrator: true } : {}),
       });
       const slotted = (result: PermissionResult): Promise<PermissionResult> | PermissionResult =>
         verdict.slot && result.behavior === "allow" ? this.inSlot(workerId, authorOf(role), toolUseID, input, signal) : result;
@@ -86,7 +86,7 @@ export class Router {
           ? slotted({ behavior: "allow", updatedInput: input })
           : { behavior: "deny", message: `Denied by policy (${verdict.rule}): ${verdict.reason}` };
       }
-      return slotted(await this.escalate(workerId, role, toolName, input, "approval", role.lead ? "human" : verdict.tier, verdict.rule, verdict.reason, signal));
+      return slotted(await this.escalate(workerId, role, toolName, input, "approval", role.orchestrator ? "human" : verdict.tier, verdict.rule, verdict.reason, signal));
     };
   }
 
@@ -166,7 +166,7 @@ export class Router {
     this.deps.announce(req, role.name);
 
     return new Promise<PermissionResult>((resolve) => {
-      const timer = role.lead ? null : setTimeout(() => {
+      const timer = role.orchestrator ? null : setTimeout(() => {
         this.waiting.delete(req.id);
         store.settleRequest(req.id, {
           state: "expired",

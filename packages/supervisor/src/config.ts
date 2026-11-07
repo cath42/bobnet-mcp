@@ -86,10 +86,12 @@ const Role = z.object({
   /** Remote Control for this role's workers; unset takes the project's, then the supervisor's (on). */
   remote_control: z.boolean().optional(),
   /**
-   * The project's lead, run as a worker: named as the project's orchestrator, it stays alive
-   * between turns (a result doesn't end it; a stop does), holds no worker slot, and gets the lead
-   * tools, which act only in its own project and answer only its own workers' orchestrator-tier
-   * requests. Its own requests go to Casper.
+   * A lead: a long-lived session Casper talks to (Casper, 2026-11-07: as many per project as it
+   * needs). It stays alive between turns (a result doesn't end it; a stop does), holds no worker
+   * slot, is never stalled by the clock, and runs in auto mode unless told otherwise. The lead named
+   * as the project's orchestrator is also the orchestrator, run as a worker: the orchestrator's
+   * tools, no policy rules but the guards, its own requests Casper's. Any other lead is a worker
+   * under policy.yaml like the rest.
    */
   lead: z.boolean().default(false),
 });
@@ -236,6 +238,8 @@ export interface RoleConfig {
   purpose: string | undefined;
   remoteControl: boolean;
   lead: boolean;
+  /** The lead named as its project's orchestrator: the orchestrator, run as a worker. */
+  orchestrator: boolean;
 }
 
 export interface RunConfig {
@@ -325,16 +329,12 @@ export function parseSupervisorConfig(
   for (const [pKey, p] of Object.entries(file.projects)) {
     const roles = new Map<string, RoleConfig>();
     const orchestrator = p.orchestrator ?? file.orchestrator;
-    const leads = Object.entries(p.roles).filter(([, r]) => r.lead);
-    if (leads.length > 1) throw new Error(`${pKey}: one lead role at most, not ${leads.map(([k]) => k).join(", ")}`);
     for (const [rKey, r] of Object.entries(p.roles)) {
       const name = r.name ?? capitalize(rKey);
       if (!isValidSegment(name)) throw new Error(`${pKey}.${rKey}: "${name}" is not a valid BobNet name`);
-      // The lead is the project's orchestrator, run as a worker: the orchestrator's name is its own.
-      if (r.lead && name.toLowerCase() !== orchestrator.toLowerCase()) {
-        throw new Error(`${pKey}.${rKey}: a lead role is named as the project's orchestrator (${orchestrator}), not ${name}`);
-      }
-      const clash = r.lead ? undefined : names.get(name.toLowerCase());
+      // A lead named as the project's orchestrator is the orchestrator, run as a worker: that name is its own.
+      const isOrchestrator = r.lead && name.toLowerCase() === orchestrator.toLowerCase();
+      const clash = isOrchestrator ? undefined : names.get(name.toLowerCase());
       if (clash) throw new Error(`${pKey}.${rKey}: BobNet name ${name} is already used by ${clash}`);
       names.set(name.toLowerCase(), `${pKey}.${rKey}`);
       const dir = isAbsolute(r.dir) ? r.dir : resolve(p.path, r.dir);
@@ -363,6 +363,7 @@ export function parseSupervisorConfig(
         purpose: r.purpose,
         remoteControl: r.remote_control ?? p.remote_control ?? file.remote_control,
         lead: r.lead,
+        orchestrator: isOrchestrator,
       });
     }
     for (const c of p.consult) if (!roles.has(c)) throw new Error(`${pKey}.consult: no role ${c}`);

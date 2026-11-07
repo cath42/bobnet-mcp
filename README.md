@@ -141,7 +141,19 @@ Start it, then run `/remote-control`:
 claude --dangerously-load-development-channels server:bobnet
 ```
 
-Or run the orchestrator as a worker. A role with `lead: true`, named as its project's orchestrator, can do what the interactive orchestrator does, and nothing less. It stays alive between turns and wakes on each message (a worker's completion, an escalation, a BobNet message, or you typing), with the same info-only digest. It ends only when stopped. It holds none of the laptop's worker slots and is never stalled by the clock. It gets the orchestrator's tools in-process, so no token reaches it, plus `broadcast`, `post_update` and `update_status`. `policy.yaml`'s rules don't bind it. Only two guards do: the supervisor's folder and hooks. It runs in auto mode unless its role or project sets `permission_mode`, and auto mode judges the rest, and what that leaves open waits for you on the dashboard, with no timeout. It never answers its own requests, and it asks you its questions in its own session. Every worker starts with Remote Control on, named for its session: follow it and type to it in claude.ai/code, through the link in `worker_status` and on the dashboard. Set `remote_control: false` on the supervisor, a project or a role to turn it off; a consult never has it. That uses the Agent SDK's `enableRemoteControl`, which isn't in its types, so the SDK is pinned; without it, the worker runs on and says why.
+A role with `lead: true` is a lead: a long-lived session you talk to, as many per project as it needs (a product owner, an architect, the orchestrator).
+- **Life:** it stays alive between turns and wakes on each message (a BobNet message, a worker's news, or you typing), with the same info-only digest an interactive session gets. It ends only when stopped.
+- **Running:** it holds none of the laptop's worker slots and is never stalled by the clock. It runs in auto mode unless its role or project sets `permission_mode`.
+- **Talking:** it has `broadcast`, `post_update` and `update_status`, and asks you its questions in its own session.
+
+Any other lead is a worker under `policy.yaml` like the rest, and its requests go to the project's orchestrator.
+
+**The lead named as its project's orchestrator is the orchestrator, run as a worker,** and can do what the interactive orchestrator does, and nothing less:
+- It gets the orchestrator's tools in-process, so no token reaches it.
+- `policy.yaml`'s rules don't bind it. Only two guards do: the supervisor's folder and hooks. Auto mode judges the rest, and what that leaves open waits for you on the dashboard, with no timeout.
+- It never answers its own requests.
+
+Every worker starts with Remote Control on, named for its session: follow it and type to it in claude.ai/code, through the link in `worker_status` and on the dashboard. Set `remote_control: false` on the supervisor, a project or a role to turn it off; a consult never has it. That uses the Agent SDK's `enableRemoteControl`, which isn't in its types, so the SDK is pinned; without it, the worker runs on and says why.
 
 Channels are a research preview, so a self-written channel server needs that flag. It must also be defined in a `.mcp.json`: `--mcp-config` doesn't register channels. Stay on MCP SDK 1.x: a server that speaks protocol revision 2026-07-28 isn't registered as a channel. A test fails if that changes.
 

@@ -90,11 +90,12 @@ describe("config", () => {
     expect(set("", "    permission_mode: default\n")).toBe("default");
   });
 
-  it("names a lead as its project's orchestrator, one per project", () => {
-    expect(testConfig(dir, STUDIO).projects.get("studio")!.roles.get("bob")).toMatchObject({ name: "Bob", lead: true, remoteControl: true });
-    expect(() => testConfig(dir, "  studio:\n    path: /s\n    roles:\n      ann: { dir: /s/a, lead: true }\n")).toThrow(/a lead role is named as the project's orchestrator \(Bob\), not Ann/);
-    expect(() => testConfig(dir, "  studio:\n    path: /s\n    roles:\n      bob: { dir: /s/b, lead: true }\n      cy: { dir: /s/c, lead: true, name: Bob }\n")).toThrow(/one lead role at most/);
-    // Bob without lead is still a clash with the orchestrator's name.
+  it("allows several leads; the one named as the orchestrator is the orchestrator (Casper, 2026-11-07)", () => {
+    const roles = testConfig(dir, "  studio:\n    path: /s\n    roles:\n      bob: { dir: /s/b, lead: true }\n      ledecky: { dir: /s/l, lead: true }\n      ann: { dir: /s/a }\n").projects.get("studio")!.roles;
+    expect(roles.get("bob")).toMatchObject({ name: "Bob", lead: true, orchestrator: true, remoteControl: true });
+    expect(roles.get("ledecky")).toMatchObject({ name: "Ledecky", lead: true, orchestrator: false, permissionMode: "auto" });
+    expect(roles.get("ann")).toMatchObject({ lead: false, orchestrator: false });
+    // Only a lead may take the orchestrator's name.
     expect(() => testConfig(dir, "  studio:\n    path: /s\n    roles:\n      bob: { dir: /s/b }\n")).toThrow(/already used by the orchestrator/);
   });
 });
@@ -193,10 +194,10 @@ describe("a lead", () => {
 
   it("has no rules but the two guards: the supervisor's folder and the hooks", async () => {
     const { sup, leadSession: s, sessions } = await withLead();
-    const lead = { project: "studio", role: "bob", writeRoots: ["/work/studio-bob"], cwd: "/work/studio-bob", lead: true };
+    const lead = { project: "studio", role: "bob", writeRoots: ["/work/studio-bob"], cwd: "/work/studio-bob", orchestrator: true };
     // A builder's deny rule doesn't bind it; auto mode judges the call, as for the interactive orchestrator.
     expect(POLICY.preflight("Bash", { command: "git push -q origin HEAD:main" }, lead)).toBeNull();
-    expect(POLICY.preflight("Bash", { command: "git push" }, { ...lead, lead: false })).toMatchObject({ decision: "deny", rule: "no-push" });
+    expect(POLICY.preflight("Bash", { command: "git push" }, { ...lead, orchestrator: false })).toMatchObject({ decision: "deny", rule: "no-push" });
     // No slot either: it ran none as the interactive orchestrator.
     expect(POLICY.preflight("Bash", { command: "pnpm test" }, lead)).toBeNull();
     // Writes anywhere, as before.
@@ -206,7 +207,7 @@ describe("a lead", () => {
     // What auto mode leaves open is Casper's, and waits for him: no timeout.
     void s.ask("Bash", { command: "rm -rf build" });
     await until(() => sup.pending().length === 1);
-    expect(sup.pending()[0]).toMatchObject({ tier: "human", rule: "lead" });
+    expect(sup.pending()[0]).toMatchObject({ tier: "human", rule: "orchestrator" });
     expect((sup as unknown as { router: { waiting: Map<string, { timer: unknown }> } }).router.waiting.values().next().value!.timer).toBeNull();
     expect(sessions.length).toBe(1);
   });
@@ -369,5 +370,41 @@ describe("the sandbox check", () => {
 
   it("is a Mac's built-in sandbox there, and bubblewrap on Linux", async () => {
     expect(await sandboxProblem("darwin")).toBeNull();
+  });
+});
+
+describe("a lead that isn't the orchestrator", () => {
+  const TWO = `${STUDIO}      ledecky: { dir: /work/studio-ledecky, lead: true }\n`;
+  it("lives between turns like any lead, but is a worker under policy: no orchestrator tools, its requests the orchestrator's", async () => {
+    const broker = new FakeBroker();
+    const { queryFn, sessions } = fakeQuery();
+    const sup = new Supervisor({ config: testConfig(dir, TWO), policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async () => false });
+    await sup.start();
+    running.push(sup);
+    const bob = sup.spawn({ project: "studio", role: "bob", task: "lead" });
+    const led = sup.spawn({ project: "studio", role: "ledecky", task: "own the backlog" });
+    await until(() => sessions.length === 2);
+    const [, s] = sessions;
+    // Both run past the cap of 2 with a builder, and neither ends at a result.
+    sup.spawn({ project: "studio", role: "ann", task: "x" });
+    sup.spawn({ project: "helix", role: "bill", task: "y" });
+    await until(() => sessions.length === 4);
+    s!.turnDone("roadmap drafted");
+    await tick(20);
+    expect(sup.status(led.id).state).toBe("running");
+    expect(Object.keys(s!.options.mcpServers!)).toEqual(["bobnet"]);
+    expect(s!.options.permissionMode).toBe("auto");
+    expect(s!.options.systemPrompt).toMatchObject({ append: expect.stringMatching(/Bob is the project's orchestrator: your permission requests go to it/) });
+    // policy.yaml binds it, unlike the orchestrator.
+    expect(POLICY.preflight("Bash", { command: "git push" }, { project: "studio", role: "ledecky", writeRoots: ["/work/studio-ledecky"], cwd: "/work/studio-ledecky" })).toMatchObject({ decision: "deny" });
+    // Its orchestrator-tier request goes to Bob, as any worker's, and Bob may answer it.
+    void s!.ask("WebFetch", { url: "https://x" });
+    await until(() => sup.pending().length === 1);
+    expect(sup.pending()[0]).toMatchObject({ worker_id: led.id, tier: "orchestrator" });
+    await until(() => broker.toOrchestrator().some((b) => b.startsWith("Ledecky needs approval for WebFetch")));
+    const r = await callTool(handlers(sup, { lead: bob.id }), "answer_request", { id: sup.pending()[0]!.id, decision: "allow" });
+    expect(r.isError).toBeUndefined();
+    // It still asks Casper in its own session, not through a request.
+    expect(await s!.ask("AskUserQuestion", { questions: [] })).toMatchObject({ behavior: "deny" });
   });
 });
