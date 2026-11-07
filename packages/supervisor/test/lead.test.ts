@@ -23,9 +23,9 @@ const POLICY = new Policy(POLICY_TEXT, { protect: [SUPERVISOR_DIR] });
 const STUDIO = `  studio:
     path: /work/studio
     roles:
-      bob: { dir: /work/studio-bob, lead: true, remote_control: true }
-      ann: { dir: /work/studio-ann, remote_control: true }
-      cy: { dir: /work/studio-cy }
+      bob: { dir: /work/studio-bob, lead: true }
+      ann: { dir: /work/studio-ann }
+      cy: { dir: /work/studio-cy, remote_control: false }
 `;
 
 let dir: string;
@@ -103,7 +103,11 @@ describe("Remote Control", () => {
     expect(store.auditLog(20).some((a) => a.action === "remote-control" && a.worker_id === w.id)).toBe(true);
   });
 
-  it("is off unless the role asks for it", async () => {
+  it("is on for every worker unless its role or project turns it off, and never for a consult", async () => {
+    expect(testConfig(dir, "  studio:\n    path: /s\n    remote_control: false\n    roles:\n      ann: { dir: /s/a }\n      bo: { dir: /s/b, remote_control: true }\n").projects.get("studio")!.roles.get("ann")!.remoteControl).toBe(false);
+    expect(testConfig(dir, "  studio:\n    path: /s\n    remote_control: false\n    roles:\n      ann: { dir: /s/a }\n      bo: { dir: /s/b, remote_control: true }\n").projects.get("studio")!.roles.get("bo")!.remoteControl).toBe(true);
+    expect(testConfig(dir).projects.get("helix")!.roles.get("bill")!.remoteControl).toBe(true);
+    expect(testConfig(dir, "remote_control: false\n").projects.get("helix")!.roles.get("bill")!.remoteControl).toBe(false);
     const { sup, sessions } = await setup();
     const w = sup.spawn({ project: "studio", role: "cy", task: "x" });
     await until(() => sessions.length === 1);

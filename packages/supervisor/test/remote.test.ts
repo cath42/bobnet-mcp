@@ -12,7 +12,7 @@ const POLICY = new Policy(`rules: []`);
 const OVER = `  studio:
     path: /work/studio
     roles:
-      bob: { dir: /work/studio-bob, lead: true, remote_control: true }
+      bob: { dir: /work/studio-bob, lead: true }
       ann: { dir: /work/studio-ann }
 `;
 const REMOTE = `remote:\n  poe@ubu1: { spawn: { studio: [bob] } }\n`;

@@ -1618,8 +1618,8 @@ function buildPrompt(task: string, handoff: string, waiting: Envelope[]): string
 function leadAppend(role: RoleConfig): string {
   return [
     `You are ${role.name}, the lead for project ${role.project}, running as a worker under the BobNet supervisor. Casper may be following this session in Remote Control and typing to you there.`,
-    `Your supervisor tools (mcp__${LEAD_SERVER}__*) spawn and follow ${role.project}'s workers and answer their orchestrator-tier requests. Requests Casper decides are his: he answers them on the dashboard or here.`,
-    "Your own permission requests go to Casper and may take a while or be denied. When a denial carries an instruction, follow it.",
+    `Your supervisor tools (mcp__${LEAD_SERVER}__*) are the orchestrator's: spawn and follow workers, and answer their requests. A tier-human request needs Casper's own decision: set user_decided only when he gave that exact decision in this session, never on your own judgement.`,
+    "Your own permission requests are Casper's, never yours to answer; they wait for him and may be denied. When a denial carries an instruction, follow it.",
     "Ending a turn doesn't end you: you wait for the next message (a worker's completion, an escalation, a BobNet message, or Casper typing), and you end only when stopped.",
     "Your state lives in files: anything you decide or learn that matters later goes in the files your role owns.",
     `When a tool's output is too large and saved to a file, don't read the file back, whatever its notice says: re-run the command narrower (grep, head, tail, a filter) or Grep the file. A Read of it over ${SAVED_READ_MAX / 1000} KB is refused.`,

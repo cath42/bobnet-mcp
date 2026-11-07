@@ -472,6 +472,9 @@ projects:
     expect(bill.options.cwd).toBe("/work/helix-bill/architecture");
     expect(bill.options.disallowedTools).toEqual(expect.arrayContaining(["Write", "Edit"]));
     await until(() => bill.inputs.length === 1);
+    // Remote Control is on for every worker, but never for a consult's short read-only life.
+    await until(() => sessions[0]!.remoteCalls.length === 1);
+    expect(bill.remoteCalls).toEqual([]);
     expect(bill.inputs[0]).toMatch(/^\[Consult c_\w+\] Homer asks Bill/);
     await expect(bill.ask("Write", { file_path: "/work/helix-bill/architecture/x.md" })).resolves.toMatchObject({ behavior: "deny" });
     const id = bill.inputs[0]!.match(/c_\w+/)![0];

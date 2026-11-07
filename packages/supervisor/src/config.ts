@@ -83,11 +83,8 @@ const Role = z.object({
   /** Claude Code's OS sandbox for Bash; off only for roles that truly need it off. */
   sandbox: z.boolean().optional(),
   purpose: z.string().optional(),
-  /**
-   * Turns on Remote Control when a worker starts: the session shows in claude.ai/code under the
-   * worker's name, and Casper can follow it and type to it there. Its URL is in worker_status.
-   */
-  remote_control: z.boolean().default(false),
+  /** Remote Control for this role's workers; unset takes the project's, then the supervisor's (on). */
+  remote_control: z.boolean().optional(),
   /**
    * The project's lead, run as a worker: named as the project's orchestrator, it stays alive
    * between turns (a result doesn't end it; a stop does), holds no worker slot, and gets the lead
@@ -128,6 +125,8 @@ const Project = z.object({
   env: Env,
   /** Every role's memory_dir, unless the role sets its own. */
   memory_dir: z.union([path, z.literal(false)]).optional(),
+  /** Remote Control for the project's workers, unless a role says otherwise; unset takes the supervisor's. */
+  remote_control: z.boolean().optional(),
   /** How a worker lands its commits: run by the supervisor in the worker's worktree, in a run slot. */
   land: z
     .object({
@@ -190,6 +189,12 @@ const SupervisorFile = z.object({
   consult_effort: EffortLevel.optional(),
   /** More paths every sandboxed worker may write, e.g. fnm's multishell folder. */
   sandbox_write: z.array(path).default([]),
+  /**
+   * Every worker starts with Remote Control on (Casper, 2026-11-07): its session shows in
+   * claude.ai/code under its name, and Casper can follow it and type to it there; its URL is in
+   * worker_status and on the dashboard. A project or role may turn it off; a consult never has it.
+   */
+  remote_control: z.boolean().default(true),
   /**
    * Who may ask this supervisor, over BobNet, to spawn: a sender's address (name@laptop, as the
    * broker stamps it) to the roles it may spawn, by project. It may follow and stop only what it
@@ -354,7 +359,7 @@ export function parseSupervisorConfig(
         writeRoots: r.write_roots ?? [resolveRoot(dir)],
         sandbox: r.sandbox ?? p.sandbox ?? true,
         purpose: r.purpose,
-        remoteControl: r.remote_control,
+        remoteControl: r.remote_control ?? p.remote_control ?? file.remote_control,
         lead: r.lead,
       });
     }
