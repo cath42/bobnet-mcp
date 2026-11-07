@@ -112,6 +112,8 @@ export class Supervisor {
   private readonly landResults = new Map<string, string[]>();
   /** Interactive agents queued for a slot by their orchestrator: name → project. */
   private readonly interactive = new Map<string, string>();
+  /** This laptop's id on BobNet, once the supervisor has registered. */
+  private laptop: string | null = null;
   /** Each running lead's info-only news (joins, leaves, statuses, quiet broadcasts), as the interactive orchestrator's digest. */
   private readonly leadNews = new Map<string, Inbox>();
   private holdTimer: NodeJS.Timeout | null = null;
@@ -180,7 +182,9 @@ export class Supervisor {
       this.store.markOrphaned(r.id);
     }
 
-    await this.registerWithRetry({ name: this.config.name, ...(this.config.team ? { team: this.config.team } : {}), purpose: "BobNet supervisor: runs role agents headless on this laptop" });
+    const me = (await this.registerWithRetry({ name: this.config.name, ...(this.config.team ? { team: this.config.team } : {}), purpose: "BobNet supervisor: runs role agents headless on this laptop" })) as { address?: string } | undefined;
+    // The laptop as the broker knows it (from its token), not the hostname: workers' Remote Control names carry it.
+    this.laptop = me?.address?.split("@")[1] ?? null;
     for (const role of this.roles()) {
       await this.registerWithRetry({
         name: role.name,
@@ -761,7 +765,7 @@ export class Supervisor {
       },
       ...(role.remoteControl && !consult
         ? {
-            remoteControl: remoteName(role, w),
+            remoteControl: remoteName(role, w, this.laptop),
             onRemoteControl: (rc) => {
               this.store.audit("supervisor", "url" in rc ? "remote-control" : "remote-control:failed", w.id, rc);
               if ("url" in rc) this.remoteEvent(w, { event: "remote_control", url: rc.url });
@@ -1376,12 +1380,11 @@ export class Supervisor {
     })();
   }
 
-  private async registerWithRetry(identity: Identity): Promise<void> {
+  private async registerWithRetry(identity: Identity): Promise<unknown> {
     const deadline = Date.now() + REGISTER_GIVE_UP_MS;
     for (;;) {
       try {
-        await this.broker.register(identity);
-        return;
+        return await this.broker.register(identity);
       } catch (err) {
         const code = (err as { code?: string }).code;
         if (code !== "name_in_use" && code !== "disconnected" && code !== "timeout") throw err;
@@ -1626,10 +1629,16 @@ function leadAppend(role: RoleConfig): string {
   ].join("\n");
 }
 
-/** The name a worker's Remote Control session shows: its role, then its session or project. */
-function remoteName(role: RoleConfig, w: WorkerRow): string {
+/**
+ * The name a worker's Remote Control session shows: its BobNet address, then its session, short
+ * (Casper, 2026-11-07): "Bob@mbp-1 LAND-43 b1", "Marvin@mbp-1 LAND-42 r2", "Calvin@mbp-1 LAND-44 d",
+ * "Bill@mbp-1 LAND-41 retro"; the address alone with no session.
+ */
+export function remoteName(role: RoleConfig, w: WorkerRow, laptop: string | null): string {
   const d = w.declared_session ? (JSON.parse(w.declared_session) as DeclaredSession | null) : null;
-  return `${role.name} · ${d ? sessionName(d) : w.project}`;
+  const who = laptop ? `${role.name}@${laptop}` : role.name;
+  if (!d) return who;
+  return `${who} ${d.feature} ${d.kind === "retro" ? "retro" : `${d.kind[0]}${d.label ?? ""}`}`;
 }
 
 function systemAppend(role: RoleConfig, orchestrator: string): string {
