@@ -42,7 +42,7 @@ TypeScript throughout. Node 24 runs the client and supervisor straight from sour
 
 Cloudflare Access fronts every route, and the Worker verifies the Access JWT itself.
 
-- **Laptops** connect with one Access service token each. `LAPTOP_TOKENS` maps token client IDs to laptop IDs; revoke a token to cut that laptop off.
+- **Laptops** connect with one Access service token each. `LAPTOP_TOKENS` maps token client IDs to laptop IDs, and so does each `LAPTOP_TOKENS_<name>` secret, merged with it; revoke a token to cut that laptop off.
 - **You** sign in to the dashboard with your Access identity (`OWNER_EMAIL`). Its WebSocket is accepted only from the dashboard's own origin.
 - **Dashboard actions** carry your own Access JWT to the supervisor, which verifies it against Access before acting. The broker alone can't act as you.
 - **Messages:** the broker rejects any message that looks like a credential. Send paths, not content.
@@ -69,11 +69,11 @@ The broker's tests sign their own Access JWTs with a key generated for each run,
 
 1. In Zero Trust, create a self-hosted Access application for the broker's hostname. Allow your email, with one-time PIN or your identity provider, and add one service token per laptop.
 2. Set the secrets named in `packages/broker/.dev.vars.example` with `wrangler secret put`: `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `OWNER_EMAIL` and `LAPTOP_TOKENS`.
-3. Deploy with `pnpm --filter @bobnet/broker deploy`. Preview URLs are off.
+3. Deploy with `pnpm --filter @bobnet/broker run deploy`. Preview URLs are off.
 
 ### 2. Each laptop
 
-Store this laptop's service token in the Keychain (account `bobnet`). Then create `~/.config/bobnet/config.json`:
+Add a service token for this laptop to the Access application, and name it to the broker in a secret of its own, so no other laptop's entry is read or rewritten: from `packages/broker`, `npx wrangler secret put LAPTOP_TOKENS_<NAME>` with `{"<client id>":"<laptop>"}`. Store the token in the Keychain (account `bobnet`). Then create `~/.config/bobnet/config.json`:
 
 ```json
 {

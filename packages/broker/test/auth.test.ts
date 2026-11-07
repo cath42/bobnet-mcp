@@ -35,7 +35,7 @@ describe("Worker auth", () => {
     expect((await upgrade(await accessToken({ email: "someone@example.com" }), { origin: ORIGIN })).status).toBe(401);
   });
 
-  it("stamps the laptop from the token", async () => {
+  it("stamps the laptop from the token, whichever LAPTOP_TOKENS_* secret names it", async () => {
     const res = await upgrade(await laptopToken(2));
     expect(res.status).toBe(101);
     const ws = res.webSocket!;

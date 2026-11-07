@@ -7,5 +7,6 @@ ACCESS_TEAM_DOMAIN=
 ACCESS_AUD=
 # The only human identity the broker accepts.
 OWNER_EMAIL=
-# JSON map of Access service-token client IDs to laptop IDs, e.g. {"abc.access":"mbp-1"}
+# JSON map of Access service-token client IDs to laptop IDs, e.g. {"abc.access":"mbp-1"}.
+# Each LAPTOP_TOKENS_<NAME> secret is another such map, merged with it: one per laptop.
 LAPTOP_TOKENS=

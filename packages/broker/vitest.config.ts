@@ -20,7 +20,9 @@ export default defineConfig({
           ACCESS_TEAM_DOMAIN: TEAM,
           ACCESS_AUD: "test-aud",
           OWNER_EMAIL: "owner@example.com",
-          LAPTOP_TOKENS: JSON.stringify({ "token-1.access": "mbp-1", "token-2.access": "mbp-2" }),
+          LAPTOP_TOKENS: JSON.stringify({ "token-1.access": "mbp-1" }),
+          // A second laptop's own secret, merged with the first.
+          LAPTOP_TOKENS_MBP2: JSON.stringify({ "token-2.access": "mbp-2" }),
           TEST_SIGNING_JWK: JSON.stringify(privateJwk),
         },
         outboundService(req) {

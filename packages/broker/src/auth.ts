@@ -17,10 +17,18 @@ function jwksFor(team: string) {
   return jwks;
 }
 
+// Every secret named LAPTOP_TOKENS or LAPTOP_TOKENS_<anything> is a JSON map of
+// client ID to laptop ID, merged: a new laptop adds its own secret without
+// reading or rewriting the others.
 function laptopTokens(env: Env): Record<string, string> {
-  const parsed: unknown = JSON.parse(env.LAPTOP_TOKENS);
-  if (typeof parsed !== "object" || parsed === null) throw new Error("LAPTOP_TOKENS must be a JSON object");
-  return parsed as Record<string, string>;
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (!/^LAPTOP_TOKENS(_\w+)?$/.test(name) || typeof value !== "string") continue;
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed !== "object" || parsed === null) throw new Error(`${name} must be a JSON object`);
+    Object.assign(out, parsed);
+  }
+  return out;
 }
 
 /** Returns who the request is from, or null if it isn't the owner or a known laptop. */
