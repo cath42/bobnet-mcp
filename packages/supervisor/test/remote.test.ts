@@ -56,7 +56,7 @@ async function setup() {
   return { sup, broker, sessions, ask };
 }
 
-const SPAWN = { op: "spawn", project: "studio", role: "bob", task: "Lead LAND-42 build 3", session: { feature: "LAND-42", kind: "build", label: "3" } };
+const SPAWN = { op: "spawn", project: "studio", role: "bob", task: "Lead LAND-42 build 3", as: "lead", session: { feature: "LAND-42", kind: "build", label: "3" } };
 
 describe("remote config", () => {
   it("lists who may spawn which roles, checked against the projects", () => {
@@ -79,8 +79,9 @@ describe("a remote request", () => {
   it("spawns an allowed role as the requester's, through the usual path, and tells it the session URL and the end", async () => {
     const { sup, broker, sessions, ask } = await setup();
     const r = await ask("poe@ubu1", SPAWN);
-    expect(r).toMatchObject({ ok: true, op: "spawn", worker: { project: "studio", role: "bob", name: "Bob", session: "LAND-42 build 3" } });
+    expect(r).toMatchObject({ ok: true, op: "spawn", worker: { project: "studio", role: "bob", name: "Bob", as: "lead", session: "LAND-42 build 3" } });
     const id = r.worker.id as string;
+    expect(store.worker(id)!.run_as).toBe("lead");
     expect(store.worker(id)!.spawned_by).toBe("poe@ubu1");
     expect(store.auditLog(20).find((a) => a.action === "spawn" && a.worker_id === id)!.actor).toBe("poe@ubu1");
     expect(store.auditLog(20).find((a) => a.action === "remote:spawn")).toMatchObject({ actor: "poe@ubu1", worker_id: id });
@@ -88,6 +89,8 @@ describe("a remote request", () => {
     expect(JSON.parse(broker.sent.find((s) => s.body.includes('"event":"remote_control"'))!.body)).toEqual({ event: "remote_control", worker: id, url: "https://claude.ai/code/session_test" });
     expect(await ask("poe@ubu1", { op: "status", id })).toMatchObject({ ok: true, worker: { id, state: "running", remote_url: "https://claude.ai/code/session_test" } });
     expect((await ask("poe@ubu1", { op: "list" })).workers.map((w: { id: string }) => w.id)).toEqual([id]);
+    // Without `as`, the same role runs as a worker.
+    expect((await ask("poe@ubu1", { ...SPAWN, as: undefined, task: "one fix" })).worker).toMatchObject({ as: "worker", state: "queued" });
 
     const stopping = ask("poe@ubu1", { op: "stop", id });
     await until(() => sessions[0]!.inputs.length === 2);

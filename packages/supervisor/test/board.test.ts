@@ -12,7 +12,7 @@ import { quiet } from "./fakes.ts";
 const row = (over: Partial<WorkerRow>): WorkerRow => ({
   id: "w_x", project: "helix", role: "homer", task: "", handoff: null, state: "done", priority: 1, resume_session: null, session_id: null,
   checkpoint: null, error: null, created_at: "2026-10-31T10:00:00.000Z", started_at: null, ended_at: null, last_event_at: null, tasks: null, declared_session: null,
-  usage: null, model: null, effort: null, ctx: null, spawned_by: null, ...over,
+  usage: null, model: null, effort: null, ctx: null, spawned_by: null, run_as: null, ...over,
 });
 
 describe("sessions", () => {

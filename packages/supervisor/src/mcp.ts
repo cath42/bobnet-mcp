@@ -23,6 +23,7 @@ const Spawn = z.object({
   resume_session: z.string().optional(),
   model: z.string().optional(),
   effort: z.enum(EFFORTS).optional(),
+  as: z.enum(["lead", "worker"]).optional(),
 });
 const Id = z.object({ id: z.string() });
 const Reset = z.object({ id: z.string(), model: z.string().optional(), effort: z.enum(EFFORTS).optional() });
@@ -85,6 +86,12 @@ export const TOOLS = [
         },
         handoff: { type: "string", description: "Handoff file path to read first and write before finishing." },
         resume_session: { type: "string", description: "Resume this session id instead of starting fresh (review-to-build fix loops)." },
+        as: {
+          type: "string",
+          enum: ["lead", "worker"],
+          description:
+            "worker (the default): ends after its result and holds a worker slot. lead: a long-lived session Casper talks to, alive until stopped, holding no slot; only for a role with lead: true, and only when Casper asks for one.",
+        },
         ...POWER,
       },
       ["project", "role", "task"],
@@ -170,6 +177,7 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
         ...(s.resume_session ? { resume_session: s.resume_session } : {}),
         ...(s.model ? { model: s.model } : {}),
         ...(s.effort ? { effort: s.effort } : {}),
+        ...(s.as ? { as: s.as } : {}),
         ...(opts.lead ? { spawnedBy: opts.lead } : {}),
       });
     },

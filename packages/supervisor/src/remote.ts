@@ -21,6 +21,7 @@ export const RemoteRequest = z.discriminatedUnion("op", [
       session: Session.nullable().optional(),
       model: z.string().optional(),
       effort: z.enum(EFFORTS).optional(),
+      as: z.enum(["lead", "worker"]).optional(),
     })
     .strict(),
   z.object({ op: z.literal("status"), id: z.string() }).strict(),

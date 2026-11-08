@@ -141,7 +141,9 @@ Start it, then run `/remote-control`:
 claude --dangerously-load-development-channels server:bobnet
 ```
 
-A role with `lead: true` is a lead: a long-lived session you talk to, as many per project as it needs (a product owner, an architect, the orchestrator).
+A role with `lead: true` can run as a lead: a long-lived session you talk to, as many per project as it needs (a product owner, an architect, the orchestrator). Whoever spawns it decides: `spawn_worker` (and the remote `spawn` op) takes `as: "lead"` or `as: "worker"`, and the default is a worker, which ends after its result like any other role. So when you want a lead, ask for one (poe spawns it `as: "lead"`); when a lead spawns the role for a task, it gets a worker. A role runs one worker at a time, so a task run waits while the role's lead runs, and the spawn says so.
+
+As a lead:
 - **Life:** it stays alive between turns and wakes on each message (a BobNet message, a worker's news, or you typing), with the same info-only digest an interactive session gets. It ends only when stopped.
 - **Running:** it holds none of the laptop's worker slots and is never stalled by the clock. It runs in auto mode unless its role or project sets `permission_mode`.
 - **Talking:** it has `broadcast`, `post_update` and `update_status`, and asks you its questions in its own session.

@@ -86,12 +86,14 @@ const Role = z.object({
   /** Remote Control for this role's workers; unset takes the project's, then the supervisor's (on). */
   remote_control: z.boolean().optional(),
   /**
-   * A lead: a long-lived session Casper talks to (Casper, 2026-11-07: as many per project as it
-   * needs). It stays alive between turns (a result doesn't end it; a stop does), holds no worker
-   * slot, is never stalled by the clock, and runs in auto mode unless told otherwise. The lead named
-   * as the project's orchestrator is also the orchestrator, run as a worker: the orchestrator's
-   * tools, no policy rules but the guards, its own requests Casper's. Any other lead is a worker
-   * under policy.yaml like the rest.
+   * A lead role: one that may run as a lead, a long-lived session Casper talks to (Casper,
+   * 2026-11-07: as many per project as it needs). Whether a run is one is its spawn's `as`, a
+   * worker unless it says lead: a lead stays alive between turns (a result doesn't end it; a stop
+   * does), holds no worker slot and is never stalled by the clock; run as a worker, the role ends
+   * after its result like any other. A lead role runs in auto mode unless told otherwise. The one
+   * named as the project's orchestrator is also the orchestrator when run as a lead: the
+   * orchestrator's tools, no policy rules but the guards, its own requests Casper's. Any other lead
+   * is under policy.yaml like the rest.
    */
   lead: z.boolean().default(false),
 });

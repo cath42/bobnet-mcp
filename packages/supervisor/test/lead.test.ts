@@ -55,7 +55,7 @@ async function setup(opts: { remoteControl?: boolean } = {}) {
 /** Starts the lead and returns its tools, as its in-process server runs them. */
 async function withLead() {
   const s = await setup();
-  const lead = s.sup.spawn({ project: "studio", role: "bob", task: "Lead LAND-42 build 2" });
+  const lead = s.sup.spawn({ project: "studio", role: "bob", task: "Lead LAND-42 build 2", as: "lead" });
   await until(() => s.sessions.length === 1);
   const h = handlers(s.sup, { lead: lead.id });
   const call = async (name: string, args: Record<string, unknown> = {}) => {
@@ -186,7 +186,7 @@ describe("a lead", () => {
     const { sup, sessions } = await setup();
     const a = sup.spawn({ project: "helix", role: "bill", task: "a" });
     const b = sup.spawn({ project: "helix", role: "marvin", task: "b" });
-    const lead = sup.spawn({ project: "studio", role: "bob", task: "lead" });
+    const lead = sup.spawn({ project: "studio", role: "bob", task: "lead", as: "lead" });
     await until(() => sessions.length === 3);
     expect([a, b, lead].map((w) => sup.status(w.id).state)).toEqual(["running", "running", "running"]);
     expect(sup.spawn({ project: "studio", role: "ann", task: "c" }).note).toMatch(/2 workers running, the laptop's limit/);
@@ -381,8 +381,8 @@ describe("a lead that isn't the orchestrator", () => {
     const sup = new Supervisor({ config: testConfig(dir, TWO), policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async () => false });
     await sup.start();
     running.push(sup);
-    const bob = sup.spawn({ project: "studio", role: "bob", task: "lead" });
-    const led = sup.spawn({ project: "studio", role: "ledecky", task: "own the backlog" });
+    const bob = sup.spawn({ project: "studio", role: "bob", task: "lead", as: "lead" });
+    const led = sup.spawn({ project: "studio", role: "ledecky", task: "own the backlog", as: "lead" });
     await until(() => sessions.length === 2);
     const [, s] = sessions;
     // Both run past the cap of 2 with a builder, and neither ends at a result.
@@ -406,5 +406,49 @@ describe("a lead that isn't the orchestrator", () => {
     expect(r.isError).toBeUndefined();
     // It still asks Casper in its own session, not through a request.
     expect(await s!.ask("AskUserQuestion", { questions: [] })).toMatchObject({ behavior: "deny" });
+  });
+});
+
+describe("a lead role's lifetime, as its spawn says (Casper, 2026-11-07)", () => {
+  const TWO = `${STUDIO}      ledecky: { dir: /work/studio-ledecky, lead: true }\n`;
+  async function two() {
+    const broker = new FakeBroker();
+    const { queryFn, sessions } = fakeQuery();
+    const sup = new Supervisor({ config: testConfig(dir, TWO), policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async () => false });
+    await sup.start();
+    running.push(sup);
+    return { sup, sessions };
+  }
+
+  it("is a worker unless asked: a lead's spawn of ledecky ends at its result, holds a slot, and the next one starts (ubu1, 2026-11-07)", async () => {
+    const { sup, sessions } = await two();
+    const bob = sup.spawn({ project: "studio", role: "bob", task: "lead", as: "lead" });
+    await until(() => sessions.length === 1);
+    const lead = handlers(sup, { lead: bob.id });
+    const first = JSON.parse((await callTool(lead, "spawn_worker", { project: "studio", role: "ledecky", task: "fix batch 1" })).content[0]!.text);
+    const second = JSON.parse((await callTool(lead, "spawn_worker", { project: "studio", role: "ledecky", task: "fix batch 2" })).content[0]!.text);
+    expect(second.note).toMatch(/Ledecky already has a worker running; it starts after that one ends/);
+    await until(() => sessions.length === 2);
+    const s = sessions[1]!;
+    // A worker's prompt, not a lead's, and no lead tools or Casper questions in its own session.
+    expect(s.options.systemPrompt).toMatchObject({ append: expect.not.stringMatching(/Remote Control and typing to you there/) });
+    // It holds one of the two slots: a builder beside it fills the laptop.
+    expect(sup.spawn({ project: "helix", role: "bill", task: "y" }).state).toBe("running");
+    expect(sup.spawn({ project: "studio", role: "ann", task: "z" }).note).toMatch(/2 workers running, the laptop's limit/);
+    s.turnDone("batch 1 done");
+    await until(() => sup.status(first.id).state === "done");
+    await until(() => sup.status(second.id).state === "running");
+  });
+
+  it("runs as a lead only when asked, and only for a lead role", async () => {
+    const { sup } = await two();
+    expect(() => sup.spawn({ project: "studio", role: "ann", task: "x", as: "lead" })).toThrow("Ann isn't a lead role (lead: true in supervisor.yaml), so it runs only as a worker");
+    const led = sup.spawn({ project: "studio", role: "ledecky", task: "own the backlog", as: "lead" });
+    await until(() => sup.status(led.id).state === "running");
+    // A task run of the role waits behind its lead, and says so.
+    expect(sup.spawn({ project: "studio", role: "ledecky", task: "a fix" }).note).toMatch(new RegExp(`Ledecky is running as a lead \\(${led.id}\\), which lives until stopped; it starts after that lead is stopped, or message Ledecky instead`));
+    // A reset keeps what the spawn asked for.
+    const fresh = await sup.reset(led.id);
+    expect(store.worker(fresh.id)!.run_as).toBe("lead");
   });
 });

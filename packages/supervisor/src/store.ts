@@ -41,6 +41,8 @@ export interface WorkerRow {
   declared_session: string | null;
   /** Who asked for it: "orchestrator", a lead worker's id, or a remote requester's address; null before spawns said. */
   spawned_by: string | null;
+  /** "lead" for a long-lived lead its spawn asked for; "worker" (or null, before spawns said) ends after its result. */
+  run_as: string | null;
 }
 
 export type RequestKind = "approval" | "question";
@@ -121,6 +123,7 @@ export class Store {
     if (!cols.has("tasks")) this.db.exec("ALTER TABLE workers ADD COLUMN tasks TEXT");
     if (!cols.has("declared_session")) this.db.exec("ALTER TABLE workers ADD COLUMN declared_session TEXT");
     if (!cols.has("spawned_by")) this.db.exec("ALTER TABLE workers ADD COLUMN spawned_by TEXT");
+    if (!cols.has("run_as")) this.db.exec("ALTER TABLE workers ADD COLUMN run_as TEXT");
   }
 
   close(): void {
@@ -154,12 +157,13 @@ export class Store {
     /** Already JSON, as stored. */
     declared_session?: string | null;
     spawned_by?: string | null;
+    run_as?: "lead" | "worker";
   }): WorkerRow {
     const id = `w_${randomUUID().slice(0, 8)}`;
     this.run(
-      `INSERT INTO workers (id, project, role, task, handoff, state, priority, resume_session, model, effort, tasks, declared_session, spawned_by, created_at)
-       VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, w.project, w.role, w.task, w.handoff, w.priority, w.resume_session, w.model ?? null, w.effort ?? null, w.tasks ? JSON.stringify(w.tasks) : null, w.declared_session ?? null, w.spawned_by ?? null, now(),
+      `INSERT INTO workers (id, project, role, task, handoff, state, priority, resume_session, model, effort, tasks, declared_session, spawned_by, run_as, created_at)
+       VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, w.project, w.role, w.task, w.handoff, w.priority, w.resume_session, w.model ?? null, w.effort ?? null, w.tasks ? JSON.stringify(w.tasks) : null, w.declared_session ?? null, w.spawned_by ?? null, w.run_as ?? "worker", now(),
     );
     return this.worker(id)!;
   }

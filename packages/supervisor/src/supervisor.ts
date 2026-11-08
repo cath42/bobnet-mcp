@@ -267,9 +267,15 @@ export class Supervisor {
     effort?: Effort;
     /** Who asks: the orchestrator unless said (a lead's worker id, a remote requester's address). */
     spawnedBy?: string;
+    /**
+     * A lead lives until stopped and holds no worker slot; a worker ends after its result. The spawn
+     * says which, a worker unless it asks (Casper, 2026-11-07): whoever starts a lead role decides.
+     */
+    as?: "lead" | "worker";
   }): WorkerRow & { note?: string } {
     const project = this.project(opts.project);
     const role = this.role(opts.project, opts.role);
+    if (opts.as === "lead" && !role.lead) throw new SupervisorError(`${role.name} isn't a lead role (lead: true in supervisor.yaml), so it runs only as a worker`);
     if (role.sandbox && this.sandboxBroken) {
       throw new SupervisorError(`${role.name} runs in Claude Code's sandbox, which can't run on this machine: ${this.sandboxBroken}`);
     }
@@ -309,8 +315,9 @@ export class Supervisor {
       tasks,
       declared_session: declared,
       spawned_by: opts.spawnedBy ?? "orchestrator",
+      run_as: opts.as ?? "worker",
     });
-    this.store.audit(opts.spawnedBy ?? "orchestrator", "spawn", w.id, { project: w.project, role: w.role, tasks, session: declared, resume: w.resume_session, model: w.model, effort: w.effort });
+    this.store.audit(opts.spawnedBy ?? "orchestrator", "spawn", w.id, { project: w.project, role: w.role, as: opts.as ?? "worker", tasks, session: declared, resume: w.resume_session, model: w.model, effort: w.effort });
     this.schedule();
     const row = this.store.worker(w.id)!;
     const note = row.state === "queued" ? this.queuedBecause(row) : undefined;
@@ -319,7 +326,9 @@ export class Supervisor {
 
   /** Why a queued worker hasn't started, so a spawn that waits says so. */
   private queuedBecause(w: WorkerRow): string {
-    if (this.activeRun(w.project, w.role)) return `queued: ${this.roleOf(w).name} already has a worker running; it starts after that one ends`;
+    const active = this.activeRun(w.project, w.role);
+    if (active && isLead(this.store.worker(active))) return `queued: ${this.roleOf(w).name} is running as a lead (${active}), which lives until stopped; it starts after that lead is stopped, or message ${this.roleOf(w).name} instead`;
+    if (active) return `queued: ${this.roleOf(w).name} already has a worker running; it starts after that one ends`;
     if (this.workersRunning() >= this.config.concurrency) return `queued: ${this.workersRunning()} workers running, the laptop's limit; it starts when one ends`;
     return "queued";
   }
@@ -348,7 +357,7 @@ export class Supervisor {
     const model = power.model ?? w.model ?? undefined;
     const effort = power.effort ?? (w.effort as Effort | null) ?? undefined;
     const spawnedBy = by ?? w.spawned_by ?? undefined;
-    return this.spawn({ project: w.project, role: w.role, task: w.task, tasks: storedTasks(w), carrySession: w.declared_session, ...(w.handoff ? { handoff: w.handoff } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(spawnedBy ? { spawnedBy } : {}) });
+    return this.spawn({ project: w.project, role: w.role, task: w.task, tasks: storedTasks(w), carrySession: w.declared_session, ...(w.handoff ? { handoff: w.handoff } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(spawnedBy ? { spawnedBy } : {}), as: isLead(w) ? "lead" : "worker" });
   }
 
   /** Live workers (queued or running) unless `all`, tasks cut short: the full history is too big for a tool result. */
@@ -449,6 +458,7 @@ export class Supervisor {
       ...(w.handoff ? { handoff: w.handoff } : {}),
       resume_session: w.session_id,
       ...(w.spawned_by ? { spawnedBy: w.spawned_by } : {}),
+      as: isLead(w) ? "lead" : "worker",
     });
     if (answer.decision === "allow") this.preapproved.set(resumed.id, [{ tool: request.tool, input: request.input }]);
     return { request, resumed };
@@ -637,6 +647,7 @@ export class Supervisor {
           ...(req.session !== undefined ? { session: req.session ? { feature: req.session.feature, kind: req.session.kind, ...(req.session.label ? { label: req.session.label } : {}) } : null } : {}),
           ...(req.model ? { model: req.model } : {}),
           ...(req.effort ? { effort: req.effort } : {}),
+          ...(req.as ? { as: req.as } : {}),
           spawnedBy: from,
         });
         return { worker: { ...this.remoteView(w), ...(w.note ? { note: w.note } : {}) } };
@@ -659,6 +670,7 @@ export class Supervisor {
       project: w.project,
       role: w.role,
       name: this.roleOf(w).name,
+      as: isLead(w) ? "lead" : "worker",
       state: w.state,
       session: d ? sessionName(d) : null,
       checkpoint: this.checkpoints.get(w.id) ?? w.checkpoint,
@@ -715,7 +727,7 @@ export class Supervisor {
   private schedule(): void {
     for (const w of this.store.queued()) {
       // A lead holds no worker slot, so it never waits behind its own builders.
-      if (!this.roleOf(w).lead && this.workersRunning() >= this.config.concurrency) continue;
+      if (!isLead(w) && this.workersRunning() >= this.config.concurrency) continue;
       const busy = [...this.runs.keys()].some((id) => {
         const r = this.store.worker(id);
         return r?.project === w.project && r.role === w.role;
@@ -727,7 +739,8 @@ export class Supervisor {
   }
 
   private launch(w: WorkerRow, consult?: Consult): void {
-    const base = this.roleOf(w);
+    // A lead role run as a worker is a worker like any other: it ends after its result.
+    const base = isLead(w) ? this.roleOf(w) : { ...this.roleOf(w), lead: false, orchestrator: false };
     const project = this.project(w.project);
     // A consult worker only reads and answers: no file writes, no landing, a short life.
     const role: RoleConfig = consult
@@ -1272,7 +1285,7 @@ export class Supervisor {
     for (const [id, run] of this.runs) {
       const w = this.store.worker(id);
       // A lead is never stuck by the clock: it waits on messages, and watches CI as long as it takes.
-      if (!w || this.roleOf(w).lead || this.stallReported.has(id) || this.supervisorWaits.has(id) || this.router.isWaiting(id)) continue;
+      if (!w || isLead(w) || this.stallReported.has(id) || this.supervisorWaits.has(id) || this.router.isWaiting(id)) continue;
       const inTool = run.toolsInFlight > 0;
       const quiet = Date.now() - run.lastEventAt;
       if (quiet < (inTool ? this.config.toolStallMinutes : this.config.stallMinutes) * 60_000) continue;
@@ -1295,7 +1308,7 @@ export class Supervisor {
     let n = 0;
     for (const id of this.runs.keys()) {
       const w = this.store.worker(id);
-      if (w && !this.roleOf(w).lead) n++;
+      if (w && !isLead(w)) n++;
     }
     return n;
   }
@@ -1354,7 +1367,7 @@ export class Supervisor {
    */
   private roleStatus(role: RoleConfig, workerId: string | undefined): void {
     // A running lead keeps its own status, as the interactive orchestrator did.
-    if (role.lead && workerId) return;
+    if (workerId && isLead(this.store.worker(workerId))) return;
     const status = workerId ? `role · worker ${workerId} running` : "role · no worker running (messages wait for the next one)";
     this.broker.request({ t: "status", as: role.name, status }).catch(() => {});
   }
@@ -1652,6 +1665,9 @@ export function sandboxProblem(platform = process.platform): Promise<string | nu
  * A lead runs headless too, but Casper may be following it in Remote Control, and it stays alive
  * between turns. The one named as the orchestrator also has the orchestrator's tools and no rules.
  */
+/** A worker its spawn started as a lead; one from before spawns said is a worker. */
+const isLead = (w: WorkerRow | undefined): boolean => w?.run_as === "lead";
+
 function leadAppend(role: RoleConfig, orchestrator: string): string {
   return [
     `You are ${role.name}, a lead for project ${role.project}, running as a worker under the BobNet supervisor. Casper may be following this session in Remote Control and typing to you there.`,
