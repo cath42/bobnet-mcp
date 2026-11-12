@@ -309,7 +309,7 @@ describe("a worker's exit", () => {
 });
 
 describe("a worker whose turn is done", () => {
-  it("ends at its result, background commands and all, and later messages wait in its inbox (Luke, 2026-11-07)", async () => {
+  it("ends at its result when no background task is listed, whatever holds the session open, and later messages wait in its inbox (Luke, 2026-11-07)", async () => {
     const { sup, sessions } = await setup();
     const w = sup.spawn({ project: "studio", role: "ann", task: "x" });
     await until(() => sessions.length === 1);
@@ -325,6 +325,43 @@ describe("a worker whose turn is done", () => {
     await until(() => sessions[1]?.inputs.length === 1);
     expect(sessions[1]!.inputs[0]).toMatch(/Messages that arrived for you while no worker was running[\s\S]*here is the signed-in run/);
     expect(next.id).not.toBe(w.id);
+  });
+
+  it("waits while a background command it started runs, and ends at the result after it (Casper, 2026-11-12)", async () => {
+    const { sup, sessions } = await setup();
+    const w = sup.spawn({ project: "studio", role: "ann", task: "build the tiles" });
+    await until(() => sessions.length === 1);
+    const s = sessions[0]!;
+    const tasks = (n: number) => s.emit({ type: "system", subtype: "background_tasks_changed", tasks: Array.from({ length: n }, (_, i) => ({ task_id: `b${i}`, task_type: "local_bash", description: "tile build" })) } as never);
+    s.say("Started the tile build in the background; I'll wait for its notice.");
+    tasks(1);
+    s.turnDone("waiting for the build");
+    await tick(20);
+    expect(sup.status(w.id).state).toBe("running");
+    expect(s.closed).toBe(false);
+    // The build ends, and its notice wakes the worker for a turn of its own: that result ends it.
+    tasks(0);
+    s.say("Build done: 3,104 tiles.");
+    s.finish("tiles built");
+    await until(() => sup.status(w.id).state === "done");
+    expect(store.worker(w.id)!.error).toBeNull();
+  });
+
+  it("isn't ended by a resumed session's turn with no model call: the brief still runs (Bob, 2026-11-12)", async () => {
+    const { sup, sessions } = await setup();
+    const w = sup.spawn({ project: "studio", role: "ann", task: "go on with the tiles", resume_session: "sess-old" });
+    await until(() => sessions.length === 1);
+    const s = sessions[0]!;
+    // The last run's background command's "stopped" notice gets a turn that never calls the model.
+    s.emit({ type: "system", subtype: "task_notification", task_id: "b0", status: "stopped", summary: "Background shell command didn't finish before the previous session ended" } as never);
+    s.emit({ type: "result", subtype: "success", result: "", num_turns: 0, modelUsage: {}, total_cost_usd: 0 } as never);
+    await tick(20);
+    expect(sup.status(w.id).state).toBe("running");
+    expect(s.closed).toBe(false);
+    expect(s.inputs[0]).toMatch(/go on with the tiles/);
+    s.say("Picking up from the handoff.");
+    s.finish("tiles built");
+    await until(() => sup.status(w.id).state === "done");
   });
 
   it("never drops a message into a session whose input has closed", async () => {

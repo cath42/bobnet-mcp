@@ -1286,7 +1286,8 @@ export class Supervisor {
       const w = this.store.worker(id);
       // A lead is never stuck by the clock: it waits on messages, and watches CI as long as it takes.
       if (!w || isLead(w) || this.stallReported.has(id) || this.supervisorWaits.has(id) || this.router.isWaiting(id)) continue;
-      const inTool = run.toolsInFlight > 0;
+      // A background command it waits on (a long build) counts as a tool call in flight.
+      const inTool = run.toolsInFlight > 0 || run.backgroundTasks > 0;
       const quiet = Date.now() - run.lastEventAt;
       if (quiet < (inTool ? this.config.toolStallMinutes : this.config.stallMinutes) * 60_000) continue;
       this.stallReported.add(id);

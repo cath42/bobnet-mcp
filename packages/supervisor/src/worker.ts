@@ -7,7 +7,8 @@ import { BILLING_ENV, configDir, type RoleConfig } from "./config.ts";
 
 // One headless Claude Code session per worker, on the Agent SDK. Input is a
 // stream, so the supervisor can hand a running worker a message mid-task; the
-// worker ends when its turn produces a result and the input is closed. A
+// worker ends when its turn produces a result with no background command of its
+// still running (one that is wakes it for another turn when it ends). A
 // long-lived worker (a lead) instead waits for its next message after a
 // result, and ends only when stopped.
 
@@ -41,6 +42,8 @@ export type Outcome =
   | { state: "stopped"; reason: string };
 
 const GRACE_MS = 10_000;
+/** How long a worker whose background work has finished waits for the turn that work wakes, before it ends. */
+export const PARKED_WAKE_MS = 2 * 60_000;
 /** How long a stopped worker's last turn, for its handoff, may take. */
 const LAST_TURN_MS = 3 * 60_000;
 /** v0.1's server; workers use only the supervisor's in-process `bobnet` tools. */
@@ -129,6 +132,8 @@ export class WorkerRun {
   lastEventAt = Date.now();
   /** Tool calls started and not yet answered: a long build is not a stall. */
   toolsInFlight = 0;
+  /** Background tasks still running (a build started with run_in_background), as the session last listed them. */
+  backgroundTasks = 0;
   /**
    * Live token counts summed from each model response, until a result
    * reports the session's exact cumulative totals and cost.
@@ -158,6 +163,14 @@ export class WorkerRun {
   /** The message an interrupted turn hands over: the next turn, not the end. */
   private nextTurn: string | null = null;
   private ending = false;
+  /** Whether the model has answered in this run: a turn before that is the last run's leftovers, not the brief's. */
+  private modelTurn = false;
+  /**
+   * A worker whose turn ended with background work running: the outcome it ends with if that work
+   * finishes and no turn follows. A background task's end normally wakes it for a turn of its own.
+   */
+  private parked: Outcome | null = null;
+  private parkedTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: WorkerRunOptions) {
     this.opts = opts;
@@ -271,6 +284,26 @@ export class WorkerRun {
     }
   }
 
+  /** A turn has started after a parked result: that turn's result decides. */
+  private unpark(): void {
+    this.parked = null;
+    if (this.parkedTimer) clearTimeout(this.parkedTimer);
+    this.parkedTimer = null;
+  }
+
+  /** Background work is done; if no turn follows within a while, the worker ends with its parked result. */
+  private endParkedSoon(): void {
+    if (this.parkedTimer) return;
+    this.parkedTimer = setTimeout(() => {
+      if (!this.parked || !this.idle) return;
+      this.result = this.parked;
+      this.parked = null;
+      this.input.end();
+      this.query?.close();
+    }, PARKED_WAKE_MS);
+    this.parkedTimer.unref();
+  }
+
   /** Interrupts, then ends the session; kills it if it hasn't ended after a grace period. */
   private async end(): Promise<void> {
     if (this.ending || this.result) return;
@@ -294,6 +327,20 @@ export class WorkerRun {
         this.track(msg);
         this.opts.onEvent(msg);
         if (msg.type === "system" && msg.subtype === "init" && this.opts.remoteControl && !this.remote) void this.startRemoteControl();
+        if (msg.type === "assistant") {
+          this.modelTurn = true;
+          this.unpark();
+        }
+        if (msg.type === "system" && msg.subtype === "background_tasks_changed") {
+          this.backgroundTasks = msg.tasks.filter((t) => !t.ambient).length;
+          if (this.parked && this.backgroundTasks === 0) this.endParkedSoon();
+        }
+        // A resumed session can open with a turn for the last run's leftovers (a background command's
+        // "stopped" notice) that never calls the model; the brief is still to come, so it isn't the end.
+        if (msg.type === "result" && msg.num_turns === 0 && !this.modelTurn && !this.stopReason && this.nextTurn === null) {
+          this.write({ type: "supervisor", note: "a turn with no model call before the brief's: not the end" });
+          continue;
+        }
         if (msg.type === "result" && this.opts.longLived && !this.stopReason && this.nextTurn === null) {
           // A lead's turn is over, not its work: it waits for its next message.
           this.idle = true;
@@ -304,7 +351,14 @@ export class WorkerRun {
           this.nextTurn = null;
           this.toolsInFlight = 0;
           this.opts.onInterrupted?.();
+        } else if (msg.type === "result" && this.backgroundTasks > 0 && !this.stopReason) {
+          // Its turn is over, not its work (Casper, 2026-11-12): a background command it started (a long
+          // build) wakes it when it ends, and it ends at a result with nothing left running.
+          this.parked = msg.subtype === "success" ? { state: "done", result: msg.result } : { state: "failed", error: msg.subtype };
+          this.idle = true;
+          this.toolsInFlight = 0;
         } else if (msg.type === "result") {
+          this.unpark();
           this.result =
             msg.subtype === "success"
               ? { state: "done", result: msg.result }
