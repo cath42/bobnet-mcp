@@ -19,10 +19,9 @@ rather than by convention.
 
 ## Open questions
 
-- **C2 (Casper):** may Casper edit and reorder on the dashboard directly? Under the first frame,
-  edits from the UI were requests to the project's PO (Picard input: "the UI must not become a third
-  writer"). Peach's proposal: Casper's own gates (release scope, order of releases, closing a release)
-  directly. Everything else as a request to the PO, which keeps one writer and the PO's judgement.
+- *Settled (Casper, 2026-11-13, C2):* Casper edits his own gates (release scope, order of releases,
+  closing a release) on the dashboard directly. Everything else he wants changed is a request to the
+  project's PO, which keeps one writer and the PO's judgement. Criteria for both to be written.
 - Is "open feature" a field the service keeps now? It decides who may write, so the service needs it.
   Under the first frame it was derived from sessions (roadmap-view.md 9).
 

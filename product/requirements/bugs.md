@@ -1,34 +1,29 @@
 # 8. Bugs
 
 **State:** Open. Casper (2026-11-13): "we need to start considering how we want to handle bugs in this
-system, we don't have those yet either." These are the questions to settle before criteria.
+system, we don't have those yet either." Below is one proposal for Casper to accept or change. The
+criteria get written once it is settled.
 
 **Who needs it:** Casper, who finds bugs using the products. Agents, who find them while building.
-Reviewers, whose findings (blockers, majors) are often bugs in all but name. The PO, who decides
-when one is fixed.
+The PO, who decides when one gets fixed.
 
-## What is settled
+## Proposal (Peach, 2026-11-13)
 
-- `bug` is one of the board's types (Helix's types).
-- A bug is captured as quickly as any backlog item ([capture.md](capture.md)).
+A bug is captured like any backlog item ([capture.md](capture.md)), with type `bug`. It is not put
+into a feature when it is found. It waits in the project's triage list until the PO decides which
+feature or release fixes it.
 
-## Questions for Casper
-
-1. **Where a bug lives.** In the feature that caused it, as a task? In whichever feature fixes it? On
-   its own, outside features, like a backlog item? Peach's proposal: on its own when found, with a
-   link to the feature and release it was found in. It is slotted like a backlog item when someone
-   decides to fix it.
-2. **What interrupts.** Does a bug in a released product jump the queue (a "fixes" session now), or
-   wait for triage like everything else? Peach's proposal: a severity set at capture (blocks use /
-   wrong / cosmetic), where "blocks use" shows on what waits on Casper.
-3. **Review findings.** Are a review session's blockers and majors bugs on the board, or tasks of the
-   feature under review? Today in Helix they are tasks or "fixes" builds on the same feature.
-4. **Who may file one.** Any agent, Casper, the project's own users (later)?
-5. **What closes one.** The fix landing, or Casper (or the PO) confirming it, with evidence like any
-   acceptance criterion?
-6. **Which product, which version.** Does a bug record the release or commit it was found in, and
-   where (staging, production)?
+1. **Capture.** You or any agent records it in one step: what happened, where (staging or
+   production), and the feature it was found in, if known.
+2. **Triage.** The PO slots it like any backlog item: into a feature (usually a "fixes" session), into
+   a release, or closes it with a reason.
+3. **Urgent ones.** A bug marked "blocks use" also shows on your "waits on Casper" list, so you decide
+   whether it jumps the queue.
+4. **Review findings are not bugs.** A review session's blockers and majors stay tasks of the feature
+   under review, as in Helix today, because that feature isn't done yet.
+5. **Closing.** A bug closes when its fix has landed and its one acceptance criterion ("it no longer
+   happens", with evidence) is checked.
 
 ## Input to ask for
 
-- Picard: how Helix handles review findings and defects today, and what goes wrong.
+- Picard: how Helix handles defects found after a feature is Done, and whether point 4 matches.

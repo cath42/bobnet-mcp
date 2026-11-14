@@ -27,5 +27,5 @@ feature, makes it a feature of its own, or drops it.
 
 - Is Helix's `drafts/` folder (DRAFT-n, ~103 items) the same thing? Peach's view: yes, they move over
   as backlog items ([migration.md](migration.md)). To check with Picard.
-- Can an item be captured with no project ("for later, somewhere")? Peach's proposal: yes, into a
-  BobNet-wide inbox the PO of the right project picks up. **For Casper.**
+- *Settled (Casper, 2026-11-13):* no capture without a project. Every item belongs to a project from
+  the moment it is captured.
