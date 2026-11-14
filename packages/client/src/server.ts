@@ -1,7 +1,11 @@
-import type { PeerInfo } from "@bobnet/protocol";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import type { BoardOpInput, PeerInfo } from "@bobnet/protocol";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { BOARD_TOOLS, type BoardToolDeps, onlyProject } from "./board-tools.ts";
+import { CaptureQueue } from "./capture-queue.ts";
 import type { Identity } from "./config.ts";
 import { BrokerConnection, BrokerError, type PushFrame } from "./connection.ts";
 import { type ChannelEvent, Inbox } from "./inbox.ts";
@@ -122,6 +126,12 @@ const TOOLS = [
   },
 ] as const;
 
+/** The board's tools (ADR 0001 §8), as MCP lists them. */
+const BOARD_TOOL_LIST = BOARD_TOOLS.map((t) => {
+  const { $schema: _, ...inputSchema } = z.toJSONSchema(z.object(t.shape)) as Record<string, unknown>;
+  return { name: t.name, description: t.description, inputSchema: inputSchema as { type: "object" } };
+});
+
 export interface BobnetServer {
   server: Server;
   connection: BrokerConnection;
@@ -134,6 +144,8 @@ export function createServer(opts: {
   credentials: { clientId: string; clientSecret: string };
   log: Logger;
   WebSocketImpl?: ConstructorParameters<typeof BrokerConnection>[0]["WebSocketImpl"];
+  /** The capture queue's folder (ADR 0001 §12); defaults to ~/.local/state/bobnet/capture-queue. */
+  captureDir?: string;
 }): BobnetServer {
   const { log } = opts;
   const inbox = new Inbox();
@@ -164,8 +176,20 @@ export function createServer(opts: {
     credentials: opts.credentials,
     log,
     onPush,
+    onReady: () => flushCaptures(),
     ...(opts.WebSocketImpl ? { WebSocketImpl: opts.WebSocketImpl } : {}),
   });
+
+  const captures = new CaptureQueue((as, op, ctx, waitMs) => connection.boardOp(as, op, ctx, waitMs), {
+    ...(opts.captureDir ? { dir: opts.captureDir } : {}),
+    onError: (msg, detail) => log.warn(msg, detail),
+  });
+  /** Captures made as this session's name, by this process or one before it, go once the board is back. */
+  const flushCaptures = () => {
+    if (!self) return;
+    const name = self.name.toLowerCase();
+    captures.flush((as) => as.toLowerCase() === name).catch((err: Error) => log.warn("capture flush failed", { err: err.message }));
+  };
 
   const requireSelf = () => {
     if (!self) throw new BrokerError("not_hosted", "Not registered on BobNet yet: call `register` first");
@@ -176,7 +200,15 @@ export function createServer(opts: {
     const result = await connection.register(identity);
     self = { name: identity.name, address: result.address };
     inbox.setSelf(result.address, identity.team ?? null);
+    flushCaptures();
     return result;
+  };
+
+  const board: BoardToolDeps = {
+    op: (op: BoardOpInput) => connection.boardOp(requireSelf().name, op),
+    capture: (input) => captures.capture(requireSelf().name, input),
+    project: () => onlyProject(board.op),
+    readHandoff: (path) => readFileSync(path.replace(/^~(?=\/|$)/, homedir()), "utf8"),
   };
 
   const handlers: Record<string, (args: unknown) => Promise<unknown>> = {
@@ -234,7 +266,12 @@ export function createServer(opts: {
     },
   };
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOLS] }));
+  for (const t of BOARD_TOOLS) {
+    const args = z.object(t.shape);
+    handlers[t.name] = (raw) => t.run(board, args.parse(raw));
+  }
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOLS, ...BOARD_TOOL_LIST] }));
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const handler = handlers[req.params.name];

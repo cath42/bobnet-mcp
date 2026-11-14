@@ -1,5 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { type ClientFrame, type ClientInfo, type ErrorCode, PING, PONG, PROTOCOL_VERSION, type ServerFrame } from "@bobnet/protocol";
+import {
+  type BoardCtx,
+  type BoardOpInput,
+  type BoardResults,
+  type ClientFrame,
+  type ClientInfo,
+  type ErrorCode,
+  PING,
+  PONG,
+  PROTOCOL_VERSION,
+  type ServerFrame,
+} from "@bobnet/protocol";
 import ownPackage from "../package.json" with { type: "json" };
 import type { Credentials, Identity } from "./config.ts";
 import type { Logger } from "./log.ts";
@@ -10,6 +21,8 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const BACKOFF_MIN_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
 const REREGISTER_EVERY_MS = 5_000;
+/** How long a board operation waits for the broker before it fails (ADR 0001 §12). */
+export const BOARD_WAIT_MS = 60_000;
 
 export type RequestFrame = ClientFrame extends infer F ? (F extends { rid: string } ? Omit<F, "rid"> : never) : never;
 export type PushFrame = Extract<ServerFrame, { t: "deliver" | "presence" | "action" }>;
@@ -53,6 +66,8 @@ export interface ConnectionOptions {
 export class BrokerConnection {
   private ws: WebSocket | null = null;
   private ready = false;
+  /** When the broker was last lost, or this connection started without it; null while connected. */
+  private downSince: Date | null = new Date();
   private laptop: string | null = null;
   private seq = 0;
   private readonly pending = new Map<string, Pending>();
@@ -111,6 +126,23 @@ export class BrokerConnection {
     return this.sendRequest<R>(frame);
   }
 
+  /**
+   * One board operation as a peer this connection hosts. It waits up to `waitMs` for the broker,
+   * then fails saying since when the board has been unavailable, for the agent to retry.
+   */
+  async boardOp<K extends keyof BoardResults>(as: string, op: BoardOpInput & { op: K }, ctx?: BoardCtx, waitMs = BOARD_WAIT_MS): Promise<BoardResults[K]> {
+    try {
+      await this.whenReady(waitMs);
+    } catch {
+      throw new BrokerError("unavailable", `the board is unavailable since ${(this.downSince ?? new Date()).toISOString()}; wait and retry`);
+    }
+    return this.sendRequest<BoardResults[K]>({ t: "board_op", as, ...(ctx ? { ctx } : {}), op } as RequestFrame);
+  }
+
+  get connected(): boolean {
+    return this.ready;
+  }
+
   /** Fire-and-forget frames (acks). Dropped if disconnected; the broker redelivers. */
   sendRaw(frame: ClientFrame): void {
     if (this.ready) this.ws?.send(JSON.stringify(frame));
@@ -130,14 +162,14 @@ export class BrokerConnection {
     });
   }
 
-  private whenReady(): Promise<void> {
+  private whenReady(timeoutMs = REQUEST_TIMEOUT_MS): Promise<void> {
     if (this.ready) return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         const i = this.waitingForReady.indexOf(done);
         if (i !== -1) this.waitingForReady.splice(i, 1);
         reject(new BrokerError("disconnected", "Not connected to the BobNet broker; retrying in the background"));
-      }, REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
       const done = () => {
         clearTimeout(timer);
         resolve();
@@ -216,6 +248,7 @@ export class BrokerConnection {
     }
     if (this.unrestored.size > 0) this.scheduleRetry();
     this.ready = true;
+    this.downSince = null;
     for (const w of this.waitingForReady.splice(0)) w();
     this.opts.log.info("connected", { laptop: this.laptop });
     this.opts.onReady?.(this.laptop ?? "");
@@ -224,6 +257,7 @@ export class BrokerConnection {
   private onClose(ws: WebSocket, code: number, reason: string): void {
     if (ws !== this.ws) return;
     this.ready = false;
+    this.downSince ??= new Date();
     this.ws = null;
     this.clearTimers();
     this.failPending("disconnected", "Connection to the BobNet broker dropped");

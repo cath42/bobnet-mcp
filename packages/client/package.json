@@ -8,7 +8,9 @@
     "./connection": "./src/connection.ts",
     "./config": "./src/config.ts",
     "./log": "./src/log.ts",
-    "./inbox": "./src/inbox.ts"
+    "./inbox": "./src/inbox.ts",
+    "./board-tools": "./src/board-tools.ts",
+    "./capture-queue": "./src/capture-queue.ts"
   },
   "bin": {
     "bobnet": "./src/bin.ts"
