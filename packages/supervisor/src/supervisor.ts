@@ -1,6 +1,6 @@
 import { execFile, spawn as spawnProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync, renameSync } from "node:fs";
 import { join, relative, resolve, isAbsolute } from "node:path";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import {
@@ -103,6 +103,8 @@ const FILE_WRITE_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 /** How often hold files are re-read, to notice a hold set or released. */
 const HOLD_CHECK_MS = 5_000;
 /** A queued board report the board refuses is dropped, not retried: a retry gets the same answer and blocks the rows behind it. */
+/** The most tasks a board ctx carries (the protocol's BoardCtx). */
+const MAX_TASKS = 50;
 const FINAL_BOARD_ERRORS = new Set(["invalid", "forbidden", "conflict", "frame_too_large", "secret_detected"]);
 
 interface Consult {
@@ -361,7 +363,8 @@ export class Supervisor {
       await this.broker.boardOp(role.name, { op: "session_join", project: project.key, session: ctx.session! }, ctx);
     } catch (err) {
       const code = (err as { code?: string }).code;
-      throw new SupervisorError(`${role.name} isn't spawned: the board ${code === "unavailable" ? "can't be reached" : "refused to join"} ${sessionName(d)}: ${(err as Error).message}`);
+      const refused = code !== undefined && ["invalid", "forbidden", "conflict"].includes(code);
+      throw new SupervisorError(`${role.name} isn't spawned: the board ${refused ? "refused to join" : "can't be reached to join"} ${sessionName(d)}: ${(err as Error).message}`);
     }
     return this.spawn({ ...opts, id });
   }
@@ -384,6 +387,7 @@ export class Supervisor {
     const notItems = project.board === "service" ? (opts.tasks ?? []).filter((t) => !ItemRef.safeParse(t.toUpperCase()).success) : [];
     if (notItems.length) throw new SupervisorError(`not item ids on ${project.key}'s board: ${notItems.join(", ")} (e.g. LAND-41)`);
     const tasks = opts.tasks ? [...new Set(opts.tasks.map((t) => t.toUpperCase()))] : null;
+    if (project.board === "service" && tasks && tasks.length > MAX_TASKS) throw new SupervisorError(`at most ${MAX_TASKS} tasks per worker on ${project.key}'s board, not ${tasks.length}`);
     // The session is declared, never read from the brief: the board shows the worker in it.
     if (opts.carrySession === undefined && opts.session === undefined && board) {
       throw new SupervisorError(`${project.key} has ${board}: say which session this worker is in, session: { feature: "LAND-43", kind: "build", label: "B" } (kind design, build, review or retro; label as you call it), or null for none`);
@@ -1032,15 +1036,17 @@ export class Supervisor {
     this.store.audit("supervisor", "slot", workerId, { label });
   }
 
-    private releaseCall(toolUseId: string): void {
+  /** A call that returned its result passed its slot; one cut off by an interrupt was cancelled. */
+  private releaseCall(toolUseId: string, outcome: CiStatus = "passed"): void {
     const call = this.slotCalls.get(toolUseId);
     if (!call) return;
     this.slotCalls.delete(toolUseId);
+    this.slotOutcomes.set(call.workerId, outcome);
     call.release();
   }
 
   private releaseCalls(workerId: string): void {
-    for (const [toolUseId, call] of this.slotCalls) if (call.workerId === workerId) this.releaseCall(toolUseId);
+    for (const [toolUseId, call] of this.slotCalls) if (call.workerId === workerId) this.releaseCall(toolUseId, "cancelled");
   }
 
   /**
@@ -1158,6 +1164,8 @@ export class Supervisor {
         }
       }
       this.store.audit("supervisor", "land:start", workerId, { command: land.command, head });
+      // A land command that throws failed; one that returns says how below.
+      this.slotOutcomes.set(workerId, "failed");
       const r = await runCommand(land.command, worktree, env, land.timeoutMinutes * 60_000);
       const output = r.output.length > LAND_OUTPUT_MAX ? `…${r.output.slice(-LAND_OUTPUT_MAX)}` : r.output;
       const ok = r.code === 0;
@@ -1291,6 +1299,7 @@ export class Supervisor {
       }
     }
     this.store.audit("supervisor", "run:start", workerId, { name, args });
+    if (spec.slot) this.slotOutcomes.set(workerId, "failed");
     try {
       const r = await runCommand([...spec.command, ...args], cwd, env, spec.timeoutMinutes * 60_000);
       const ok = r.code === 0;
@@ -1595,18 +1604,23 @@ export class Supervisor {
 
   /**
    * The board reports, in order, each removed once the board has it. One the board refuses is final:
-   * logged and dropped, so it can't hold up the rest. One it can't take now waits, with all behind it.
+   * logged and dropped, so it can't hold up the rest. So is one made as a role no longer configured,
+   * or one that doesn't parse. One the board can't take now waits, with all behind it.
    */
   private async flushBoardReports(): Promise<void> {
+    const names = new Set(this.roles().map((r) => r.name.toLowerCase()));
     for (const item of this.store.outbox("board_op")) {
-      const { ctx, op } = JSON.parse(item.body) as { ctx: BoardCtx; op: BoardOpInput };
+      let report: { ctx: BoardCtx; op: BoardOpInput } | null = null;
       try {
-        await this.broker.boardOp(item.to_name, op, ctx, 0);
+        report = JSON.parse(item.body) as { ctx: BoardCtx; op: BoardOpInput };
+        if (!names.has(item.to_name.toLowerCase())) throw Object.assign(new Error(`${item.to_name} is no longer a role here`), { code: "not_hosted" });
+        await this.broker.boardOp(item.to_name, report.op, report.ctx, 0);
       } catch (err) {
-        const code = (err as { code?: string }).code;
-        if (!code || !FINAL_BOARD_ERRORS.has(code)) return;
-        this.log.error("the board refused a report; dropped", { op: op.op, worker: ctx.worker, code, err: (err as Error).message });
-        this.store.audit("supervisor", "board:refused", ctx.worker, { op: op.op, code, message: (err as Error).message });
+        const code = (err as { code?: string }).code ?? (report ? undefined : "bad_row");
+        const final = code !== undefined && (FINAL_BOARD_ERRORS.has(code) || code === "bad_row" || (code === "not_hosted" && !names.has(item.to_name.toLowerCase())));
+        if (!final) return;
+        this.log.error("a board report can't be made; dropped", { op: report?.op.op, worker: report?.ctx.worker, code, err: (err as Error).message });
+        this.store.audit("supervisor", "board:refused", report?.ctx.worker ?? null, { op: report?.op.op ?? null, code, message: (err as Error).message });
       }
       this.store.removeOutbox(item.seq);
     }
@@ -1618,7 +1632,7 @@ export class Supervisor {
   private boardCtx(w: WorkerRow): BoardCtx {
     const d = w.declared_session ? (JSON.parse(w.declared_session) as DeclaredSession | null) : null;
     const tasks = (storedTasks(w) ?? []).map((t) => t.toUpperCase()).filter((t) => ItemRef.safeParse(t).success);
-    return { worker: w.id, role: w.role, project: w.project, session: d ? boardSession(d) : null, tasks: tasks.slice(0, 50) };
+    return { worker: w.id, role: w.role, project: w.project, session: d ? boardSession(d) : null, tasks: tasks.slice(0, MAX_TASKS) };
   }
 
   /** One of the supervisor's own board reports (§9, §10), through the outbox, so a broker that is down loses none. */
@@ -1631,16 +1645,24 @@ export class Supervisor {
   /** The board tools as a worker gets them: made as its role, with its ctx (§4, §8). */
   private boardTools(workerId: string, role: RoleConfig, project: ProjectConfig): BoardToolDeps {
     const ctx = () => this.boardCtx(this.worker(workerId));
-    const roots = [role.dir, project.path, join(this.config.stateDir, "handoffs")].map((r) => resolve(r));
+    const real = (p: string) => {
+      try {
+        return realpathSync(p);
+      } catch {
+        return resolve(p);
+      }
+    };
     return {
       op: (op) => this.broker.boardOp(role.name, op, ctx()),
       capture: (input) => this.captures.capture(role.name, input, ctx()),
       project: async () => project.key,
       // Only files of its own: its worktree, the project, the handoffs. Never a path that reaches anywhere else.
+      // Real paths, file and roots alike, so a symlink in the worktree can't reach out of it.
       readHandoff: (path) => {
-        const full = resolve(role.dir, path);
+        const roots = [role.dir, project.path, join(this.config.stateDir, "handoffs", project.key)].map(real);
+        const full = real(resolve(role.dir, path));
         if (!roots.some((r) => !relative(r, full).startsWith("..") && !isAbsolute(relative(r, full)))) {
-          throw new SupervisorError(`close_session reads a handoff in your worktree, the project or the handoffs folder, not ${path}`);
+          throw new SupervisorError(`close_session reads a handoff in your worktree, the project or the project's handoffs folder, not ${path}`);
         }
         return readFileSync(full, "utf8");
       },
@@ -1662,13 +1684,14 @@ export class Supervisor {
     }
   }
 
+  /** A slot released with no outcome recorded (a refused fetch, a failed rebase, no result) was cancelled. */
   private onSlotReleased(e: SlotEntry): void {
+    const status = this.slotOutcomes.get(e.holder) ?? "cancelled";
+    this.slotOutcomes.delete(e.holder);
     const id = this.slotRuns.get(e);
     if (!id) return;
     this.slotRuns.delete(e);
     const w = this.store.worker(e.holder);
-    const status = this.slotOutcomes.get(e.holder) ?? "passed";
-    this.slotOutcomes.delete(e.holder);
     if (w) this.boardReport(w, { op: "slot_run", project: w.project, external_id: id, name: e.label, status, started_at: e.since, ended_at: new Date().toISOString() });
   }
 

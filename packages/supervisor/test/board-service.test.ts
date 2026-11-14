@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrokerError } from "@bobnet/client/connection";
@@ -75,7 +75,7 @@ describe("a spawn into a session", () => {
     };
     await expect(sup.spawnJoined(spawn)).rejects.toThrow("Luigi isn't spawned: the board refused to join BOB-2 build: BOB-2 build 1 is closed; name another label");
     broker.boardUp = false;
-    await expect(sup.spawnJoined(spawn)).rejects.toThrow(/the board can't be reached BOB-2 build: the board is unavailable since/);
+    await expect(sup.spawnJoined(spawn)).rejects.toThrow(/the board can't be reached to join BOB-2 build: the board is unavailable since/);
     expect(store.workers({ project: "bobnet" })).toEqual([]);
   });
 
@@ -153,6 +153,19 @@ describe("a run's reports", () => {
     expect(ops(broker, "run_end")).toHaveLength(1);
     expect(store.auditLog().find((a) => a.action === "board:refused")).toMatchObject({ detail: expect.stringContaining("No session BOB-2 build 1") });
   });
+
+  it("drops a report made as a role no longer configured, and one that doesn't parse, so neither holds up the rest", async () => {
+    const { sup, broker } = await setup();
+    const ctx = { worker: "w_gone", role: "gone", project: "bobnet", session: null, tasks: [] };
+    store.addOutbox("Gone", JSON.stringify({ ctx, op: { op: "run_end", project: "bobnet", id: "w_gone" } }), "board_op");
+    store.addOutbox("Luigi", "{not json", "board_op");
+    store.addOutbox("Luigi", JSON.stringify({ ctx: { ...ctx, worker: "w_1", role: "luigi" }, op: { op: "run_end", project: "bobnet", id: "w_1" } }), "board_op");
+    broker.board = () => ({ ref: null, seq: 1 });
+    sup.onConnected();
+    await until(() => store.outbox().length === 0);
+    expect(ops(broker, "run_end").map((o) => o.as)).toEqual(["Luigi"]);
+    expect(store.auditLog().filter((a) => a.action === "board:refused").map((a) => JSON.parse(a.detail).code).sort()).toEqual(["bad_row", "not_hosted"]);
+  });
 });
 
 describe("the board tools a worker gets", () => {
@@ -183,7 +196,23 @@ describe("the board tools a worker gets", () => {
     writeFileSync(outside, "x");
     const r = await close.handler({ session: { feature: "BOB-2", kind: "build", label: "1" }, need: "none", summary: "s", handoff: outside }, {});
     expect(r.isError).toBe(true);
-    expect(r.content[0]!.text).toMatch(/reads a handoff in your worktree, the project or the handoffs folder/);
+    expect(r.content[0]!.text).toMatch(/reads a handoff in your worktree, the project or the project's handoffs folder/);
+  });
+
+  it("follow no symlink out of the worker's own places", async () => {
+    const worktree = join(dir, "bobnet-luigi");
+    mkdirSync(join(worktree, "packages"), { recursive: true });
+    const outside = join(dir, "secret.md");
+    writeFileSync(outside, "x");
+    symlinkSync(outside, join(worktree, "packages", "handoff.md"));
+    const config = testConfig(dir, BOBNET.replace("/work/bobnet-luigi/packages", join(worktree, "packages")));
+    const { sup, sessions } = await setup(config);
+    await sup.spawnJoined(spawn);
+    await until(() => sessions.length === 1);
+    const close = toolsOf(sessions[0]!.options.mcpServers!["bobnet"])["close_session"]!;
+    const r = await close.handler({ session: { feature: "BOB-2", kind: "build", label: "1" }, need: "none", summary: "s", handoff: "handoff.md" }, {});
+    expect(r.isError).toBe(true);
+    expect(r.content[0]!.text).toMatch(/reads a handoff in your worktree/);
   });
 
   it("queue a capture with the worker's ctx, and the supervisor sends it once the board is back", async () => {
@@ -271,5 +300,47 @@ projects:
     expect(start).toMatchObject({ name: "pnpm test", status: "running" });
     expect(end).toMatchObject({ external_id: start!.external_id, status: "passed", ended_at: expect.any(String) });
     expect(start!.external_id).toMatch(/^mbp-1:[0-9a-f-]{36}$/);
+  });
+
+  it("reports a slot cut off by an interrupt as cancelled", async () => {
+    const { sup, broker, sessions } = await setup();
+    const w = await sup.spawnJoined(spawn);
+    await until(() => sessions.length === 1);
+    const internals = sup as unknown as { takeCallSlot: (id: string, author: string, toolUseId: string, label: string, signal: AbortSignal) => Promise<void>; releaseCalls: (id: string) => void };
+    await internals.takeCallSlot(w.id, "Luigi <luigi@bobnet>", "tu_1", "pnpm test", new AbortController().signal);
+    internals.releaseCalls(w.id);
+    await until(() => ops(broker, "slot_run").length === 2);
+    expect(ops(broker, "slot_run").map((o) => (o.op as { status: string }).status)).toEqual(["running", "cancelled"]);
+  });
+
+  it("reports a land refused before its check as cancelled", async () => {
+    const worktree = join(dir, "bobnet-luigi");
+    mkdirSync(join(worktree, "packages"), { recursive: true });
+    const g = (...args: string[]) => execFileSync("git", ["-C", worktree, ...args]).toString().trim();
+    execFileSync("git", ["init", "-q", worktree]);
+    writeFileSync(join(worktree, "README"), "x");
+    g("add", ".");
+    g("-c", "user.name=Luigi", "-c", "user.email=l@x", "commit", "-qm", "init");
+    g("remote", "add", "origin", join(dir, "no-such-remote"));
+    const config = parseSupervisorConfig(
+      `
+orchestrator: Mario
+state_dir: ${dir}
+projects:
+  bobnet:
+    path: ${worktree}
+    board: service
+    land: { command: [/usr/bin/true], target: origin/v2 }
+    roles:
+      luigi: { dir: ${join(worktree, "packages")}, name: Luigi }
+`,
+      (d) => d,
+    );
+    const { sup, broker, sessions } = await setup(config);
+    const w = await sup.spawnJoined(spawn);
+    await until(() => sessions.length === 1);
+    expect(await sup.land(w.id)).toMatchObject({ ok: false });
+    await until(() => ops(broker, "slot_run").length === 2);
+    expect(ops(broker, "slot_run").map((o) => (o.op as { status: string }).status)).toEqual(["running", "cancelled"]);
   });
 });
