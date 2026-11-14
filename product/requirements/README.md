@@ -66,10 +66,11 @@ releases is Casper's (open question C1 below).
 
 ## What already exists (v2, 2026-11-13)
 
-The supervisor reads a Backlog.md board from git (`packages/supervisor/src/board.ts`), and the dashboard
+The supervisor reads Backlog.md Markdown files from git (`packages/supervisor/src/board.ts`), and the dashboard
 shows the roadmap by milestone, a feature's tasks by build session, drafts, and agents on the cards
-their spawn named. Under the new frame that reader is a bridge for migration
-([migration.md](migration.md)), not the design. The dashboard's views carry over.
+their spawn named. Under the new frame it is replaced, not
+extended: the board is a database. That reader may at most serve the one-off import
+([migration.md](migration.md)). The dashboard's views carry over.
 
 ## Open questions
 
@@ -100,7 +101,8 @@ For Casper:
   spawn declared, against a rule table built from [board-writes.md](board-writes.md). Anyone may
   capture.
 - **T3, history and backup:** every write is an event (who, role, session, time, old and new value);
-  the board is built from that log. Export to plain files in a documented shape, scheduled to a copy
+  the board is built from that log. Export as JSON in a documented, versioned shape (a backup and the exit route, never a second
+  store), scheduled to a copy
   Casper owns. Cloudflare's point-in-time recovery covers short-range mistakes.
 - **T4, down (C4):** "board unavailable, agents wait" is acceptable for reads and writes, since the
   broker is already the single point for messages. Except capture: the client queues it locally and

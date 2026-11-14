@@ -10,6 +10,14 @@ layer. Nothing about the board lives in the project's repo. It replaces Backlog.
 
 ## Criteria
 
+0. **The board is a database, not files** (Casper, 2026-11-13: "a structured system like an actual
+   database ... not still trying to hack something with MD files"). Every item kind (project,
+   release, feature, task, backlog item, bug, session, question) is its own record with typed fields.
+   Links between them are references the store enforces: an item's parent, release, dependencies, the
+   session that closed it. Acceptance criteria are records of their own, each with its text, evidence
+   and state, not checkboxes in text. Status, type and other closed lists are constrained values. No
+   Markdown or YAML is parsed or stored as structure. Only description and notes are free text.
+   *Evidence: the schema (Toad's ADR); a test that an invalid status or a dangling link is refused.*
 1. Every project's board is in the service: releases, features, tasks, backlog items
    ([capture.md](capture.md)) and bugs ([bugs.md](bugs.md)), each in exactly one project.
    *Evidence: test.*

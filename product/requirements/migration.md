@@ -3,8 +3,9 @@
 **Who needs it:** Helix first (the main stakeholder and the largest board), then BobNet's own board,
 then any other project that joins. Casper, for whom retiring Backlog.md is a goal (2026-11-13).
 
-**What it is:** each project's Backlog.md board is moved into the service once, after which Backlog.md
-is no longer used for it.
+**What it is:** each project's Backlog.md board is imported into the service's database once, after
+which Backlog.md is no longer used for it. Reading Markdown is the one-off import's job only. Nothing
+in the service reads or writes Markdown after it.
 
 ## Criteria
 
