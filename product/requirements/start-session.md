@@ -32,4 +32,8 @@ retro). BobNet fills in the brief and Casper confirms. The request goes to poe, 
 ## Open questions
 
 - **Toad:** how does a project declare its gates and session kinds (one open feature, which statuses
-  allow which session) so BobNet doesn't hard-code Helix's rules?
+  allow which session) so BobNet doesn't hard-code Helix's rules? *Toad's advice (consult,
+  2026-11-13):* in the project's supervisor config, with defaults that fit Backlog.md. Gates are
+  shown read-only and a violation is flagged, not enforced. **Conflict to settle before release 2:**
+  criteria 1 and 5 have the UI refuse a start past a gate. Peach's view: for the start button, BobNet
+  refuses, since a start from the UI is BobNet's own action, not a board write. To settle with Toad.

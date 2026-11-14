@@ -69,3 +69,8 @@ Each file lists its own. These cut across all of them:
 - **Q3 (Toad): how boards reach the dashboard.** Each supervisor reads its projects' repos and sends a
   shaped board to the broker today. Does that hold across laptops and for Helix's size (the frame
   caps at 1500 items, per Picard input)? Does the broker keep it only as a cache, never as a store?
+  *Toad's advice (consult, 2026-11-13; not yet an ADR):* yes, with four conditions. Snapshots are
+  keyed by project, laptop and commit, and sent only when the commit changes. Open work is sent in
+  full; done features go as counts and ids, with detail fetched on click through the supervisor.
+  Fields are added additively. The same repo at two refs on two laptops shows twice, labelled, and is
+  never merged. Board-sources criteria 7 and 8 already fit this.

@@ -42,4 +42,5 @@ never copies status into its own store.
 - Settled with Picard (2026-11-13): milestones vs the releases index, now criterion 5.
 - The system takes Helix's board shape (Casper, 2026-11-13). Where Helix's layout is specific to
   Helix (the releases index's path, its labels), the project's config names it, and BobNet doesn't
-  hard-code it. Toad to confirm.
+  hard-code it. Toad agrees (consult, 2026-11-13): the project's supervisor config names them, with
+  Backlog.md defaults; the config is Casper's file.

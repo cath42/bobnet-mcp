@@ -37,9 +37,10 @@ the prototype settles it.
 
 ## Open questions
 
-- **Toad:** where does a session's outcome live? Today it is in handoff files on the laptop
-  (`~/.local/state/bobnet/handoffs/<project>/`) and in the close message. Should the close become a
-  structured record BobNet keeps (it is BobNet's own data, not the board's), or should handoffs gain
-  a fixed header BobNet reads?
+- **Toad:** where does a session's outcome live? *Toad's advice (consult, 2026-11-13; not yet an
+  ADR):* make a session's close a structured record the supervisor keeps as BobNet's own data,
+  written from what the session declares when it closes (need, blockers and majors, tasks closed),
+  with a link to the handoff. Never parse handoff files. Criterion 2 reads it from there once Toad
+  records it.
 - Which session kinds exist across projects? Helix uses design, build, review, retro and "fixes"
   (as a build label). Is "fixes" a kind of its own?
