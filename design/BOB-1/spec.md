@@ -25,14 +25,23 @@ view. Capture is on every screen.
 
 ## Screens
 
-### Overview (`#overview`) (roadmap-view 6, waiting-on-casper 3)
-- Totals: **wait on you** (red edge while anything holds work up, with how many do), agents working, projects
-  and laptops, backlog items to triage.
-- One card per project: laptop, lead, PO; current release with features done of total; **open feature** with
-  criteria ticked, who is on it, and its next step when that waits on Casper; **next Ready** feature; waits on
-  Casper (how many hold work up); backlog items, bugs, oldest age.
-- "Holds work up": the first three blocking items, then a link to all.
-- Phone: totals 2 by 2, cards one column. Tablet and desktop: cards side by side.
+### Overview (`#overview`) (roadmap-view 6, waiting-on-casper 3; redone in round 1, notes 31-34)
+It answers three questions in this order: what needs me, who is working on what right now, and where each project stands.
+- **Needs you (count)**: one line per item that holds work up (kind badge, the question in bold and cut to
+  one line, then project · feature · "holds up …" in red). It ends with a link: "5 hold work up · 7 more
+  when you have time →" to Waits on you. Nothing held up: "Nothing is held up by you."
+- **Working now (count)**: one line per agent with a state dot (green working, amber waiting on you), name,
+  role, state when it isn't working, and tokens. Under that: project › feature id, session label › task id
+  and title, with the feature and task linking to the Feature view. Leads and consults: "Other work (no
+  session)". None running: "No agent is working."
+- **Projects**: a full-width row per project with five cells: the name (to its roadmap) with laptop, lead
+  and PO; **Release** (number, name, meter, features done of total); **Open now** (id and title clamped to
+  two lines, criteria ticked, who is on it or "nobody on it"); **Next** ("Waits on you: Q-258" in amber
+  when the next step is Casper's, then "Then Ready:" the next Ready feature); **Backlog** (items to triage,
+  bugs, oldest).
+- Desktop (wide main, 1320 px) and tablet: Needs you and Working now side by side, Projects under them. A
+  project row has 5 cells on desktop and 2 per line on a tablet. Phone: everything stacks. A project's cells
+  stack with their label on the left, and a Needs-you line wraps to two lines.
 
 ### Roadmap (`#roadmap/<project>`) (roadmap-view 1-4, 7-9)
 - Project switch (segmented). Releases **numbered in their order** (1, 2, 3), each with a state (open, all
@@ -63,15 +72,22 @@ view. Capture is on every screen.
 - Picker of features that are open or Ready, across projects.
 - Head card: id, project, release and order number, state, title, criteria meter, tasks done, sessions, who is on
   it now.
+- **On it now** (when anyone is): a card with a green edge, one line per agent with a state dot, name, role,
+  state and tokens, then session › task id and title (notes 28-30).
 - **Next step banner** at the top (where a phone sees it first), linking to the end of the chain.
 - **Sessions as a vertical chain, in the order they ran.** Each step: a dot in its kind's colour (style.css's
   `--k-design`, `--k-build`, `--k-review`, `--k-retro`), kind, label (Design, Build 1, Review 1, Build 2, Review
   2, Fixes), start and end with duration, state (running, closed, waiting). A closed one shows its outcome
   in one line: **need** (none in green, casper in amber, with the items), blockers and majors, minors fixed or
   tasks sent back, tasks closed or moved, then its total tokens, muted. A running one shows its agents live (model, laptop, time, **tokens**,
-  context, last checkpoint). Then a sentence of summary, links (handoff, the close commit, Remote Control
+  context, last checkpoint). Each agent line also shows role, state and the tasks it is on. A
+  waiting agent's line is amber. Then a sentence of summary, links (handoff, the close commit, Remote Control
   where there is one), and **Tasks it moved**, folded except on the latest session, each with the status the
-  session left it in and its criteria now.
+  session left it in and its criteria now. On a running session the list is **Tasks it is on**.
+- **Agents on tasks**: a task row with an agent on it has a green edge and, under the title, one line per
+  agent: dot, name, role, state, tokens. In the board's list beside the chain the line also gives the session
+  label. The source is the session and tasks each worker declared at spawn. The sample's running build on
+  LAND-49 (Fixes 2: Marvin on 49.19, Howard on 49.14, waiting on his permission) is *example*.
 - The chain ends on a dashed **Next** step: what the feature's state calls for, or "Waits on you" with the
   question, the recommendation and what comes after.
 - Beside the chain (desktop, sticky) or under it (tablet, phone): **In no session yet** (tasks no session has
@@ -81,7 +97,8 @@ view. Capture is on every screen.
 - Filter by project (with counts). Two groups: **Holds work up** (red edge) and **When you have time**,
   each oldest first.
 - Each item: its kind (question, action, review gate, permission, bug · blocks use), id, project and feature,
-  age; the question in bold; the recommendation; what it holds up (red); who asked; the session that closed
+  age; the question in bold; the recommendation; what it holds up (red), only on items that hold work up; "Needed before …" (muted) on
+  one that waits for a later milestone (notes 35); who asked; the session that closed
   on it (need: casper), if any; a link to where it is answered. No answering here.
 - A session closed with need: casper shows on the question it waits for, not as a second item.
 - Empty: "Nothing is held up by you." The count leaves the tab.

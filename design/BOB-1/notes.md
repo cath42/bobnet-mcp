@@ -42,8 +42,8 @@ or corrects go in BOB-1's notes (BOB-1 #6), not here.
 15. The **open feature** has a green edge and "nobody on it now" when no agent is. Here open means "has
     sessions and isn't Done": LAND-49 is open though Helix's file says Ready (see open point 2).
 16. Per release: backlog items, open bugs and oldest age, linking to the triage list (roadmap-view 7).
-17. The overview is the cross-project summary: one card per project with its open feature, next Ready
-    feature, waits on Casper and backlog. There is no separate "all projects" roadmap.
+17. The overview is the cross-project summary. There is no separate "all projects" roadmap. (Its layout was
+    redone in round 1: 31 to 34.)
 
 **Casper's gates**
 18. Gates sit behind **Edit your gates** (roadmap and triage), not always on: the roadmap is mostly read on
@@ -56,7 +56,7 @@ or corrects go in BOB-1's notes (BOB-1 #6), not here.
 
 **Waits on Casper**
 22. Two groups, **Holds work up** and **When you have time**, each oldest first. Blocking means it holds
-    up a named task, session or feature.
+    up a named task, session or feature. (Sharpened in round 1: 35.)
 23. A session closed with `need: casper` shows **on the question it waits for**, not as a second item
     (LAND-49's fixes session on Q-258).
 24. Kinds: question, action (A-n, Peach), review gate, permission, bug · blocks use.
@@ -69,6 +69,39 @@ or corrects go in BOB-1's notes (BOB-1 #6), not here.
 27. Capture: one text field, project preset from the screen, then optional **Bug**, which adds **where**
     (staging, production) and **blocks use**. The first sentence becomes the title; the whole text is kept as
     Casper's words.
+
+## Round 1 with Casper (2026-11-14; his words in Mario's lead/BOB-1-casper-feedback.md)
+
+**Agents on tasks** ("who is working on what right now")
+28. **Who is on a task shows on the task's row, live**: a dot (green working, amber waiting on you), name,
+    role, state and tokens. It shows on every row of that task in the Feature view: the running session's
+    **"Tasks it is on"** (the running session's version of "Tasks it moved") and the board's list beside the
+    chain, where the row also names the session (Fixes 2). A row with an agent on it has a green edge.
+29. An **"On it now"** card sits under the feature's head, above the Next banner: one line per agent,
+    agent → session › task. A phone sees who works on the feature before the chain.
+30. The source is what each worker declares at spawn: its session {feature, kind, label} and its tasks.
+    Nothing is guessed from briefs. A task an agent is on shows In Progress. Leads and consults declare no
+    session; they show only on the Overview, as **Other work** on their project.
+
+**The Overview, redone** (Casper: "the overview looks bad, its not a very good UX")
+31. It answers three things in this order: **Needs you**, **Working now**, **Projects**. On desktop and tablet
+    the first two sit side by side and Projects runs full width under them. On a phone all three stack.
+32. **Needs you** is one line per item that holds work up (kind, the question, project · feature · what it
+    holds up), then "N hold work up · M more when you have time →". It's a pointer to the Waits tab, not a
+    copy of its cards: no recommendation, no source and no session here.
+33. **Working now** lists every agent: name, role, state, tokens, then project › feature › session › task.
+    Agents with no session show "Other work (no session)" in its place.
+34. **Projects** are full-width rows, not half-width cards. Each has five cells: the project (laptop, lead,
+    PO), Release (meter, features done of total), Open now (title clamped to two lines, criteria, who is on
+    it), Next (what waits on Casper, then the next Ready feature) and Backlog. At tablet width that's two
+    cells per line. On a phone the cells stack, each with its label on the left. The totals strip is gone
+    because the rows hold the same numbers.
+
+**Waits on you**
+35. **"Holds up" only appears on blocking items.** If an item is needed by a later milestone and holds up no
+    work now, it says **"Needed before …"** and stays under When you have time. A-15 says "Needed before the
+    demo" and Q-259 says "Needed before rehearsal 2 (49.13)". The rule: anything that says "Holds up" is in
+    the first group.
 
 ## Settled with Peach during this task (2026-11-13; in the requirements, eba0a15)
 
@@ -98,5 +131,11 @@ or corrects go in BOB-1's notes (BOB-1 #6), not here.
 5. **One laptop only.** Both real projects run on mbp-1, so the prototype can't show two laptops. Envision,
    Echo and Vitals aren't in the sample.
 6. **"Fixes" as a session kind** stays Peach's open question (steps-view.md); shown as a build labelled Fixes.
-7. **Playwright isn't in packages/broker's devDependencies** (the brief said it was). The screenshots used
+8. **Agent state "waiting on you"** (Howard, waiting on his permission) is derived in the prototype. The
+   service needs the supervisor's pending-permission record per worker to show it. Marvin's and Howard's
+   session, Fixes 2, and the leads' Other work are *example*. (Toad.)
+9. **Answering from the UI.** Casper asked whether he can answer questions from the dashboard, and how.
+   Today's requirement says no (waiting-on-casper.md: "This list shows and links"), so nothing in the
+   prototype answers. That's Peach's to rule with Casper. If the answer is yes, it needs its own design.
+10. **Playwright isn't in packages/broker's devDependencies** (the brief said it was). The screenshots used
    helix-navigator-access's playwright-core 1.63.0, which matches the installed Chromium; nothing installed.
