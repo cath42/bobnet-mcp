@@ -23,6 +23,11 @@ rather than by convention.
 6. Every write carries who made it, in the item's history ([board-service.md](board-service.md) 7).
    *Evidence: test.*
 
+## Added by Casper's feedback (BOB-1 #6, round 2)
+
+Casper answers questions from the dashboard ([waiting-on-casper.md](waiting-on-casper.md) 4): a
+write only he may make, to a question record's answer.
+
 ## Open questions
 
 - *Settled (Casper, 2026-11-13, C2):* Casper edits his own gates (release scope, order of releases,

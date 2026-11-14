@@ -56,4 +56,11 @@ Round 1:
 > 1. I like the concept, but the overview looks bad, its not a very good UX - also what is missing here is something that overlays agents work against tasks/stories within a feature, I want to know who is working on what right now which would all be within a feature session right? Finally, you have questions in here, can I answer questions from the UI and if so, how?
 
 Peach's reading: concept accepted; Overview rejected as UX (Daisy redoes it); new need: agents overlaid on a feature's tasks (steps-view.md criterion 9); answering from the UI is a question to Casper (waiting-on-casper.md open question; today's "Must not break" stands until he answers).
+
+Round 2:
+> 3. yes answering from the dashboard would be a really strong feature, it makes it so much easier to answer questions - the new prototype is now missing one of the strongest features of the old one, the ability to see within a session the amount of tokens and context per call graph for the session and per agent - besides those, this looks very good
+>
+> Wait one more thing, often times we are waiting while CI is running or as someone is running a long running E2E test script, the CI is probably more clear but could we make it so that I can see if we are waiting on a CI run at least that would be good and how long its been running?
+
+Peach's reading: answering questions from the dashboard is accepted (waiting-on-casper.md criterion 4); the context-per-call chart returns inside a session (steps-view.md criterion 10); new need: waiting on CI, with how long (steps-view.md criterion 11). Round 1's Overview and agents-on-tasks are accepted ("this looks very good"). Permissions allow/deny from the UI: not yet asked.
 <!-- SECTION:NOTES:END -->

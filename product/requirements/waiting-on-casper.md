@@ -15,17 +15,25 @@
 3. Its count shows on the overview, so Casper sees there is something without opening it.
    *Evidence: screenshot.*
 
+4. Casper answers a question from the dashboard. The question offers the recommended option where
+   there is one, or free text; his answer is kept verbatim on the question's record, the question
+   leaves the list, and the project's lead (or PO) gets a message with the answer. It is Casper's
+   own write, like his gates ([board-writes.md](board-writes.md)); anyone else is refused.
+   Casper (BOB-1 #6 round 2): "answering from the dashboard would be a really strong feature".
+   *Evidence: test (answer stored verbatim, refused for another role, lead messaged); screenshot on
+   phone.*
+
 ## Must not break
 
-- Answering stays where it is today (in the project's conversation or files). This list shows and
-  links. It doesn't answer for Casper.
+- A question is answered once, by Casper, and the answer is never edited by anyone else. Answering
+  in the project's conversation still works: the record shows it answered either way.
 
 ## Open questions
 
-- **Answering from the UI (Casper asked, BOB-1 #6 round 1: "can I answer questions from the UI and
-  if so, how?").** Open: the "Must not break" above stands until he answers. It was written when
-  the list was read-only; with questions as board records (C8) an answer is a write of Casper's own,
-  which the write rules ([board-writes.md](board-writes.md)) would need to allow.
+- *Settled (Casper, BOB-1 #6 round 2):* he answers questions from the dashboard (criterion 4).
+  **Open, asked of Casper:** do pending permission requests (allow/deny) belong in the same place?
+  Criterion 1 lists them as shown only until he says. The existing dashboard already has actions on
+  permission requests, which the screen must not lose.
 
 - *Settled (Casper, 2026-11-13, C8):* questions only Casper can answer are board records (open or
   answered, with the answer verbatim), linked to the item they hold up. Helix's `lead/questions.md`

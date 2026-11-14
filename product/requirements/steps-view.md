@@ -35,6 +35,16 @@ the prototype settles it.
    to know who is working on what right now".) *Evidence: test with a running worker declaring two
    tasks; screenshot on phone and desktop.*
 9. Phone and tablet, in BobNet's own look. *Evidence: screenshots on phone and desktop.*
+10. Inside a session, the chart of context per call (today's dashboard's "Context size per call"),
+    in tokens, for the session as a whole and per agent. Casper (BOB-1 #6 round 2): the prototype
+    "is now missing one of the strongest features of the old one". Not lost in the move. *Evidence:
+    dashboard check against today's chart on the same session.*
+11. Waiting on CI: a feature or session that waits on a CI run shows that, and how long the run has
+    been going. CI is GitHub Actions; a long end-to-end script run on a laptop is wanted too if its
+    source can be had (the supervisor's run slot knows holder, label and start for land and test
+    runs). Casper: "if we are waiting on a CI run at least that would be good and how long its been
+    running". The CI run is the floor; the E2E script is the stretch. *Evidence: test with a
+    running and a finished run; dashboard check.*
 
 ## Must not break
 
@@ -44,6 +54,10 @@ the prototype settles it.
 - Cards and sessions come only from what `spawn_worker` declared, never from parsing a brief.
 
 ## Open questions
+
+- **Toad:** the source of CI runs (GitHub Actions through `gh` or the API, from the supervisor or
+  the broker) and how a run is tied to a feature or session without parsing anything (criterion
+  11); and whether a laptop's long E2E run can report itself through the run slot.
 
 - **Toad:** where does a session's outcome live? *Toad's advice (consult, 2026-11-13; not yet an
   ADR):* make a session's close a structured record the supervisor keeps as BobNet's own data,
