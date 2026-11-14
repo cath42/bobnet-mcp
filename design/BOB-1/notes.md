@@ -136,8 +136,7 @@ or corrects go in BOB-1's notes (BOB-1 #6), not here.
     by the button says where it goes: "Recorded on Q-258 as yours, word for word; Bob, Helix's lead, gets a
     message." The options are the question's own, from questions.md.
 42. **An action:** an optional note and **Mark done**. **A permission:** an optional note to the agent,
-    then **Deny** (danger) and **Allow**. A dashed amber box says **"Pending Casper's yes"**: until he
-    agrees, permissions stay a link to the supervisor.
+    then **Deny** (danger) and **Allow**. Casper said yes (round 3).
 43. After he sends, a toast with Undo says what was recorded and who got the message, and the item leaves
     its group. It shows under **Answered from here today** at the bottom of Waits on you: the question
     muted, the option he picked, his words in quotes exactly as typed, and "Bob, Helix's lead got a message".
@@ -160,8 +159,8 @@ or corrects go in BOB-1's notes (BOB-1 #6), not here.
     **failed** run turns red and stays until the agent moves on. An agent **queued** for the laptop's run
     slot gets a dashed line naming the holder ("Luigi holds it (e2e, 23 min)"). A run that passes leaves
     the line at once. All four are on `#states`.
-48. The two sources, as designed: **GitHub Actions** for CI (a workflow run for the agent's branch or
-    commit) and the supervisor's **run slot** for local runs (holder, label such as land or e2e, since).
+48. The two sources, as designed: **any CI running anywhere** for CI (Casper, round 3; the example is a
+    GitHub Actions workflow run for the agent's branch or commit, but any CI system counts) and the supervisor's **run slot** for local runs (holder, label such as land or e2e, since).
 
 ## Settled with Peach during this task (2026-11-13; in the requirements, eba0a15)
 
@@ -198,11 +197,11 @@ or corrects go in BOB-1's notes (BOB-1 #6), not here.
    waiting-on-casper.md ("This list shows and links"). Toad has to say where an answer is written: on the
    board record once a project has moved, but in Helix's lead/questions.md until BOB-9, which BobNet
    doesn't write today. Toad also has to say how the lead's message is sent. **Permissions** from the
-   dashboard are pending Casper's yes (Mario is asking him).
+   dashboard: Casper said yes (round 3).
 10. **Playwright isn't in packages/broker's devDependencies** (the brief said it was). The screenshots used
    helix-navigator-access's playwright-core 1.63.0, which matches the installed Chromium; nothing installed.
 11. **Which CI run an agent waits on** needs a link between them: the agent's last push (branch and commit)
-   matched to a GitHub Actions run, or the agent saying so at a checkpoint. "Usually about N min" needs the
+   matched to a CI run (any CI running anywhere, Casper round 3; GitHub Actions is the example), or the agent saying so at a checkpoint. "Usually about N min" needs the
    recent run times per workflow or slot label. Both are Toad's to place. In the sample, Marvin's run
    and Daisy's land are *example*.
 12. **Context per call needs each session's runs with their calls' context sizes.** Today's dashboard has

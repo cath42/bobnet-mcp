@@ -248,8 +248,6 @@ form.answer .words { display: grid; gap: 4px; font-size: 12px; color: var(--mute
 form.answer textarea { font: inherit; font-size: 16px; width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); resize: vertical; }
 form.answer .foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
 form.answer .who-gets { margin-right: auto; font-size: 12.5px; color: var(--muted); flex: 1 1 14em; }
-.pending-yes { font-size: 13px; padding: 6px 10px; border: 1px dashed var(--warn); border-radius: 8px; color: var(--muted); }
-.pending-yes b { color: var(--warn); margin-right: 4px; }
 @media (max-width: 600px) {
   form.answer .foot button { flex: 1; min-height: 44px; }
   form.answer .who-gets { flex-basis: 100%; }

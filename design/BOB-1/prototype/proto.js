@@ -76,7 +76,7 @@ function toast(text, undo) {
 
 const waitCount = () => state.waits.length;
 
-// ---------- Waiting on a run: CI (GitHub Actions) or the laptop's run slot (land, e2e) ----------
+// ---------- Waiting on a run: any CI running anywhere (GitHub Actions in the sample) or the laptop's run slot (land, e2e) ----------
 
 const mins = (iso) => Math.round((new Date(R.now.slice(0, 16)) - new Date(iso)) / 6e4);
 const runFor = (iso) => dur(iso, R.now.slice(0, 16));
@@ -623,8 +623,7 @@ function answerBox(w) {
     form.append(h("label", { class: "words" }, h("span", null, "Note (optional)"), h("textarea", { rows: 2, placeholder: "Anything they should know, e.g. which app worked." })),
       foot(h("button", { type: "submit", class: "primary" }, "Mark done")));
   } else {
-    form.append(h("div", { class: "pending-yes" }, h("b", null, "Pending Casper's yes"), " Allow and deny from here are designed but not agreed; until they are, this stays a link to the supervisor."),
-      h("label", { class: "words" }, h("span", null, `Note to ${w.from} (optional)`), h("textarea", { rows: 2, placeholder: "e.g. go ahead, it's idle" })),
+    form.append(h("label", { class: "words" }, h("span", null, `Note to ${w.from} (optional)`), h("textarea", { rows: 2, placeholder: "e.g. go ahead, it's idle" })),
       foot(h("button", { type: "submit", class: "danger", value: "deny" }, "Deny"), h("button", { type: "submit", class: "primary", value: "allow" }, "Allow")));
   }
   return form;
@@ -655,7 +654,7 @@ function waits() {
       rest.length ? h("ul", { class: "list waits" }, rest.map(waitItem)) : h("div", { class: "empty-card" }, "Nothing else waits on you.")),
     state.answered.length ? h("section", null, h("h2", null, "Answered from here today ", h("span", { class: "count" }, state.answered.length)),
       h("ul", { class: "list waits" }, state.answered.map(answeredItem))) : null,
-    h("p", { class: "note" }, "Answer a question, mark an action done or (pending your yes) allow a permission right here; you can still answer in the project's conversation or its files. Your answer is kept on the item word for word and the project's lead gets a message; the item leaves the list. A session that closed with need: casper shows on the question it waits for."),
+    h("p", { class: "note" }, "Answer a question, mark an action done or allow a permission right here; you can still answer in the project's conversation or its files. Your answer is kept on the item word for word and the project's lead gets a message; the item leaves the list. A session that closed with need: casper shows on the question it waits for."),
   ];
 }
 

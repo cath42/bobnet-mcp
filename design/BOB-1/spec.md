@@ -93,7 +93,7 @@ It answers three questions in this order: what needs me, who is working on what 
   LAND-49 (Fixes 2: Marvin on 49.19, Howard on 49.14, waiting on his permission) is *example*.
 - **Waiting on a run** (notes 44-48): an agent waiting on CI or on the laptop's run slot shows a run line
   on its session card and in On it now. The line has a spinner, "Waiting on CI · 12 min", the run's name as
-  a link (`CI › e2e (staging) #4812 ↗`), the source (GitHub Actions, repo, branch, or the run slot's
+  a link (`CI › e2e (staging) #4812 ↗`), the source (any CI running anywhere, e.g. GitHub Actions, repo, branch; or the run slot's
   holder and command) and "usually about N min". It turns amber when running long (past 1.5× usual), red
   when the run failed, and dashed when the agent is queued for the slot. It leaves when the run passes.
 - **Context per call** (notes 36-39): every session card, running or closed, has **"Context per call · N
@@ -120,7 +120,7 @@ It answers three questions in this order: what needs me, who is working on what 
   the item, one at a time. A question shows its options as radio cards (the recommended one first,
   tagged, none picked) and a text box for his own words; **Send answer** works once there is an option or
   words. An action has an optional note and **Mark done**. A permission has an optional note to the agent
-  and **Deny** / **Allow**, under a dashed "Pending Casper's yes" box. The line by the buttons says it is
+  and **Deny** / **Allow** (Casper said yes, round 3). The line by the buttons says it is
   recorded as his words and who gets a message (the project's lead; for a permission, the agent). Sent: a
   toast with Undo, the item leaves its group, and it shows under **Answered from here today** with the
   option he picked and his words quoted exactly. On a phone the buttons are full width, 44 px tall.
