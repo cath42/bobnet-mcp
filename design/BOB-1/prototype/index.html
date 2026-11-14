@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>BobNet · release 1 prototype</title>
+  <link rel="stylesheet" href="../../../packages/broker/public/style.css">
+  <link rel="stylesheet" href="proto.css">
+  <script src="../sample/helix.js"></script>
+  <script src="../sample/bobnet.js"></script>
+  <script src="../sample/records.js"></script>
+  <script src="proto.js" defer></script>
+</head>
+<body>
+  <header>
+    <h1>BobNet</h1>
+    <nav id="tabs">
+      <a href="#overview">Overview</a>
+      <a href="#waits">Waits on you <span class="count" id="wait-count"></span></a>
+      <a href="#roadmap/helix">Roadmap</a>
+      <a href="#feature/LAND-49">Feature</a>
+      <a href="#triage/helix">Triage</a>
+    </nav>
+    <button type="button" class="primary capture-btn" id="capture-open" aria-haspopup="dialog">+ Capture</button>
+    <span class="conn" data-state="live">live</span>
+  </header>
+  <p class="proto" id="proto"></p>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <main id="view"></main>
+  <dialog id="capture" aria-labelledby="capture-h"></dialog>
+  <dialog id="confirm" aria-labelledby="confirm-h"></dialog>
+</body>
+</html>
