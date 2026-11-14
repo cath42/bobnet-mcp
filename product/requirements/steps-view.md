@@ -25,7 +25,9 @@ the prototype settles it.
    with the question. *Evidence: test.*
 6. A link to each session's handoff file and its Remote Control session, where there is one.
    *Evidence: dashboard check.*
-7. Usage shows as tokens, never money. *Evidence: test.*
+7. Usage shows as tokens, never money. A closed session's outcome line shows its total tokens (all
+   its agents, the orchestrator's share included where known), as today's dashboard shows tokens per
+   session. (Peach, 2026-11-13, on Daisy's question.) *Evidence: test.*
 8. Phone and tablet, in BobNet's own look. *Evidence: screenshots on phone and desktop.*
 
 ## Must not break
