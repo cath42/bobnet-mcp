@@ -281,7 +281,8 @@ describe("stuck workers", () => {
   });
 });
 
-describe("land", () => {
+// Real git, real repositories: seconds each under load, past the 5 s default.
+describe("land", { timeout: 20_000 }, () => {
   function repo(): { worktree: string; script: string } {
     const worktree = join(dir, "helix-homer");
     mkdirSync(join(worktree, "platform"), { recursive: true });
@@ -516,7 +517,8 @@ projects:
   });
 });
 
-describe("rebase", () => {
+// Real git, real repositories: seconds each under load, past the 5 s default.
+describe("rebase", { timeout: 20_000 }, () => {
   const g = (cwd: string, ...args: string[]) =>
     execFileSync("git", ["-C", cwd, "-c", "user.name=Main", "-c", "user.email=m@x", ...args], { encoding: "utf8" }).trim();
 
