@@ -31,7 +31,10 @@ This file is loaded for every role. Your own rules are in your role's folder:
 - **Usage is tokens, never dollars** (a Max subscription), in the UI and in reports.
 - **The dashboard has its own look** (`packages/broker/public/style.css`), never another product's,
   and works on a phone and a tablet.
-- **Boards stay in their repos.** BobNet shows and launches; a project's board files are written by
-  that project's product owner with its own tools, never by BobNet.
+- **Boards: today in their repos, moving into BobNet.** Today a project's board is Backlog.md files
+  in its repo, written by that project's product owner with its own tools, never by BobNet's code.
+  Casper's frame (2026-11-13) makes the board a BobNet service (API and MCP) that retires Backlog.md;
+  its shape is still open (`product/requirements/README.md`, C1-C7). Build nothing that writes a
+  project's board until a feature for it is Ready.
 - Questions only Casper can answer go to Mario, who asks Casper. Peach asks Casper directly about
   requirements, in Peach's own conversations.
