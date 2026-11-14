@@ -1,6 +1,9 @@
 # 0001. The board service: records, operations, who writes, events, runs and CI
 
-- **Status:** proposed (Toad, 2026-11-14)
+- **Status:** accepted (Casper, 2026-11-14: `lead/2026-11-14-board-adr-and-review-decisions.md`, "1. Yes,
+  2. Yes"). Proposed by Toad the same day; amended on acceptance with the four points from the system
+  review (`architecture/reviews/2026-11-14-system-review.md`, "How ADR 0001 fits") and the migration
+  order. Before the build starts, Luigi fixes the review's findings 1-3 (decision 3).
 - **For:** BOB-2 (the service) and BOB-7 (who writes); BOB-3, 4, 5, 8, 9 and 10 build on it.
 - **Reads:** product/requirements/ (all), product/backlog/tasks/bob-2..10, design/BOB-1/notes.md and
   spec.md, lead/BOB-1-casper-feedback.md, Peach's message on criterion 0 (2026-11-14).
@@ -45,6 +48,21 @@ and CI (§10, §11) go from the Worker to `Board` directly, with the identity th
 Wrangler gets a `BOARD` binding and migration tag `v2` with `new_sqlite_classes: ["Board"]`
 (additive). Every write is one `transactionSync`: the state change and its event commit together.
 
+**Frame handling stops running to completion.** Today `Broker.dispatch` makes no awaits, so each frame
+is handled whole before the next starts (`broker.ts:157-187`). A `board_op` awaits `Board` over RPC,
+and the input gate doesn't hold other frames during an outbound call: a register, a takeover or a
+disconnect can run in that gap. So a `board_op` handler:
+
+- reads the caller and its `ctx` before the call and passes them to `Board` as values;
+- holds no roster row, `Conn` field or socket across the await, and after it re-reads from `Broker`
+  storage anything it needs (the caller's socket for the reply, the owner sockets for
+  `board_changed`, the recipients of returned messages);
+- if the caller's socket closed meanwhile, drops the reply. It still stores and delivers the
+  returned messages and pushes `board_changed`, because `Board` has committed.
+
+Every other frame keeps running to completion. A test interleaves a `board_op` with a takeover of
+the same name.
+
 ### 2. Records and schema
 
 Typed columns, `CHECK` lists, foreign keys. `Board` runs `PRAGMA foreign_keys = ON` at start, and the
@@ -64,7 +82,7 @@ Every table has an integer `pk`; links are foreign keys to `pk`. The ids people 
 | `item_refs` | Every id an item has ever had: `project`, `ref` UNIQUE per project, `item`, `primary`. Ids are never reused because a ref is never deleted. "Was LAND-n.m" becomes an alias row on the new item (migration 4). |
 | `item_labels`, `item_deps` | One row per label; one per dependency, both ends foreign keys, same project. |
 | `criteria` | `item`, `ord`, `section` CHECK (`ac`, `dod`), `text`, `evidence`, `state` CHECK (`open`, `checked`), `checked_by`, `checked_at`, `casper_gate` (only Casper's acceptance checks it: BOB-1 #6 is one). Progress counts `ac` only. |
-| `sessions` | `project`, `feature` (an item of kind feature), `kind` CHECK (`design`, `build`, `review`, `retro`), `label`, UNIQUE (feature, kind, label); `started_at`, `ended_at`, and the close (§6). |
+| `sessions` | `project`, `feature` (an item of kind feature), `kind` CHECK (`design`, `build`, `review`, `retro`), `label`, UNIQUE (feature, kind, label); `started_at`, `ended_at`, and the close (§6). "Other work" is not a kind: it is a run with no session (§9). |
 | `session_waits_on` | A closed session's `need: casper` questions. |
 | `questions` | Questions and actions only Casper can answer or do (C8): `project`, `ref` (Q-258, A-17), `kind` CHECK (`question`, `action`), `text`, `context`, `asked_by`, `session`, `needed_before` (an item or release, or a short text when it is neither: "the demo"), `state` CHECK (`open`, `answered`, `done`, `withdrawn`), the answer (§7). |
 | `question_options` | `question`, `ord`, `key`, `text`, `recommended`. |
@@ -280,7 +298,37 @@ option).
 work), `agent`, `role`, `laptop`, `model`, `effort`, `started_at`, `ended_at`, `resumed`, tokens
 (`input`, `output`, `cache_read`, `cache_write`), `calls`, `ctx` (context per call: a BLOB of
 little-endian uint32s, up to 2000 points, downsampled to 400 on read), `remote_url`. No money column:
-usage is tokens.
+usage is tokens. `run_start` and `run_end` carry no `cost_usd`, `Board` computes none, and no board
+view shows one; the protocol's `cost_usd` on `WorkerSnapshot` and usage rows goes optional now and is
+removed with the legacy board (review finding 10).
+
+**Session kinds.** `packages/protocol/src/board.ts` defines its own `SessionKind` as `design`,
+`build`, `review`, `retro`. "Other work" is a run whose `session` is NULL, a bucket the views make,
+never a kind a record holds. The legacy `SessionKind` in `frames.ts:157`, which includes `other`,
+stays only as long as `ProjectBoard` does.
+
+**Which side holds the truth for a run:**
+
+- **While the run is live**, the supervisor holds it: its SQLite `workers` row, and the snapshot's
+  tokens and `ctx`. `Board.runs` holds the `run_start` row with `ended_at` NULL, and the views take the
+  live numbers from the snapshot.
+- **From `run_end` on**, `Board.runs` holds it, and the dashboard reads only that. The supervisor's
+  row is local bookkeeping: it may be swept by the supervisor's retention, and no view reads it for a
+  project on the service.
+- **A run whose `run_end` hasn't arrived** after its laptop's snapshot stops listing it shows
+  "ending" while the laptop reports, and "unknown end" once the laptop's report is stale. The board
+  never guesses tokens for it.
+
+**When the broker is down at `run_end`:** the supervisor's own board operations (`run_start`,
+`run_end`, `push`, `slot_run`, the orchestrator's run upserts) go through its outbox
+(`store.ts:273-285`), not straight to the socket. The outbox gains a `kind` column (`message` for
+today's rows, `board_op` for these) by an additive store migration. It is flushed in order on
+connect, as today's rows are (`supervisor.ts:1392` `flushOutbox`), and a row is deleted only after the broker's
+`ok`. Each operation is idempotent by key: `run_start` and `run_end` by run id (a second `run_end`
+for an ended run is `ok` and changes nothing), `push` by (`repo`, `sha`), `slot_run` by its
+`external_id`. A replay after a lost `ok` does no harm. `session_join` is not queued: spawn waits for
+it (§12). §12's capture queue stays separate because captures come from every client, not only
+supervisors.
 
 - The supervisor sends `run_start` when a worker starts and `run_end` with tokens and `ctx` when it
   ends. A running worker's live context stays in the snapshot (`WorkerSnapshot.ctx`), as today.
@@ -382,10 +430,14 @@ is `running` or `queued`. This is derived, not a worker state.
 2. **The tools** (§8) in `worker-tools.ts` and the channel client, `session_join` and the run reports
    (§9) in the supervisor, the capture queue (§12), and `close_session` (§6).
 3. **Export and import** (§11), then **BobNet's own board** imported through it as the pilot (it is
-   ours, small, and on Backlog.md since 2026-11-13), then Helix (BOB-9) at Picard's date.
+   ours, small, and on Backlog.md since 2026-11-13), then Helix (BOB-9) at Picard's date. Casper
+   decided this order on 2026-11-14 (decision 2 in the lead file). Dashboard answers to Helix's
+   questions come with BOB-9, after the pilot (§7).
 4. **The views** (BOB-3, 4, 5, 8, 10) on `board_op` reads, the gates (BOB-7 #3, #4), and CI (§10).
 
-Nothing goes live without a release and a broker deploy, which runs only when Casper asks for it.
+Before step 1, Luigi fixes the review's findings 1-3: the stale-tip land, the owner JWT as a bearer
+token to laptops, and the supervisor's ack before a message is consumed (decision 3). Nothing goes
+live without a release and a broker deploy, which runs only when Casper asks for it.
 
 ## Consequences
 
@@ -406,8 +458,11 @@ Nothing goes live without a release and a broker deploy, which runs only when Ca
 
 ## Alternatives considered
 
-- **Tables in the `Broker` object** (my advice T1): simpler, with no RPC. Rejected because
-  point-in-time recovery would tie the board's mistakes to the message store's (§1).
+- **Tables in the `Broker` object** (my advice T1): simpler, with no RPC, and frame handling would keep
+  running to completion. Rejected because point-in-time recovery would tie the board's mistakes to
+  the message store's (§1). The cost is the await rule in §1.
+- **Run ends sent straight to the socket, lost when the broker is down:** rejected. A run's tokens
+  would vanish from the board's record. They go through the outbox (§9).
 - **One Durable Object per project:** isolation. Rejected because Overview and Waits read across
   every project, and cross-object reads for one screen cost more than the isolation is worth at five
   projects.
@@ -455,8 +510,8 @@ Nothing goes live without a release and a broker deploy, which runs only when Ca
    run from anything else shows on its project and branch, not on an agent. "Usually" appears once a
    name has three passing runs. Peach to accept that as the criterion's meaning.
 10. **Dropped items** are archived with a reason, not given a sixth status (board-service 8 holds).
-11. **Migration order** (migration.md, open for Casper): I recommend BobNet's own board first, as the
-    pilot through the same import path, then Helix. For Casper, through Mario.
+11. **Migration order** (migration.md): BobNet's own board first, as the pilot through the same import
+    path, then Helix. Casper decided it on 2026-11-14.
 12. **BOB-3 #8 and BOB-2 #10** (Helix-sized fast): agreed. Lists are aggregate queries (§2).
 13. **BOB-9 #7**, "removed from its repo": agreed. Markdown is read only by the one-off import.
 
