@@ -52,3 +52,15 @@ Mario's reading:
 - CI: any CI running anywhere, not only GitHub Actions; local runs through the run slot as designed.
 - BOB-1 is approved, with rounds 1 and 2. Next: Peach writes BOB-2..10's criteria; Toad's ADR for the
   service (BOB-2, BOB-7) before Luigi builds.
+
+## Outcome (session closed 2026-11-14)
+
+- BOB-1 approved and Done (Peach, v2 dc3d6f0); Casper's words in BOB-1's notes #6, rounds 1-3.
+- Prototype turned around twice by Daisy: round 1 (Overview redone, agents on tasks, A-15 nit) 8ee76ea,
+  5abbfcd; round 2 (context per call in sessions, answering/done/allow-deny, waiting on CI) d6b0cab, f3c27e9;
+  closing pass (permissions agreed, any CI) a4c7828. Notes 1-48 in design/BOB-1/notes.md.
+- Requirements: answering, actions done and permission allow/deny from the dashboard are Casper's own writes
+  (waiting-on-casper.md); context-per-call chart per session and agent (steps-view 10); waiting on any CI and
+  run-slot runs with duration (steps-view 11). BOB-2..10 criteria written, Draft until Toad has seen them.
+- Next: Toad's ADR for the board service (BOB-2, BOB-7), worker w_a7c3d33e started at Casper's "lets go";
+  then Peach marks BOB-2..5,7..10 Ready and Luigi builds. No release, no deploy this session.
