@@ -10,6 +10,8 @@ import type { Logger } from "@bobnet/client/log";
 
 const FILE = "board.json";
 const GIT_TIMEOUT_MS = 30_000;
+/** A fetch that hangs would never settle, and no later night would be scheduled. */
+const FETCH_TIMEOUT_MS = 60_000;
 
 export interface BoardBackupOptions {
   repo: string;
@@ -101,8 +103,22 @@ function sameBoard(committed: string, doc: BoardExportV1): boolean {
 export function exportFetcher(url: string, credentials: { clientId: string; clientSecret: string }): () => Promise<unknown> {
   const target = new URL("/v1/board/export", url.replace(/^ws/, "http"));
   return async () => {
-    const res = await fetch(target, { headers: { "CF-Access-Client-Id": credentials.clientId, "CF-Access-Client-Secret": credentials.clientSecret } });
+    const res = await fetch(target, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), headers: { "CF-Access-Client-Id": credentials.clientId, "CF-Access-Client-Secret": credentials.clientSecret } });
     if (!res.ok) throw new Error(`GET ${target.pathname}: ${res.status}`);
     return res.json();
+  };
+}
+
+/** POST /v1/board/import with this laptop's Access service token (the Backlog.md import's --post). */
+export function importPoster(url: string, credentials: { clientId: string; clientSecret: string }): (doc: unknown) => Promise<unknown> {
+  const target = new URL("/v1/board/import", url.replace(/^ws/, "http"));
+  return async (doc) => {
+    const res = await fetch(target, {
+      method: "POST",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: { "content-type": "application/json", "CF-Access-Client-Id": credentials.clientId, "CF-Access-Client-Secret": credentials.clientSecret },
+      body: JSON.stringify(doc),
+    });
+    return { status: res.status, reply: await res.json().catch(() => null) };
   };
 }

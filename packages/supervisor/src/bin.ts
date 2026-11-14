@@ -6,7 +6,8 @@ import { loadConfig } from "@bobnet/client/config";
 import { BrokerConnection } from "@bobnet/client/connection";
 import { createLogger } from "@bobnet/client/log";
 import ownPackage from "../package.json" with { type: "json" };
-import { BoardBackup, exportFetcher } from "./board-backup.ts";
+import { importBacklogCommand } from "./backlog-import.ts";
+import { BoardBackup, exportFetcher, importPoster } from "./board-backup.ts";
 import { configDir, loadSupervisorConfig } from "./config.ts";
 import { installLaunchAgent } from "./launchd.ts";
 import { installSystemdUnit } from "./systemd.ts";
@@ -18,6 +19,16 @@ import { Supervisor } from "./supervisor.ts";
 
 const log = createLogger();
 const dir = configDir();
+
+// The one-off Backlog.md import (ADR 0001 §11): a dry run unless --post.
+if (process.argv[2] === "import-backlog") {
+  process.exit(
+    await importBacklogCommand(process.argv.slice(3), () => {
+      const broker = loadConfig();
+      return importPoster(broker.url, broker.credentials);
+    }),
+  );
+}
 
 if (process.argv[2] === "install-launchd") {
   console.log(`Installed ${installLaunchAgent(new URL(import.meta.url).pathname)}`);

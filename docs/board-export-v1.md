@@ -142,3 +142,38 @@ origin. No other identity may export or import (`403`). It is all or nothing:
   by the owner or `import@<laptop>`, with the reason `imported from <source> (…)`.
 - The answer is `{ok: true, projects: [{key, items, events, next_item}]}`, or
   `{ok: false, code, message}`.
+
+## Making one from Backlog.md
+
+The one-off move of a project's board (BOB-9, BOB-14) writes this shape from its Backlog.md at a
+named commit, read through git and never from a worktree:
+
+```sh
+node packages/supervisor/src/bin.ts import-backlog --repo ~/Code/helix --ref <commit> \
+  --project helix --name Helix --prefix LAND --draft-prefix DRAFT --questions lead/questions.md \
+  --out helix-board.json --report helix-import.md
+```
+
+It is a dry run: it posts nothing unless `--post` is given, and even then not while anything in its
+report is unmapped. It reads tasks, completed items, drafts and milestones, archived ones too, and the
+project's `lead/questions.md`. The mapping rules:
+
+- An id under the prefix keeps its number. A dotted id (`LAND-49.19`) gets the next number past
+  every id there is, in numeric order by segment, and keeps the old id as an alias. Drafts keep
+  `DRAFT-n`. Every link is mapped to the new refs, and free text stays as written.
+- `Was LAND-n.m` at the start of a line in a description or notes makes the old id an alias of the
+  item. When the old item is archived, it is absorbed. When it is still on the board, both are kept
+  and the report says so.
+- An increment is a feature, and so is a top-level item that holds tasks. A task under a task goes
+  under its feature. A draft, or an item with no feature over it, is a backlog item. A draft's
+  parent becomes its `parent_hint`.
+- A milestone is a release, numbered from its title (`R2 Edit and audit`). An archived release is
+  `closed`, the first one not archived is `open`, and the rest are `planned`.
+- A feature In Progress is open, with a build session `imported`.
+- Open questions and actions come from `lead/questions.md`'s tables. Answered questions come from its
+  running paragraph (`Q-258 (Casper, 2026-11-13, …)`), with the answer verbatim. The next ids come
+  from `The next ID is **Q-267**`.
+- A prefix `Q` or `A` is refused.
+
+The report lists counts, what couldn't map, every renumbered id (old → new), and what was done by
+rule, so the project's PO can check them before the cut-over.

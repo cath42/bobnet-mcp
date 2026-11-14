@@ -193,7 +193,38 @@ export function sessionAt(sessions: Array<{ name: string; kind: string; started_
 const section = (text: string, name: string) =>
   new RegExp(`<!-- SECTION:${name}:BEGIN -->\\n?([\\s\\S]*?)\\n?<!-- SECTION:${name}:END -->`).exec(text)?.[1]?.trim() ?? null;
 
-export function parseBacklogItem(text: string): BoardItem | null {
+/** A Backlog.md file as written, nothing cut: what the one-off import (backlog-import.ts) reads. */
+export interface BacklogFile {
+  id: string;
+  title: string;
+  status: string;
+  type: string | null;
+  parent: string | null;
+  milestone: string | null;
+  assignee: string[];
+  labels: string[];
+  deps: string[];
+  references: string[];
+  priority: string | null;
+  ordinal: number | null;
+  created: string | null;
+  updated: string | null;
+  desc: string | null;
+  notes: string | null;
+  plan: string | null;
+  summary: string | null;
+  /** Acceptance criteria and definition of done: [checked, its number, text]. */
+  ac: Array<[boolean, number, string]>;
+  dod: Array<[boolean, number, string]>;
+}
+
+const checklist = (text: string, marker: string): Array<[boolean, number, string]> => {
+  const block = new RegExp(`<!-- ${marker}:BEGIN -->([\\s\\S]*?)<!-- ${marker}:END -->`).exec(text)?.[1] ?? "";
+  return [...block.matchAll(/^- \[( |x)\] #(\d+) (.*)$/gm)].map((m) => [m[1] === "x", Number(m[2]), m[3]!.trim()]);
+};
+
+/** The one Markdown reader (ADR 0001 §11): a Backlog.md file's front matter and sections. */
+export function readBacklogFile(text: string): BacklogFile | null {
   const fm = /^---\n([\s\S]*?)\n---/.exec(text);
   if (!fm) return null;
   let d: Record<string, unknown>;
@@ -205,19 +236,45 @@ export function parseBacklogItem(text: string): BoardItem | null {
   if (typeof d["id"] !== "string") return null;
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
   const str = (v: unknown) => (typeof v === "string" ? v : null);
-  const desc = section(text, "DESCRIPTION");
-  const ac = [...text.matchAll(/^- \[( |x)\] #\d+ (.*)$/gm)].map((m) => [m[1] === "x", m[2]!.slice(0, 300)] as [boolean, string]);
   return {
     id: d["id"].toUpperCase(),
-    title: String(d["title"] ?? "").slice(0, 300),
+    title: String(d["title"] ?? ""),
     status: String(d["status"] ?? ""),
     type: str(d["type"]),
     parent: str(d["parent_task_id"])?.toUpperCase() ?? null,
     milestone: str(d["milestone"]),
-    assignee: list(d["assignee"]).map((a) => a.replace(/^@/, "")).slice(0, 10),
-    labels: list(d["labels"]).slice(0, 20),
-    deps: list(d["dependencies"]).map((x) => x.toUpperCase()).slice(0, 40),
-    desc: desc ? desc.slice(0, 600) : null,
+    assignee: list(d["assignee"]).map((a) => a.replace(/^@/, "")),
+    labels: list(d["labels"]),
+    deps: list(d["dependencies"]).map((x) => x.toUpperCase()),
+    references: list(d["references"]),
+    priority: str(d["priority"]),
+    ordinal: typeof d["ordinal"] === "number" ? d["ordinal"] : null,
+    created: str(d["created_date"]),
+    updated: str(d["updated_date"]),
+    desc: section(text, "DESCRIPTION"),
+    notes: section(text, "NOTES"),
+    plan: section(text, "PLAN"),
+    summary: section(text, "FINAL_SUMMARY"),
+    ac: checklist(text, "AC"),
+    dod: checklist(text, "DOD"),
+  };
+}
+
+export function parseBacklogItem(text: string): BoardItem | null {
+  const f = readBacklogFile(text);
+  if (!f) return null;
+  const ac = [...text.matchAll(/^- \[( |x)\] #\d+ (.*)$/gm)].map((m) => [m[1] === "x", m[2]!.slice(0, 300)] as [boolean, string]);
+  return {
+    id: f.id,
+    title: f.title.slice(0, 300),
+    status: f.status,
+    type: f.type,
+    parent: f.parent,
+    milestone: f.milestone,
+    assignee: f.assignee.slice(0, 10),
+    labels: f.labels.slice(0, 20),
+    deps: f.deps.slice(0, 40),
+    desc: f.desc ? f.desc.slice(0, 600) : null,
     ac: ac.slice(0, 40),
   };
 }
@@ -266,7 +323,7 @@ const exec: Exec = (cmd, args, cwd) =>
   );
 
 /** Reads many files at one commit through one `git cat-file --batch`. */
-function catFiles(cwd: string, specs: string[]): Promise<string[]> {
+export function catFiles(cwd: string, specs: string[]): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const p = spawn("git", ["-C", cwd, "cat-file", "--batch"], { stdio: ["pipe", "pipe", "ignore"] });
     const chunks: Buffer[] = [];
