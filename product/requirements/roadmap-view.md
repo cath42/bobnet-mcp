@@ -30,8 +30,11 @@ order, each with its features in their order and where each stands.
   both and changes neither.
 - Everything in [1](board-sources.md).
 
+9. "Open" is derived from sessions: a feature is open while it has a session that isn't closed. It
+   is a read-only signal and never a board field. The board doesn't record it (Picard, 2026-11-13: in
+   Helix the orchestrator opens a feature when a session starts and the session PO says when it
+   closes). *Evidence: test.*
+
 ## Open questions
 
-- Is "open" a board state or a session state? In Helix, one feature is open at a time and that
-  decides who writes the board (Picard input), but no field records it. Peach's proposal: a feature
-  counts as open while it has a session that isn't closed. Peach will ask Picard.
+- None of its own. See the [README](README.md).

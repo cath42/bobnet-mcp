@@ -17,9 +17,11 @@ never copies status into its own store.
    `drafts/` folder (the triage queue). *Evidence: test.* (Picard input)
 4. A re-created item ("Was LAND-n.m" in the new item) shows once, as the new item, with a link to
    the old id. It does not show twice. *Evidence: test with a moved task.* (Picard input)
-5. A release's members and order come from the board's milestone files. Where a project also keeps a
-   releases index (Helix: `product/releases/`), the view reads it and doesn't create a third list.
-   *Evidence: test.* (Picard input; see open question)
+5. A feature's release is its `milestone` field: the board is the source for membership. Where a
+   project keeps a releases index (Helix: `product/releases/README.md`), the index is the source for
+   release status and the order of releases, and the view reads it instead of creating a third list.
+   When the two disagree, the view shows both and flags the mismatch. *Evidence: test with a
+   mismatch.* (Picard, 2026-11-13, citing Helix `method/backlog-structure.md`)
 6. Order is shown as the board records it (Backlog.md `ordinal`), and not by id alone. *Evidence: test.*
 7. The view says which commit it shows and how old it is. When the repo can't be read, the last good
    board stays, marked stale. *Evidence: test; dashboard check.*
@@ -37,6 +39,5 @@ never copies status into its own store.
 ## Open questions
 
 - Q1 and Q3 in the [README](README.md).
-- Helix keeps release membership and order in two places: milestone files and a releases index.
-  Which wins when they disagree? Peach's proposal: show both and flag the mismatch. Peach will ask
-  Picard.
+- Settled with Picard (2026-11-13): milestones vs the releases index, now criterion 5.
+- How does a project other than Helix name its releases index, if it has one? Part of Q1.
