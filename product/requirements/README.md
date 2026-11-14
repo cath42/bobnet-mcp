@@ -6,6 +6,10 @@ the order of releases.
 
 ## The central backlog system
 
+**Agreed by Casper, 2026-11-13** ("yes"), capabilities 1–4 and 6–9 for release 1. Start a session
+(5) is release 2 and stays Draft until then. Toad's decisions (schema, tools, event log) and Peach's
+checks with Picard remain open and don't block the prototype.
+
 One place where every project's work lives and is driven (Helix, Envision, Echo, Vitals and BobNet
 itself): a board service inside BobNet that agents work through, and a dashboard Casper sees it on.
 
@@ -33,22 +37,21 @@ has the largest board (~700 task files, 3 releases, ~29 features). Picard's writ
 
 | # | Capability | File | State |
 |---|---|---|---|
-| 1 | The board service: store, API and MCP | [board-service.md](board-service.md) | Draft |
-| 2 | The roadmap: releases and features across projects | [roadmap-view.md](roadmap-view.md) | Draft |
-| 3 | The steps view: a feature's sessions and tasks | [steps-view.md](steps-view.md) | Draft |
-| 4 | What waits on Casper | [waiting-on-casper.md](waiting-on-casper.md) | Draft |
+| 1 | The board service: store, API and MCP | [board-service.md](board-service.md) | Agreed |
+| 2 | The roadmap: releases and features across projects | [roadmap-view.md](roadmap-view.md) | Agreed |
+| 3 | The steps view: a feature's sessions and tasks | [steps-view.md](steps-view.md) | Agreed |
+| 4 | What waits on Casper | [waiting-on-casper.md](waiting-on-casper.md) | Agreed |
 | 5 | Start a session from the UI | [start-session.md](start-session.md) | Draft |
-| 6 | Who writes the board, and editing from the UI | [board-writes.md](board-writes.md) | Draft |
-| 7 | Capture backlog items without structuring them | [capture.md](capture.md) | Draft |
-| 8 | Bugs | [bugs.md](bugs.md) | Draft |
-| 9 | Moving boards off Backlog.md | [migration.md](migration.md) | Draft |
+| 6 | Who writes the board, and editing from the UI | [board-writes.md](board-writes.md) | Agreed |
+| 7 | Capture backlog items without structuring them | [capture.md](capture.md) | Agreed |
+| 8 | Bugs | [bugs.md](bugs.md) | Agreed |
+| 9 | Moving boards off Backlog.md | [migration.md](migration.md) | Agreed |
 
 State: Open (questions before criteria), Draft (being written), Agreed (Casper agreed it), Deferred.
 
 **Release scope** (Casper, 2026-11-13): **release 1** is the board service (1), who writes (6),
 capture (7), Helix moved onto it (9) and the views (2, 3, 4). **A prototype comes first**, before any
-build. **Release 2** is starting a session from the UI (5). Bugs (8) are settled; which release
-they join is open (C9).
+build. **Release 2** is starting a session from the UI (5). Bugs (8) are in release 1 (C9).
 
 ## Settled with Casper (2026-11-13)
 
@@ -77,8 +80,7 @@ extended: the board is a database. That reader may at most serve the one-off imp
 Each file lists its own. These cut across all of them.
 
 For Casper:
-- **C9: bugs in release 1?** A bug is a backlog item of type bug, so it costs little on top of
-  capture. *Peach's proposal:* include it in release 1.
+- **C9: bugs in release 1.** *Settled (Casper, 2026-11-13): yes.*
 - **C1: releases.** *Settled (Casper, 2026-11-13): yes.* Release 1 is the service, Helix moved onto
   it, and the views, with the prototype first. See Release scope above.
 - **C2: who writes.** *Settled (Casper, 2026-11-13): yes, as proposed.* Casper edits his own gates on

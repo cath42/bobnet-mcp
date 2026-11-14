@@ -1,10 +1,10 @@
 ---
 id: BOB-1
 title: 'Prototype the central backlog view, for Casper to accept before building'
-status: Draft
+status: Ready
 assignee: []
 created_date: '2026-11-14 03:59'
-updated_date: '2026-11-14 04:30'
+updated_date: '2026-11-14 04:36'
 labels: []
 milestone: m-0
 dependencies: []

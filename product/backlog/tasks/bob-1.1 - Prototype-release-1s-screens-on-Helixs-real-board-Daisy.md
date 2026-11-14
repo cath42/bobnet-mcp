@@ -1,9 +1,10 @@
 ---
 id: BOB-1.1
 title: Prototype release 1's screens on Helix's real board (Daisy)
-status: Draft
+status: Ready
 assignee: []
 created_date: '2026-11-14 03:59'
+updated_date: '2026-11-14 04:36'
 labels: []
 milestone: m-0
 dependencies: []
