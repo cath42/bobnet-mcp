@@ -1,5 +1,6 @@
 import type {
   BoardCaller,
+  BoardCtx,
   BoardEvent,
   BoardOp,
   BoardResults,
@@ -10,8 +11,13 @@ import type {
   ItemRecord,
   ItemSummary,
   ProjectRecord,
+  QuestionRecord,
   ReleaseRecord,
+  RunRecord,
+  SessionRecord,
+  SessionRef,
   SessionSummary,
+  TokenTotals,
 } from "@bobnet/protocol";
 import { BoardError } from "./errors.ts";
 import { Rules, type Scope } from "./rules.ts";
@@ -25,6 +31,8 @@ const PAGE = 100;
 const ORD_STEP = 1000;
 
 type Op<K extends BoardOp["op"]> = Extract<BoardOp, { op: K }>;
+/** What a write answers: its record and event, and what the operation adds. */
+type Written = BoardResults[Exclude<BoardOp["op"], "projects" | "list" | "get" | "grants">];
 type Value = string | number | boolean | null | undefined;
 type Change = [field: string, old: Value, now: Value];
 
@@ -80,6 +88,48 @@ interface ReleaseRow {
   closed_by: string | null;
   [k: string]: SqlStorageValue;
 }
+
+interface SessionRow {
+  pk: number;
+  project: number;
+  feature: number;
+  kind: SessionSummary["kind"];
+  label: string;
+  started_at: string;
+  ended_at: string | null;
+  imported: number;
+  need: "none" | "answer" | "casper" | null;
+  minors_fixed: number | null;
+  summary: string | null;
+  handoff_path: string | null;
+  handoff_text: string | null;
+  commit_sha: string | null;
+  closed_by: string | null;
+  [k: string]: SqlStorageValue;
+}
+
+interface RunRow {
+  pk: number;
+  id: string;
+  project: number;
+  session: number | null;
+  agent: string;
+  role: string;
+  laptop: string;
+  model: string | null;
+  effort: string | null;
+  started_at: string;
+  ended_at: string | null;
+  resumed: number;
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+  calls: number;
+  [k: string]: SqlStorageValue;
+}
+
+const TOKENS = "coalesce(sum(input), 0) AS input, coalesce(sum(output), 0) AS output, coalesce(sum(cache_read), 0) AS cache_read, coalesce(sum(cache_write), 0) AS cache_write";
 
 type SummaryRow = ItemRow & {
   ref: string;
@@ -198,6 +248,16 @@ export class BoardStore {
 
   private get(caller: BoardCaller, op: Op<"get">): BoardResults["get"] {
     const p = this.readable(caller, op.project);
+    if ((op.ref === undefined) === (op.session === undefined)) throw new BoardError("invalid", "get takes a ref or a session, one of them");
+    if (op.session) {
+      const s = this.session(p, op.session);
+      return { session: this.sessionRecord(s), ...(op.history ? { history: this.history("sessions", s.pk) } : {}) };
+    }
+    if (op.ref === undefined) throw new BoardError("invalid", "get takes a ref or a session");
+    if (/^[QA]-\d+$/.test(op.ref)) {
+      const q = this.question(p, op.ref);
+      return { question: this.questionRecord(q.pk), ...(op.history ? { history: this.history("questions", q.pk) } : {}) };
+    }
     if (/^R\d+$/.test(op.ref)) {
       const r = this.release(p, op.ref);
       return { release: this.releaseRecord(r), ...(op.history ? { history: this.history("releases", r.pk) } : {}) };
@@ -320,14 +380,14 @@ export class BoardStore {
   // ---------- Writes ----------
 
   /** One write, inside the caller's transaction. Returns its result and what it changed, for the broker to push. */
-  write(caller: BoardCaller, op: Exclude<BoardOp, Op<"projects" | "list" | "get" | "grants">>): { result: BoardWritten; changed: { project: string; seq: number; refs: string[] } | null } {
+  write(caller: BoardCaller, op: Exclude<BoardOp, Op<"projects" | "list" | "get" | "grants">>): { result: Written; changed: { project: string; seq: number; refs: string[] } | null } {
     const tx = new Tx(this.sql, caller);
     const result = this.apply(tx, op);
     if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null };
     return { result, changed: { project: tx.projectKey ?? "*", seq: tx.seqs.at(-1)!, refs: [...tx.refs] } };
   }
 
-  private apply(tx: Tx, op: Exclude<BoardOp, Op<"projects" | "list" | "get" | "grants">>): BoardWritten & { created?: boolean } {
+  private apply(tx: Tx, op: Exclude<BoardOp, Op<"projects" | "list" | "get" | "grants">>): Written {
     switch (op.op) {
       case "create_project":
         return this.createProject(tx, op);
@@ -356,13 +416,30 @@ export class BoardStore {
         return this.grant(tx, op);
       case "revoke":
         return this.revoke(tx, op);
+      case "capture":
+        return this.capture(tx, op);
+      case "close_session":
+        return this.closeSession(tx, op);
+      case "ask":
+        return this.ask(tx, op);
+      case "record_answer":
+        return this.recordAnswer(tx, op);
       case "session_join":
         return this.sessionJoin(tx, op);
+      case "run_start":
+        return this.runStart(tx, op);
+      case "run_end":
+        return this.runEnd(tx, op);
+      case "push":
+        return this.push(tx, op);
+      case "slot_run":
+        return this.slotRun(tx, op);
     }
   }
 
   private createProject(tx: Tx, op: Op<"create_project">): BoardWritten {
     ownerOnly(tx.caller, "Creating a project");
+    if (op.prefix === "Q" || op.prefix === "A") throw new BoardError("invalid", "Prefixes Q and A are questions' and actions'");
     if (this.sql.exec("SELECT 1 FROM projects WHERE key = ? OR prefix = ?", op.key, op.prefix).toArray().length > 0) {
       throw new BoardError("conflict", `A project ${op.key} or with prefix ${op.prefix} exists`);
     }
@@ -406,7 +483,8 @@ export class BoardStore {
     return { ref, seq: tx.event("create_release", "releases", pk, ref, changes) };
   }
 
-  private create(tx: Tx, op: Op<"create">): BoardWritten {
+  /** An item's create; a capture's (§12), which anyone may make, as a backlog item that keeps who captured it. */
+  private create(tx: Tx, op: Op<"create">, capture?: { id: string; casper_words: string | null; dropped: string[] }): BoardWritten {
     const p = tx.project(this.project(op.project));
     let parent: ItemRow | null = null;
     let release: ReleaseRow | null = null;
@@ -427,10 +505,13 @@ export class BoardStore {
     if (op.type !== "bug" && (op.bug_where || op.blocks_use || op.found_in)) throw new BoardError("invalid", "Bug fields are for items of type bug");
     const scope = parent ? this.scope(parent) : null;
     const where = parent ? `${scope!.ref}'s tasks` : `${op.kind === "feature" ? "features" : "the backlog"}`;
-    this.rules.require(tx.caller, p, "create", scope, where);
+    if (!capture) this.rules.require(tx.caller, p, "create", scope, where);
     // A create-only grant makes Drafts: an item born further on takes the status right too.
     if (op.status !== undefined && op.status !== "Draft") this.rules.require(tx.caller, p, "status", scope, where);
-    if (op.release) {
+    if (op.release && capture && !this.rules.may(tx.caller, p, "triage", null)) {
+      // A capture never asks back: it is stored, without the release, and says so.
+      capture.dropped.push("release");
+    } else if (op.release) {
       release = this.release(p, op.release);
       if (op.kind === "feature") ownerOnly(tx.caller, "Putting a feature in a release");
       else this.rules.require(tx.caller, p, "triage", null, "the backlog");
@@ -451,8 +532,9 @@ export class BoardStore {
     const status = op.status ?? "Draft";
     const pk = this.sql
       .exec<{ pk: number }>(
-        `INSERT INTO items (project, kind, type, status, title, description, notes, plan, parent, release, ord, parent_hint, bug_where, blocks_use, found_in, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING pk`,
+        `INSERT INTO items (project, kind, type, status, title, description, notes, plan, parent, release, ord, parent_hint, bug_where, blocks_use, found_in,
+                            captured_by, captured_session, casper_words, capture_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING pk`,
         p.pk,
         op.kind,
         op.type,
@@ -468,6 +550,10 @@ export class BoardStore {
         op.bug_where ?? null,
         op.blocks_use ? 1 : 0,
         foundIn?.pk ?? null,
+        capture ? tx.who : null,
+        capture ? tx.sessionPk() : null,
+        capture?.casper_words ?? null,
+        capture?.id ?? null,
         tx.at,
         tx.at,
       )
@@ -490,6 +576,7 @@ export class BoardStore {
       ["blocks_use", null, op.blocks_use || null],
       ["found_in", null, op.found_in],
     ];
+    if (capture) changes.push(["captured_by", null, tx.who], ["casper_words", null, capture.casper_words], ["capture_id", null, capture.id]);
     for (const label of new Set(op.labels ?? [])) {
       this.sql.exec("INSERT INTO item_labels (item, label) VALUES (?, ?)", pk, label);
       changes.push(["label", null, label]);
@@ -505,7 +592,7 @@ export class BoardStore {
       changes.push([`${c.section} #${ord}`, null, c.text]);
       if (c.casper_gate) changes.push([`${c.section} #${ord} casper_gate`, null, true]);
     }
-    return { ref, seq: tx.event("create", "items", pk, ref, changes, op.reason) };
+    return { ref, seq: tx.event(capture ? "capture" : "create", "items", pk, ref, changes, op.reason) };
   }
 
   private update(tx: Tx, op: Op<"update">): BoardWritten {
@@ -830,7 +917,9 @@ export class BoardStore {
 
   private sessionJoin(tx: Tx, op: Op<"session_join">): BoardWritten & { created: boolean } {
     const p = tx.project(this.project(op.project));
-    this.rules.requireFlag(tx.caller, p, "sessions");
+    // Who may spawn into a session is decided where the spawn is made; the board takes it from the supervisor.
+    const ctx = supervisorOp(tx.caller, op);
+    if (ctx && !sameSession(ctx.session, op.session)) throw new BoardError("forbidden", "session_join joins the session its worker's spawn declared");
     const feature = this.feature(p, op.session.feature);
     const ref = this.refOf(feature.pk);
     if (feature.archived_at) throw new BoardError("invalid", `${ref} is archived`);
@@ -853,6 +942,452 @@ export class BoardStore {
       seq = tx.event("session_join", "items", feature.pk, ref, [["open_since", null, tx.at]]);
     }
     return { ref: name, seq, created: !existing };
+  }
+
+  private capture(tx: Tx, op: Op<"capture">): BoardWritten & { duplicate: boolean; dropped: string[] } {
+    const p = tx.project(this.project(op.project));
+    const had = this.sql.exec<{ pk: number; project: number }>("SELECT pk, project FROM items WHERE capture_id = ?", op.capture_id).toArray()[0];
+    if (had) {
+      if (had.project !== p.pk) throw new BoardError("conflict", `Capture ${op.capture_id} is already stored in another project`);
+      return { ref: this.refOf(had.pk), seq: 0, duplicate: true, dropped: [] };
+    }
+    const dropped: string[] = [];
+    const create: Op<"create"> = {
+      op: "create",
+      project: op.project,
+      kind: "backlog",
+      type: op.type,
+      title: op.title,
+      ...(op.description !== undefined ? { description: op.description } : {}),
+      ...(op.release !== undefined ? { release: op.release } : {}),
+      ...(op.bug_where !== undefined ? { bug_where: op.bug_where } : {}),
+      ...(op.blocks_use !== undefined ? { blocks_use: op.blocks_use } : {}),
+      ...(op.found_in !== undefined ? { found_in: op.found_in } : {}),
+    };
+    const written = this.create(tx, create, { id: op.capture_id, casper_words: op.casper_words ?? null, dropped });
+    return { ...written, duplicate: false, dropped };
+  }
+
+  /** §6: applies the close's moves as status writes tagged with the session, then records the close. */
+  private closeSession(tx: Tx, op: Op<"close_session">): BoardWritten & { tasks_moved: SessionRecord["tasks_moved"]; tokens: TokenTotals } {
+    const p = tx.project(this.project(op.project));
+    this.rules.requireFlag(tx.caller, p, "sessions");
+    const s = this.session(p, op.session);
+    const name = this.sessionName(s);
+    if (s.ended_at) throw new BoardError("conflict", `${name} is closed already`);
+    if (op.need === "casper" && op.waits_on.length === 0) throw new BoardError("invalid", "A close that needs Casper names the questions it waits on");
+    const waits = [...new Set(op.waits_on)].map((r) => this.question(p, r));
+    const ofFeature = (refs: string[], what: string) =>
+      [...new Set(refs)].map((r) => {
+        const row = this.item(p, r);
+        if (row.kind !== "task" || row.parent !== s.feature) throw new BoardError("invalid", `${what} ${r} isn't a task of ${this.refOf(s.feature)}`);
+        return row;
+      });
+    const lists = { blocker: ofFeature(op.blockers, "Blocker"), major: ofFeature(op.majors, "Major"), sent_back: ofFeature(op.sent_back, "Sent back") };
+
+    // The moves are this boundary's status writes, checked as any is, and tagged with the session.
+    tx.inSession(s.pk);
+    for (const m of op.moves) this.update(tx, { op: "update", project: op.project, ref: m.task, set: { status: m.status }, reason: `${name} closed` });
+
+    const close = {
+      ended_at: tx.at,
+      need: op.need,
+      minors_fixed: op.minors_fixed,
+      summary: op.summary,
+      handoff_path: op.handoff.path,
+      handoff_text: op.handoff.text,
+      commit_sha: op.commit ?? null,
+      closed_by: tx.who,
+    };
+    const keys = Object.keys(close) as Array<keyof typeof close>;
+    this.sql.exec(`UPDATE sessions SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE pk = ?`, ...keys.map((k) => close[k]), s.pk);
+    const changes: Change[] = keys.filter((k) => k !== "handoff_text").map((k): Change => [k, null, close[k]]);
+    for (const [role, rows] of Object.entries(lists)) {
+      for (const row of rows) {
+        this.sql.exec("INSERT INTO session_tasks (project, session, item, role) VALUES (?, ?, ?, ?)", p.pk, s.pk, row.pk, role);
+        changes.push([role, null, this.refOf(row.pk)]);
+      }
+    }
+    for (const q of waits) {
+      this.sql.exec("INSERT INTO session_waits_on (project, session, question) VALUES (?, ?, ?)", p.pk, s.pk, q.pk);
+      changes.push(["waits_on", null, q.ref]);
+    }
+    let seq = tx.event("close_session", "sessions", s.pk, name, changes);
+    const open = this.sql.exec("SELECT 1 FROM sessions WHERE feature = ? AND ended_at IS NULL", s.feature).toArray().length > 0;
+    const feature = this.sql.exec<ItemRow>("SELECT * FROM items WHERE pk = ?", s.feature).one();
+    if (!open && feature.open_since) {
+      this.setItem(feature.pk, { open_since: null }, tx.at);
+      seq = tx.event("close_session", "items", feature.pk, this.refOf(feature.pk), [["open_since", feature.open_since, null]]);
+    }
+    return { ref: name, seq, tasks_moved: this.tasksMoved(s.pk), tokens: this.sessionTokens(s.pk) };
+  }
+
+  private ask(tx: Tx, op: Op<"ask">): BoardWritten {
+    const p = tx.project(this.project(op.project));
+    this.rules.requireFlag(tx.caller, p, "questions");
+    const holds = this.items(p, op.holds);
+    const holdSessions = op.holds_sessions.map((s) => this.session(p, s));
+    const nb = op.needed_before;
+    const nbItem = nb && "item" in nb ? this.item(p, nb.item) : null;
+    const nbRelease = nb && "release" in nb ? this.release(p, nb.release) : null;
+    const nbText = nb && "text" in nb ? nb.text : null;
+    const keys = op.options.map((o) => o.key);
+    if (new Set(keys).size !== keys.length) throw new BoardError("invalid", "Each option has its own key");
+    const counter = op.kind === "question" ? "next_question" : "next_action";
+    const n = this.sql.exec<{ n: number }>(`SELECT ${counter} AS n FROM projects WHERE pk = ?`, p.pk).one().n;
+    this.sql.exec(`UPDATE projects SET ${counter} = ${counter} + 1 WHERE pk = ?`, p.pk);
+    const ref = `${op.kind === "question" ? "Q" : "A"}-${n}`;
+    const pk = this.sql
+      .exec<{ pk: number }>(
+        `INSERT INTO questions (project, ref, kind, text, context, asked_by, session, needed_before_item, needed_before_release, needed_before_text, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING pk`,
+        p.pk,
+        ref,
+        op.kind,
+        op.text,
+        op.context ?? null,
+        tx.who,
+        tx.sessionPk(),
+        nbItem?.pk ?? null,
+        nbRelease?.pk ?? null,
+        nbText,
+        tx.at,
+      )
+      .one().pk;
+    const changes: Change[] = [["kind", null, op.kind], ["text", null, op.text], ["context", null, op.context], ["asked_by", null, tx.who]];
+    if (nb) changes.push(["needed_before", null, nbItem ? this.refOf(nbItem.pk) : (nbRelease?.ref ?? nbText)]);
+    op.options.forEach((o, i) => {
+      this.sql.exec("INSERT INTO question_options (question, ord, key, text, recommended) VALUES (?, ?, ?, ?, ?)", pk, i + 1, o.key, o.text, o.recommended ? 1 : 0);
+      changes.push([`option ${o.key}`, null, `${o.text}${o.recommended ? " (recommended)" : ""}`]);
+    });
+    for (const h of holds) {
+      this.sql.exec("INSERT INTO question_holds (project, question, item) VALUES (?, ?, ?)", p.pk, pk, h.pk);
+      changes.push(["holds", null, this.refOf(h.pk)]);
+    }
+    for (const s of holdSessions) {
+      this.sql.exec("INSERT INTO question_holds (project, question, session) VALUES (?, ?, ?)", p.pk, pk, s.pk);
+      changes.push(["holds", null, this.sessionName(s)]);
+    }
+    return { ref, seq: tx.event("ask", "questions", pk, ref, changes) };
+  }
+
+  /** Casper's answer given in conversation, recorded by the lead or PO (§7): write-once, his words verbatim. */
+  private recordAnswer(tx: Tx, op: Op<"record_answer">): BoardWritten {
+    const p = tx.project(this.project(op.project));
+    this.rules.requireFlag(tx.caller, p, "questions");
+    const q = this.question(p, op.ref);
+    if (q.state !== "open") throw new BoardError("conflict", `${q.ref} is ${q.state} already: an answer is written once`);
+    if (op.key !== undefined && !this.sql.exec("SELECT 1 FROM question_options WHERE question = ? AND key = ?", q.pk, op.key).toArray().length) {
+      throw new BoardError("invalid", `${q.ref} has no option ${op.key}`);
+    }
+    const state = q.kind === "action" ? "done" : "answered";
+    this.sql.exec(
+      "UPDATE questions SET state = ?, answer_key = ?, answer_words = ?, answered_by = ?, answered_at = ?, answered_via = 'conversation' WHERE pk = ?",
+      state,
+      op.key ?? null,
+      op.words,
+      tx.who,
+      tx.at,
+      q.pk,
+    );
+    const changes: Change[] = [["state", "open", state], ["answer_key", null, op.key], ["answer_words", null, op.words], ["answered_via", null, "conversation"]];
+    return { ref: q.ref, seq: tx.event("record_answer", "questions", q.pk, q.ref, changes) };
+  }
+
+  /** A worker's run (§9), once per id: a replay from the supervisor's outbox changes nothing. */
+  private runStart(tx: Tx, op: Op<"run_start">): BoardWritten & { unknown_tasks: string[] } {
+    const p = tx.project(this.project(op.project));
+    supervisorOp(tx.caller, op);
+    if (this.runRow(op.id)) return { ref: op.id, seq: 0, unknown_tasks: [] };
+    const session = op.session ? this.session(p, op.session) : null;
+    // A run is recorded whatever its spawn named: ids that aren't items here are reported, not refused.
+    const tasks: ItemRow[] = [];
+    const unknown: string[] = [];
+    for (const ref of new Set(op.tasks)) {
+      const row = this.sql.exec<ItemRow>("SELECT i.* FROM item_refs r JOIN items i ON i.pk = r.item WHERE r.project = ? AND r.ref = ?", p.pk, ref).toArray()[0];
+      if (row) tasks.push(row);
+      else unknown.push(ref);
+    }
+    const laptop = tx.caller.kind === "agent" ? tx.caller.laptop : "";
+    const pk = this.sql
+      .exec<{ pk: number }>(
+        `INSERT INTO runs (id, project, session, agent, role, laptop, model, effort, started_at, resumed, remote_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING pk`,
+        op.id,
+        p.pk,
+        session?.pk ?? null,
+        op.agent,
+        op.role,
+        laptop,
+        op.model ?? null,
+        op.effort ?? null,
+        op.started_at,
+        op.resumed ? 1 : 0,
+        op.remote_url ?? null,
+      )
+      .one().pk;
+    for (const t of tasks) this.sql.exec("INSERT INTO run_tasks (project, run, item) VALUES (?, ?, ?)", p.pk, pk, t.pk);
+    const changes: Change[] = [
+      ["agent", null, op.agent],
+      ["role", null, op.role],
+      ["session", null, session ? this.sessionName(session) : null],
+      ["model", null, op.model],
+      ["effort", null, op.effort],
+      ["started_at", null, op.started_at],
+      ["resumed", null, op.resumed || null],
+      ...tasks.map((t): Change => ["task", null, this.refOf(t.pk)]),
+    ];
+    return { ref: op.id, seq: tx.event("run_start", "runs", pk, op.id, changes), unknown_tasks: unknown };
+  }
+
+  /** A run's end with its tokens and context per call; a second end for an ended run changes nothing. */
+  private runEnd(tx: Tx, op: Op<"run_end">): BoardWritten {
+    const p = tx.project(this.project(op.project));
+    supervisorOp(tx.caller, op);
+    const run = this.runRow(op.id);
+    if (!run || run.project !== p.pk) throw new BoardError("invalid", `No run ${op.id} in ${p.key}`);
+    if (run.ended_at) return { ref: op.id, seq: 0 };
+    const t = op.tokens;
+    this.sql.exec(
+      "UPDATE runs SET ended_at = ?, input = ?, output = ?, cache_read = ?, cache_write = ?, calls = ?, ctx = ? WHERE pk = ?",
+      op.ended_at,
+      t.input,
+      t.output,
+      t.cache_read,
+      t.cache_write,
+      op.calls,
+      op.ctx.length > 0 ? ctxBlob(op.ctx) : null,
+      run.pk,
+    );
+    const changes: Change[] = [
+      ["ended_at", null, op.ended_at],
+      ["input", 0, t.input],
+      ["output", 0, t.output],
+      ["cache_read", 0, t.cache_read],
+      ["cache_write", 0, t.cache_write],
+      ["calls", 0, op.calls],
+    ];
+    return { ref: op.id, seq: tx.event("run_end", "runs", run.pk, op.id, changes) };
+  }
+
+  /** What a land pushed (§10), once per (repo, sha). */
+  private push(tx: Tx, op: Op<"push">): BoardWritten {
+    const p = tx.project(this.project(op.project));
+    supervisorOp(tx.caller, op);
+    const ref = `${op.repo}@${op.sha.slice(0, 12)}`;
+    if (this.sql.exec("SELECT 1 FROM pushes WHERE repo = ? AND sha = ?", op.repo, op.sha).toArray().length > 0) return { ref, seq: 0 };
+    const run = op.run ? this.runRow(op.run) : undefined;
+    if (op.run && (!run || run.project !== p.pk)) throw new BoardError("invalid", `No run ${op.run} in ${p.key}`);
+    const pk = this.sql
+      .exec<{ pk: number }>(
+        "INSERT INTO pushes (project, repo, branch, sha, worker, run, at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING pk",
+        p.pk,
+        op.repo,
+        op.branch,
+        op.sha,
+        op.worker,
+        run?.pk ?? null,
+        tx.at,
+      )
+      .one().pk;
+    const changes: Change[] = [["repo", null, op.repo], ["branch", null, op.branch], ["sha", null, op.sha], ["worker", null, op.worker], ["run", null, op.run]];
+    return { ref, seq: tx.event("push", "pushes", pk, ref, changes) };
+  }
+
+  /** A run-slot run (§10): made at its grant, its status and end updated at its release. */
+  private slotRun(tx: Tx, op: Op<"slot_run">): BoardWritten {
+    const p = tx.project(this.project(op.project));
+    supervisorOp(tx.caller, op);
+    const ref = `slot ${op.external_id}`;
+    const had = this.sql
+      .exec<{ pk: number; project: number; status: string; started_at: string | null; ended_at: string | null }>(
+        "SELECT pk, project, status, started_at, ended_at FROM ci_runs WHERE source = 'slot' AND external_id = ?",
+        op.external_id,
+      )
+      .toArray()[0];
+    if (had) {
+      if (had.project !== p.pk) throw new BoardError("conflict", `Slot run ${op.external_id} belongs to another project`);
+      const changes: Change[] = [];
+      const cols: Record<string, SqlStorageValue> = {};
+      if (op.status !== had.status) (cols.status = op.status), changes.push(["status", had.status, op.status]);
+      if (op.started_at && op.started_at !== had.started_at) (cols.started_at = op.started_at), changes.push(["started_at", had.started_at, op.started_at]);
+      if (op.ended_at && op.ended_at !== had.ended_at) (cols.ended_at = op.ended_at), changes.push(["ended_at", had.ended_at, op.ended_at]);
+      if (changes.length === 0) return { ref, seq: 0 };
+      const keys = Object.keys(cols);
+      this.sql.exec(`UPDATE ci_runs SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE pk = ?`, ...keys.map((k) => cols[k]!), had.pk);
+      return { ref, seq: tx.event("slot_run", "ci_runs", had.pk, ref, changes) };
+    }
+    const run = op.run ? this.runRow(op.run) : undefined;
+    if (op.run && (!run || run.project !== p.pk)) throw new BoardError("invalid", `No run ${op.run} in ${p.key}`);
+    const laptop = tx.caller.kind === "agent" ? tx.caller.laptop : null;
+    const pk = this.sql
+      .exec<{ pk: number }>(
+        `INSERT INTO ci_runs (source, external_id, project, name, laptop, status, started_at, ended_at, worker, session)
+         VALUES ('slot', ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING pk`,
+        op.external_id,
+        p.pk,
+        op.name,
+        laptop,
+        op.status,
+        op.started_at ?? null,
+        op.ended_at ?? null,
+        op.worker ?? null,
+        run?.session ?? null,
+      )
+      .one().pk;
+    // The tie is direct: the holder's run names its session and tasks (§10).
+    if (run) this.sql.exec("INSERT INTO ci_run_tasks (project, ci_run, item) SELECT project, ?, item FROM run_tasks WHERE run = ?", pk, run.pk);
+    const changes: Change[] = [["name", null, op.name], ["status", null, op.status], ["started_at", null, op.started_at], ["ended_at", null, op.ended_at], ["worker", null, op.worker], ["run", null, op.run]];
+    return { ref, seq: tx.event("slot_run", "ci_runs", pk, ref, changes) };
+  }
+
+  // ---------- Sessions, questions, runs ----------
+
+  private sessionRecord(s: SessionRow): SessionRecord {
+    const feature = this.refOf(s.feature);
+    const tasks = (role: string) =>
+      this.sql.exec<{ item: number }>("SELECT item FROM session_tasks WHERE session = ? AND role = ? ORDER BY item", s.pk, role).toArray().map((r) => this.refOf(r.item));
+    const runs = this.sql.exec<RunRow>("SELECT * FROM runs WHERE session = ? ORDER BY started_at, pk", s.pk).toArray();
+    return {
+      feature,
+      kind: s.kind,
+      label: s.label,
+      started_at: s.started_at,
+      ended_at: s.ended_at,
+      imported: s.imported === 1,
+      close:
+        s.need === null
+          ? null
+          : {
+              need: s.need,
+              waits_on: this.sql
+                .exec<{ ref: string }>("SELECT q.ref FROM session_waits_on w JOIN questions q ON q.pk = w.question WHERE w.session = ? ORDER BY q.pk", s.pk)
+                .toArray()
+                .map((r) => r.ref),
+              blockers: tasks("blocker"),
+              majors: tasks("major"),
+              minors_fixed: s.minors_fixed ?? 0,
+              sent_back: tasks("sent_back"),
+              summary: s.summary ?? "",
+              handoff_path: s.handoff_path,
+              handoff_text: s.handoff_text,
+              commit: s.commit_sha,
+              closed_by: s.closed_by ?? "",
+            },
+      tasks_moved: this.tasksMoved(s.pk),
+      tokens: this.sessionTokens(s.pk),
+      runs: runs.map((r) => this.runRecord(r)),
+    };
+  }
+
+  private runRecord(r: RunRow): RunRecord {
+    return {
+      id: r.id,
+      agent: r.agent,
+      role: r.role,
+      laptop: r.laptop,
+      model: r.model,
+      effort: r.effort,
+      started_at: r.started_at,
+      ended_at: r.ended_at,
+      resumed: r.resumed === 1,
+      tokens: { input: r.input, output: r.output, cache_read: r.cache_read, cache_write: r.cache_write },
+      calls: r.calls,
+      tasks: this.sql.exec<{ item: number }>("SELECT item FROM run_tasks WHERE run = ? ORDER BY item", r.pk).toArray().map((t) => this.refOf(t.item)),
+    };
+  }
+
+  /** Every status write tagged with the session, with the last status each item was left in (§6). */
+  private tasksMoved(session: number): SessionRecord["tasks_moved"] {
+    const rows = this.sql
+      .exec<{ pk: number; status: ItemSummary["status"] }>(
+        `SELECT e.pk, c.new AS status FROM events e JOIN event_changes c ON c.event = e.seq
+         WHERE e.session = ? AND e.tbl = 'items' AND c.field = 'status' ORDER BY e.seq`,
+        session,
+      )
+      .toArray();
+    const last = new Map<number, ItemSummary["status"]>();
+    for (const r of rows) last.set(r.pk, r.status);
+    return [...last].map(([pk, status]) => ({ task: this.refOf(pk), status }));
+  }
+
+  private sessionTokens(session: number): TokenTotals {
+    return this.sql.exec<TokenTotals>(`SELECT ${TOKENS} FROM runs WHERE session = ?`, session).one();
+  }
+
+  private questionRecord(pk: number): QuestionRecord {
+    const q = this.sql
+      .exec<{
+        ref: string;
+        kind: QuestionRecord["kind"];
+        text: string;
+        context: string | null;
+        asked_by: string;
+        session: number | null;
+        needed_before_item: number | null;
+        needed_before_release: number | null;
+        needed_before_text: string | null;
+        state: QuestionRecord["state"];
+        answer_key: string | null;
+        answer_words: string | null;
+        answered_by: string | null;
+        answered_at: string | null;
+        answered_via: "dashboard" | "conversation" | null;
+        created_at: string;
+      }>("SELECT * FROM questions WHERE pk = ?", pk)
+      .one();
+    const holds = this.sql.exec<{ item: number | null; session: number | null }>("SELECT item, session FROM question_holds WHERE question = ? ORDER BY rowid", pk).toArray();
+    return {
+      ref: q.ref,
+      kind: q.kind,
+      text: q.text,
+      context: q.context,
+      asked_by: q.asked_by,
+      session: q.session === null ? null : this.sessionRef(q.session),
+      needed_before:
+        q.needed_before_item !== null
+          ? { item: this.refOf(q.needed_before_item) }
+          : q.needed_before_release !== null
+            ? { release: this.releaseRef(q.needed_before_release) }
+            : q.needed_before_text !== null
+              ? { text: q.needed_before_text }
+              : null,
+      options: this.sql
+        .exec<{ key: string; text: string; recommended: number }>("SELECT key, text, recommended FROM question_options WHERE question = ? ORDER BY ord", pk)
+        .toArray()
+        .map((o) => ({ key: o.key, text: o.text, recommended: o.recommended === 1 })),
+      holds: holds.flatMap((h) => (h.item !== null ? [this.refOf(h.item)] : [])),
+      holds_sessions: holds.flatMap((h) => (h.session !== null ? [this.sessionRef(h.session)!] : [])),
+      state: q.state,
+      answer:
+        q.answered_at === null
+          ? null
+          : { key: q.answer_key, words: q.answer_words, by: q.answered_by ?? "", at: q.answered_at, via: q.answered_via ?? "conversation" },
+      created_at: q.created_at,
+    };
+  }
+
+  private session(p: ProjectRow, ref: SessionRef): SessionRow {
+    const feature = this.item(p, ref.feature);
+    const row = this.sql.exec<SessionRow>("SELECT * FROM sessions WHERE feature = ? AND kind = ? AND label = ?", feature.pk, ref.kind, ref.label).toArray()[0];
+    if (!row) throw new BoardError("invalid", `No session ${ref.feature} ${ref.kind} ${ref.label} in ${p.key}`);
+    return row;
+  }
+
+  private sessionName(s: Pick<SessionRow, "feature" | "kind" | "label">): string {
+    return `${this.refOf(s.feature)} ${s.kind} ${s.label}`;
+  }
+
+  private question(p: ProjectRow, ref: string): { pk: number; ref: string; kind: QuestionRecord["kind"]; state: QuestionRecord["state"] } {
+    const row = this.sql
+      .exec<{ pk: number; ref: string; kind: QuestionRecord["kind"]; state: QuestionRecord["state"] }>("SELECT pk, ref, kind, state FROM questions WHERE project = ? AND ref = ?", p.pk, ref)
+      .toArray()[0];
+    if (!row) throw new BoardError("invalid", `No question ${ref} in ${p.key}`);
+    return row;
+  }
+
+  private runRow(id: string): RunRow | undefined {
+    return this.sql.exec<RunRow>("SELECT * FROM runs WHERE id = ?", id).toArray()[0];
   }
 
   // ---------- Lookups ----------
@@ -946,6 +1481,8 @@ class Tx {
   readonly refs = new Set<string>();
   projectKey: string | null = null;
   private projectPk: number | null = null;
+  /** The session a close tags its writes with, whatever the caller's ctx says. */
+  private session: number | null = null;
 
   constructor(
     private readonly sql: SqlStorage,
@@ -955,6 +1492,30 @@ class Tx {
   /** Who, as the history names them. */
   get who(): string {
     return this.caller.kind === "owner" ? this.caller.email : `${this.caller.name}@${this.caller.laptop}`;
+  }
+
+  inSession(pk: number): void {
+    this.session = pk;
+  }
+
+  /** The session this write is made in: a close's, or the one the caller's supervisor declared. */
+  sessionPk(): number | null {
+    if (this.session !== null) return this.session;
+    const caller = this.caller;
+    const ctx = caller.kind === "agent" && caller.ctx?.project === this.projectKey ? caller.ctx : null;
+    if (!ctx?.session) return null;
+    return (
+      this.sql
+        .exec<{ pk: number }>(
+          `SELECT s.pk FROM sessions s JOIN item_refs r ON r.item = s.feature
+           WHERE s.project = ? AND r.ref = ? AND s.kind = ? AND s.label = ?`,
+          this.projectPk,
+          ctx.session.feature,
+          ctx.session.kind,
+          ctx.session.label,
+        )
+        .toArray()[0]?.pk ?? null
+    );
   }
 
   project<P extends { pk: number; key: string }>(p: P): P {
@@ -967,18 +1528,7 @@ class Tx {
   event(op: string, table: string, pk: number, ref: string | null, changes: Change[], reason?: string): number {
     const caller = this.caller;
     const ctx = caller.kind === "agent" && caller.ctx?.project === this.projectKey ? caller.ctx : null;
-    const session = ctx?.session
-      ? (this.sql
-          .exec<{ pk: number }>(
-            `SELECT s.pk FROM sessions s JOIN item_refs r ON r.item = s.feature
-             WHERE s.project = ? AND r.ref = ? AND s.kind = ? AND s.label = ?`,
-            this.projectPk,
-            ctx.session.feature,
-            ctx.session.kind,
-            ctx.session.label,
-          )
-          .toArray()[0]?.pk ?? null)
-      : null;
+    const session = this.sessionPk();
     const seq = this.sql
       .exec<{ seq: number }>(
         `INSERT INTO events (at, project, actor_kind, actor, role, worker, session, op, tbl, pk, ref, reason)
@@ -1014,6 +1564,32 @@ function shown(v: Value): string | null {
 
 function ownerOnly(caller: BoardCaller, what: string): void {
   if (caller.kind !== "owner") throw new BoardError("forbidden", `${what} is Casper's gate; only the owner may`);
+}
+
+/**
+ * The supervisor's own operations (ADR 0001 §4, §8): made only over the laptop's pinned supervisor
+ * connection, for a worker of the project. The owner may join a session; nothing else of these is his.
+ */
+function supervisorOp(caller: BoardCaller, op: { op: string; project: string }): BoardCtx | null {
+  if (caller.kind === "owner") {
+    if (op.op === "session_join") return null;
+    throw new BoardError("forbidden", `${op.op} is the supervisor's report, not the owner's`);
+  }
+  if (!caller.supervisor || !caller.ctx) throw new BoardError("forbidden", `${op.op} is made only by a laptop's supervisor, for a worker it runs`);
+  if (caller.ctx.project !== op.project) throw new BoardError("forbidden", `${op.op} for ${op.project} comes from a worker of ${op.project}, not ${caller.ctx.project}`);
+  return caller.ctx;
+}
+
+function sameSession(a: SessionRef | null, b: SessionRef): boolean {
+  return a !== null && a.feature === b.feature && a.kind === b.kind && a.label === b.label;
+}
+
+/** Context per call as the runs table keeps it: little-endian uint32s (§9). */
+function ctxBlob(points: number[]): ArrayBuffer {
+  const buf = new ArrayBuffer(points.length * 4);
+  const view = new DataView(buf);
+  points.forEach((v, i) => view.setUint32(i * 4, v, true));
+  return buf;
 }
 
 function openRelease(r: ReleaseRow): void {

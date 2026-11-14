@@ -35,7 +35,7 @@ const SAYS: Record<GrantField, string> = {
   create: "create items",
 };
 
-const FLAGS = { sessions: "start or close sessions", questions: "ask Casper or record his answers", admin: "change the rules" } as const;
+const FLAGS = { sessions: "close sessions", questions: "ask Casper or record his answers", admin: "change the rules" } as const;
 export type Flag = keyof typeof FLAGS;
 
 export class Rules {
@@ -81,18 +81,23 @@ export class Rules {
    * on; `not_open_feature` covers every item whose feature isn't open.
    */
   require(caller: BoardCaller, project: { pk: number; key: string }, field: GrantField, scope: Scope | null, what: string): void {
-    if (caller.kind === "owner") return;
+    if (caller.kind === "owner" || this.may(caller, project, field, scope)) return;
     const rows = this.rows(project.pk, caller.name, caller.laptop);
+    const scoped = rows.some((r) => hasField(r, field));
+    const why = scoped && scope?.open ? ` (${scope.ref} is open${caller.ctx?.session ? ` and ${caller.name}'s session is on ${caller.ctx.session.feature}` : ""})` : "";
+    throw new BoardError("forbidden", `${caller.name} may not ${SAYS[field]} on ${what} in ${project.key}${why}; ${this.whoMay(project.pk, field)}`);
+  }
+
+  /** Whether the caller may write `field` under `scope`, as `require` decides it. */
+  may(caller: BoardCaller, project: { pk: number; key: string }, field: GrantField, scope: Scope | null): boolean {
+    if (caller.kind === "owner") return true;
     const covers = (items: GrantItems) => {
       if (items === "all") return true;
       if (items === "none") return false;
       const mine = scope !== null && scope.open && caller.ctx?.project === project.key && caller.ctx.session?.feature === scope.ref;
       return items === "open_feature" ? mine : !scope?.open;
     };
-    if (rows.some((r) => hasField(r, field) && covers(r.items))) return;
-    const scoped = rows.some((r) => hasField(r, field));
-    const why = scoped && scope?.open ? ` (${scope.ref} is open${caller.ctx?.session ? ` and ${caller.name}'s session is on ${caller.ctx.session.feature}` : ""})` : "";
-    throw new BoardError("forbidden", `${caller.name} may not ${SAYS[field]} on ${what} in ${project.key}${why}; ${this.whoMay(project.pk, field)}`);
+    return this.rows(project.pk, caller.name, caller.laptop).some((r) => hasField(r, field) && covers(r.items));
   }
 
   requireFlag(caller: BoardCaller, project: { pk: number; key: string }, flag: Flag): void {

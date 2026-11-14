@@ -381,7 +381,11 @@ export class Broker extends DurableObject<Env> {
     }
     if (frame.as === undefined) throw new FrameError("bad_frame", "A board operation names the peer it is made as");
     const peer = this.hosted(conn, frame.as);
-    return { kind: "agent", name: peer.name, laptop: peer.laptop, ctx: frame.ctx ?? null };
+    // Only the laptop's pinned supervisor speaks for workers: anyone else's ctx is dropped (ADR 0001 §4).
+    const pinned = this.supervisorOf(peer.laptop);
+    const sup = pinned === undefined ? undefined : this.peer(addressKey({ name: pinned, laptop: peer.laptop }));
+    const supervisor = sup !== undefined && sup.conn_id === conn.connId;
+    return { kind: "agent", name: peer.name, laptop: peer.laptop, supervisor, ctx: supervisor ? (frame.ctx ?? null) : null };
   }
 
   // ---------- Dashboard ----------

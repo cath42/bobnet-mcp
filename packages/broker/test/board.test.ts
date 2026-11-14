@@ -1,4 +1,4 @@
-import type { BoardCaller, BoardCtx, BoardOpInput, BoardReply, BoardResults, GrantField, ItemRecord } from "@bobnet/protocol";
+import type { BoardCaller, BoardCtx, BoardOpInput, BoardReply, BoardResults, GrantField, ItemRecord, SessionRef } from "@bobnet/protocol";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 // The board service's core (ADR 0001 §2, §3, §5), called as the broker calls it.
 
 const owner: BoardCaller = { kind: "owner", email: "owner@example.com" };
-const agent = (name: string, ctx: BoardCtx | null = null): BoardCaller => ({ kind: "agent", name, laptop: "mbp-1", ctx });
+const agent = (name: string, ctx: BoardCtx | null = null): BoardCaller => ({ kind: "agent", name, laptop: "mbp-1", supervisor: ctx !== null, ctx });
 const inSession = (name: string, feature: string, role = "po"): BoardCaller =>
   agent(name, { worker: `w_${name.toLowerCase()}`, role, project: "helix", session: { feature, kind: "build", label: "1" }, tasks: [] });
 
@@ -49,8 +49,8 @@ async function helix() {
 /** Helix's rule (board-writes 2, 3): the session PO writes the open feature, Picard the rest, builders read. */
 async function helixRules() {
   const po = { read: true, fields: ["status", "order", "content", "criteria", "triage", "create"] as GrantField[] };
-  await ok(owner, { op: "grant", project: "helix", agent: "Picard", role: "backlog PO", ...po, items: "not_open_feature", sessions: true, admin: true });
-  await ok(owner, { op: "grant", project: "helix", agent: "Riker", role: "session PO", ...po, items: "open_feature" });
+  await ok(owner, { op: "grant", project: "helix", agent: "Picard", role: "backlog PO", ...po, items: "not_open_feature", sessions: true, questions: true, admin: true });
+  await ok(owner, { op: "grant", project: "helix", agent: "Riker", role: "session PO", ...po, items: "open_feature", sessions: true });
   await ok(owner, { op: "grant", project: "helix", agent: "Bill", role: "builder", read: true, items: "none", fields: [] });
 }
 
@@ -240,7 +240,7 @@ describe("who may write what (ADR 0001 §5)", () => {
   it("has Helix's two PO rows: the session PO writes the open feature, Picard the rest", async () => {
     const { f1, f2, t1, t2 } = await helix();
     await helixRules();
-    await ok(agent("Picard"), { op: "session_join", project: "helix", session: { feature: f1, kind: "build", label: "1" } });
+    await ok(owner, { op: "session_join", project: "helix", session: { feature: f1, kind: "build", label: "1" } });
     expect((await item(f1)).open_since).not.toBeNull();
 
     const riker = inSession("Riker", f1);
@@ -379,5 +379,188 @@ describe("lists", () => {
     expect((await list({ type: "bug" })).total).toBe(52);
     expect((await list({ text: "task 10" })).items!.map((i) => i.title)).toEqual(["Task 10", "Task 100", "Task 101", "Task 102", "Task 103", "Task 104"]);
     expect((await list({ status: "Done" })).total).toBe(0);
+  });
+});
+
+// ---------- Step 2: the supervisor's reports, capture, questions and the close ----------
+
+/** The laptop's supervisor speaking for a worker of helix (ADR 0001 §4). */
+const sup = (name: string, session: BoardCtx["session"], worker = `w_${name.toLowerCase()}`): Extract<BoardCaller, { kind: "agent" }> => ({
+  kind: "agent",
+  name,
+  laptop: "mbp-1",
+  supervisor: true,
+  ctx: { worker, role: name.toLowerCase(), project: "helix", session, tasks: [] },
+});
+const at = (min: number) => new Date(Date.UTC(2026, 10, 14, 10, min)).toISOString();
+const tokens = (n: number) => ({ input: n, output: n, cache_read: n, cache_write: n });
+const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+describe("the supervisor's operations (ADR 0001 §4, §9, §10)", () => {
+  it("joins a session for a worker its spawn declared, with no sessions grant, and only that session", async () => {
+    const { f1 } = await helix();
+    await helixRules();
+    const session = { feature: f1, kind: "build" as const, label: "1" };
+    expect(await ok(sup("Bill", session), { op: "session_join", project: "helix", session })).toMatchObject({ created: true });
+    expect(await refused(sup("Bill", session), { op: "session_join", project: "helix", session: { ...session, label: "2" } })).toMatchObject({ code: "forbidden" });
+    // A peer that isn't the supervisor carries no ctx, so it can't make the supervisor's operations.
+    expect(await refused({ ...sup("Bill", session), supervisor: false }, { op: "session_join", project: "helix", session })).toMatchObject({ code: "forbidden" });
+    expect(await refused(agent("Picard"), { op: "session_join", project: "helix", session })).toMatchObject({ code: "forbidden" });
+  });
+
+  it("records a run once from start to end in tokens, with its session, tasks and context per call", async () => {
+    const { f1, t1 } = await helix();
+    const session = { feature: f1, kind: "build" as const, label: "1" };
+    const bill = sup("Bill", session);
+    await ok(bill, { op: "session_join", project: "helix", session });
+    const start = { op: "run_start" as const, project: "helix", id: "w_bill", agent: "Bill", role: "builder", started_at: at(0), session, tasks: [t1, "LAND-99"] };
+    expect(await ok(bill, start)).toMatchObject({ unknown_tasks: ["LAND-99"] });
+    expect(await ok(bill, start)).toMatchObject({ unknown_tasks: [] });
+    const end = { op: "run_end" as const, project: "helix", id: "w_bill", ended_at: at(30), tokens: tokens(100), calls: 3, ctx: [1000, 70000, 0x10000000] };
+    const first = await ok(bill, end);
+    expect(await ok(bill, { ...end, tokens: tokens(5) })).toMatchObject({ seq: first.seq });
+
+    const got = await ok(owner, { op: "get", project: "helix", session, history: true });
+    expect(got.session).toMatchObject({ tokens: tokens(100), runs: [{ id: "w_bill", agent: "Bill", laptop: "mbp-1", calls: 3, tokens: tokens(100), tasks: [t1], ended_at: at(30) }] });
+    expect(got.session!.runs[0]).not.toHaveProperty("cost_usd");
+    await runInDurableObject(board(), (_, state) => {
+      const blob = state.storage.sql.exec<{ ctx: ArrayBuffer }>("SELECT ctx FROM runs WHERE id = 'w_bill'").one().ctx;
+      const view = new DataView(blob);
+      expect([0, 1, 2].map((i) => view.getUint32(i * 4, true))).toEqual([1000, 70000, 0x10000000]);
+    });
+    expect(await refused(bill, { ...end, id: "w_nobody" })).toMatchObject({ code: "invalid" });
+  });
+
+  it("keeps the supervisor's reports to its laptop's supervisor, for the worker's own project", async () => {
+    await helix();
+    const start = { op: "run_start" as const, project: "helix", id: "w_x", agent: "Bill", role: "builder", started_at: at(0), session: null };
+    expect(await refused(owner, start)).toMatchObject({ code: "forbidden" });
+    expect(await refused({ ...sup("Bill", null), supervisor: false }, start)).toMatchObject({ code: "forbidden" });
+    const elsewhere: BoardCaller = { kind: "agent", name: "Bill", laptop: "mbp-1", supervisor: true, ctx: { worker: "w_x", role: "b", project: "bobnet", session: null, tasks: [] } };
+    expect(await refused(elsewhere, start)).toMatchObject({ code: "forbidden", message: expect.stringMatching(/not bobnet/) });
+  });
+
+  it("records a push once per commit, and a slot run from grant to release with its holder's session and tasks", async () => {
+    const { f1, t1 } = await helix();
+    const session = { feature: f1, kind: "build" as const, label: "1" };
+    const bill = sup("Bill", session);
+    await ok(bill, { op: "session_join", project: "helix", session });
+    await ok(bill, { op: "run_start", project: "helix", id: "w_bill", agent: "Bill", role: "builder", started_at: at(0), session, tasks: [t1] });
+    const push = { op: "push" as const, project: "helix", repo: "cath42/helix", branch: "main", sha: "abcdef1234567", worker: "w_bill", run: "w_bill" };
+    const pushed = await ok(bill, push);
+    expect(await ok(bill, push)).toMatchObject({ seq: pushed.seq });
+    const slot = { op: "slot_run" as const, project: "helix", external_id: "s_1", name: "land", worker: "w_bill", run: "w_bill" };
+    await ok(bill, { ...slot, status: "running", started_at: at(1) });
+    await ok(bill, { ...slot, status: "passed", ended_at: at(4) });
+    await runInDurableObject(board(), (_, state) => {
+      const sql = state.storage.sql;
+      expect(sql.exec("SELECT status, laptop, started_at, ended_at, session IS NOT NULL AS tied FROM ci_runs").toArray()).toEqual([
+        { status: "passed", laptop: "mbp-1", started_at: at(1), ended_at: at(4), tied: 1 },
+      ]);
+      expect(sql.exec<{ n: number }>("SELECT count(*) AS n FROM ci_run_tasks").one().n).toBe(1);
+      expect(sql.exec<{ n: number }>("SELECT count(*) AS n FROM pushes WHERE run IS NOT NULL").one().n).toBe(1);
+    });
+  });
+});
+
+describe("capture (ADR 0001 §12)", () => {
+  it("lets anyone capture, storing a capture sent twice once, with who captured it", async () => {
+    await helix();
+    const cap = { op: "capture" as const, project: "helix", capture_id: uuid(1), title: "The chart is slow", casper_words: "it crawls" };
+    const first = await ok(agent("Stranger"), cap);
+    expect(first).toMatchObject({ duplicate: false, dropped: [] });
+    expect(await ok(agent("Stranger"), cap)).toMatchObject({ ref: first.ref, duplicate: true });
+    expect(await item(first.ref!)).toMatchObject({ kind: "backlog", type: "task", status: "Draft", captured_by: "Stranger@mbp-1", casper_words: "it crawls" });
+    expect((await item(first.ref!)).history.map((e) => e.op)).toEqual(["capture"]);
+  });
+
+  it("keeps a capture's release only for someone who may triage, and says when it didn't", async () => {
+    const { r1 } = await helix();
+    await helixRules();
+    expect(await ok(agent("Bill"), { op: "capture", project: "helix", capture_id: uuid(2), title: "x", release: r1 })).toMatchObject({ dropped: ["release"] });
+    const picard = await ok(agent("Picard"), { op: "capture", project: "helix", capture_id: uuid(3), title: "y", release: r1 });
+    expect(picard.dropped).toEqual([]);
+    expect((await item(picard.ref!)).release).toBe(r1);
+  });
+});
+
+describe("questions (ADR 0001 §7)", () => {
+  it("asks with options and holds, and records an answer from conversation once, verbatim", async () => {
+    const { f1, t1 } = await helix();
+    await helixRules();
+    expect(await refused(agent("Riker"), { op: "ask", project: "helix", text: "Which?" })).toMatchObject({ code: "forbidden" });
+    const q = await ok(agent("Picard"), {
+      op: "ask",
+      project: "helix",
+      text: "Which chart?",
+      options: [{ key: "a", text: "Bars", recommended: true }, { key: "b", text: "Lines" }],
+      holds: [t1],
+      needed_before: { item: f1 },
+    });
+    expect(q.ref).toBe("Q-1");
+    expect((await ok(agent("Picard"), { op: "ask", project: "helix", kind: "action", text: "Rotate the key" })).ref).toBe("A-1");
+    expect(await refused(agent("Picard"), { op: "record_answer", project: "helix", ref: "Q-1", key: "c", words: "c" })).toMatchObject({ code: "invalid" });
+    await ok(agent("Picard"), { op: "record_answer", project: "helix", ref: "Q-1", key: "a", words: "Bars, obviously" });
+    expect(await refused(agent("Picard"), { op: "record_answer", project: "helix", ref: "Q-1", words: "again" })).toMatchObject({ code: "conflict" });
+    const { question } = await ok(owner, { op: "get", project: "helix", ref: "Q-1" });
+    expect(question).toMatchObject({
+      state: "answered",
+      holds: [t1],
+      needed_before: { item: f1 },
+      options: [{ key: "a", recommended: true }, { key: "b", recommended: false }],
+      answer: { key: "a", words: "Bars, obviously", by: "Picard@mbp-1", via: "conversation" },
+    });
+  });
+
+  it("refuses a project prefix that reads as a question's", async () => {
+    expect(await refused(owner, { op: "create_project", key: "quiz", name: "Quiz", prefix: "Q" })).toMatchObject({ code: "invalid" });
+  });
+});
+
+describe("close_session (ADR 0001 §6)", () => {
+  async function closing() {
+    const ids = await helix();
+    await helixRules();
+    const session = { feature: ids.f1, kind: "build" as const, label: "1" };
+    const bill = sup("Bill", session);
+    await ok(bill, { op: "session_join", project: "helix", session });
+    await ok(bill, { op: "run_start", project: "helix", id: "w_bill", agent: "Bill", role: "builder", started_at: at(0), session });
+    await ok(bill, { op: "run_end", project: "helix", id: "w_bill", ended_at: at(9), tokens: tokens(10), calls: 1 });
+    const riker = sup("Riker", session);
+    return { ...ids, session, riker };
+  }
+  const close = (session: SessionRef) => ({
+    op: "close_session" as const,
+    project: "helix",
+    session,
+    need: "none" as const,
+    summary: "Built the roadmap",
+    handoff: { path: "/state/h.md", text: "# Handoff\nDone." },
+  });
+
+  it("applies its moves tagged with the session, reads tasks moved from the log, sums tokens, and clears the open feature", async () => {
+    const { f1, t1, session, riker } = await closing();
+    await ok(riker, { op: "update", project: "helix", ref: t1, set: { status: "In Progress" } });
+    const closed = await ok(riker, { ...close(session), moves: [{ task: t1, status: "In Review" }], minors_fixed: 2, commit: "abc1234" });
+    expect(closed).toMatchObject({ ref: `${f1} build 1`, tasks_moved: [{ task: t1, status: "In Review" }], tokens: tokens(10) });
+    expect((await item(f1)).open_since).toBeNull();
+    expect((await item(t1)).history.at(-1)).toMatchObject({ actor: { session }, reason: `${f1} build 1 closed` });
+    const { session: s } = await ok(owner, { op: "get", project: "helix", session });
+    expect(s).toMatchObject({ ended_at: expect.any(String), close: { need: "none", minors_fixed: 2, commit: "abc1234", handoff_text: "# Handoff\nDone.", closed_by: "Riker@mbp-1" } });
+    expect(await refused(riker, close(session))).toMatchObject({ code: "conflict" });
+    expect(await refused(sup("Bill", session), { op: "session_join", project: "helix", session })).toMatchObject({ code: "conflict" });
+  });
+
+  it("needs the sessions grant, the questions it waits on, and findings that are the feature's tasks", async () => {
+    const { t2, session, riker } = await closing();
+    expect(await refused(sup("Bill", session), close(session))).toMatchObject({ code: "forbidden" });
+    expect(await refused(agent("Picard"), { ...close(session), need: "casper" })).toMatchObject({ code: "invalid" });
+    expect(await refused(agent("Picard"), { ...close(session), blockers: [t2] })).toMatchObject({ code: "invalid", message: expect.stringMatching(/isn't a task of/) });
+    // A move the closer may not make refuses the whole close.
+    expect(await refused(riker, { ...close(session), moves: [{ task: t2, status: "Done" }] })).toMatchObject({ code: "forbidden" });
+    await ok(agent("Picard"), { op: "ask", project: "helix", text: "Ship?" });
+    await ok(agent("Picard"), { ...close(session), need: "casper", waits_on: ["Q-1"] });
+    const { session: s } = await ok(owner, { op: "get", project: "helix", session });
+    expect(s!.close).toMatchObject({ need: "casper", waits_on: ["Q-1"] });
   });
 });

@@ -42,6 +42,8 @@ export const ProjectKey = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 const prefix = z.string().regex(/^[A-Z][A-Z0-9]{0,9}$/);
 /** An item's id, `LAND-49`. */
 export const ItemRef = z.string().regex(/^[A-Z][A-Z0-9]{0,9}-\d{1,6}$/);
+/** A question's id, `Q-258`, or an action's, `A-17`: no project has prefix Q or A. */
+export const QuestionRef = z.string().regex(/^[QA]-\d{1,6}$/);
 /** A release's id within its project, `R1`. */
 export const ReleaseRef = z.string().regex(/^R\d{1,4}$/);
 const name = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,31}$/);
@@ -49,6 +51,11 @@ const laptop = z.string().regex(/^(\*|[A-Za-z][A-Za-z0-9_-]{0,31})$/);
 const title = z.string().trim().min(1).max(300);
 const text = z.string().max(16 * 1024);
 const reason = z.string().trim().min(1).max(500);
+const at = z.string().datetime({ offset: true });
+const count = z.number().int().nonnegative();
+/** A run's id: the supervisor's worker id. */
+const runId = z.string().regex(/^[A-Za-z0-9_./-]{1,60}$/);
+const sha = z.string().regex(/^[0-9a-f]{7,40}$/);
 
 /** A session by what a spawn declares: the feature, the kind and a label ("3"). */
 export const SessionRef = z.object({ feature: ItemRef, kind: BoardSessionKind, label: z.string().trim().min(1).max(40) });
@@ -64,10 +71,13 @@ export const BoardCtx = z.object({
 });
 export type BoardCtx = z.infer<typeof BoardCtx>;
 
-/** Who makes an operation, as the broker verified it (§4). */
+/**
+ * Who makes an operation, as the broker verified it (§4). `supervisor`: the connection hosts the
+ * laptop's pinned supervisor peer, which alone may say `ctx` and make the supervisor's own operations.
+ */
 export type BoardCaller =
   | { kind: "owner"; email: string }
-  | { kind: "agent"; name: string; laptop: string; ctx: BoardCtx | null };
+  | { kind: "agent"; name: string; laptop: string; supervisor: boolean; ctx: BoardCtx | null };
 
 const NewCriterion = z.object({
   text: z.string().trim().min(1).max(1000),
@@ -97,6 +107,18 @@ const ItemFields = z.object({
   found_in: ItemRef.nullable(),
 });
 
+/** Tokens, never money (§9). */
+export const TokenTotals = z.object({ input: count, output: count, cache_read: count, cache_write: count });
+export type TokenTotals = z.infer<typeof TokenTotals>;
+
+export const CiStatus = z.enum(["queued", "running", "passed", "failed", "cancelled"]);
+export type CiStatus = z.infer<typeof CiStatus>;
+
+/** The most context-per-call points a run keeps (§9). */
+export const RUN_CTX_MAX = 2000;
+/** A handoff's text as a close stores it (§6). */
+export const HANDOFF_MAX = 64 * 1024;
+
 const project = { project: ProjectKey };
 const item = { project: ProjectKey, ref: ItemRef };
 
@@ -119,7 +141,14 @@ export const BoardOp = z.discriminatedUnion("op", [
     archived: z.boolean().optional(),
     cursor: z.string().max(20).optional(),
   }),
-  z.object({ op: z.literal("get"), ...project, ref: z.union([ItemRef, ReleaseRef]), history: z.boolean().optional() }),
+  /** One record by `ref` (an item, release, question or action), or a session by `session`. */
+  z.object({
+    op: z.literal("get"),
+    ...project,
+    ref: z.union([QuestionRef, ItemRef, ReleaseRef]).optional(),
+    session: SessionRef.optional(),
+    history: z.boolean().optional(),
+  }),
   z.object({ op: z.literal("grants"), ...project }),
 
   // Writes
@@ -194,14 +223,121 @@ export const BoardOp = z.discriminatedUnion("op", [
     admin: z.boolean().default(false),
   }),
   z.object({ op: z.literal("revoke"), project: z.union([ProjectKey, z.literal("*")]), agent: name, laptop: laptop.default("*") }),
+  /** Anyone's capture into the triage list (§12): `capture_id` is made where it was captured, so a second send stores nothing. */
+  z.object({
+    op: z.literal("capture"),
+    ...project,
+    capture_id: z.string().uuid(),
+    title,
+    description: text.nullable().optional(),
+    type: z.enum(["task", "spike", "bug", "chore"]).default("task"),
+    /** Kept only for a caller who may triage; otherwise the capture is stored without it, and says so. */
+    release: ReleaseRef.nullable().optional(),
+    casper_words: text.nullable().optional(),
+    bug_where: BugWhere.nullable().optional(),
+    blocks_use: z.boolean().optional(),
+    found_in: ItemRef.nullable().optional(),
+  }),
+  /** The structured session close (§6): applies its moves, stores the handoff's text, clears the open feature with the last open session. */
+  z.object({
+    op: z.literal("close_session"),
+    ...project,
+    session: SessionRef,
+    need: z.enum(["none", "answer", "casper"]),
+    waits_on: z.array(QuestionRef).max(20).default([]),
+    blockers: z.array(ItemRef).max(50).default([]),
+    majors: z.array(ItemRef).max(50).default([]),
+    minors_fixed: count.default(0),
+    sent_back: z.array(ItemRef).max(50).default([]),
+    moves: z.array(z.object({ task: ItemRef, status: ItemStatus })).max(100).default([]),
+    summary: z.string().trim().min(1).max(300),
+    /** The handoff file, read on the laptop by the tool: its text is stored, never parsed. */
+    handoff: z.object({ path: z.string().min(1).max(500), text: z.string().max(HANDOFF_MAX) }),
+    commit: sha.optional(),
+  }),
+  /** A question or action only Casper can answer or do (§7). */
+  z.object({
+    op: z.literal("ask"),
+    ...project,
+    kind: z.enum(["question", "action"]).default("question"),
+    text: z.string().trim().min(1).max(4000),
+    context: text.nullable().optional(),
+    options: z
+      .array(z.object({ key: z.string().trim().min(1).max(20), text: z.string().trim().min(1).max(1000), recommended: z.boolean().default(false) }))
+      .max(10)
+      .default([]),
+    /** What it holds up: items, and sessions. */
+    holds: z.array(ItemRef).max(20).default([]),
+    holds_sessions: z.array(SessionRef).max(10).default([]),
+    needed_before: z.union([z.object({ item: ItemRef }), z.object({ release: ReleaseRef }), z.object({ text: z.string().trim().min(1).max(100) })]).optional(),
+  }),
+  /** Casper's answer given in conversation, verbatim (§7): write-once. */
+  z.object({
+    op: z.literal("record_answer"),
+    ...project,
+    ref: QuestionRef,
+    key: z.string().trim().min(1).max(20).optional(),
+    words: z.string().trim().min(1).max(4000),
+  }),
+
+  // The supervisor's own (§6, §9, §10): authorised by the connection, idempotent by key.
   /** A spawn into a session (§6): creates it if new and opens its feature. */
   z.object({ op: z.literal("session_join"), ...project, session: SessionRef }),
+  z.object({
+    op: z.literal("run_start"),
+    ...project,
+    id: runId,
+    agent: name,
+    role: z.string().min(1).max(40),
+    model: z.string().max(100).nullable().optional(),
+    effort: z.string().max(20).nullable().optional(),
+    started_at: at,
+    resumed: z.boolean().default(false),
+    session: SessionRef.nullable(),
+    tasks: z.array(ItemRef).max(50).default([]),
+    remote_url: z.string().url().max(500).nullable().optional(),
+  }),
+  z.object({
+    op: z.literal("run_end"),
+    ...project,
+    id: runId,
+    ended_at: at,
+    tokens: TokenTotals,
+    calls: count,
+    /** Context per call, in order. */
+    ctx: z.array(z.number().int().nonnegative().max(0xffffffff)).max(RUN_CTX_MAX).default([]),
+  }),
+  /** What a land pushed (§10), which ties a CI run on that commit to its worker. */
+  z.object({
+    op: z.literal("push"),
+    ...project,
+    repo: z.string().min(1).max(200),
+    branch: z.string().min(1).max(200),
+    sha,
+    worker: z.string().min(1).max(40),
+    run: runId.optional(),
+  }),
+  /** A run-slot run (§10), reported at its grant and again at its release. */
+  z.object({
+    op: z.literal("slot_run"),
+    ...project,
+    external_id: z.string().min(1).max(100),
+    name: z.string().min(1).max(100),
+    status: CiStatus,
+    started_at: at.nullable().optional(),
+    ended_at: at.nullable().optional(),
+    worker: z.string().min(1).max(40).nullable().optional(),
+    /** The holder's run: the slot run takes its session and tasks. */
+    run: runId.nullable().optional(),
+  }),
 ]);
 export type BoardOp = z.infer<typeof BoardOp>;
 export type BoardOpInput = z.input<typeof BoardOp>;
 export type BoardOpName = BoardOp["op"];
 
 export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants"];
+/** The supervisor's own operations, which only its connection makes (§8). */
+export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_end", "push", "slot_run"];
 
 // ---------- Records ----------
 
@@ -289,6 +425,59 @@ export interface ItemRecord extends ItemSummary {
   updated_at: string;
 }
 
+export interface RunRecord {
+  id: string;
+  agent: string;
+  role: string;
+  laptop: string;
+  model: string | null;
+  effort: string | null;
+  started_at: string;
+  ended_at: string | null;
+  resumed: boolean;
+  tokens: TokenTotals;
+  calls: number;
+  tasks: string[];
+}
+
+export interface SessionRecord extends SessionSummary {
+  imported: boolean;
+  close: {
+    need: "none" | "answer" | "casper";
+    waits_on: string[];
+    blockers: string[];
+    majors: string[];
+    minors_fixed: number;
+    sent_back: string[];
+    summary: string;
+    handoff_path: string | null;
+    handoff_text: string | null;
+    commit: string | null;
+    closed_by: string;
+  } | null;
+  /** Read from the log (§6): every status event tagged with the session, with the last status each task was left in. */
+  tasks_moved: Array<{ task: string; status: ItemStatus }>;
+  /** Summed from the session's runs, never declared. */
+  tokens: TokenTotals;
+  runs: RunRecord[];
+}
+
+export interface QuestionRecord {
+  ref: string;
+  kind: "question" | "action";
+  text: string;
+  context: string | null;
+  asked_by: string;
+  session: SessionRef | null;
+  needed_before: { item: string } | { release: string } | { text: string } | null;
+  options: Array<{ key: string; text: string; recommended: boolean }>;
+  holds: string[];
+  holds_sessions: SessionRef[];
+  state: "open" | "answered" | "done" | "withdrawn";
+  answer: { key: string | null; words: string | null; by: string; at: string; via: "dashboard" | "conversation" } | null;
+  created_at: string;
+}
+
 export interface BoardEvent {
   seq: number;
   at: string;
@@ -324,7 +513,7 @@ export interface BoardWritten {
 export interface BoardResults {
   projects: { projects: ProjectRecord[] };
   list: { releases?: ReleaseRecord[]; items?: ItemSummary[]; total: number; cursor: string | null };
-  get: { item?: ItemRecord; release?: ReleaseRecord; history?: BoardEvent[] };
+  get: { item?: ItemRecord; release?: ReleaseRecord; session?: SessionRecord; question?: QuestionRecord; history?: BoardEvent[] };
   grants: { grants: GrantRecord[] };
   create_project: BoardWritten;
   create_release: BoardWritten;
@@ -340,7 +529,15 @@ export interface BoardResults {
   order_releases: BoardWritten;
   grant: BoardWritten;
   revoke: BoardWritten;
+  capture: BoardWritten & { duplicate: boolean; dropped: string[] };
+  close_session: BoardWritten & { tasks_moved: SessionRecord["tasks_moved"]; tokens: TokenTotals };
+  ask: BoardWritten;
+  record_answer: BoardWritten;
   session_join: BoardWritten & { created: boolean };
+  run_start: BoardWritten & { unknown_tasks: string[] };
+  run_end: BoardWritten;
+  push: BoardWritten;
+  slot_run: BoardWritten;
 }
 
 export const BoardErrorCode = z.enum(["invalid", "conflict", "forbidden", "unavailable"]);
