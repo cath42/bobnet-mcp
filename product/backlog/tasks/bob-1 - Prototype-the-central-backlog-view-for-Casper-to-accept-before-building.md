@@ -4,7 +4,7 @@ title: 'Prototype the central backlog view, for Casper to accept before building
 status: Draft
 assignee: []
 created_date: '2026-11-14 03:59'
-updated_date: '2026-11-14 04:24'
+updated_date: '2026-11-14 04:30'
 labels: []
 milestone: m-0
 dependencies: []
@@ -34,6 +34,7 @@ Casper, 2026-11-13: a prototype before we start building. A clickable prototype 
 - [ ] #6 Casper accepted it, or his corrections are recorded in the requirements. Evidence: Casper's words, verbatim, in the feature's notes
 - [ ] #7 Capture on a phone in one field, and a project's triage list of backlog items (capture.md 4-6). Evidence: prototype screenshots, phone and desktop
 - [ ] #8 Casper's gates editable on the dashboard: release scope, order of releases, closing a release (board-writes.md, C2). Evidence: prototype screenshots
+- [ ] #9 Bugs in the triage list, a 'blocks use' bug and Casper's open questions on the waits-on-Casper list (bugs.md, waiting-on-casper.md, C8). Evidence: prototype screenshots, phone and desktop
 <!-- AC:END -->
 
 ## Definition of Done
