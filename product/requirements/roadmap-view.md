@@ -19,21 +19,19 @@ order, each with its features in their order and where each stands.
    is guessed from a brief. *Evidence: test.*
 6. A project summary across projects: per project, the open feature, the next Ready feature, and
    how much waits on Casper ([4](waiting-on-casper.md)). *Evidence: screenshot on phone and desktop.*
-7. Drafts show as a count with their age. A draft also shows which session close it came from, when
-   the board records that. *Evidence: test.* (Picard input, need 4)
+7. Backlog items ([capture.md](capture.md)) and open bugs show as counts with their age, per project
+   and per release, and open as a triage list. *Evidence: test.* (Picard input, need 4)
 8. It reads well on a phone and a tablet, in BobNet's own look. *Evidence: screenshots on phone and
    desktop.*
+9. Which feature is open shows on the roadmap. Under the first frame it was derived from sessions (a
+   feature is open while it has a session that isn't closed; Picard, 2026-11-13: Helix doesn't record
+   it). Now the service may keep it ([board-writes.md](board-writes.md)). *Evidence: test.*
 
 ## Must not break
 
 - Order inside a release is the project's PO's. The order of releases is Casper's. The view shows
-  both and changes neither.
-- Everything in [1](board-sources.md).
-
-9. "Open" is derived from sessions: a feature is open while it has a session that isn't closed. It
-   is a read-only signal and never a board field. The board doesn't record it (Picard, 2026-11-13: in
-   Helix the orchestrator opens a feature when a session starts and the session PO says when it
-   closes). *Evidence: test.*
+  both. Changing them from the UI is [board-writes.md](board-writes.md).
+- Everything in [1](board-service.md).
 
 ## Open questions
 

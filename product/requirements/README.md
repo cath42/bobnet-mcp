@@ -6,17 +6,24 @@ the order of releases.
 
 ## The central backlog system
 
-One place to see and drive every project's work (Helix, Envision, Echo, Vitals and BobNet itself)
-without moving any board out of its repo.
+One place where every project's work lives and is driven (Helix, Envision, Echo, Vitals and BobNet
+itself): a board service inside BobNet that agents work through, and a dashboard Casper sees it on.
 
-**Frame** (agreed with Casper 2026-11-13; a start, not settled):
+**Frame** (Casper, 2026-11-13, second version; replaces the first, which kept boards in repos):
 
-- Each project's board stays in its repo and is the only source. BobNet is the central view and
-  launcher, not a second store.
-- Hierarchy: release > feature > sessions (design, build, review, fixes, retro) > tasks.
-- First the steps view, then starting a session from the UI.
-- Editing and reordering are deferred. When they come, they are requests to that project's backlog
-  product owner, never writes by BobNet.
+- **The board is a BobNet service**, not files in each repo. Agents read and write it through an API
+  and an MCP layer. **Backlog.md is retired by it, as a goal.**
+- Hierarchy: release > feature > sessions (design, build, review, fixes, retro) > tasks. **Backlog
+  items** sit outside it until someone slots them: in a release or in no release, in no feature
+  ([capture.md](capture.md)).
+- **Bugs** are part of the system; how they are handled is still to be settled ([bugs.md](bugs.md)).
+- A new system designed for Helix, its main stakeholder. What other projects keep today doesn't
+  constrain it.
+- Views first (the roadmap, a feature's sessions, what waits on Casper), then starting a session from
+  the UI. A prototype before any build.
+
+*First version of the frame (superseded):* boards stay in their repos as the only source, and BobNet is
+a view and launcher, not a second store, with edits as requests to each project's PO.
 
 **Stakeholders.** Casper (owner, the one who decides and watches from a phone). Each project's product
 owner and orchestrator. Picard (Helix's backlog product owner) is the largest stakeholder: Helix
@@ -26,25 +33,28 @@ has the largest board (~700 task files, 3 releases, ~29 features). Picard's writ
 
 | # | Capability | File | State |
 |---|---|---|---|
-| 1 | Read each project's board from its repo | [board-sources.md](board-sources.md) | Draft |
+| 1 | The board service: store, API and MCP | [board-service.md](board-service.md) | Draft |
 | 2 | The roadmap: releases and features across projects | [roadmap-view.md](roadmap-view.md) | Draft |
 | 3 | The steps view: a feature's sessions and tasks | [steps-view.md](steps-view.md) | Draft |
 | 4 | What waits on Casper | [waiting-on-casper.md](waiting-on-casper.md) | Draft |
 | 5 | Start a session from the UI | [start-session.md](start-session.md) | Draft |
-| 6 | Board changes as requests to the project's PO | [board-change-requests.md](board-change-requests.md) | Deferred |
+| 6 | Who writes the board, and editing from the UI | [board-writes.md](board-writes.md) | Draft |
+| 7 | Capture backlog items without structuring them | [capture.md](capture.md) | Draft |
+| 8 | Bugs | [bugs.md](bugs.md) | Open |
+| 9 | Moving boards off Backlog.md | [migration.md](migration.md) | Draft |
 
-State: Draft (being written), Agreed (Casper agreed it), Deferred (recorded, not planned).
+State: Open (questions before criteria), Draft (being written), Agreed (Casper agreed it), Deferred.
 
-**Release scope** (Casper, 2026-11-13): 1, 2, 3 and 4 in the first release, since they only read.
-5 in the next. 6 is deferred. **A prototype comes before any build** (Casper, 2026-11-13): Daisy
-prototypes the first release's screens from these requirements, Casper sees and accepts it, and only
-then does building start.
+**Release scope** (Casper, 2026-11-13, set under the first frame): the views (2, 3, 4) in the first
+release, starting a session (5) in the next. **A prototype comes before any build.** Under the new
+frame the views need the board service (1) and Helix moved onto it (9) first; how that changes the
+releases is Casper's (open question C1 below).
 
 ## Settled with Casper (2026-11-13)
 
 - **A new system, designed for Helix.** What each project keeps today doesn't constrain it. Helix
-  is the main stakeholder, so its board (Backlog.md, its hierarchy and rules) and its build process
-  shape the system. Other projects adopt the system's shape to show up in it; BobNet doesn't
+  is the main stakeholder, so its board (its hierarchy and rules, today in Backlog.md) and its build
+  process shape the system. Other projects adopt the system's shape to show up in it; BobNet doesn't
   read their current formats.
 - **One view across every laptop.** All supervisors' projects show on one screen.
 - **The steps view is an example, not a spec.** Casper's "steps view" was brainstorming: an example
@@ -56,21 +66,34 @@ then does building start.
 
 ## What already exists (v2, 2026-11-13)
 
-The supervisor already reads a Backlog.md board from git at a ref (`packages/supervisor/src/board.ts`).
-The dashboard already shows the roadmap by milestone, a feature's tasks by build session, drafts,
-and agents on the cards their spawn named. It covers one supervisor's projects, and only Backlog.md.
-These requirements describe the whole system. Where something exists, the criteria still hold and
-become its acceptance tests.
+The supervisor reads a Backlog.md board from git (`packages/supervisor/src/board.ts`), and the dashboard
+shows the roadmap by milestone, a feature's tasks by build session, drafts, and agents on the cards
+their spawn named. Under the new frame that reader is a bridge for migration
+([migration.md](migration.md)), not the design. The dashboard's views carry over.
 
 ## Open questions
 
-Each file lists its own. These cut across all of them:
+Each file lists its own. These cut across all of them.
 
-- **Q3 (Toad): how boards reach the dashboard.** Each supervisor reads its projects' repos and sends a
-  shaped board to the broker today. Does that hold across laptops and for Helix's size (the frame
-  caps at 1500 items, per Picard input)? Does the broker keep it only as a cache, never as a store?
-  *Toad's advice (consult, 2026-11-13; not yet an ADR):* yes, with four conditions. Snapshots are
-  keyed by project, laptop and commit, and sent only when the commit changes. Open work is sent in
-  full; done features go as counts and ids, with detail fetched on click through the supervisor.
-  Fields are added additively. The same repo at two refs on two laptops shows twice, labelled, and is
-  never merged. Board-sources criteria 7 and 8 already fit this.
+For Casper:
+- **C1: releases.** The service and Helix's move onto it now come before the views can show anything
+  real. Is release 1 "the service, Helix moved onto it, and the views", with the prototype first?
+- **C2: who writes.** With the board in BobNet, may Casper edit and reorder from the dashboard
+  directly, or do edits still go through each project's PO ([board-writes.md](board-writes.md))?
+- **C3: bugs.** The questions in [bugs.md](bugs.md).
+- **C4: the service is in the path.** Agents can't read or write their board when BobNet's service is
+  down or a laptop is offline. Acceptable, or must agents keep working (a local copy that syncs)?
+
+For Toad (architecture under the new frame, [Toad's first advice](#toads-first-advice-superseded) is
+mostly moot):
+- **T1:** where the board lives (the broker's Durable Object on Cloudflare, or elsewhere), its data
+  model, and its API and MCP surface for agents.
+- **T2:** history and audit: who changed what and when, since git history no longer records it.
+- **T3:** a session's close as a structured record (Toad's first advice still holds), now in the same
+  store as the board.
+
+### Toad's first advice (superseded)
+
+Under the first frame (consult, 2026-11-13): each supervisor reads its repos and sends a shaped board,
+the broker holds it as a cache only; session closes become structured records the supervisor keeps;
+project layout is named in the supervisor's config.

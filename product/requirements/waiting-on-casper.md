@@ -20,7 +20,7 @@
 
 ## Open questions
 
-- Helix's shape (`Q-n` in `lead/questions.md`) is the model (Casper, 2026-11-13: Helix shapes the
-  system). Toad: does a project's config name the file?
-- Toad: the same question as for session outcomes. Is `need: casper` read from handoffs or from a
-  structured close?
+- Helix keeps Casper's questions as `Q-n` in `lead/questions.md`. With the board in BobNet, should
+  questions live in the service too, linked to the item they block? Peach's proposal: yes, a question
+  is a board record (open, answered, the answer verbatim). **For Casper.**
+- `need: casper` comes from the structured session close (README T3), never from handoff files.
