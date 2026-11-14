@@ -38,6 +38,8 @@ never copies status into its own store.
 
 ## Open questions
 
-- Q1 and Q3 in the [README](README.md).
+- Q3 in the [README](README.md).
 - Settled with Picard (2026-11-13): milestones vs the releases index, now criterion 5.
-- How does a project other than Helix name its releases index, if it has one? Part of Q1.
+- The system takes Helix's board shape (Casper, 2026-11-13). Where Helix's layout is specific to
+  Helix (the releases index's path, its labels), the project's config names it, and BobNet doesn't
+  hard-code it. Toad to confirm.

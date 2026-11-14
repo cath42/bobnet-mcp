@@ -7,8 +7,9 @@ handoff files. The project's orchestrator and PO, to pick the next session.
 (design, build 1, build 2, fixes, review, retro), each with its outcome, and under each its tasks.
 The next step shows at the end of the chain.
 
-This is the first of the two things the frame asks for. *Peach's reading of "steps view"; to
-confirm with Casper.*
+Casper (2026-11-13): "steps view" was a suggestion, an example of the design questions our build
+process raises. The criteria below are the needs. The layout of the screen is Daisy's to design, and
+the prototype settles it.
 
 ## Criteria
 

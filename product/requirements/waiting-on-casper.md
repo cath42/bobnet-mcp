@@ -20,7 +20,7 @@
 
 ## Open questions
 
-- Projects record questions differently: Helix uses `lead/questions.md`. Others? A common shape may
-  be needed, as for boards (Q1 in the [README](README.md)).
+- Helix's shape (`Q-n` in `lead/questions.md`) is the model (Casper, 2026-11-13: Helix shapes the
+  system). Toad: does a project's config name the file?
 - Toad: the same question as for session outcomes. Is `need: casper` read from handoffs or from a
   structured close?

@@ -35,8 +35,24 @@ has the largest board (~700 task files, 3 releases, ~29 features). Picard's writ
 
 State: Draft (being written), Agreed (Casper agreed it), Deferred (recorded, not planned).
 
-**Proposed order** (Casper decides the release scope): 1, 2, 3 and 4 in the first release, since
-they only read. 5 in the next release. 6 is deferred.
+**Release scope** (Casper, 2026-11-13): 1, 2, 3 and 4 in the first release, since they only read.
+5 in the next. 6 is deferred. **A prototype comes before any build** (Casper, 2026-11-13): Daisy
+prototypes the first release's screens from these requirements, Casper sees and accepts it, and only
+then does building start.
+
+## Settled with Casper (2026-11-13)
+
+- **A new system, designed for Helix.** What each project keeps today doesn't constrain it. Helix
+  is the main stakeholder, so its board (Backlog.md, its hierarchy and rules) and its build process
+  shape the system. Other projects adopt the system's shape to show up in it; BobNet doesn't
+  read their current formats.
+- **One view across every laptop.** All supervisors' projects show on one screen.
+- **The steps view is an example, not a spec.** Casper's "steps view" was brainstorming: an example
+  of the design questions that come out of the build process. The criteria in
+  [steps-view.md](steps-view.md) state the needs. The screen's shape is Daisy's, and the prototype
+  settles it.
+- **A session started from the UI goes to poe**, who starts sessions today. Bob may not exist by
+  then, so the request names no orchestrator.
 
 ## What already exists (v2, 2026-11-13)
 
@@ -50,12 +66,6 @@ become its acceptance tests.
 
 Each file lists its own. These cut across all of them:
 
-- **Q1 (Casper): projects whose board isn't Backlog.md.** Helix and Envision use Backlog.md (Picard
-  input; Envision runs on ubu1, without milestones). Vitals keeps a release table in
-  `requirements/backlog.md`. Echo has no board. Does BobNet read other formats, or is Backlog.md
-  the requirement for a project to show up, with the project moving to it?
-- **Q2 (Casper): projects on other laptops.** Envision runs on ubu1. Is the central view all
-  laptops' projects on one screen? Peach assumes yes: the broker already sees every supervisor.
 - **Q3 (Toad): how boards reach the dashboard.** Each supervisor reads its projects' repos and sends a
   shaped board to the broker today. Does that hold across laptops and for Helix's size (the frame
   caps at 1500 items, per Picard input)? Does the broker keep it only as a cache, never as a store?
