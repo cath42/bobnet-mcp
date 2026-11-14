@@ -37,4 +37,4 @@ feature or release fixes it.
 
 ## Input to ask for
 
-- Picard: how Helix handles defects found after a feature is Done, and whether point 4 matches.
+- *Answered (Picard, 2026-11-14):* matches. A review blocker or major is a task of the feature under review; other findings go to drafts (Helix ADR 0066 §1); a `bug` is delivered behaviour that breaks an accepted criterion, found after Done.

@@ -40,10 +40,10 @@ the prototype settles it.
     "is now missing one of the strongest features of the old one". Not lost in the move. *Evidence:
     dashboard check against today's chart on the same session.*
 11. Waiting on CI: a feature or session that waits on a CI run shows that, and how long the run has
-    been going. CI is GitHub Actions; a long end-to-end script run on a laptop is wanted too if its
-    source can be had (the supervisor's run slot knows holder, label and start for land and test
-    runs). Casper: "if we are waiting on a CI run at least that would be good and how long its been
-    running". The CI run is the floor; the E2E script is the stretch. *Evidence: test with a
+    been going. Any CI running anywhere counts (Casper, BOB-1 #6 round 3: "Any CI running anywhere"), not
+    only GitHub Actions; a run on a laptop shows through the supervisor's run slot (holder, label,
+    start), as the prototype designs it. Casper: "if we are waiting on a CI run at least that would be good and how long its been
+    running". The run slot gives the laptop's runs; other CI needs a way to report in. *Evidence: test with a
     running and a finished run; dashboard check.*
 
 ## Must not break
@@ -55,9 +55,10 @@ the prototype settles it.
 
 ## Open questions
 
-- **Toad:** the source of CI runs (GitHub Actions through `gh` or the API, from the supervisor or
-  the broker) and how a run is tied to a feature or session without parsing anything (criterion
-  11); and whether a laptop's long E2E run can report itself through the run slot.
+- **Toad:** how a CI run, whatever the CI, gets into BobNet (the run slot for laptop runs; a way
+  for any other CI to report a run's start, end and result), how a run is tied to the agent, session
+  or feature waiting on it without parsing anything, and the usual run time per kind of run for "how
+  long it has run" (criterion 11).
 
 - **Toad:** where does a session's outcome live? *Toad's advice (consult, 2026-11-13; not yet an
   ADR):* make a session's close a structured record the supervisor keeps as BobNet's own data,

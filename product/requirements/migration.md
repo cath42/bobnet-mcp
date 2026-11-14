@@ -17,7 +17,7 @@ in the service reads or writes Markdown after it.
    task with status Draft. The two are not mixed. *Evidence: test.* (Picard input)
 3. Features without an ordinal (in Helix's R1: LAND-39 to 44 and 49) are imported after the ordered
    ones in their release, by id, for the PO to reorder. Helix's `A-n` actions move over with its
-   `Q-n` questions. Unticked criteria are imported as they are, unticked. *Evidence: test.*
+   `Q-n` questions. Unticked criteria are imported as they are, unticked, with the "Done, criteria not ticked" note on Done features (Picard, 2026-11-14: the rule was to tick on closing in review, in practice it lapsed; LAND-42 is Done at 0 of 6 though Marvin's staging run records 1 to 5 passing; unticked is not unmet). *Evidence: test.*
 4. "Was LAND-n.m" re-creations are linked, so the old and new item show as one, with the old id
    findable. *Evidence: test.* (Picard input)
 5. The move is one cut-over per project, at a moment the project's PO and orchestrator agree. Nothing

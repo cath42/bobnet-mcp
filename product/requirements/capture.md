@@ -25,7 +25,6 @@ feature, makes it a feature of its own, or drops it.
 
 ## Open questions
 
-- Is Helix's `drafts/` folder (DRAFT-n, ~103 items) the same thing? Peach's view: yes, they move over
-  as backlog items ([migration.md](migration.md)). To check with Picard.
+- *Settled (Picard, 2026-11-14):* Helix's `drafts/` (DRAFT-n, ~103 items) are only captured, not-yet-in-a-feature items, the same thing; some carry a parent hint (DRAFT-46: parent LAND-43) or a milestone, which the PO clears or sets when placing them. They move over as backlog items ([migration.md](migration.md)); keep the hints as fields.
 - *Settled (Casper, 2026-11-13):* no capture without a project. Every item belongs to a project from
   the moment it is captured.
