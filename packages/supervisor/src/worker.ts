@@ -29,13 +29,12 @@ export interface QueryHandle extends AsyncIterable<SDKMessage> {
 export type RemoteControl = { url: string } | { error: string };
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => QueryHandle;
 
-/** Cumulative usage as the SDK reports it for this session (a resumed one includes its past). */
+/** Cumulative usage as the SDK reports it for this session (a resumed one includes its past): tokens, never money. */
 export interface Usage {
   tokens: TokenCounts;
-  cost_usd: number;
 }
 
-export const ZERO_USAGE: Usage = { tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, cost_usd: 0 };
+export const ZERO_USAGE: Usage = { tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
 
 export type Outcome =
   | { state: "done"; result: string }
@@ -141,7 +140,7 @@ export class WorkerRun {
   backgroundTasks = 0;
   /**
    * Live token counts summed from each model response, until a result
-   * reports the session's exact cumulative totals and cost.
+   * reports the session's exact cumulative totals.
    */
   usage: Usage = structuredClone(ZERO_USAGE);
   /** What each response has added so far: the SDK repeats a response's usage on every content block. */
@@ -490,7 +489,6 @@ export class WorkerRun {
           cache_read: sum((m) => m.cacheReadInputTokens),
           cache_write: sum((m) => m.cacheCreationInputTokens),
         },
-        cost_usd: msg.total_cost_usd,
       };
     }
     const content = (msg.type === "assistant" || msg.type === "user") && Array.isArray(msg.message.content)

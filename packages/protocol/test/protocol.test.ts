@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressKey, CLIENT_FRAME_TYPES, ClientFrame, findSecret, parseRecipient, PROTOCOL_VERSION } from "../src/index.ts";
+import { addressKey, CLIENT_FRAME_TYPES, ClientFrame, findSecret, LaptopSnapshot, parseRecipient, PROTOCOL_VERSION, WorkerSnapshot } from "../src/index.ts";
 
 describe("parseRecipient", () => {
   it("resolves a bare name to the sender's laptop", () => {
@@ -53,5 +53,23 @@ describe("ClientFrame", () => {
     expect(CLIENT_FRAME_TYPES).toContain("register");
     expect(CLIENT_FRAME_TYPES).toContain("ack");
     expect(CLIENT_FRAME_TYPES).toHaveLength(ClientFrame.options.length);
+  });
+});
+
+describe("tokens only (BOB-21)", () => {
+  const worker = {
+    id: "w_1", name: "Luigi", project: "bobnet", role: "luigi", state: "running", task: "BOB-2", checkpoint: null,
+    started_at: null, ended_at: null, last_event_at: null, tokens: { input: 1, output: 2, cache_read: 3, cache_write: 4 },
+  };
+
+  it("takes a worker and a usage row without cost_usd", () => {
+    expect(WorkerSnapshot.parse(worker)).not.toHaveProperty("cost_usd");
+    const usage = { day: "2026-11-14", project: "bobnet", role: "luigi", workers: 1, tokens: worker.tokens };
+    const snap = { supervisor: { started_at: "x", concurrency: 1, active: 1, queued: 0 }, workers: [worker], pending: [], usage: [usage] };
+    expect(LaptopSnapshot.parse(snap).usage[0]).not.toHaveProperty("cost_usd");
+  });
+
+  it("still takes cost_usd from a supervisor that sends it", () => {
+    expect(WorkerSnapshot.parse({ ...worker, cost_usd: 0.5 }).cost_usd).toBe(0.5);
   });
 });

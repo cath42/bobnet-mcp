@@ -1504,7 +1504,6 @@ export class Supervisor {
     const sub = (k: keyof TokenCounts) => Math.max(0, cum.tokens[k] - base.tokens[k]);
     return {
       tokens: { input: sub("input"), output: sub("output"), cache_read: sub("cache_read"), cache_write: sub("cache_write") },
-      cost_usd: Math.max(0, cum.cost_usd - base.cost_usd),
     };
   }
 
@@ -1540,7 +1539,6 @@ export class Supervisor {
         ended_at: w.ended_at,
         last_event_at: run ? new Date(run.lastEventAt).toISOString() : w.last_event_at,
         tokens: u.tokens,
-        cost_usd: u.cost_usd,
         session: sessions.get(w.id)?.name ?? null,
         task_ref: workerTasks(w)[0] ?? null,
         task_refs: workerTasks(w),
@@ -1554,14 +1552,13 @@ export class Supervisor {
       if (!w.started_at || w.started_at < usageSince) continue;
       const day = w.started_at.slice(0, 10);
       const key = `${day}|${w.project}|${w.role}|${w.model ?? ""}`;
-      const row = days.get(key) ?? { day, project: w.project, role: w.role, model: w.model, workers: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, cost_usd: 0 };
+      const row = days.get(key) ?? { day, project: w.project, role: w.role, model: w.model, workers: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
       const u = this.ownUsage(w);
       row.workers++;
       row.tokens.input += u.tokens.input;
       row.tokens.output += u.tokens.output;
       row.tokens.cache_read += u.tokens.cache_read;
       row.tokens.cache_write += u.tokens.cache_write;
-      row.cost_usd += u.cost_usd;
       days.set(key, row);
     }
 

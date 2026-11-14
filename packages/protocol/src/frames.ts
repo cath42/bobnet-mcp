@@ -104,7 +104,8 @@ export const WorkerSnapshot = z.object({
   ended_at: z.string().nullable(),
   last_event_at: z.string().nullable(),
   tokens,
-  cost_usd: z.number().nonnegative(),
+  /** Usage is tokens: nothing computes or shows money. Optional until it leaves with the legacy board (ADR 0001 §9). */
+  cost_usd: z.number().nonnegative().optional(),
   /** The session it works in, as its brief names it ("LAND-41 build 3"), or the one running when it started. */
   session: z.string().max(60).nullable().default(null),
   /** The first of `task_refs`, for a dashboard that reads only one. */
@@ -155,7 +156,8 @@ export const LaptopSnapshot = z.object({
         model: z.string().max(60).nullable().default(null),
         workers: z.number().int().nonnegative(),
         tokens,
-        cost_usd: z.number().nonnegative(),
+        /** Usage is tokens: optional, never shown (ADR 0001 §9). */
+        cost_usd: z.number().nonnegative().optional(),
       }),
     )
     .max(500),

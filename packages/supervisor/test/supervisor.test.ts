@@ -495,15 +495,17 @@ describe("usage and snapshots", () => {
     await until(() => sessions.length === 1);
     sessions[0]!.say("thinking", { input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 5000, cache_creation_input_tokens: 0 });
     await until(() => sup.snapshot().workers[0]!.tokens.input === 1000);
-    expect(sup.snapshot().workers[0]).toMatchObject({ id: w.id, name: "Bill", state: "running", tokens: { input: 1000, output: 200, cache_read: 5000 }, cost_usd: 0 });
+    expect(sup.snapshot().workers[0]).toMatchObject({ id: w.id, name: "Bill", state: "running", tokens: { input: 1000, output: 200, cache_read: 5000 } });
 
     sessions[0]!.totals = { inputTokens: 1500, outputTokens: 300, cacheReadInputTokens: 6000, cacheCreationInputTokens: 400, costUSD: 0.42 };
     sessions[0]!.finish();
     await until(() => sup.status(w.id).state === "done");
     const snap = sup.snapshot();
-    expect(snap.workers[0]).toMatchObject({ state: "done", tokens: { input: 1500, output: 300, cache_read: 6000, cache_write: 400 }, cost_usd: 0.42 });
+    expect(snap.workers[0]).toMatchObject({ state: "done", tokens: { input: 1500, output: 300, cache_read: 6000, cache_write: 400 } });
+    // Usage is tokens: the SDK's cost is neither kept nor reported (BOB-21).
+    expect(snap.workers[0]).not.toHaveProperty("cost_usd");
     expect(snap.usage).toEqual([
-      { day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), project: "helix", role: "bill", model: null, workers: 1, tokens: { input: 1500, output: 300, cache_read: 6000, cache_write: 400 }, cost_usd: 0.42 },
+      { day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), project: "helix", role: "bill", model: null, workers: 1, tokens: { input: 1500, output: 300, cache_read: 6000, cache_write: 400 } },
     ]);
     expect(snap.supervisor).toMatchObject({ concurrency: 2, active: 0, queued: 0 });
     await until(() => broker.reports.length > 0);
@@ -600,7 +602,6 @@ describe("usage and snapshots", () => {
     await until(() => sup.status(second.id).state === "done");
     const byId = new Map(sup.snapshot().workers.map((w) => [w.id, w]));
     expect(byId.get(second.id)).toMatchObject({ tokens: { input: 600, output: 50 } });
-    expect(byId.get(second.id)!.cost_usd).toBeCloseTo(0.06);
     expect(sup.snapshot().usage[0]!.tokens.input).toBe(1600);
   });
 
