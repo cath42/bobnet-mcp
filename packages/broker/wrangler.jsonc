@@ -11,8 +11,15 @@
   // checked before any file is served.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   "durable_objects": {
-    "bindings": [{ "name": "BROKER", "class_name": "Broker" }]
+    "bindings": [
+      { "name": "BROKER", "class_name": "Broker" },
+      // Every project's board (ADR 0001 §1): its own object, so it restores on its own.
+      { "name": "BOARD", "class_name": "Board" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Broker"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Broker"] },
+    { "tag": "v2", "new_sqlite_classes": ["Board"] }
+  ],
   "observability": { "enabled": true }
 }

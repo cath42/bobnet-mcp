@@ -1,5 +1,6 @@
 import { authenticate } from "./auth.ts";
 
+export { Board } from "./board/board.ts";
 export { Broker } from "./broker.ts";
 
 // The whole network lives in one Durable Object: one user, low volume, and

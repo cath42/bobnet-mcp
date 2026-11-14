@@ -99,12 +99,12 @@ const MIGRATIONS: readonly string[] = [
   `,
 ];
 
-export function migrate(sql: SqlStorage): void {
+export function migrate(sql: SqlStorage, migrations: readonly string[] = MIGRATIONS): void {
   sql.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
   const row = sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'").toArray()[0];
   const current = row ? Number(row.value) : 0;
-  for (let v = current; v < MIGRATIONS.length; v++) {
-    sql.exec(MIGRATIONS[v]!);
+  for (let v = current; v < migrations.length; v++) {
+    sql.exec(migrations[v]!);
     sql.exec(
       "INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
       String(v + 1),
