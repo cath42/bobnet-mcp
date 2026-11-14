@@ -82,15 +82,32 @@ For Casper:
   directly, or do edits still go through each project's PO ([board-writes.md](board-writes.md))?
 - **C3: bugs.** The questions in [bugs.md](bugs.md).
 - **C4: the service is in the path.** Agents can't read or write their board when BobNet's service is
-  down or a laptop is offline. Acceptable, or must agents keep working (a local copy that syncs)?
+  down or a laptop is offline. Acceptable, with captures queued locally (Toad's T4)?
 
-For Toad (architecture under the new frame, [Toad's first advice](#toads-first-advice-superseded) is
-mostly moot):
-- **T1:** where the board lives (the broker's Durable Object on Cloudflare, or elsewhere), its data
-  model, and its API and MCP surface for agents.
-- **T2:** history and audit: who changed what and when, since git history no longer records it.
-- **T3:** a session's close as a structured record (Toad's first advice still holds), now in the same
-  store as the board.
+- **C5: where the board lives.** Toad advises the broker's Durable Object on Cloudflare (below). That
+  moves every project's board, Casper's data, from git to Cloudflare. Agree?
+- **C6: backup.** Where Casper's copy lives (a git repo on a laptop, R2, both) and how often.
+- **C7: deploys.** Board changes now need broker deploys, each dropping every connection. Toad proposes
+  batching them into planned releases, one approval per batch. And a staging broker (a second
+  worker and Durable Object) so development never touches the production board: worth it?
+
+**Toad's advice under the new frame** (consult, 2026-11-13; advisory until Toad's ADR lands):
+
+- **T1, where and how:** in the broker's Durable Object (SQLite), not a new service. Board tools are
+  added to the existing channel MCP (client to broker), not a second MCP server. Protocol and schema
+  changes are additive only.
+- **T2, who may write:** checked in the broker, from the caller's role, project and the cards its
+  spawn declared, against a rule table built from [board-writes.md](board-writes.md). Anyone may
+  capture.
+- **T3, history and backup:** every write is an event (who, role, session, time, old and new value);
+  the board is built from that log. Export to plain files in a documented shape, scheduled to a copy
+  Casper owns. Cloudflare's point-in-time recovery covers short-range mistakes.
+- **T4, down (C4):** "board unavailable, agents wait" is acceptable for reads and writes, since the
+  broker is already the single point for messages. Except capture: the client queues it locally and
+  sends it on reconnect, so no idea or bug is lost to a network blip.
+- **Toad decides** the schema, the event log, the tools and messages, the authorisation table,
+  migration rules, the export format. **Peach decides** the kinds, their fields and workflow, and who
+  may write what. **Casper decides** C1 to C7.
 
 ### Toad's first advice (superseded)
 
