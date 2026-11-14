@@ -22,11 +22,61 @@ nav a .count:not(:empty) { display: inline-block; min-width: 18px; text-align: c
 .badge[data-state="question"], .badge[data-state="action"], .badge[data-state="review"], .badge[data-state="permission"] { color: var(--warn); }
 .sub-note { font-size: 12px; color: var(--muted); font-style: italic; }
 
-/* Overview */
-.proj { gap: 10px; }
-.proj .row { display: grid; grid-template-columns: 7.5em 1fr; gap: 8px; font-size: 14px; align-items: baseline; }
-.proj .row > span:first-child { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
-.proj .t { overflow-wrap: anywhere; }
+/* Overview: needs you and working now side by side, then one full-width row per project */
+.ov { display: grid; gap: 22px; }
+@media (min-width: 900px) { .ov { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .ov-proj { grid-column: 1 / -1; } }
+.ov h2 { margin-bottom: 8px; }
+.ov .card { gap: 0; padding: 4px 14px 10px; }
+.lines { list-style: none; margin: 0; padding: 0; display: grid; }
+.lines li { display: grid; gap: 2px 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; min-width: 0; }
+.lines li:first-child { border-top: 0; }
+.lines .l-m { font-size: 12.5px; color: var(--muted); }
+.ov-needs li.hold { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; }
+.ov-needs li.hold .badge { grid-row: span 2; }
+.ov-needs .l-t { color: var(--text); font-weight: 600; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-needs .l-m { color: var(--bad); }
+.ov-needs .l-m .example { color: var(--muted); }
+.ov .more { font-size: 13px; padding-top: 8px; border-top: 1px solid var(--line); text-decoration: none; }
+.now-list li { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; }
+.now-list .l-path { grid-column: 1 / -1; grid-row: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 14px; }
+.now-list .l-path .id { margin-right: 4px; }
+.now-list .l-task { color: var(--text); text-decoration: none; }
+.now-list .l-m { white-space: nowrap; font-variant-numeric: tabular-nums; text-align: right; }
+.dot.warn { background: var(--warn); }
+.plist { display: grid; gap: 10px; }
+.prow { grid-template-columns: 11em repeat(4, minmax(0, 1fr)); gap: 8px 22px; padding: 12px 14px; align-items: start; }
+.prow .pc { display: grid; gap: 4px; min-width: 0; font-size: 14px; align-content: start; }
+.prow .pc .lab { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.prow .pname a { font-size: 17px; font-weight: 600; color: var(--text); text-decoration: none; }
+.prow .v { color: var(--text); text-decoration: none; }
+.prow a.v:hover { text-decoration: underline; }
+.prow .meter { max-width: 220px; }
+.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+@media (max-width: 1099px) { .prow { grid-template-columns: repeat(2, minmax(0, 1fr)); } .prow .pname { grid-column: 1 / -1; grid-template-columns: auto 1fr; align-items: baseline; gap: 10px; } }
+@media (max-width: 520px) {
+  .prow { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .prow .pname { grid-template-columns: 1fr; gap: 0; }
+  .prow .pc:not(.pname) { grid-template-columns: 5.5em minmax(0, 1fr); column-gap: 10px; }
+  .prow .pc:not(.pname) > :not(.lab) { grid-column: 2; }
+  .prow .pc .lab { grid-row: 1; padding-top: 2px; }
+  .now-list .l-path { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+}
+
+/* Who is on a task, live: on a task row in the chain and in the board's list */
+.who { display: block; font-size: 12px; color: var(--muted); }
+.who b { color: var(--text); font-size: 12.5px; }
+.who .dot { margin-right: 4px; }
+.who b { margin-right: 4px; }
+.who[data-state="waiting on you"] { color: var(--warn); }
+.tasks li .on-it { grid-column: 2 / -1; display: grid; gap: 2px; }
+.tasks li.on { background: color-mix(in srgb, var(--ok) 8%, transparent); box-shadow: inset 3px 0 0 var(--ok); padding-left: 6px; }
+.on-now { gap: 4px; border-left: 3px solid var(--ok); }
+.on-now .lines li { grid-template-columns: minmax(0, auto) minmax(0, 1fr); align-items: baseline; }
+.on-now .l-m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 760px) { .on-now .lines li { grid-template-columns: minmax(0, 1fr); } .on-now .l-m { white-space: normal; } }
+.agent[data-state="waiting on you"] { background: color-mix(in srgb, var(--warn) 12%, var(--surface)); }
+.agent[data-state="waiting on you"] b::before { background: var(--warn); }
+.badge[data-state="running"] { color: var(--ok); }
 a.tot { text-decoration: none; color: inherit; }
 .totals .hot { border-left: 3px solid var(--bad); }
 .totals .hot b { color: var(--bad); }
@@ -100,6 +150,7 @@ td select.move { font: inherit; font-size: 13px; padding: 3px 6px; border-radius
   .tasks li .tt { white-space: normal; grid-column: 1 / -1; grid-row: 2; }
   .tasks li .badge { grid-column: 2; grid-row: 1; justify-self: start; }
   .tasks li .ac { grid-column: 3; grid-row: 1; }
+  .tasks li .on-it { grid-column: 1 / -1; grid-row: 3; }
 }
 
 /* Waits on Casper */
@@ -133,3 +184,4 @@ dialog .foot { display: flex; gap: 8px; justify-content: flex-end; }
 .state-demo { display: grid; gap: 10px; }
 .empty-card { background: var(--surface); border: 1px dashed var(--line); border-radius: var(--radius); padding: 18px 14px; color: var(--muted); font-size: 14px; text-align: center; }
 .banner.down { border-left-color: var(--bad); }
+@media (max-width: 520px) { .ov-needs .l-t { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; } }

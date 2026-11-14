@@ -40,16 +40,35 @@
         moved: [["49.5", "Done"], ["49.11", "Done"], ["49.18", "Done"], ["49.20", "Done"], ["49.19", "Ready"]],
         summary: "49.19 stays Ready until Q-258. DRAFT-107 (web-bff refresh-token rotation).",
         handoff: null, commit: "1623d7e04", tokens: 7400000, tokensExample: true },
+      // Example: no second fixes session has run. It shows two agents of one running session on different tasks.
+      // Each worker declares its session {feature, kind, label} and its tasks at spawn (supervisor spawn_worker).
+      { kind: "build", label: "Fixes 2", start: "2026-11-13T20:05", end: null, state: "running", example: true,
+        agents: [
+          { name: "Marvin", role: "tester", state: "working", tasks: ["49.19"], model: "Opus 5.5", laptop: "mbp-1", tokens: 2310000, ctx: 96000, example: true,
+            checkpoint: "49.19 · C11 rerun scripted · waits for the two-company account (Q-258)" },
+          { name: "Howard", role: "engineer", state: "waiting on you", tasks: ["49.14"], model: "Opus 5.5", laptop: "mbp-1", tokens: 1480000, ctx: 71000, example: true,
+            checkpoint: "49.14 · shapefile export in EPSG:4326 until A-17 says otherwise · asks to kill an idle vitest (permission)" },
+        ],
+        moved: [["49.19", "In Progress"], ["49.14", "In Progress"]],
+        summary: "Reruns C11 on staging (49.19) and redoes the shapefiles' coordinate system (49.14).",
+        handoff: null, rc: true },
     ],
     "BOB-1": [
       { kind: "design", label: "Design", start: "2026-11-13T20:45", end: null, state: "running",
-        agents: [{ name: "Daisy", model: "Opus 5.5", laptop: "mbp-1", tokens: 1840000, ctx: 118000, example: true,
+        agents: [{ name: "Daisy", role: "designer", state: "working", tasks: ["1.1"], model: "Opus 5.5", laptop: "mbp-1", tokens: 1840000, ctx: 118000, example: true,
           checkpoint: "BOB-1.1 · prototype on Helix's board · screenshots next" }],
         moved: [["1.1", "Ready"]], summary: "Daisy's prototype (BOB-1.1).", handoff: "w_768eb4e6.md", rc: true },
     ],
   },
+  // Agents with no session: leads and consults declare none, so they show as "Other work" on their project.
+  other: [
+    { name: "Bob", role: "lead", project: "helix", state: "working", model: "Opus 5.5", laptop: "mbp-1", tokens: 3900000, ctx: 142000, example: true,
+      checkpoint: "Runs LAND-49's fixes 2; Q-258 asked again" },
+    { name: "Mario", role: "lead", project: "bobnet", state: "working", model: "Opus 5.5", laptop: "mbp-1", tokens: 2700000, ctx: 88000, example: true,
+      checkpoint: "Casper reviewing BOB-1 live; round 1 with Daisy" },
+  ],
   next: {
-    "LAND-49": { kind: "casper", item: "Q-258", then: "A fixes session reruns C11 on staging (49.19). After it: 49.14 once A-17 is done, then 49.13, rehearsal 2, your live run." },
+    "LAND-49": { kind: "casper", item: "Q-258", then: "Fixes 2 reruns C11 on staging (49.19) once the account has two companies. After it: 49.13, rehearsal 2, your live run." },
     "BOB-1": { kind: "casper", item: "BOB-1#6", then: "Once accepted: BOB-2, the board service (Toad's ADR first)." },
   },
   waits: [
@@ -61,13 +80,13 @@
       text: "Accept the prototype of release 1's screens, or correct it", rec: "design/BOB-1/", from: "Peach" },
     { id: "A-17", kind: "action", project: "helix", feature: "LAND-49", holds: "LAND-49.14", blocking: true, since: "2026-11-10",
       text: "Try claude.ai and Desktop on Marvin's shapefile cut; tell Bob which app and coordinate system work", rec: "qa/runs/land-31-3-claude-app-test.md", from: "Bob" },
-    { id: "Q-259", kind: "question", project: "helix", feature: "LAND-49", holds: "rehearsal 2 (49.13)", blocking: false, since: "2026-11-13",
+    { id: "Q-259", kind: "question", project: "helix", feature: "LAND-49", holds: null, before: "rehearsal 2 (49.13)", blocking: false, since: "2026-11-13",
       text: "Is the account mark the account's initials? Will you re-save the demo home view with Status?", rec: "(1) yes, as built; (2) re-save before rehearsal 2", from: "Marvin, Calvin" },
     { id: "Q-257", kind: "question", project: "helix", feature: "LAND-49", holds: null, blocking: false, since: "2026-11-13",
       text: "Does the wide map read before its text, on staging?", rec: "Yes (Calvin)", from: "Calvin, review 2" },
     { id: "PERM", kind: "permission", project: "helix", feature: "LAND-49", holds: "Howard's build", blocking: true, since: "2026-11-13", example: true,
       text: "Howard asks to run: kill 33987 (an idle vitest left from the build)", rec: "Pending in the supervisor", from: "Howard" },
-    { id: "A-15", kind: "action", project: "helix", feature: "LAND-44", holds: "the demo", blocking: false, since: "2026-11-10",
+    { id: "A-15", kind: "action", project: "helix", feature: "LAND-44", holds: null, before: "the demo", blocking: false, since: "2026-11-10",
       text: "In Claude, replace the old Helix connector with mcp-staging.helixnavigator.com/mcp", rec: "Claude's connector settings", from: "Bob" },
     { id: "A-20", kind: "action", project: "helix", feature: "LAND-48", holds: null, blocking: false, since: "2026-11-10",
       text: "Decide whether the CI token helix-v2-ci keeps DNS: Edit", rec: "Cloudflare dashboard, API tokens", from: "Bender" },

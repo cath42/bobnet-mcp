@@ -75,50 +75,79 @@ function toast(text, undo) {
 
 const waitCount = () => state.waits.length;
 
-// ---------- Overview: every project, what's open, what's next, what waits on Casper ----------
+// Who works on what right now. A worker declares its session {feature, kind, label} and its tasks at spawn,
+// so agent -> session -> tasks is known. Leads and consults declare no session: "Other work".
+function working() {
+  const out = [];
+  for (const p of R.projects) for (const f of allFeatures(p.key)) for (const s of R.sessions[f.id] ?? [])
+    if (s.state === "running") for (const a of s.agents ?? []) out.push({ ...a, p, f, s });
+  for (const a of R.other ?? []) out.push({ ...a, p: proj(a.project), f: null, s: null, tasks: [] });
+  return out;
+}
+const onTask = (fid, n) => working().filter((a) => a.f?.id === fid && a.tasks.includes(n));
+const taskTitle = (fid, n) => { const b = R.projects.map((p) => S[p.key]).find((b) => b.feature === fid); return b?.tasks.find((t) => short(t.id) === n)?.title; };
+const STATE_DOT = { working: "on", "waiting on you": "warn", idle: "" };
+const agentChip = (a, withSession) => h("span", { class: "who", dataset: { state: a.state } },
+  h("i", { class: `dot ${STATE_DOT[a.state] ?? ""}`, "aria-hidden": "true" }), h("b", null, a.name), ` ${a.role} · ${a.state} · ${tok(a.tokens)} tokens`,
+  withSession && a.s ? ` · ${a.s.label}` : "", " ", ex(a.example));
+
+// ---------- Overview: what needs Casper, who is working on what, where each project stands ----------
 
 function overview() {
-  const blocking = state.waits.filter((w) => w.blocking);
-  const working = Object.values(R.sessions).flat().filter((s) => s.state === "running").flatMap((s) => s.agents ?? []);
-  const backlog = R.projects.reduce((n, p) => n + items(p.key).length, 0);
+  const ws = [...state.waits].sort((a, b) => a.since.localeCompare(b.since));
+  const blocking = ws.filter((w) => w.blocking), rest = ws.length - blocking.length;
+  const now = working();
   return [
-    h("div", { class: "totals" },
-      h("a", { href: "#waits", class: "tot" }, h("div", { class: blocking.length ? "hot" : "" }, h("b", null, waitCount()), h("span", null, `wait on you · ${blocking.length} hold work up`))),
-      h("div", null, h("b", null, working.length), h("span", null, "agents working")),
-      h("div", null, h("b", null, R.projects.length), h("span", null, "projects, 1 laptop")),
-      h("div", null, h("b", null, backlog), h("span", null, "backlog items to triage"))),
-    h("section", null, h("h2", null, "Projects"),
-      h("div", { class: "cards" }, R.projects.map(projectCard))),
-    h("section", null, h("h2", null, "Holds work up ", h("span", { class: "count" }, blocking.length)),
-      h("ul", { class: "list waits" }, blocking.slice(0, 3).map(waitItem)),
-      h("p", { class: "note" }, h("a", { href: "#waits" }, `All ${waitCount()} that wait on you`))),
+    h("div", { class: "ov" },
+      h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count" }, ws.length)),
+        h("div", { class: "card" },
+          blocking.length ? h("ul", { class: "lines" }, blocking.map((w) => h("li", { class: "hold" },
+            badge(w.kind === "bug" ? "bug" : w.kind, KIND[w.kind]),
+            h("a", { href: "#waits", class: "l-t" }, w.text),
+            h("span", { class: "l-m" }, `${proj(w.project).name}${w.feature ? ` · ${w.feature}` : ""} · holds up ${w.holds}`, " ", ex(w.example)))))
+            : h("p", { class: "muted", style: "margin:0" }, "Nothing is held up by you."),
+          h("a", { href: "#waits", class: "more" }, rest ? `${plural(blocking.length, "holds", "hold")} work up · ${rest} more when you have time →` : "Waits on you →"))),
+      h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length)),
+        now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list" }, now.map(nowLine)))
+          : h("div", { class: "empty-card" }, "No agent is working.")),
+      h("section", { class: "ov-proj" }, h("h2", null, "Projects"),
+        h("div", { class: "plist" }, R.projects.map(projectRow)))),
   ];
 }
 
-function projectCard(p) {
+function nowLine(a) {
+  const n = a.tasks[0];
+  return h("li", { dataset: { state: a.state } },
+    h("span", { class: "l-who" }, h("i", { class: `dot ${STATE_DOT[a.state] ?? ""}`, "aria-hidden": "true" }), h("b", null, a.name), h("span", { class: "muted" }, ` ${a.role}`)),
+    h("span", { class: "l-path" },
+      h("span", { class: "muted" }, a.p.name, " › "),
+      a.f ? [h("a", { class: "id", href: `#feature/${a.f.id}` }, a.f.id), h("span", { class: "muted" }, `${a.s.label} › `),
+        a.tasks.map((t) => h("a", { href: `#feature/${a.f.id}`, class: "l-task", title: taskTitle(a.f.id, t) ?? "" }, h("span", { class: "id" }, t), taskTitle(a.f.id, t)?.replace(/^[^:]{0,40}:\s*/, "") ?? ""))]
+        : h("span", { class: "muted", style: "font-style:italic" }, "Other work (no session)")),
+    h("span", { class: "l-m" }, a.state === "working" ? null : h("span", { style: "color:var(--warn)" }, `${a.state} · `), `${tok(a.tokens)} tokens`, " ", ex(a.example)));
+}
+
+function projectRow(p) {
   const fs = allFeatures(p.key);
   const open = fs.find(isOpen), ready = fs.find((f) => f.status === "Ready" && !isOpen(f));
   const rel = open?.rel ?? releases(p.key)[0];
   const relFs = rel.features, relDone = relFs.filter((f) => f.status === "Done").length;
-  const ws = state.waits.filter((w) => w.project === p.key), wb = ws.filter((w) => w.blocking).length;
   const its = items(p.key), bugs = its.filter(isBug).length, oldest = its.length ? Math.max(...its.map((d) => days(d.created))) : 0;
   const nx = open && R.next[open.id];
-  const agents = open ? (R.sessions[open.id] ?? []).filter((s) => s.state === "running").flatMap((s) => s.agents) : [];
-  return h("div", { class: "card proj" },
-    h("div", { class: "top" }, h("a", { href: `#roadmap/${p.key}`, class: "name", style: "color:inherit;text-decoration:none;font-size:16px" }, p.name),
-      h("span", { class: "sub" }, `${p.laptop} · lead ${p.lead} · PO ${p.po}`)),
-    h("div", { class: "row" }, h("span", null, "Release"), h("span", null, `${rel.title.split(" ")[0]} ${rel.title.split(" ").slice(1).join(" ")} · ${relDone} of ${relFs.length} features done`)),
-    h("div", { class: "row" }, h("span", null, "Open"), open
-      ? h("span", { class: "t" }, h("a", { class: "id", href: `#feature/${open.id}` }, open.id), open.title,
-        h("div", { class: "muted" }, `${open.ac[0]} of ${open.ac[1]} criteria · ${agents.length ? `${plural(agents.length, "agent")} on it now` : "nobody on it now"}`),
-        nx ? h("div", { class: "muted", style: "color:var(--warn)" }, `Next: waits on you, ${nx.item.replace("#", " #")}`) : null)
+  const agents = open ? working().filter((a) => a.f?.id === open.id) : [];
+  const cell = (label, ...kids) => h("div", { class: "pc" }, h("span", { class: "lab" }, label), ...kids);
+  return h("div", { class: "card prow" },
+    h("div", { class: "pc pname" }, h("a", { href: `#roadmap/${p.key}` }, p.name), h("span", { class: "muted" }, `${p.laptop} · lead ${p.lead} · PO ${p.po}`)),
+    cell("Release", h("span", { class: "v" }, h("b", null, rel.title.split(" ")[0]), " ", rel.title.split(" ").slice(1).join(" ")),
+      meter(relDone, relFs.length), h("span", { class: "muted" }, `${relDone} of ${relFs.length} features done`)),
+    cell("Open now", open
+      ? [h("a", { href: `#feature/${open.id}`, class: "v clamp" }, h("span", { class: "id" }, open.id), open.title),
+         h("span", { class: "muted" }, `${open.ac[0]} of ${open.ac[1]} criteria · `,
+           agents.length ? h("span", { style: "color:var(--ok)" }, `${agents.map((a) => a.name).join(", ")} on it`) : "nobody on it")]
       : h("span", { class: "muted" }, "no feature open")),
-    h("div", { class: "row" }, h("span", null, "Next ready"), ready
-      ? h("span", { class: "t" }, h("a", { class: "id", href: `#roadmap/${p.key}` }, ready.id), ready.title)
-      : h("span", { class: "muted" }, "none Ready yet")),
-    h("div", { class: "row" }, h("span", null, "Waits on you"), h("span", null, h("a", { href: "#waits" }, ws.length), wb ? h("span", { style: "color:var(--bad)" }, ` · ${wb} hold work up`) : "")),
-    h("div", { class: "row" }, h("span", null, "Backlog"), its.length
-      ? h("span", null, h("a", { href: `#triage/${p.key}` }, `${its.length} items`), ` · ${plural(bugs, "bug")} · oldest ${oldest} days`)
+    cell("Next", nx ? h("a", { href: "#waits", class: "v", style: "color:var(--warn)" }, `Waits on you: ${nx.item.replace("#", " #")}`) : null,
+      ready ? h("span", { class: "muted clamp" }, "Then Ready: ", h("span", { class: "id" }, ready.id), ready.title) : h("span", { class: "muted" }, "none Ready yet")),
+    cell("Backlog", its.length ? [h("a", { href: `#triage/${p.key}`, class: "v" }, `${its.length} items`), h("span", { class: "muted" }, `${plural(bugs, "bug")} · oldest ${oldest} days`)]
       : h("span", { class: "muted" }, "nothing to triage")));
 }
 
@@ -241,11 +270,14 @@ function feature(id) {
   if (!hit) return [h("div", { class: "empty-card" }, `No feature ${id}.`)];
   const { p, f } = hit;
   const b = S[p.key], ss = R.sessions[id] ?? [], nx = R.next[id];
-  const tasks = b.feature === id ? b.tasks : [];
+  const live = ss.filter((s) => s.state === "running");
+  const liveSt = new Map(live.flatMap((s) => s.moved));
+  // A task an agent is on shows In Progress (the sample's board predates the example session).
+  const tasks = (b.feature === id ? b.tasks : []).map((t) => (liveSt.has(short(t.id)) ? { ...t, status: liveSt.get(short(t.id)) } : t));
   const byShort = new Map(tasks.map((t) => [short(t.id), t]));
   const inSession = new Set(ss.flatMap((s) => s.moved.map((m) => m[0])));
   const loose = tasks.filter((t) => !inSession.has(short(t.id)));
-  const agents = ss.filter((s) => s.state === "running").flatMap((s) => s.agents);
+  const agents = working().filter((a) => a.f?.id === id);
   const pickable = R.projects.flatMap((q) => allFeatures(q.key).filter((x) => x.status !== "Done" && (R.sessions[x.id] || x.status === "Ready")));
   const wait = nx && state.waits.find((w) => w.id === nx.item);
   return [
@@ -258,43 +290,48 @@ function feature(id) {
         h("div", { class: "title" }, f.title),
         h("div", { class: "facts" }, meter(f.ac[0], f.ac[1]), h("span", null, `${f.ac[0]} of ${f.ac[1]} criteria`), h("span", null, `${f.tasksDone} of ${f.tasks} tasks done`),
           h("span", null, `${plural(ss.length, "session")}`), h("span", { style: agents.length ? "color:var(--ok)" : "" }, agents.length ? `${plural(agents.length, "agent")} on it now` : "nobody on it now"))),
+      agents.length ? h("section", { class: "card on-now" }, h("h2", { style: "margin:0" }, "On it now"),
+        h("ul", { class: "lines" }, agents.map((a) => h("li", null, agentChip(a, false), h("span", { class: "l-m" }, `${a.s.label} › `,
+          a.tasks.map((n) => [h("span", { class: "id" }, n), taskTitle(id, n) ?? ""])))))) : null,
       wait ? h("a", { href: "#next", class: "banner", style: "text-decoration:none;color:inherit" }, h("b", { style: "color:var(--warn)" }, "Next: waits on you"), h("span", null, `${wait.id.replace("#", " #")} · ${wait.text}`)) : null,
       h("div", { class: "two" },
         h("section", null, h("h2", null, "Sessions, in the order they ran"),
           ss.length ? h("ol", { class: "steps" }, ss.map((s, i) => stepItem(p, s, byShort, i === ss.length - 1)), nextItem(nx, wait))
             : h("div", { class: "empty-card" }, "No session has run on this feature yet. Next: a design session, once it is Ready.")),
         h("aside", null, h("h2", null, "Tasks ", h("span", { class: "count" }, tasks.length)),
-          loose.length ? h("div", { class: "card", style: "margin-bottom:10px" }, h("div", { class: "muted" }, "In no session yet"), h("ul", { class: "tasks" }, loose.map((t) => taskLi(t, t.status)))) : null,
-          h("details", { class: "card", open: innerWidth >= 1100 || null }, h("summary", { style: "margin:0" }, `All ${tasks.length}, as the board has them now`), h("ul", { class: "tasks" }, tasks.map((t) => taskLi(t, t.status))))))),
+          loose.length ? h("div", { class: "card", style: "margin-bottom:10px" }, h("div", { class: "muted" }, "In no session yet"), h("ul", { class: "tasks" }, loose.map((t) => taskLi(t, t.status, onTask(id, short(t.id)), true)))) : null,
+          h("details", { class: "card", open: innerWidth >= 1100 || null }, h("summary", { style: "margin:0" }, `All ${tasks.length}, as the board has them now`), h("ul", { class: "tasks" }, tasks.map((t) => taskLi(t, t.status, onTask(id, short(t.id)), true))))))),
   ];
 }
 
-function taskLi(t, st) {
-  return h("li", null, h("span", { class: "id" }, short(t.id)), h("span", { class: "tt", title: t.title }, t.title),
-    badge(st === "In Review" ? "in review" : st.toLowerCase(), st), h("span", { class: "ac" }, t.ac[1] ? `${t.ac[0]}/${t.ac[1]}` : "–"));
+function taskLi(t, st, on = [], withSession = false) {
+  return h("li", { class: on.length ? "on" : null }, h("span", { class: "id" }, short(t.id)), h("span", { class: "tt", title: t.title }, t.title),
+    badge(st === "In Review" ? "in review" : st === "In Progress" ? "running" : st.toLowerCase(), st), h("span", { class: "ac" }, t.ac[1] ? `${t.ac[0]}/${t.ac[1]}` : "–"),
+    on.length ? h("span", { class: "on-it" }, on.map((a) => agentChip(a, withSession))) : null);
 }
 
 function stepItem(p, s, byShort, last) {
   const helix = p.key === "helix";
-  const moved = s.moved.map(([n, st]) => { const t = byShort.get(n); return t ? taskLi(t, st) : null; });
+  const live = s.state === "running";
+  const moved = s.moved.map(([n, st]) => { const t = byShort.get(n); return t ? taskLi(t, st, live ? (s.agents ?? []).filter((a) => a.tasks.includes(n)).map((a) => ({ ...a, s })) : []) : null; });
   const closedN = s.moved.filter((m) => m[1] === "Done").length;
   return h("li", { class: "step", dataset: { kind: s.kind, state: s.state } }, h("span", { class: "dot2", "aria-hidden": "true" }),
     h("div", { class: "card" },
-      h("div", { class: "top" }, h("span", { class: "kind" }, s.kind), h("b", null, s.label), h("span", { class: "when" }, span(s.start, s.end)), badge(s.state)),
+      h("div", { class: "top" }, h("span", { class: "kind" }, s.kind), h("b", null, s.label), h("span", { class: "when" }, span(s.start, s.end)), ex(s.example), badge(s.state)),
       s.state === "closed" ? h("div", { class: "outcome" },
         h("span", { class: "need", dataset: { need: s.need } }, `need: ${s.need}`, s.needs.length ? ` (${s.needs.join(", ")})` : ""),
         h("span", null, `${plural(s.blockers, "blocker")} · ${plural(s.majors, "major")}`),
         s.minors ? h("span", null, `${s.minors} minors, fixed`) : null, s.back ? h("span", null, `${s.back} sent back`) : null,
         h("span", null, closedN ? `closed ${plural(closedN, "task")}` : `moved ${plural(s.moved.length, "task")}`),
         s.tokens ? h("span", { class: "muted" }, `${tok(s.tokens)} tokens`, " ", ex(s.tokensExample)) : null) : null,
-      (s.agents ?? []).map((a) => h("div", { class: "agent" }, h("b", null, a.name, " ", ex(a.example)), h("span", { class: "d" }, a.checkpoint),
+      (s.agents ?? []).map((a) => h("div", { class: "agent", dataset: { state: a.state } }, h("b", null, a.name, " ", h("span", { class: "muted" }, `${a.role} · ${a.state}${a.tasks?.length ? ` · on ${a.tasks.join(", ")}` : ""}`), " ", ex(a.example)), h("span", { class: "d" }, a.checkpoint),
         h("span", { class: "d" }, `${a.model} · ${a.laptop} · ${dur(s.start, R.now.slice(0, 16))} · ${tok(a.tokens)} tokens · context ${tok(a.ctx)}`))),
       h("div", { class: "sub" }, s.summary),
       h("div", { class: "links" },
         s.handoff ? h("a", { href: "#source", title: helix ? `~/.local/state/bobnet/handoffs/helix/${s.handoff}` : s.handoff }, "Handoff") : h("span", { class: "off" }, "No handoff file"),
         s.commit ? h("a", { href: "#source", title: `helix-navigator-picard ${s.commit}` }, `Close ${s.commit.slice(0, 7)}`) : null,
         s.rc ? h("a", { href: "#source" }, "Remote Control") : h("span", { class: "off" }, s.state === "running" ? "No Remote Control" : "")),
-      moved.length ? h("details", { open: last || null }, h("summary", null, `Tasks it moved (${moved.length})`), h("ul", { class: "tasks" }, moved)) : null));
+      moved.length ? h("details", { open: last || null }, h("summary", null, live ? `Tasks it is on (${moved.length})` : `Tasks it moved (${moved.length})`), h("ul", { class: "tasks" }, moved)) : null));
 }
 
 function nextItem(nx, wait) {
@@ -320,6 +357,7 @@ function waitItem(w) {
     h("div", { class: "meta" },
       w.rec ? h("span", null, w.kind === "question" ? "Recommended: " : "", w.rec) : null,
       w.holds ? h("span", { style: "color:var(--bad)" }, `Holds up ${w.holds}`) : null,
+      w.before ? h("span", null, `Needed before ${w.before}`) : null,
       h("span", null, `from ${w.from}`),
       w.session ? h("span", null, w.session) : null,
       h("a", { href: "#source" }, w.kind === "question" || w.kind === "action" ? "Open in lead/questions.md" : w.kind === "permission" ? "Open in the supervisor" : "Open")));
@@ -464,7 +502,7 @@ function render() {
   const [route = "overview", a, b] = location.hash.slice(1).split("/");
   const views = { overview: () => overview(), roadmap: () => roadmap(a ?? "helix", b === "edit"), feature: () => feature(a ?? "LAND-49"), waits: () => waits(), triage: () => triage(a ?? "helix", b === "edit"), source: () => source(), states: () => states() };
   const v = views[route] ?? views.overview;
-  $("view").className = route === "feature" || route === "roadmap" ? "wide" : "";
+  $("view").className = route === "feature" || route === "roadmap" || route === "overview" ? "wide" : "";
   $("view").replaceChildren(...v().filter(Boolean));
   for (const el of document.querySelectorAll("#tabs a")) el.toggleAttribute("aria-current", el.getAttribute("href").slice(1).split("/")[0] === route);
   $("wait-count").textContent = waitCount() || "";
