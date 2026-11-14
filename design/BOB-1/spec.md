@@ -11,7 +11,7 @@ board, for Casper to accept or correct (BOB-1 #6). Luigi builds from this file, 
   read only (Helix: `~/Code/helix-navigator-picard` at 282cca2fe, 698 tasks, 103 drafts, 29 features, 3
   releases). `sample/records.js` holds what no board file has: LAND-49's six sessions, transcribed from Helix's
   close handoffs and git log, and the waits-on-Casper items from Helix's `lead/questions.md`. Three things are
-  marked *example* on screen (a bug that blocks use, a pending permission, sessions' tokens): no
+  marked *example* on screen (a bug that blocks use, a pending permission, sessions' tokens and context per call, CI and run-slot waits): no
   record of them exists to sample. The `#source` screen names all of it; a strip under the header names it on
   every screen.
 - **Screenshots:** `shots/<criterion>-<screen>-<width>.png` at 390, 1024 and 1440. Retake with
@@ -30,8 +30,11 @@ It answers three questions in this order: what needs me, who is working on what 
 - **Needs you (count)**: one line per item that holds work up (kind badge, the question in bold and cut to
   one line, then project · feature · "holds up …" in red). It ends with a link: "5 hold work up · 7 more
   when you have time →" to Waits on you. Nothing held up: "Nothing is held up by you."
-- **Working now (count)**: one line per agent with a state dot (green working, amber waiting on you), name,
-  role, state when it isn't working, and tokens. Under that: project › feature id, session label › task id
+- **Needs you** lines for a question, action or permission have an **Answer / Mark done / Allow or deny**
+  button. It opens the same form as on Waits on you, in place under the line (notes 40).
+- **Working now (count)**: one line per agent with a state dot (green working, amber waiting on you, an
+  accent ring when waiting on a run), name, role, state when it isn't working, and tokens. An agent waiting
+  on a run reads "waiting on CI · 12 min" (amber once it runs long) and has a third line naming the run, as a link (notes 46). Under that: project › feature id, session label › task id
   and title, with the feature and task linking to the Feature view. Leads and consults: "Other work (no
   session)". None running: "No agent is working."
 - **Projects**: a full-width row per project with five cells: the name (to its roadmap) with laptop, lead
@@ -88,6 +91,19 @@ It answers three questions in this order: what needs me, who is working on what 
   agent: dot, name, role, state, tokens. In the board's list beside the chain the line also gives the session
   label. The source is the session and tasks each worker declared at spawn. The sample's running build on
   LAND-49 (Fixes 2: Marvin on 49.19, Howard on 49.14, waiting on his permission) is *example*.
+- **Waiting on a run** (notes 44-48): an agent waiting on CI or on the laptop's run slot shows a run line
+  on its session card and in On it now. The line has a spinner, "Waiting on CI · 12 min", the run's name as
+  a link (`CI › e2e (staging) #4812 ↗`), the source (GitHub Actions, repo, branch, or the run slot's
+  holder and command) and "usually about N min". It turns amber when running long (past 1.5× usual), red
+  when the run failed, and dashed when the agent is queued for the slot. It leaves when the run passes.
+- **Context per call** (notes 36-39): every session card, running or closed, has **"Context per call · N
+  calls"** in its links row. It opens a panel inside the card with today's chart (`app.js` contextChart,
+  style.css's `.chart`, `.key`, `.tip`). **Whole session** shows cumulative context across all agents, with
+  the feature's previous session of that kind dashed. Picking an **agent** (a switch, or a row in the table)
+  shows its runs as one line, with dotted drops where a new worker starts and a grey band for earlier runs
+  of that role on the feature. Under the chart is a table with one row per agent (model, runs, calls, peak
+  context, bar, tokens) and a Session total. Phone: the panel runs edge to edge in the card, labels go to
+  the key, a tap shows the tooltip, and the table stacks without the bar or the model.
 - The chain ends on a dashed **Next** step: what the feature's state calls for, or "Waits on you" with the
   question, the recommendation and what comes after.
 - Beside the chain (desktop, sticky) or under it (tablet, phone): **In no session yet** (tasks no session has
@@ -99,7 +115,15 @@ It answers three questions in this order: what needs me, who is working on what 
 - Each item: its kind (question, action, review gate, permission, bug · blocks use), id, project and feature,
   age; the question in bold; the recommendation; what it holds up (red), only on items that hold work up; "Needed before …" (muted) on
   one that waits for a later milestone (notes 35); who asked; the session that closed
-  on it (need: casper), if any; a link to where it is answered. No answering here.
+  on it (need: casper), if any; a link to where it is answered.
+- **Answering** (notes 40-43): each question, action and permission has a button that opens a form inside
+  the item, one at a time. A question shows its options as radio cards (the recommended one first,
+  tagged, none picked) and a text box for his own words; **Send answer** works once there is an option or
+  words. An action has an optional note and **Mark done**. A permission has an optional note to the agent
+  and **Deny** / **Allow**, under a dashed "Pending Casper's yes" box. The line by the buttons says it is
+  recorded as his words and who gets a message (the project's lead; for a permission, the agent). Sent: a
+  toast with Undo, the item leaves its group, and it shows under **Answered from here today** with the
+  option he picked and his words quoted exactly. On a phone the buttons are full width, 44 px tall.
 - A session closed with need: casper shows on the question it waits for, not as a second item.
 - Empty: "Nothing is held up by you." The count leaves the tab.
 
@@ -121,7 +145,8 @@ It answers three questions in this order: what needs me, who is working on what 
 
 ### States (`#states`)
 Board unavailable (red banner: since when, showing what it last said, captures wait on the device), loading,
-nothing waits on you, a project with no releases, a capture while the board is down.
+nothing waits on you, a project with no releases, waiting on a run (CI as usual, running long, a local run
+slot, failed, queued), a capture while the board is down.
 
 ## Screenshots per criterion (BOB-1)
 
@@ -135,3 +160,6 @@ nothing waits on you, a project with no releases, a capture while the board is d
 | #7 capture, triage list | `c7-capture`, `c7-triage-after-capture`, `c7-triage` |
 | #8 Casper's gates | `c8-gates-edit`, `c8-gates-moved`, `c8-close-release`, `c8-gates-backlog-item` |
 | #9 bugs, blocks use, Casper's questions | `c9-capture-bug`, `c9-waits-with-bug`, `c9-triage-bugs`, `c3-waits` |
+| Round 2: context per call | `r2-ctx-running`, `r2-ctx-running-agent`, `r2-ctx-closed-agent` (element shots of the session card) |
+| Round 2: answering | `r2-answer-question`, `r2-answered`, `r2-answer-overview`, `r2-answer-action`, `r2-answer-permission` |
+| Round 2: waiting on CI / a run | `r2-ci-overview`, `r2-ci-feature`, `r2-ci-states` |

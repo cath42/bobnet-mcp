@@ -758,7 +758,7 @@ function source() {
         row("LAND-49", `${hx.tasks.length} tasks, from the files; its 6 sessions transcribed from Helix's close handoffs (land-49-build-close.md, land-49-review-close.md) and git log`),
         row("Waits on you", "Helix's lead/questions.md at the same commit: Q-214, Q-215, Q-257 to Q-259, A-6, A-15, A-17, A-20, and BOB-1's acceptance"),
         row("BobNet's board", `This repo, product/backlog at ${bn.source.commit}: ${bn.counts.tasks} tasks, ${bn.counts.features} features, ${bn.counts.releases} releases`),
-        row("Examples", "Marked example: a bug that blocks use, a pending permission, and every session's tokens. No sampled record has them."),
+        row("Examples", "Marked example: a bug that blocks use, a pending permission, every session's tokens and context per call (made from a seed), and the CI and run-slot waits. No sampled record has them."),
         row("Regenerate", "node design/BOB-1/sample/extract.mjs helix ~/Code/helix-navigator-picard LAND-49"))))),
     h("p", { class: "note" }, "Links to handoffs, commits and Remote Control land here in the prototype; in the product they open the file, the commit and the session."),
   ];

@@ -103,6 +103,66 @@ or corrects go in BOB-1's notes (BOB-1 #6), not here.
     demo" and Q-259 says "Needed before rehearsal 2 (49.13)". The rule: anything that says "Holds up" is in
     the first group.
 
+## Round 2 with Casper (2026-11-14; "Round 2" in Mario's lead/BOB-1-casper-feedback.md)
+
+**Context per call, inside a session** (Casper: "one of the strongest features of the old one")
+36. Today's Usage chart moves **onto each session card**, running or closed. It isn't a separate tab. The
+    card's links row gets **"Context per call · N calls"**, which opens a panel inside the card, under the
+    agents and the summary and above the tasks. It is folded by default, because six open charts would bury
+    the chain. More than one card can be open at a time, so two sessions can be compared.
+37. The panel has today's chart, look and wording. **Whole session** is every call across all its agents,
+    with context summed, so the line ends at the session's tokens read. The feature's previous session of
+    the same kind is dashed (Fixes 2 against Fixes, Review 2 against Review 1). **One agent** joins its
+    runs into one line: calls carry on, a new worker drops to a small context at a dotted line, and the grey
+    band is the middle half of earlier runs of that role on the feature. Under the chart is today's table
+    with one row per agent: model, runs, calls, peak context, a bar, tokens, and a **Session** total row.
+    Clicking a row picks that agent, like today's role rows. Agents rather than roles, because two engineers
+    in one build are different lines.
+38. A closed session's tokens on its outcome line and a running agent's tokens now come from the same runs
+    as the chart, so the numbers agree everywhere.
+39. **Phone:** the panel drops the card's side padding and runs edge to edge, so the chart gets about 340
+    of 390 px. The line labels move into the key, and the agent switch scrolls sideways. A tap shows the
+    tooltip at that call. The table stacks into one small card per agent (runs, calls, peak, tokens) with
+    no bar and no model.
+
+**Answering from the dashboard** (Casper: "yes")
+40. Every question, action and permission on **Waits on you** has its own button: **Answer**, **Mark done**,
+    or **Allow or deny**. The button opens a form inside the item, and only one form is open at a time. The
+    **Overview's Needs you** has the same button on each line and opens the same form in place, so Casper
+    doesn't have to leave the Overview.
+41. **A question:** its options as radio cards, with the recommended one first and tagged *recommended*,
+    none picked to begin with, then a text box for his own words. The words are optional with an option and
+    are enough without one. **Send answer** is off until he picks an option or writes something. The line
+    by the button says where it goes: "Recorded on Q-258 as yours, word for word; Bob, Helix's lead, gets a
+    message." The options are the question's own, from questions.md.
+42. **An action:** an optional note and **Mark done**. **A permission:** an optional note to the agent,
+    then **Deny** (danger) and **Allow**. A dashed amber box says **"Pending Casper's yes"**: until he
+    agrees, permissions stay a link to the supervisor.
+43. After he sends, a toast with Undo says what was recorded and who got the message, and the item leaves
+    its group. It shows under **Answered from here today** at the bottom of Waits on you: the question
+    muted, the option he picked, his words in quotes exactly as typed, and "Bob, Helix's lead got a message".
+    The Needs-you count and the tab's count drop at once. A review gate (BOB-1 #6) and a bug stay links;
+    a review is accepted in conversation.
+
+**Waiting on CI or a long run** (Casper: "how long its been running")
+44. An agent waiting on a run gets its own state: **waiting on CI** or **waiting on a run (label)**, with
+    how long it has run ("waiting on CI · 12 min"). Its dot is an accent ring, not amber, because nothing
+    is Casper's to do.
+45. On the session card, the agent shows a **run line**: a small spinner, "Waiting on CI · 12 min",
+    the run's name as a link (`CI › e2e (staging) #4812 ↗`, opening the run on GitHub), the source (GitHub
+    Actions, repo, branch) and "usually about 10 min". A local run says "run slot on mbp-1: **land**, held by
+    Daisy" and what it runs. The same line shows in **On it now**. On task rows the agent's chip reads
+    "waiting on CI · 12 min".
+46. In **Working now**, the agent's state on the right reads "waiting on CI · 12 min" in accent, with a
+    third line that names the run and links to it.
+47. A run is **running long** once it passes half again its usual time (the median of that workflow's or
+    slot label's recent runs). The line turns amber and says "running long, usually about 12 min". A
+    **failed** run turns red and stays until the agent moves on. An agent **queued** for the laptop's run
+    slot gets a dashed line naming the holder ("Luigi holds it (e2e, 23 min)"). A run that passes leaves
+    the line at once. All four are on `#states`.
+48. The two sources, as designed: **GitHub Actions** for CI (a workflow run for the agent's branch or
+    commit) and the supervisor's **run slot** for local runs (holder, label such as land or e2e, since).
+
 ## Settled with Peach during this task (2026-11-13; in the requirements, eba0a15)
 
 - A Done feature shows its real criteria count with "Done, criteria not ticked" (roadmap-view 4).
@@ -134,8 +194,17 @@ or corrects go in BOB-1's notes (BOB-1 #6), not here.
 8. **Agent state "waiting on you"** (Howard, waiting on his permission) is derived in the prototype. The
    service needs the supervisor's pending-permission record per worker to show it. Marvin's and Howard's
    session, Fixes 2, and the leads' Other work are *example*. (Toad.)
-9. **Answering from the UI.** Casper asked whether he can answer questions from the dashboard, and how.
-   Today's requirement says no (waiting-on-casper.md: "This list shows and links"), so nothing in the
-   prototype answers. That's Peach's to rule with Casper. If the answer is yes, it needs its own design.
+9. **Answering from the UI**: Casper said yes in round 2, designed in 40-43. Peach still has to change
+   waiting-on-casper.md ("This list shows and links"). Toad has to say where an answer is written: on the
+   board record once a project has moved, but in Helix's lead/questions.md until BOB-9, which BobNet
+   doesn't write today. Toad also has to say how the lead's message is sent. **Permissions** from the
+   dashboard are pending Casper's yes (Mario is asking him).
 10. **Playwright isn't in packages/broker's devDependencies** (the brief said it was). The screenshots used
    helix-navigator-access's playwright-core 1.63.0, which matches the installed Chromium; nothing installed.
+11. **Which CI run an agent waits on** needs a link between them: the agent's last push (branch and commit)
+   matched to a GitHub Actions run, or the agent saying so at a checkpoint. "Usually about N min" needs the
+   recent run times per workflow or slot label. Both are Toad's to place. In the sample, Marvin's run
+   and Daisy's land are *example*.
+12. **Context per call needs each session's runs with their calls' context sizes.** Today's dashboard has
+   them for the current session; the steps view wants them for every past session too. Every chart in the
+   prototype is *example* data, made from a seed.
