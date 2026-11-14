@@ -28,8 +28,11 @@ rather than by convention.
 - *Settled (Casper, 2026-11-13, C2):* Casper edits his own gates (release scope, order of releases,
   closing a release) on the dashboard directly. Everything else he wants changed is a request to the
   project's PO, which keeps one writer and the PO's judgement. Criteria for both to be written.
-- Is "open feature" a field the service keeps now? It decides who may write, so the service needs it.
-  Under the first frame it was derived from sessions (roadmap-view.md 9).
+- *Settled (Peach, 2026-11-13):* the service keeps which feature is open, as part of the feature's
+  record. It is set when a session on the feature starts and cleared when its last session closes,
+  never by hand. It decides who may write. Helix's board doesn't record it today (LAND-49 had six
+  sessions while its file said Ready; design/BOB-1/notes.md open point 2), so the import derives it
+  from sessions. How it is stored is Toad's.
 
 ## Superseded
 

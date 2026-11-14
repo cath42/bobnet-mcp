@@ -1,10 +1,10 @@
 ---
 id: BOB-1
 title: 'Prototype the central backlog view, for Casper to accept before building'
-status: Ready
+status: In Review
 assignee: []
 created_date: '2026-11-14 03:59'
-updated_date: '2026-11-14 04:36'
+updated_date: '2026-11-14 05:00'
 labels: []
 milestone: m-0
 dependencies: []
@@ -44,3 +44,9 @@ Casper, 2026-11-13: a prototype before we start building. A clickable prototype 
 - [ ] #3 Architect (Toad) signed off if it touches the protocol, the broker store or how the parts fit (or: not applicable, because ...)
 - [ ] #4 Live only after a release and a restart: say whether it needs one
 <!-- DOD:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Prototype landed (BOB-1.1 Done, v2 6f44ed1): design/BOB-1/. Waiting for Casper's verdict; Mario's summary for him: lead/BOB-1-prototype-for-casper.md. Casper's words go here verbatim.
+<!-- SECTION:NOTES:END -->

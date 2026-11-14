@@ -44,5 +44,6 @@ the prototype settles it.
   written from what the session declares when it closes (need, blockers and majors, tasks closed),
   with a link to the handoff. Never parse handoff files. Criterion 2 reads it from there once Toad
   records it.
-- Which session kinds exist across projects? Helix uses design, build, review, retro and "fixes"
-  (as a build label). Is "fixes" a kind of its own?
+- *Settled (Peach, 2026-11-13):* the session kinds are design, build, review and retro. "Fixes" is
+  not a kind of its own: it is a build labelled Fixes, as Helix runs it and as the prototype shows
+  it (design/BOB-1/notes.md open point 6).
