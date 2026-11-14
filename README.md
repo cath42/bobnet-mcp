@@ -44,7 +44,7 @@ Cloudflare Access fronts every route, and the Worker verifies the Access JWT its
 
 - **Laptops** connect with one Access service token each. `LAPTOP_TOKENS` maps token client IDs to laptop IDs, and so does each `LAPTOP_TOKENS_<name>` secret, merged with it; revoke a token to cut that laptop off.
 - **You** sign in to the dashboard with your Access identity (`OWNER_EMAIL`). Its WebSocket is accepted only from the dashboard's own origin.
-- **Dashboard actions** carry your own Access JWT to the supervisor, which verifies it against Access before acting. The broker alone can't act as you.
+- **Dashboard actions** carry your own Access JWT to the laptop's supervisor, which verifies it against Access before acting. The broker sends them only to the name each supervisor registered as, and takes a laptop's reports only from it. That stops a mistake, not an attacker: the token is a bearer token for as long as it is live (the dashboard app's Access session length), so whoever controls the broker, or a supervisor that receives it, can replay it for dashboard actions until then. A shorter Access session for the dashboard app narrows that window; it is your setting in Access.
 - **Messages:** the broker rejects any message that looks like a credential. Send paths, not content.
 - **Workers:**
   - never `bypassPermissions`;

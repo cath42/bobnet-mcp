@@ -345,6 +345,34 @@ describe("dashboard actions", () => {
     expect(await owner.next((f) => f.t === "action_result")).toMatchObject({ id, laptop: "mbp-1", ok: true, message: "stopped" });
   });
 
+  it("pins the reporter to the name the supervisor registers as, and ignores a report from any other peer on its laptop", async () => {
+    const sup = await Client.open(await laptopToken(1));
+    await sup.request({ t: "register", name: "supervisor", supervisor: true });
+    await sup.request({ t: "report", as: "supervisor", snapshot });
+    const bob = await agent(1, "Bob");
+    const forged = { ...snapshot, supervisor: { ...snapshot.supervisor, active: 9 } };
+    expect(await errorCode(bob.request({ t: "report", as: "Bob", snapshot: forged }))).toBe("forbidden");
+    // Nor can another peer pin itself while the supervisor is online.
+    const other = await Client.open(await laptopToken(1));
+    expect(await errorCode(other.request({ t: "register", name: "Mallory", supervisor: true }))).toBe("forbidden");
+
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const d = await owner.request({ t: "dashboard" });
+    expect(d.laptops).toEqual([{ laptop: "mbp-1", at: expect.any(String), snapshot }]);
+    const { id } = await owner.request({ t: "action", laptop: "mbp-1", action: { kind: "stop", worker: "w_1" } });
+    expect(await sup.next((f) => f.t === "action")).toMatchObject({ id, to: "supervisor@mbp-1" });
+
+    // A supervisor whose configured name changed takes the pin once the old one is gone.
+    sup.close();
+    await bob.next(presence("left", "supervisor"));
+    const renamed = await Client.open(await laptopToken(1));
+    await renamed.request({ t: "register", name: "Sup", supervisor: true });
+    expect(await errorCode(bob.request({ t: "report", as: "Bob", snapshot: forged }))).toBe("forbidden");
+    await renamed.request({ t: "report", as: "Sup", snapshot });
+    const { id: next } = await owner.request({ t: "action", laptop: "mbp-1", action: { kind: "stop", worker: "w_1" } });
+    expect(await renamed.next((f) => f.t === "action")).toMatchObject({ id: next, to: "Sup@mbp-1" });
+  });
+
   it("refuses actions from laptops, and for a laptop with no supervisor online", async () => {
     const bob = await agent(1, "Bob");
     expect(await errorCode(bob.request({ t: "action", laptop: "mbp-1", action: { kind: "stop", worker: "w_1" } }))).toBe("forbidden");

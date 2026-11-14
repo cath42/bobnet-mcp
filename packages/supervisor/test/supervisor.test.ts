@@ -168,9 +168,11 @@ describe("landSummary", () => {
 });
 
 describe("lifecycle", () => {
-  it("registers the supervisor and every role on BobNet at start", async () => {
+  it("registers the supervisor, as its laptop's supervisor, and every role on BobNet at start", async () => {
     const { broker } = await setup();
     expect(broker.registered.map((r) => r.name)).toEqual(["supervisor", "Bill", "Marvin", "Homer", "Mario"]);
+    // Pins it as the laptop's reporter on the broker: only its reports count, and the owner's actions go only to it.
+    expect(broker.registered.map((r) => r.supervisor ?? false)).toEqual([true, false, false, false, false]);
   });
 
   it("starts a worker in its role folder with project settings, the claude_code prompt and the sandbox", async () => {

@@ -198,7 +198,7 @@ export class Supervisor {
       this.store.markOrphaned(r.id);
     }
 
-    const me = (await this.registerWithRetry({ name: this.config.name, ...(this.config.team ? { team: this.config.team } : {}), purpose: "BobNet supervisor: runs role agents headless on this laptop" })) as { address?: string } | undefined;
+    const me = (await this.registerWithRetry({ name: this.config.name, ...(this.config.team ? { team: this.config.team } : {}), purpose: "BobNet supervisor: runs role agents headless on this laptop", supervisor: true })) as { address?: string } | undefined;
     // The laptop as the broker knows it (from its token), not the hostname: workers' Remote Control names carry it.
     this.laptop = me?.address?.split("@")[1] ?? null;
     for (const role of this.roles()) {

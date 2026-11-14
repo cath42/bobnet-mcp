@@ -281,6 +281,11 @@ export const RegisterFrame = z.object({
    * instance is this process reconnecting, and is handed over at once.
    */
   instance: z.string().min(8).max(64).optional(),
+  /**
+   * This name is its laptop's supervisor: the one peer whose `report` the broker
+   * takes for the laptop and whom dashboard actions go to. Pinned until it is gone.
+   */
+  supervisor: z.literal(true).optional(),
 });
 
 export const DeregisterFrame = z.object({ t: z.literal("deregister"), rid, as: segment });

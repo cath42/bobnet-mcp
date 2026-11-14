@@ -20,6 +20,8 @@ export interface Identity {
   team?: string;
   purpose?: string;
   expertise?: string[];
+  /** This name is its laptop's supervisor (the supervisor's own name only). */
+  supervisor?: true;
 }
 
 export interface ClientConfig {

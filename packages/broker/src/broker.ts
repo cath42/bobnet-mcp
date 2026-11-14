@@ -195,6 +195,11 @@ export class Broker extends DurableObject<Env> {
     const laptop = conn.identity.laptop;
     const key = addressKey({ name: frame.name, laptop });
     const existing = this.peer(key);
+    const pinned = this.supervisorOf(laptop);
+    const pinnedConn = pinned && pinned !== frame.name ? this.peer(addressKey({ name: pinned, laptop }))?.conn_id : null;
+    if (frame.supervisor && pinnedConn && this.isLive(pinnedConn)) {
+      throw new FrameError("forbidden", `${pinned} is the supervisor on ${laptop}`);
+    }
     if (existing?.conn_id && existing.conn_id !== conn.connId && this.isLive(existing.conn_id)) {
       const holder = this.socket(existing.conn_id)!;
       const sameProcess = frame.instance !== undefined && existing.instance === frame.instance;
@@ -232,6 +237,12 @@ export class Broker extends DurableObject<Env> {
         frame.instance ?? null,
       )
       .one();
+
+    if (frame.supervisor) {
+      this.sql.exec("INSERT INTO laptop_supervisors (laptop, name) VALUES (?, ?) ON CONFLICT (laptop) DO UPDATE SET name = excluded.name", laptop, frame.name);
+      this.sql.exec("UPDATE laptop_reports SET reporter = ? WHERE laptop = ?", frame.name, laptop);
+      if (pinned !== frame.name) this.audit(conn, "supervisor", { laptop, name: frame.name, was: pinned ?? null });
+    }
 
     const wasOnline = existing?.conn_id === conn.connId;
     if (!wasOnline) this.presence("joined", peer);
@@ -325,8 +336,16 @@ export class Broker extends DurableObject<Env> {
 
   // ---------- Dashboard ----------
 
+  /** The name the laptop's supervisor registered as, if it has. */
+  private supervisorOf(laptop: string): string | undefined {
+    return this.sql.exec<{ name: string }>("SELECT name FROM laptop_supervisors WHERE laptop = ?", laptop).toArray()[0]?.name;
+  }
+
   private report(conn: Conn, as: string, snapshot: LaptopSnapshot): Results["report"] {
     const peer = this.hosted(conn, as);
+    const pinned = this.supervisorOf(peer.laptop);
+    // Reports name whom the owner's actions, and token, go to: only the supervisor's count.
+    if (pinned && pinned !== peer.name) throw new FrameError("forbidden", `Only ${pinned}, the supervisor, reports for ${peer.laptop}`);
     const at = new Date().toISOString();
     this.sql.exec(
       `INSERT INTO laptop_reports (laptop, snapshot, at, reporter) VALUES (?, ?, ?, ?)

@@ -85,6 +85,14 @@ const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (laptop, project)
   );
   `,
+  `
+  -- Each laptop's supervisor, by the name it registered as: the only peer whose reports
+  -- the laptop takes, and whom dashboard actions go to. A laptop with none takes any (pre-pin).
+  CREATE TABLE laptop_supervisors (
+    laptop TEXT PRIMARY KEY,
+    name   TEXT NOT NULL
+  );
+  `,
 ];
 
 export function migrate(sql: SqlStorage): void {
