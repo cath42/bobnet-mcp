@@ -6,3 +6,6 @@ allowBuilds:
 # @bobnet/broker's playwright-core, at the root too: design/'s screenshot scripts import it by name.
 publicHoistPattern:
   - playwright-core
+# Lands run pnpm without a TTY: when a change like the hoist above needs node_modules rebuilt, rebuild it
+# rather than abort (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY), so every worktree lands after a rebase.
+confirmModulesPurge: false
