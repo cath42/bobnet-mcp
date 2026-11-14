@@ -40,3 +40,8 @@ order, each with its features in their order and where each stands.
 ## Open questions
 
 - None of its own. See the [README](README.md).
+
+## Casper's verdict (BOB-1 #6, round 1, 2026-11-14)
+
+The concept is accepted; the Overview screen of the prototype is rejected as UX ("looks bad, its
+not a very good UX"). Daisy redoes it. The criteria above are the needs; the layout stays hers.

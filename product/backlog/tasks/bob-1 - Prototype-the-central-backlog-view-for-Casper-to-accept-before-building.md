@@ -49,4 +49,11 @@ Casper, 2026-11-13: a prototype before we start building. A clickable prototype 
 
 <!-- SECTION:NOTES:BEGIN -->
 Prototype landed (BOB-1.1 Done, v2 6f44ed1): design/BOB-1/. Waiting for Casper's verdict; Mario's summary for him: lead/BOB-1-prototype-for-casper.md. Casper's words go here verbatim.
+
+#6 Casper's verdict on the prototype, verbatim (session 2026-11-14; source: Mario's lead/BOB-1-casper-feedback.md). Round by round.
+
+Round 1:
+> 1. I like the concept, but the overview looks bad, its not a very good UX - also what is missing here is something that overlays agents work against tasks/stories within a feature, I want to know who is working on what right now which would all be within a feature session right? Finally, you have questions in here, can I answer questions from the UI and if so, how?
+
+Peach's reading: concept accepted; Overview rejected as UX (Daisy redoes it); new need: agents overlaid on a feature's tasks (steps-view.md criterion 9); answering from the UI is a question to Casper (waiting-on-casper.md open question; today's "Must not break" stands until he answers).
 <!-- SECTION:NOTES:END -->

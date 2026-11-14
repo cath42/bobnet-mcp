@@ -22,6 +22,11 @@
 
 ## Open questions
 
+- **Answering from the UI (Casper asked, BOB-1 #6 round 1: "can I answer questions from the UI and
+  if so, how?").** Open: the "Must not break" above stands until he answers. It was written when
+  the list was read-only; with questions as board records (C8) an answer is a write of Casper's own,
+  which the write rules ([board-writes.md](board-writes.md)) would need to allow.
+
 - *Settled (Casper, 2026-11-13, C8):* questions only Casper can answer are board records (open or
   answered, with the answer verbatim), linked to the item they hold up. Helix's `lead/questions.md`
   moves over with its board ([migration.md](migration.md)). Criteria 1 and 2 read them from there.

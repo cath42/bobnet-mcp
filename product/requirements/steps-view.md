@@ -28,7 +28,13 @@ the prototype settles it.
 7. Usage shows as tokens, never money. A closed session's outcome line shows its total tokens (all
    its agents, the orchestrator's share included where known), as today's dashboard shows tokens per
    session. (Peach, 2026-11-13, on Daisy's question.) *Evidence: test.*
-8. Phone and tablet, in BobNet's own look. *Evidence: screenshots on phone and desktop.*
+8. Who works on what, now: within a feature, the running agents show against the tasks they
+   work on, so Casper sees at a glance which agent is on which task. It reads what `spawn_worker`
+   declared (its `session` and `tasks`); a task with no agent shows none. Agents with no session
+   (leads, consults) show as "Other work", not against a task. (Casper, BOB-1 #6 round 1: "I want
+   to know who is working on what right now".) *Evidence: test with a running worker declaring two
+   tasks; screenshot on phone and desktop.*
+9. Phone and tablet, in BobNet's own look. *Evidence: screenshots on phone and desktop.*
 
 ## Must not break
 
