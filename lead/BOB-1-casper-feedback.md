@@ -39,3 +39,16 @@ Mario's reading:
 - New: show when work waits on a CI run (and, if possible, a long E2E script), with how long it has run.
   Possible sources: the run slot (supervisor run_slots: holder, label, since) for land/test runs on the
   laptop; GitHub Actions runs (gh) for CI.
+
+## Round 3: the verdict
+
+Mario asked: 1. may Casper allow or deny agents' permission requests from the dashboard; 2. which CI
+"waiting on CI" covers (GitHub Actions, or other CI too); 3. is the prototype (with rounds 1 and 2) accepted.
+
+> 1 yes, 2. Any CI running anywhere, 3. Approved
+
+Mario's reading:
+- Permissions: allow/deny from the dashboard (Waits on you and the Overview's Needs you), like answers.
+- CI: any CI running anywhere, not only GitHub Actions; local runs through the run slot as designed.
+- BOB-1 is approved, with rounds 1 and 2. Next: Peach writes BOB-2..10's criteria; Toad's ADR for the
+  service (BOB-2, BOB-7) before Luigi builds.
