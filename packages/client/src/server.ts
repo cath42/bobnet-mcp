@@ -5,7 +5,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { BOARD_TOOLS, type BoardToolDeps, onlyProject } from "./board-tools.ts";
-import { CaptureQueue } from "./capture-queue.ts";
+import { CAPTURE_FLUSH_MS, CaptureQueue } from "./capture-queue.ts";
 import type { Identity } from "./config.ts";
 import { BrokerConnection, BrokerError, type PushFrame } from "./connection.ts";
 import { type ChannelEvent, Inbox } from "./inbox.ts";
@@ -190,6 +190,10 @@ export function createServer(opts: {
     const name = self.name.toLowerCase();
     captures.flush((as) => as.toLowerCase() === name).catch((err: Error) => log.warn("capture flush failed", { err: err.message }));
   };
+  // And now and then while connected: a send that timed out on a live connection waits for no reconnect.
+  setInterval(() => {
+    if (connection.connected && captures.pending()) flushCaptures();
+  }, CAPTURE_FLUSH_MS).unref();
 
   const requireSelf = () => {
     if (!self) throw new BrokerError("not_hosted", "Not registered on BobNet yet: call `register` first");

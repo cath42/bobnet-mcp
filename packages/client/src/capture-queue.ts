@@ -31,8 +31,14 @@ export type CaptureSend = (as: string, op: Extract<BoardOpInput, { op: "capture"
 
 export type CaptureOutcome = (Captured & { capture_id: string; queued: false }) | { capture_id: string; queued: true; message: string };
 
-/** Refusals that a later send won't change. */
-const PERMANENT = new Set(["invalid", "forbidden", "conflict", "bad_frame", "frame_too_large", "secret_detected"]);
+/**
+ * Refusals that a later send won't change. Not bad_frame: the op was checked before it was queued,
+ * so a broker that calls it bad is one older than board_op, and the capture waits for a newer one.
+ */
+const PERMANENT = new Set(["invalid", "forbidden", "conflict", "frame_too_large", "secret_detected"]);
+
+/** How often a connected process sends what is still queued (a send that timed out, say). */
+export const CAPTURE_FLUSH_MS = 60_000;
 
 export function defaultCaptureDir(): string {
   const state = process.env["XDG_STATE_HOME"] || join(homedir(), ".local", "state");
@@ -69,6 +75,15 @@ export class CaptureQueue {
     if (result && "ref" in result) return { ...result, capture_id, queued: false };
     if (result && "refused" in result) throw new BrokerError(result.code, result.message);
     return { capture_id, queued: true, message: "queued; it gets its id when the board is back" };
+  }
+
+  /** Whether any capture waits in the queue. */
+  pending(): boolean {
+    try {
+      return readdirSync(this.dir).some((n) => n.endsWith(".json"));
+    } catch {
+      return false;
+    }
   }
 
   /**

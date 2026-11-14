@@ -44,6 +44,12 @@ function checked(op: Record<string, unknown>): BoardOpInput {
   return op as BoardOpInput;
 }
 
+/** What a frame leaves a close's handoff text: the frame less the rest of the op, with room for the frame's own fields and a ctx. */
+export function handoffBudget(op: Record<string, unknown>): number {
+  const rest = Buffer.byteLength(JSON.stringify({ t: "board_op", rid: "0000000000", as: "x".repeat(32), op: { ...op, handoff: { path: (op["handoff"] as { path: string }).path, text: "" } } }));
+  return LIMITS.frameBytes - rest - 2 * 1024;
+}
+
 /** A frame stays under 64 KB: a handoff longer than what fits is cut at its end, and says so. */
 export function fitHandoff(text: string, budget = LIMITS.frameBytes - 8 * 1024): string {
   const size = (t: string) => Buffer.byteLength(JSON.stringify(t));
@@ -161,7 +167,8 @@ export const BOARD_TOOLS: BoardTool[] = [
       const text = deps.readHandoff(path);
       const secret = findSecret(text);
       if (secret) throw new Error(`secret_detected: the handoff holds what looks like a credential (${secret}); take it out and close again`);
-      return deps.op(checked({ ...a, op: "close_session", project: await project(deps, a), handoff: { path, text: fitHandoff(text) } }));
+      const op = { ...a, op: "close_session", project: await project(deps, a), handoff: { path, text: "" } };
+      return deps.op(checked({ ...op, handoff: { path, text: fitHandoff(text, handoffBudget(op)) } }));
     },
   },
   {

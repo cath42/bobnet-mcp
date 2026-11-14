@@ -7,7 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ServerFrame } from "@bobnet/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket as WsClient, WebSocketServer } from "ws";
-import { BOARD_TOOLS, fitHandoff } from "../src/board-tools.ts";
+import { BOARD_TOOLS, fitHandoff, handoffBudget } from "../src/board-tools.ts";
 import { CaptureQueue, type CaptureSend } from "../src/capture-queue.ts";
 import { BrokerConnection, BrokerError } from "../src/connection.ts";
 import type { Logger } from "../src/log.ts";
@@ -200,6 +200,35 @@ describe("the board tools in the channel client", () => {
     expect(existsSync(join(captureDir, "refused"))).toBe(false);
     expect(broker.ops.filter((o) => (o["op"] as { op: string }).op === "capture")).toHaveLength(1);
   });
+});
+
+it("keeps a capture the broker calls a bad frame queued: that broker is older than board_op", async () => {
+  const d = dir();
+  const send: CaptureSend = async () => {
+    throw new BrokerError("bad_frame", "Unknown frame type: board_op");
+  };
+  expect(await new CaptureQueue(send, { dir: d, answerMs: 50 }).capture("Luigi", { project: "helix", title: "x" })).toMatchObject({ queued: true });
+  expect(queued(d)).toHaveLength(1);
+  expect(existsSync(join(d, "refused"))).toBe(false);
+});
+
+it("gives a close's handoff what the rest of the frame leaves it", () => {
+  const ref = (n: number) => `LAND-${100000 + n}`;
+  const op = {
+    op: "close_session",
+    project: "helix",
+    session: { feature: "LAND-1", kind: "build", label: "1" },
+    need: "none",
+    moves: Array.from({ length: 100 }, (_, i) => ({ task: ref(i), status: "In Review" })),
+    blockers: Array.from({ length: 50 }, (_, i) => ref(i)),
+    majors: Array.from({ length: 50 }, (_, i) => ref(i)),
+    sent_back: Array.from({ length: 50 }, (_, i) => ref(i)),
+    summary: "é".repeat(300),
+    handoff: { path: `/${"p".repeat(499)}`, text: "" },
+  };
+  const text = fitHandoff("ü".repeat(60_000), handoffBudget(op));
+  const frame = JSON.stringify({ t: "board_op", rid: "0000000000", as: "x".repeat(32), op: { ...op, handoff: { ...op.handoff, text } } });
+  expect(Buffer.byteLength(frame)).toBeLessThanOrEqual(64 * 1024 - 1024);
 });
 
 it("cuts a handoff that won't fit a frame at its end, and says so", () => {
