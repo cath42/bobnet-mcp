@@ -22,7 +22,8 @@ or corrects go in BOB-1's notes (BOB-1 #6), not here.
 6. A **"fixes" session is a build with the label Fixes** in the chain (as Helix records it). Its kind colour is
    build's. Whether "fixes" becomes a kind of its own stays Peach's question (steps-view.md).
 7. Session kinds use style.css's existing kind colours (design, build, review, retro).
-8. Tokens show on **running** agents only (with context and model). Closed sessions show no usage.
+8. Tokens show on running agents (with context and model), and a closed session's **total tokens** sit last on
+   its outcome line, muted (Peach, steps-view 7).
 
 **What shows at phone width**
 9. Tabs scroll sideways (as today); **Waits on you comes second**, so its count is never off-screen.
@@ -77,6 +78,8 @@ or corrects go in BOB-1's notes (BOB-1 #6), not here.
 - "Release scope" is features and backlog items in or out of a release, the order of releases, and closing
   one; no text editing (board-writes 4).
 - Closing with open features needs a confirmation naming each and where it goes (board-writes 5).
+- A closed session shows its total tokens (all its agents, plus the orchestrator's share where known),
+  secondary, after the outcome (steps-view 7).
 
 ## Open points
 
@@ -89,12 +92,11 @@ or corrects go in BOB-1's notes (BOB-1 #6), not here.
 3. **Criteria are rarely ticked on Helix.** Many Done features show low counts (LAND-22: 3 of 138, LAND-35: 3 of
    39), so criteria are a weak progress measure on today's data. Shown as it is (Peach's ruling). Worth raising
    with Picard before the migration.
-4. **Nothing in the sample marks a bug "blocks use" or records a pending permission.** Both are shown as
-   *example* items (the bug is shaped on LAND-49.20). The running agent's tokens are an example too.
+4. **Nothing in the sample marks a bug "blocks use", records a pending permission, or counts a session's
+   tokens.** All three are shown as *example* (the bug is shaped on LAND-49.20); the token figures are
+   placeholders until the service reads BobNet's run records.
 5. **One laptop only.** Both real projects run on mbp-1, so the prototype can't show two laptops. Envision,
    Echo and Vitals aren't in the sample.
-6. **Tokens for closed sessions.** steps-view 7 says usage is tokens, not money. Should a closed session show
-   the tokens it used? The prototype shows none. (Asked Peach.)
-7. **"Fixes" as a session kind** stays Peach's open question (steps-view.md); shown as a build labelled Fixes.
-8. **Playwright isn't in packages/broker's devDependencies** (the brief said it was). The screenshots used
+6. **"Fixes" as a session kind** stays Peach's open question (steps-view.md); shown as a build labelled Fixes.
+7. **Playwright isn't in packages/broker's devDependencies** (the brief said it was). The screenshots used
    helix-navigator-access's playwright-core 1.63.0, which matches the installed Chromium; nothing installed.

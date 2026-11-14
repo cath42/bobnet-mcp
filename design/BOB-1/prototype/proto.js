@@ -285,7 +285,8 @@ function stepItem(p, s, byShort, last) {
         h("span", { class: "need", dataset: { need: s.need } }, `need: ${s.need}`, s.needs.length ? ` (${s.needs.join(", ")})` : ""),
         h("span", null, `${plural(s.blockers, "blocker")} · ${plural(s.majors, "major")}`),
         s.minors ? h("span", null, `${s.minors} minors, fixed`) : null, s.back ? h("span", null, `${s.back} sent back`) : null,
-        h("span", null, closedN ? `closed ${plural(closedN, "task")}` : `moved ${plural(s.moved.length, "task")}`)) : null,
+        h("span", null, closedN ? `closed ${plural(closedN, "task")}` : `moved ${plural(s.moved.length, "task")}`),
+        s.tokens ? h("span", { class: "muted" }, `${tok(s.tokens)} tokens`, " ", ex(s.tokensExample)) : null) : null,
       (s.agents ?? []).map((a) => h("div", { class: "agent" }, h("b", null, a.name, " ", ex(a.example)), h("span", { class: "d" }, a.checkpoint),
         h("span", { class: "d" }, `${a.model} · ${a.laptop} · ${dur(s.start, R.now.slice(0, 16))} · ${tok(a.tokens)} tokens · context ${tok(a.ctx)}`))),
       h("div", { class: "sub" }, s.summary),
@@ -439,7 +440,7 @@ function source() {
         row("LAND-49", `${hx.tasks.length} tasks, from the files; its 6 sessions transcribed from Helix's close handoffs (land-49-build-close.md, land-49-review-close.md) and git log`),
         row("Waits on you", "Helix's lead/questions.md at the same commit: Q-214, Q-215, Q-257 to Q-259, A-6, A-15, A-17, A-20, and BOB-1's acceptance"),
         row("BobNet's board", `This repo, product/backlog at ${bn.source.commit}: ${bn.counts.tasks} tasks, ${bn.counts.features} features, ${bn.counts.releases} releases`),
-        row("Examples", "Marked example: a bug that blocks use, a pending permission, and Daisy's running session's tokens. No board records them today."),
+        row("Examples", "Marked example: a bug that blocks use, a pending permission, and every session's tokens. No sampled record has them."),
         row("Regenerate", "node design/BOB-1/sample/extract.mjs helix ~/Code/helix-navigator-picard LAND-49"))))),
     h("p", { class: "note" }, "Links to handoffs, commits and Remote Control land here in the prototype; in the product they open the file, the commit and the session."),
   ];

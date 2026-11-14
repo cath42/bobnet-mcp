@@ -11,7 +11,7 @@ board, for Casper to accept or correct (BOB-1 #6). Luigi builds from this file, 
   read only (Helix: `~/Code/helix-navigator-picard` at 282cca2fe, 698 tasks, 103 drafts, 29 features, 3
   releases). `sample/records.js` holds what no board file has: LAND-49's six sessions, transcribed from Helix's
   close handoffs and git log, and the waits-on-Casper items from Helix's `lead/questions.md`. Three things are
-  marked *example* on screen (a bug that blocks use, a pending permission, a running agent's tokens): no
+  marked *example* on screen (a bug that blocks use, a pending permission, sessions' tokens): no
   record of them exists to sample. The `#source` screen names all of it; a strip under the header names it on
   every screen.
 - **Screenshots:** `shots/<criterion>-<screen>-<width>.png` at 390, 1024 and 1440. Retake with
@@ -68,7 +68,7 @@ view. Capture is on every screen.
   `--k-design`, `--k-build`, `--k-review`, `--k-retro`), kind, label (Design, Build 1, Review 1, Build 2, Review
   2, Fixes), start and end with duration, state (running, closed, waiting). A closed one shows its outcome
   in one line: **need** (none in green, casper in amber, with the items), blockers and majors, minors fixed or
-  tasks sent back, tasks closed or moved. A running one shows its agents live (model, laptop, time, **tokens**,
+  tasks sent back, tasks closed or moved, then its total tokens, muted. A running one shows its agents live (model, laptop, time, **tokens**,
   context, last checkpoint). Then a sentence of summary, links (handoff, the close commit, Remote Control
   where there is one), and **Tasks it moved**, folded except on the latest session, each with the status the
   session left it in and its criteria now.

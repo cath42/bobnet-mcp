@@ -4,7 +4,8 @@
 //              riker-land-49-rulings.md, and helix-navigator-picard's git log (commits named below)
 //   questions: helix-navigator-picard lead/questions.md at 282cca2fe (Q-n and A-n, with the date each row was added)
 // In the service, sessions come from BobNet's own records of its runs and their structured close (README T3),
-// questions from the board (C8). Items marked example: true are not on any board; they show a state Helix has no record of.
+// questions from the board (C8). A closed session's tokens are examples: no usage record was sampled.
+// Items marked example: true are not on any board; they show a state Helix has no record of.
 (window.SAMPLES ??= {}).records = {
   now: "2026-11-13T21:20:00-06:00",
   sessions: {
@@ -13,32 +14,32 @@
         need: "casper", needs: ["Q-253", "Q-254"], blockers: 0, majors: 0,
         moved: [["49.1", "Ready"], ["49.3", "Ready"], ["49.4", "Ready"], ["49.7", "Ready"], ["49.8", "Ready"], ["49.15", "Ready"], ["49.16", "Ready"], ["49.17", "Ready"], ["49.6", "In Review"], ["49.12", "In Review"]],
         summary: "Notes for 49.1 and 49.7, ADR 0108 proposed (49.6), Calvin's prototype for 49.2, 5, 9, 10, 11 (49.12). Ready in build order.",
-        handoff: "riker-land-49-rulings.md", commit: "f70149dcd" },
+        handoff: "riker-land-49-rulings.md", commit: "f70149dcd", tokens: 4200000, tokensExample: true },
       { kind: "build", label: "Build 1", start: "2026-11-12T00:10", end: "2026-11-12T14:50", state: "closed",
         need: "casper", needs: ["Q-253", "Q-254", "Q-255", "A-17"], blockers: 0, majors: 0,
         moved: [["49.1", "In Review"], ["49.3", "In Review"], ["49.4", "In Review"], ["49.7", "In Review"], ["49.8", "In Review"], ["49.15", "In Review"], ["49.16", "In Review"], ["49.17", "In Review"]],
         summary: "All 8 Ready tasks built, on main, deployed to staging with evidence. Six drafts (DRAFT-85 to 90).",
-        handoff: "land-49-build-close.md", commit: "e289f170" },
+        handoff: "land-49-build-close.md", commit: "e289f170", tokens: 38600000, tokensExample: true },
       { kind: "review", label: "Review 1", start: "2026-11-12T14:50", end: "2026-11-12T18:20", state: "closed",
         need: "none", needs: [], blockers: 0, majors: 0, minors: 9,
         moved: [["49.1", "Done"], ["49.3", "Done"], ["49.4", "Done"], ["49.6", "Done"], ["49.7", "Done"], ["49.8", "Done"], ["49.12", "Done"], ["49.15", "Done"], ["49.16", "Done"], ["49.17", "Done"], ["49.2", "Ready"], ["49.5", "Ready"], ["49.9", "Ready"], ["49.10", "Ready"], ["49.11", "Ready"]],
         summary: "8 reviewed once; 9 minors, all fixed. Casper ruled Q-253 to Q-256 in session.",
-        handoff: "land-49-review-close.md", commit: "f7d9b4ec8" },
+        handoff: "land-49-review-close.md", commit: "f7d9b4ec8", tokens: 12900000, tokensExample: true },
       { kind: "build", label: "Build 2", start: "2026-11-12T18:45", end: "2026-11-13T02:23", state: "closed",
         need: "none", needs: [], blockers: 0, majors: 0,
         moved: [["49.2", "In Review"], ["49.5", "In Review"], ["49.9", "In Review"], ["49.10", "In Review"], ["49.11", "In Review"]],
         summary: "The five prototype-gated tasks built. DRAFT-93 (account rename).",
-        handoff: null, commit: "0ebdd887a" },
+        handoff: null, commit: "0ebdd887a", tokens: 21300000, tokensExample: true },
       { kind: "review", label: "Review 2", start: "2026-11-13T07:28", end: "2026-11-13T10:42", state: "closed",
         need: "casper", needs: ["Q-257", "Q-258", "Q-259"], blockers: 0, majors: 0, back: 2,
         moved: [["49.2", "Done"], ["49.9", "Done"], ["49.10", "Done"], ["49.5", "Ready"], ["49.11", "Ready"], ["49.18", "Ready"], ["49.19", "Ready"], ["49.20", "Ready"]],
         summary: "Nothing blocks (review 0125). 49.5 and 49.11 back; 49.18 to 49.20 new.",
-        handoff: null, commit: "6fa0a46ca" },
+        handoff: null, commit: "6fa0a46ca", tokens: 9800000, tokensExample: true },
       { kind: "build", label: "Fixes", start: "2026-11-13T18:00", end: "2026-11-13T20:44", state: "closed",
         need: "casper", needs: ["Q-258"], blockers: 0, majors: 0,
         moved: [["49.5", "Done"], ["49.11", "Done"], ["49.18", "Done"], ["49.20", "Done"], ["49.19", "Ready"]],
         summary: "49.19 stays Ready until Q-258. DRAFT-107 (web-bff refresh-token rotation).",
-        handoff: null, commit: "1623d7e04" },
+        handoff: null, commit: "1623d7e04", tokens: 7400000, tokensExample: true },
     ],
     "BOB-1": [
       { kind: "design", label: "Design", start: "2026-11-13T20:45", end: null, state: "running",
