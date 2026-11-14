@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { type ClientFrame, type ClientInfo, type ErrorCode, PING, PONG, PROTOCOL_VERSION, type ServerFrame } from "@bobnet/protocol";
+import ownPackage from "../package.json" with { type: "json" };
 import type { Credentials, Identity } from "./config.ts";
 import type { Logger } from "./log.ts";
 
@@ -23,9 +23,6 @@ export class BrokerError extends Error {
   }
 }
 
-/** This package, as it tells the broker on register unless the host names itself. */
-const OWN_PACKAGE = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { name: string; version: string };
-
 interface Pending {
   t: string;
   resolve: (result: unknown) => void;
@@ -40,7 +37,7 @@ export interface ConnectionOptions {
   onPush: (frame: PushFrame) => void;
   /** Called after every (re)connect once registrations are restored. */
   onReady?: (laptop: string) => void;
-  /** The package hosting this connection, sent on register. Defaults to @bobnet/client. */
+  /** The package hosting this connection, sent on register. Defaults to this one, @bobnet/client. */
   client?: Omit<ClientInfo, "protocol">;
   /** For tests: a WebSocket constructor that accepts headers. */
   WebSocketImpl?: new (url: string, init: { headers: Record<string, string> }) => WebSocket;
@@ -75,8 +72,7 @@ export class BrokerConnection {
 
   constructor(opts: ConnectionOptions) {
     this.opts = opts;
-    const { name, version } = OWN_PACKAGE;
-    this.client = { ...(opts.client ?? { package: name, version }), protocol: PROTOCOL_VERSION };
+    this.client = { ...(opts.client ?? { package: ownPackage.name, version: ownPackage.version }), protocol: PROTOCOL_VERSION };
   }
 
   start(): void {

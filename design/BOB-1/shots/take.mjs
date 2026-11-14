@@ -1,11 +1,12 @@
 // Screenshots of the prototype for each of BOB-1's criteria, at 390, 1024 and 1440 px.
-//   PLAYWRIGHT=<path to playwright-core> node design/BOB-1/shots/take.mjs
-// Any playwright-core whose Chromium is installed will do (1.63.0 for chromium-1243).
+//   node design/BOB-1/shots/take.mjs
+// playwright-core is @bobnet/broker's devDependency, pinned at 1.63.0 for chromium-1243. Once per
+// machine, install its Chromium: pnpm --filter @bobnet/broker exec playwright-core install chromium
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { chromium } from "playwright-core";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const { chromium } = await import(join(process.env.PLAYWRIGHT ?? "playwright-core", "index.mjs"));
 const page0 = pathToFileURL(join(here, "../prototype/index.html")).href;
 const widths = { phone: [390, 844], tablet: [1024, 768], desktop: [1440, 900] };
 

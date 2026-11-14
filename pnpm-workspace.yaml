@@ -3,3 +3,6 @@ packages:
 allowBuilds:
   esbuild: true
   workerd: true
+# @bobnet/broker's playwright-core, at the root too: design/'s screenshot scripts import it by name.
+publicHoistPattern:
+  - playwright-core

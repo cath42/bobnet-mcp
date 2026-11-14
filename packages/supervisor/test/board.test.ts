@@ -250,7 +250,8 @@ describe("the orchestrator's usage", () => {
       { projects: config.projects, store, log: quiet, send: async (x) => void sent.push(x), liveCtx: () => undefined, ownTokens: () => ({ input: 10, output: 5, cache_read: 1000, cache_write: 0 }), nameOf: () => "changesets-agent", transcriptsDir: root },
       async (cmd, args, cwd) => {
         if (cmd === "gh") throw new Error("gh: not found");
-        return execFileSync(cmd, args, { cwd, encoding: "utf8" });
+        // The fixture has no origin/main to read a backlog from: git's complaint is expected, so not shown.
+        return execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
       },
     );
     await boards.refresh();

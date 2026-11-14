@@ -16,9 +16,11 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@bobnet/client": "workspace:*",
     "@cloudflare/vitest-plugin": "^1.4.0",
     "happy-dom": "21.0.4",
     "miniflare": "5.20261023.2-beta",
+    "playwright-core": "1.63.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.12",
     "wrangler": "^4.150.0"
