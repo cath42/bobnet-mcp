@@ -994,7 +994,7 @@ export class Supervisor {
     const worktree = await git(role.dir, ["rev-parse", "--show-toplevel"]);
     const dirty = await git(worktree, ["status", "--porcelain"]);
     if (dirty) return refuse(`Precondition: a clean tree. ${worktree} has uncommitted changes; commit or remove them:\n${dirty}`);
-    const head = await git(worktree, ["rev-parse", "HEAD"]);
+    let head = await git(worktree, ["rev-parse", "HEAD"]);
     const before = this.refusedHeads.get(worktree);
     const again = before?.head === head;
     if (again && !before.oneMore) {
@@ -1018,29 +1018,68 @@ export class Supervisor {
     } finally {
       this.landWaits.delete(workerId);
     }
-    this.store.audit("supervisor", "land:start", workerId, { command: land.command, head });
     try {
+      // Main may have moved while this land queued: a tip behind it is rebased here, in the
+      // slot, before the check, so the check runs on what is pushed. Stale is never a refusal.
+      let rebased = "";
+      const target = land.target;
+      const onto = target && `${target.remote}/${target.branch}`;
+      // The target's tip as fetched now, or why it couldn't be.
+      const fetchTarget = async (): Promise<{ tip: string } | { error: string }> => {
+        const f = await runCommand(["git", "fetch", target!.remote, target!.branch], worktree, env, 120_000);
+        if (f.code !== 0) return { error: `git fetch ${target!.remote} ${target!.branch} failed (exit ${f.code}):\n${f.output.slice(-2000)}` };
+        return { tip: await git(worktree, ["rev-parse", onto!]) };
+      };
+      const contains = async (tip: string) => (await runCommand(["git", "merge-base", "--is-ancestor", tip, "HEAD"], worktree, env, 60_000)).code === 0;
+      let tipBefore = "";
+      if (target) {
+        const fetched = await fetchTarget();
+        if ("error" in fetched) return refuse(fetched.error);
+        tipBefore = fetched.tip;
+        if (!(await contains(tipBefore))) {
+          const rb = await this.doRebase(workerId, target);
+          if (!rb.ok) {
+            this.store.audit("supervisor", "land:stale", workerId, { head, rebased: false });
+            this.progress(w, `stale, behind ${onto}`);
+            this.landResults.set(workerId, [...(this.landResults.get(workerId) ?? []), `stale, behind ${onto}`]);
+            return { ok: false, landed: false, output: `Stale, not refused: your tip is behind ${onto} and doesn't rebase onto it, so the check didn't run. Bring your branch up to date with ${onto}, commit, then land.\n\n${rb.output}` };
+          }
+          head = await git(worktree, ["rev-parse", "HEAD"]);
+          rebased = `Your tip was behind ${onto}, so it was rebased first: ${rb.output.split("\n")[0]}\n\n`;
+        }
+      }
+      this.store.audit("supervisor", "land:start", workerId, { command: land.command, head });
       const r = await runCommand(land.command, worktree, env, land.timeoutMinutes * 60_000);
       const output = r.output.length > LAND_OUTPUT_MAX ? `…${r.output.slice(-LAND_OUTPUT_MAX)}` : r.output;
       const ok = r.code === 0;
       const held = !ok && !r.timedOut && land.heldExit !== undefined && r.code === land.heldExit;
-      const flaky = !ok && !r.timedOut && land.flakyExit !== undefined && r.code === land.flakyExit;
+      // The target moved during the run and HEAD lacks its new tip: told by git, not by the command's words.
+      let stale = false;
+      if (!ok && !held && target) {
+        const after = await fetchTarget();
+        stale = "tip" in after && after.tip !== tipBefore && !(await contains(after.tip));
+      }
+      const flaky = !ok && !held && !stale && !r.timedOut && land.flakyExit !== undefined && r.code === land.flakyExit;
       // A flaky failure gives the same HEAD one more run, once: a second failure is a refusal (no retry loop).
       const oneMore = flaky && !again;
-      if (ok || held) this.refusedHeads.delete(worktree);
+      if (ok || held || stale) this.refusedHeads.delete(worktree);
       else this.refusedHeads.set(worktree, { head, oneMore });
-      this.store.audit("supervisor", ok ? "land:ok" : held ? "land:held" : flaky ? "land:flaky" : "land:failed", workerId, { code: r.code, head });
+      this.store.audit("supervisor", ok ? "land:ok" : held ? "land:held" : stale ? "land:stale" : flaky ? "land:flaky" : "land:failed", workerId, { code: r.code, head });
       const last = landSummary(r.output);
+      const moved = `stale, ${onto} moved during the land`;
       const failed = `${flaky ? "flaky" : "could not land"} (${r.timedOut ? "timed out" : `exit ${r.code}`})`;
-      const result = ok ? `landed: ${last}` : held ? `held, lands after the hold: ${last}` : `${failed}: ${last}`;
-      this.progress(w, ok ? `landed: ${last}` : held ? "held: lands after the hold" : failed);
+      const result = ok ? `landed: ${last}` : held ? `held, lands after the hold: ${last}` : stale ? moved : `${failed}: ${last}`;
+      this.progress(w, ok ? `landed: ${last}` : held ? "held: lands after the hold" : stale ? moved : failed);
       // Told with the run's end, not now: one wake per worker for the orchestrator.
       this.landResults.set(workerId, [...(this.landResults.get(workerId) ?? []), result]);
-      if (held) return { ok: true, output: `Held, not refused: your tip waits and lands when the hold is released; don't land again.\n\n${output}` };
+      if (held) return { ok: true, output: `${rebased}Held, not refused: your tip waits and lands when the hold is released; don't land again.\n\n${output}` };
+      if (stale) {
+        return { ok: false, landed: false, output: `Stale, not refused: ${onto} moved while your land ran, so this run doesn't count against your HEAD. Land again: it rebases onto ${onto} first. If the output below shows a failure of yours, fix it first.\n\n${output}` };
+      }
       if (oneMore) {
         return { ok: false, landed: false, output: `Flaky, not refused (exit ${r.code}): nothing of yours is wrong, so this same commit may land once more (ADR 0093 §4 (d)). Land again now; if it fails again, it is refused and goes in your handoff.\n\n${output}` };
       }
-      return { ok, landed: ok, output: `${land.command.join(" ")} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
+      return { ok, landed: ok, output: `${rebased}${land.command.join(" ")} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
     } finally {
       release();
     }
@@ -1058,10 +1097,10 @@ export class Supervisor {
     return p;
   }
 
-  private async doRebase(workerId: string): Promise<{ ok: boolean; output: string }> {
+  private async doRebase(workerId: string, onto_?: { remote: string; branch: string }): Promise<{ ok: boolean; output: string }> {
     const w = this.worker(workerId);
     const role = this.roleOf(w);
-    const rebase = this.project(w.project).rebase;
+    const rebase = onto_ ?? this.project(w.project).rebase;
     if (!rebase) throw new SupervisorError(`Project ${w.project} has no rebase`);
     const onto = `${rebase.remote}/${rebase.branch}`;
     const refuse = (why: string) => {

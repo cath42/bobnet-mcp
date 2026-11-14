@@ -607,6 +607,82 @@ projects:
     g(worktree, "switch", "-q", "main");
     await expect(sup.rebase(w.id)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(/You are on main/) });
   });
+
+  describe("a land on a stale tip", () => {
+    /** A land that counts its checks, lets main move mid-check once (a RACE file), then pushes the tip to main. */
+    function landOnStale(worktree: string, seed: string) {
+      const land = join(dir, "land.sh");
+      const checks = join(dir, "checks");
+      writeFileSync(land, `#!/bin/sh\necho check >> ${checks}\nif [ -f ${join(dir, "RACE")} ]; then rm ${join(dir, "RACE")}; cd ${seed}; git pull -q --rebase=false origin main; echo race > race.md; git add .; git -c user.name=Main -c user.email=m@x commit -qm race; git push -q origin HEAD:main; cd "$OLDPWD"; fi\ngit push origin HEAD:refs/heads/main 2>&1 || exit 1\necho "landed: main $(git rev-parse --short HEAD)"\n`);
+      chmodSync(land, 0o755);
+      const c = config(worktree);
+      c.projects.get("helix")!.land = { command: [land], timeoutMinutes: 1, envCommand: undefined, requiresEnv: [], heldExit: undefined, flakyExit: undefined, target: { remote: "origin", branch: "main" } };
+      const count = () => execFileSync("sh", ["-c", `cat ${checks} 2>/dev/null | wc -l`], { encoding: "utf8" }).trim();
+      return { c, count };
+    }
+
+    it("is opt-in per project, as land.target", () => {
+      const parse = (land: string) => parseOver(`orchestrator: Bob\nprojects:\n  a: { path: /a, land: ${land}, roles: { b: { dir: /a/b } } }`, (d) => d).projects.get("a")!.land!;
+      expect(parse("{ command: [x], target: origin/release/v2 }").target).toEqual({ remote: "origin", branch: "release/v2" });
+      expect(parse("{ command: [x] }").target).toBeUndefined();
+      expect(() => parse("{ command: [x], target: v2 }")).toThrow(/remote\/branch/);
+    });
+
+    it("fetches main in the slot and rebases a tip that is behind it before the check", async () => {
+      const { worktree, seed } = repo();
+      const { c, count } = landOnStale(worktree, seed);
+      const { sup, sessions } = await setup("", c);
+      const w = sup.spawn({ project: "helix", role: "homer", task: "t" });
+      await until(() => sessions.length === 1);
+      const main = g(seed, "rev-parse", "HEAD");
+      const r = await sup.land(w.id);
+      expect(r).toMatchObject({ ok: true, output: expect.stringMatching(/^Your tip was behind origin\/main, so it was rebased first[\s\S]*landed: main/) });
+      expect(count()).toBe("1");
+      expect(g(worktree, "rev-parse", "HEAD~1")).toBe(main);
+      expect(g(worktree, "rev-parse", "HEAD")).toBe(g(seed, "ls-remote", "origin", "refs/heads/main").split("\t")[0]);
+    });
+
+    it("refuses a stale tip that doesn't rebase cleanly without running the check, and doesn't count it as refused", async () => {
+      const { worktree, seed } = repo();
+      writeFileSync(join(seed, "homer.md"), "clash\n");
+      g(seed, "add", ".");
+      g(seed, "commit", "-qm", "clash");
+      g(seed, "push", "-q", "origin", "HEAD:main");
+      const { c, count } = landOnStale(worktree, seed);
+      const { sup, broker, sessions } = await setup("", c);
+      const w = sup.spawn({ project: "helix", role: "homer", task: "t" });
+      await until(() => sessions.length === 1);
+      const before = g(worktree, "rev-parse", "HEAD");
+      const stale = /^Stale, not refused: your tip is behind origin\/main and doesn't rebase onto it[\s\S]*Conflicts in:\nhomer\.md/;
+      await expect(sup.land(w.id)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(stale) });
+      expect(count()).toBe("0");
+      expect(g(worktree, "rev-parse", "HEAD")).toBe(before);
+      // Not a refusal of that HEAD: landing it again is tried again, not "nothing has changed".
+      await expect(sup.land(w.id)).resolves.toMatchObject({ ok: false, output: expect.stringMatching(stale) });
+      expect(store.auditLog(20).filter((a) => a.action === "land:stale")).toHaveLength(2);
+      sessions[0]!.finish("ok");
+      await until(() => broker.toOrchestrator().some((b) => b.startsWith("Homer")));
+      expect(broker.toOrchestrator().at(-1)).toMatch(/Land: stale, behind origin\/main/);
+    });
+
+    it("reports a run the target moved under as stale, not failed, and lands that HEAD on the next try", async () => {
+      const { worktree, seed } = repo();
+      const { c, count } = landOnStale(worktree, seed);
+      const { sup, broker, sessions } = await setup("", c);
+      const w = sup.spawn({ project: "helix", role: "homer", task: "t" });
+      await until(() => sessions.length === 1);
+      writeFileSync(join(dir, "RACE"), "");
+      const r = await sup.land(w.id);
+      expect(r).toMatchObject({ ok: false, output: expect.stringMatching(/^Stale, not refused: origin\/main moved while your land ran[\s\S]*\[rejected\]/) });
+      expect(store.auditLog(20).some((a) => a.action === "land:failed")).toBe(false);
+      await expect(sup.land(w.id)).resolves.toMatchObject({ ok: true, output: expect.stringMatching(/rebased first[\s\S]*landed: main/) });
+      expect(count()).toBe("2");
+      expect(g(seed, "ls-remote", "origin", "refs/heads/main").split("\t")[0]).toBe(g(worktree, "rev-parse", "HEAD"));
+      sessions[0]!.finish("ok");
+      await until(() => broker.toOrchestrator().some((b) => b.startsWith("Homer")));
+      expect(broker.toOrchestrator().at(-1)).toMatch(/Land: stale, origin\/main moved during the land; landed: /);
+    });
+  });
 });
 
 describe("listed runs", () => {

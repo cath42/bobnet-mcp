@@ -144,6 +144,12 @@ const Project = z.object({
       held_exit: z.number().int().optional(),
       /** The exit code meaning "flaky": nothing of the author's is wrong (ADR 0093 §4 (d)), so the same tip may land once more. */
       flaky_exit: z.number().int().optional(),
+      /**
+       * The branch the land pushes to, as remote/branch (BobNet's: origin/v2). Set, a tip behind it
+       * is rebased onto it in the slot before the check, and a run it moved under is "stale", not
+       * refused. Unset (Helix: its integrator replays onto main), neither.
+       */
+      target: z.string().regex(/^[\w.-]+\/[\w./-]+$/, "must be remote/branch, e.g. origin/main").optional(),
     })
     .optional(),
   /**
@@ -263,7 +269,7 @@ export interface ProjectConfig {
   team: string | undefined;
   orchestrator: string;
   orchestratorDir: string | undefined;
-  land: { command: string[]; timeoutMinutes: number; envCommand: string[] | undefined; requiresEnv: string[]; heldExit: number | undefined; flakyExit: number | undefined } | undefined;
+  land: { command: string[]; timeoutMinutes: number; envCommand: string[] | undefined; requiresEnv: string[]; heldExit: number | undefined; flakyExit: number | undefined; target?: { remote: string; branch: string } | undefined } | undefined;
   rebase: { remote: string; branch: string } | undefined;
   runs: Map<string, RunConfig>;
   holdFile: string | undefined;
@@ -382,9 +388,9 @@ export function parseSupervisorConfig(
       orchestrator,
       orchestratorDir: p.orchestrator_dir,
       land: p.land
-        ? { command: p.land.command, timeoutMinutes: p.land.timeout_minutes, envCommand: p.land.env_command, requiresEnv: p.land.requires_env, heldExit: p.land.held_exit, flakyExit: p.land.flaky_exit }
+        ? { command: p.land.command, timeoutMinutes: p.land.timeout_minutes, envCommand: p.land.env_command, requiresEnv: p.land.requires_env, heldExit: p.land.held_exit, flakyExit: p.land.flaky_exit, target: p.land.target ? remoteBranch(p.land.target) : undefined }
         : undefined,
-      rebase: p.rebase ? { remote: p.rebase.onto.split("/")[0]!, branch: p.rebase.onto.slice(p.rebase.onto.indexOf("/") + 1) } : undefined,
+      rebase: p.rebase ? remoteBranch(p.rebase.onto) : undefined,
       runs,
       holdFile: p.hold_file,
       backlog: p.backlog ? { dir: p.backlog.dir, ref: p.backlog.ref ?? (p.rebase?.onto ?? "origin/main") } : undefined,
@@ -448,3 +454,6 @@ function readMcp(projectPath: string): Record<string, unknown> {
 export function loadSupervisorConfig(dir = configDir()): SupervisorConfig {
   return parseSupervisorConfig(readFileSync(join(dir, "supervisor.yaml"), "utf8"));
 }
+
+/** "origin/release/v2" as its remote and its branch. */
+const remoteBranch = (s: string) => ({ remote: s.split("/")[0]!, branch: s.slice(s.indexOf("/") + 1) });
