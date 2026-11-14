@@ -316,7 +316,8 @@ option).
 
 ### 9. Runs, tokens and context per call (steps-view 7, 10; notes 36-38)
 
-`runs`: one row per worker run: `id` (worker id and run number), `project`, `session` (NULL is Other
+`runs`: one row per worker run: `id` (worker id: a resume is a new worker, and its `run_end` reports
+tokens net of the resume baseline), `project`, `session` (NULL is Other
 work), `agent`, `role`, `laptop`, `model`, `effort`, `started_at`, `ended_at`, `resumed`, tokens
 (`input`, `output`, `cache_read`, `cache_write`), `calls`, `ctx` (context per call: a BLOB of
 little-endian uint32s, up to 2000 points, downsampled to 400 on read), `remote_url`. No money column:
