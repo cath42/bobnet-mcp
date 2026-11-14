@@ -102,9 +102,9 @@ const READ_DEFAULT_LINES = 2000;
 const FILE_WRITE_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 /** How often hold files are re-read, to notice a hold set or released. */
 const HOLD_CHECK_MS = 5_000;
-/** A queued board report the board refuses is dropped, not retried: a retry gets the same answer and blocks the rows behind it. */
 /** The most tasks a board ctx carries (the protocol's BoardCtx). */
 const MAX_TASKS = 50;
+/** A queued board report the board refuses is dropped, not retried: a retry gets the same answer and blocks the rows behind it. */
 const FINAL_BOARD_ERRORS = new Set(["invalid", "forbidden", "conflict", "frame_too_large", "secret_detected"]);
 
 interface Consult {

@@ -1,7 +1,8 @@
-import { BOARD_READS, BoardOp, type BoardCaller, type BoardReply } from "@bobnet/protocol";
+import { BOARD_READS, BoardOp, type BoardCaller, type BoardExportV1, type BoardImportReply, type BoardReply, type Identity } from "@bobnet/protocol";
 import { DurableObject } from "cloudflare:workers";
 import { migrate } from "../schema.ts";
 import { BoardError } from "./errors.ts";
+import { exportBoard, importBoard } from "./export.ts";
 import { BOARD_MIGRATIONS } from "./schema.ts";
 import { BoardStore } from "./store.ts";
 
@@ -39,6 +40,23 @@ export class Board extends DurableObject<Env> {
       // A bug here is not an outage: answered as such, so no agent retries it for a minute.
       console.error("board error", { op: op.op, err: message });
       return { ok: false, code: "invalid", message: `Board error: ${message}` };
+    }
+  }
+
+  /** The whole board as one document (§11), for GET /v1/board/export. */
+  async exportBoard(): Promise<BoardExportV1> {
+    return exportBoard(this.ctx.storage.sql);
+  }
+
+  /** A document's projects into the board, all or nothing (§11), for POST /v1/board/import. */
+  async importBoard(by: Identity, doc: unknown): Promise<BoardImportReply> {
+    try {
+      return this.ctx.storage.transactionSync(() => importBoard(this.ctx.storage.sql, by, doc));
+    } catch (err) {
+      if (err instanceof BoardError) return { ok: false, code: err.code === "unavailable" ? "invalid" : err.code, message: err.message };
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/constraint failed/i.test(message)) console.error("board import error", { err: message });
+      return { ok: false, code: "invalid", message: `Refused by the board's schema: ${message}` };
     }
   }
 }
