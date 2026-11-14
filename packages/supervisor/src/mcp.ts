@@ -167,7 +167,7 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
   return {
     spawn_worker: (a) => {
       const s = Spawn.parse(a);
-      return sup.spawn({
+      return sup.spawnJoined({
         project: s.project,
         role: s.role,
         task: s.task,

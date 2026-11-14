@@ -1,9 +1,24 @@
 import { execFile, spawn as spawnProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, relative, resolve, isAbsolute } from "node:path";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
-import { findSecret, type Envelope, type LaptopSnapshot, type PeerInfo, type ServerFrame, type TokenCounts, type WorkerSnapshot } from "@bobnet/protocol";
+import {
+  type BoardCtx,
+  type BoardOpInput,
+  type BoardResults,
+  type CiStatus,
+  findSecret,
+  type Envelope,
+  ItemRef,
+  type LaptopSnapshot,
+  type PeerInfo,
+  RUN_CTX_MAX,
+  type ServerFrame,
+  type SessionRef,
+  type TokenCounts,
+  type WorkerSnapshot,
+} from "@bobnet/protocol";
 import type { Identity } from "@bobnet/client/config";
 import type { PushFrame, RequestFrame } from "@bobnet/client/connection";
 import type { Logger } from "@bobnet/client/log";
@@ -11,13 +26,15 @@ import type { OwnerCheck } from "./owner.ts";
 import { EFFORTS, type Effort, type ProjectConfig, type RoleConfig, type RunConfig, type SupervisorConfig } from "./config.ts";
 import { assignSessions, Boards, type DeclaredSession, sessionName, workerTasks } from "./board.ts";
 import { Inbox } from "@bobnet/client/inbox";
+import type { BoardToolDeps } from "@bobnet/client/board-tools";
+import { CAPTURE_FLUSH_MS, CaptureQueue } from "@bobnet/client/capture-queue";
 import { LEAD_SERVER, leadTools } from "./lead-tools.ts";
 import { readRequest, type RemoteRequest, reply } from "./remote.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
 import { holdReader, RunSlots, type SlotEntry } from "./slots.ts";
-import { ACTIVE_STATES, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
+import { ACTIVE_STATES, newWorkerId, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
 import { type Outcome, type QueryFn, type Usage, WorkerRun, type WorkerRunOptions, workerEnv, ZERO_USAGE } from "./worker.ts";
 import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
 
@@ -25,6 +42,8 @@ import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
 export interface BrokerLink {
   register(identity: Identity): Promise<unknown>;
   request<R>(frame: RequestFrame): Promise<R>;
+  /** A board operation as a peer it hosts, waiting up to `waitMs` (default a minute) for the broker. */
+  boardOp<K extends keyof BoardResults>(as: string, op: BoardOpInput & { op: K }, ctx?: BoardCtx, waitMs?: number): Promise<BoardResults[K]>;
   sendRaw(
     frame:
       | { t: "ack"; as: string; ids: string[] }
@@ -33,6 +52,30 @@ export interface BrokerLink {
 }
 
 export class SupervisorError extends Error {}
+
+/**
+ * `tasks` null: not known, for a worker carried over from one spawned before spawns named them.
+ * `session` null: in none ("Other work"). `carrySession` is a carried-over worker's, as stored.
+ */
+export interface SpawnOptions {
+  project: string;
+  role: string;
+  task: string;
+  tasks?: string[] | null;
+  session?: DeclaredSession | null;
+  carrySession?: string | null;
+  handoff?: string;
+  resume_session?: string;
+  model?: string;
+  effort?: Effort;
+  /** Who asks: the orchestrator unless said (a lead's worker id, a remote requester's address). */
+  spawnedBy?: string;
+  /**
+   * A lead lives until stopped and holds no worker slot; a worker ends after its result. The spawn
+   * says which, a worker unless it asks (Casper, 2026-11-07): whoever starts a lead role decides.
+   */
+  as?: "lead" | "worker";
+}
 
 const STALL_CHECK_MS = 60_000;
 /** How long a shutdown waits for its workers' exits to be recorded: past a stop's grace period and kill. */
@@ -59,6 +102,8 @@ const READ_DEFAULT_LINES = 2000;
 const FILE_WRITE_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 /** How often hold files are re-read, to notice a hold set or released. */
 const HOLD_CHECK_MS = 5_000;
+/** A queued board report the board refuses is dropped, not retried: a retry gets the same answer and blocks the rows behind it. */
+const FINAL_BOARD_ERRORS = new Set(["invalid", "forbidden", "conflict", "frame_too_large", "secret_detected"]);
 
 interface Consult {
   id: string;
@@ -121,6 +166,11 @@ export class Supervisor {
   private sandboxBroken: string | null = null;
   /** Each running lead's info-only news (joins, leaves, statuses, quiet broadcasts), as the interactive orchestrator's digest. */
   private readonly leadNews = new Map<string, Inbox>();
+  /** Captures made by workers (ADR 0001 §12): queued on the laptop, sent with the worker's ctx. */
+  private readonly captures: CaptureQueue;
+  /** Each worker-held run slot's id on the board, and how the run in it ended (§10). */
+  private readonly slotRuns = new Map<SlotEntry, string>();
+  private readonly slotOutcomes = new Map<string, CiStatus>();
   private holdTimer: NodeJS.Timeout | null = null;
   private lastHold = "";
   private readonly boards: Boards | null;
@@ -138,6 +188,8 @@ export class Supervisor {
     boards?: { transcriptsDir?: string };
     /** Whether Claude Code's sandbox can run here: null if it can, else why not. Default: sandboxProblem. */
     sandboxCheck?: () => Promise<string | null>;
+    /** The capture queue's folder; defaults to ~/.local/state/bobnet/capture-queue. */
+    captureDir?: string;
   }) {
     this.ownerCheck = deps.ownerCheck ?? null;
     this.sandboxCheck = deps.sandboxCheck ?? sandboxProblem;
@@ -153,6 +205,11 @@ export class Supervisor {
       readHold: holdReader(() => holdFiles),
       onChange: () => this.writeStatus(),
       onGrant: (e) => this.onSlotGranted(e),
+      onRelease: (e) => this.onSlotReleased(e),
+    });
+    this.captures = new CaptureQueue((as, op, ctx, waitMs) => this.broker.boardOp(as, op, ctx, waitMs), {
+      ...(deps.captureDir ? { dir: deps.captureDir } : {}),
+      onError: (msg, detail) => this.log.warn(msg, detail),
     });
     this.router = new Router({
       store: deps.store,
@@ -229,6 +286,9 @@ export class Supervisor {
       this.checkStalls();
       this.flushOutbox();
     }, STALL_CHECK_MS);
+    this.flushCaptures();
+    const captureTimer = setInterval(() => this.flushCaptures(), CAPTURE_FLUSH_MS);
+    captureTimer.unref();
     const heartbeat = setInterval(() => this.report(true), REPORT_HEARTBEAT_MS);
     heartbeat.unref();
     this.boards?.start();
@@ -248,62 +308,24 @@ export class Supervisor {
     await Promise.race([Promise.all(runs.map((r) => r.exited)), new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS).unref())]);
   }
 
+  /** The broker is back (each connect): what waited for it goes now. */
+  onConnected(): void {
+    this.flushOutbox();
+    this.flushCaptures();
+  }
+
+  /** Captures made as a role this supervisor runs; a role's own process is this one, so its ctx goes with it. */
+  private flushCaptures(): void {
+    const names = new Set(this.roles().map((r) => r.name.toLowerCase()));
+    this.captures.flush((as) => names.has(as.toLowerCase())).catch((err: Error) => this.log.warn("capture flush failed", { err: err.message }));
+  }
+
   // ---------- Orchestrator API ----------
 
-  /**
-   * `tasks` null: not known, for a worker carried over from one spawned before spawns named them.
-   * `session` null: in none ("Other work"). `carrySession` is a carried-over worker's, as stored.
-   */
-  spawn(opts: {
-    project: string;
-    role: string;
-    task: string;
-    tasks?: string[] | null;
-    session?: DeclaredSession | null;
-    carrySession?: string | null;
-    handoff?: string;
-    resume_session?: string;
-    model?: string;
-    effort?: Effort;
-    /** Who asks: the orchestrator unless said (a lead's worker id, a remote requester's address). */
-    spawnedBy?: string;
-    /**
-     * A lead lives until stopped and holds no worker slot; a worker ends after its result. The spawn
-     * says which, a worker unless it asks (Casper, 2026-11-07): whoever starts a lead role decides.
-     */
-    as?: "lead" | "worker";
-  }): WorkerRow & { note?: string } {
-    const project = this.project(opts.project);
-    const role = this.role(opts.project, opts.role);
-    if (opts.as === "lead" && !role.lead) throw new SupervisorError(`${role.name} isn't a lead role (lead: true in supervisor.yaml), so it runs only as a worker`);
-    if (role.sandbox && this.sandboxBroken) {
-      throw new SupervisorError(`${role.name} runs in Claude Code's sandbox, which can't run on this machine: ${this.sandboxBroken}`);
-    }
-    // The board shows a worker on the items its spawn names, and guesses none from the brief.
-    if (opts.tasks === undefined && project.backlog) {
-      throw new SupervisorError(`${project.key} has a backlog: say which items this worker works on or reviews, tasks: ["LAND-41.3", …] (a feature id for the feature as a whole; [] for none)`);
-    }
-    const bad = (opts.tasks ?? []).filter((t) => !TASK_ID.test(t));
-    if (bad.length) throw new SupervisorError(`not backlog ids: ${bad.join(", ")} (e.g. LAND-41 or LAND-41.3)`);
-    const tasks = opts.tasks ? [...new Set(opts.tasks.map((t) => t.toUpperCase()))] : null;
-    // The session is declared, never read from the brief: the board shows the worker in it.
-    if (opts.carrySession === undefined && opts.session === undefined && project.backlog) {
-      throw new SupervisorError(`${project.key} has a backlog: say which session this worker is in, session: { feature: "LAND-43", kind: "build", label: "B" } (kind design, build, review or retro; label as you call it), or null for none`);
-    }
-    const d = opts.session;
-    if (d) {
-      if (!FEATURE_ID.test(d.feature)) throw new SupervisorError(`session.feature ${JSON.stringify(d.feature)} isn't a feature id (e.g. LAND-43)`);
-      if (!SESSION_KINDS.includes(d.kind)) throw new SupervisorError(`session.kind is one of ${SESSION_KINDS.join(", ")}`);
-      if (d.label !== undefined && !SESSION_LABEL.test(d.label)) throw new SupervisorError(`session.label ${JSON.stringify(d.label)}: up to 20 letters, digits, . _ or -`);
-    }
-    const declared = opts.carrySession !== undefined ? opts.carrySession : JSON.stringify(d ? { feature: d.feature.toUpperCase(), kind: d.kind, ...(d.label ? { label: d.label } : {}) } : null);
-    if (opts.model !== undefined && role.models && !role.models.includes(opts.model)) {
-      throw new SupervisorError(`${role.name} may run on ${role.models.join(", ")}, not ${opts.model}`);
-    }
-    if (opts.effort !== undefined && role.maxEffort && EFFORTS.indexOf(opts.effort) > EFFORTS.indexOf(role.maxEffort)) {
-      throw new SupervisorError(`${role.name}'s effort is capped at ${role.maxEffort}; ${opts.effort} needs Casper to raise max_effort`);
-    }
+  spawn(opts: SpawnOptions & { id?: string }): WorkerRow & { note?: string } {
+    const { project, role, tasks, declared } = this.admit(opts);
     const w = this.store.createWorker({
+      ...(opts.id ? { id: opts.id } : {}),
       model: opts.model ?? role.model ?? null,
       effort: opts.effort ?? role.effort ?? null,
       project: project.key,
@@ -322,6 +344,64 @@ export class Supervisor {
     const row = this.store.worker(w.id)!;
     const note = row.state === "queued" ? this.queuedBecause(row) : undefined;
     return note ? { ...row, note } : row;
+  }
+
+  /**
+   * A spawn from the orchestrator, a lead or a remote requester. On a project on the board service
+   * a spawn into a session joins it first, and fails, saying why, if the board refuses or can't be
+   * reached within a minute: a worker never starts outside the session it was spawned into (§6, §12).
+   */
+  async spawnJoined(opts: SpawnOptions): Promise<WorkerRow & { note?: string }> {
+    const { project, role, tasks, declared } = this.admit(opts);
+    const d = declared ? (JSON.parse(declared) as DeclaredSession | null) : null;
+    if (project.board !== "service" || !d || opts.carrySession !== undefined) return this.spawn(opts);
+    const id = newWorkerId();
+    const ctx: BoardCtx = { worker: id, role: role.key, project: project.key, session: boardSession(d), tasks: tasks ?? [] };
+    try {
+      await this.broker.boardOp(role.name, { op: "session_join", project: project.key, session: ctx.session! }, ctx);
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      throw new SupervisorError(`${role.name} isn't spawned: the board ${code === "unavailable" ? "can't be reached" : "refused to join"} ${sessionName(d)}: ${(err as Error).message}`);
+    }
+    return this.spawn({ ...opts, id });
+  }
+
+  /** Checks a spawn before anything is made of it. */
+  private admit(opts: SpawnOptions): { project: ProjectConfig; role: RoleConfig; tasks: string[] | null; declared: string | null } {
+    const project = this.project(opts.project);
+    const role = this.role(opts.project, opts.role);
+    if (opts.as === "lead" && !role.lead) throw new SupervisorError(`${role.name} isn't a lead role (lead: true in supervisor.yaml), so it runs only as a worker`);
+    if (role.sandbox && this.sandboxBroken) {
+      throw new SupervisorError(`${role.name} runs in Claude Code's sandbox, which can't run on this machine: ${this.sandboxBroken}`);
+    }
+    // The board shows a worker on the items its spawn names, and guesses none from the brief.
+    const board = project.backlog ? "a backlog" : project.board ? "a board" : null;
+    if (opts.tasks === undefined && board) {
+      throw new SupervisorError(`${project.key} has ${board}: say which items this worker works on or reviews, tasks: ["LAND-41.3", …] (a feature id for the feature as a whole; [] for none)`);
+    }
+    const bad = (opts.tasks ?? []).filter((t) => !TASK_ID.test(t));
+    if (bad.length) throw new SupervisorError(`not backlog ids: ${bad.join(", ")} (e.g. LAND-41 or LAND-41.3)`);
+    const notItems = project.board === "service" ? (opts.tasks ?? []).filter((t) => !ItemRef.safeParse(t.toUpperCase()).success) : [];
+    if (notItems.length) throw new SupervisorError(`not item ids on ${project.key}'s board: ${notItems.join(", ")} (e.g. LAND-41)`);
+    const tasks = opts.tasks ? [...new Set(opts.tasks.map((t) => t.toUpperCase()))] : null;
+    // The session is declared, never read from the brief: the board shows the worker in it.
+    if (opts.carrySession === undefined && opts.session === undefined && board) {
+      throw new SupervisorError(`${project.key} has ${board}: say which session this worker is in, session: { feature: "LAND-43", kind: "build", label: "B" } (kind design, build, review or retro; label as you call it), or null for none`);
+    }
+    const d = opts.session;
+    if (d) {
+      if (!FEATURE_ID.test(d.feature)) throw new SupervisorError(`session.feature ${JSON.stringify(d.feature)} isn't a feature id (e.g. LAND-43)`);
+      if (!SESSION_KINDS.includes(d.kind)) throw new SupervisorError(`session.kind is one of ${SESSION_KINDS.join(", ")}`);
+      if (d.label !== undefined && !SESSION_LABEL.test(d.label)) throw new SupervisorError(`session.label ${JSON.stringify(d.label)}: up to 20 letters, digits, . _ or -`);
+    }
+    const declared = opts.carrySession !== undefined ? opts.carrySession : JSON.stringify(d ? { feature: d.feature.toUpperCase(), kind: d.kind, ...(d.label ? { label: d.label } : {}) } : null);
+    if (opts.model !== undefined && role.models && !role.models.includes(opts.model)) {
+      throw new SupervisorError(`${role.name} may run on ${role.models.join(", ")}, not ${opts.model}`);
+    }
+    if (opts.effort !== undefined && role.maxEffort && EFFORTS.indexOf(opts.effort) > EFFORTS.indexOf(role.maxEffort)) {
+      throw new SupervisorError(`${role.name}'s effort is capped at ${role.maxEffort}; ${opts.effort} needs Casper to raise max_effort`);
+    }
+    return { project, role, tasks, declared };
   }
 
   /** Why a queued worker hasn't started, so a spawn that waits says so. */
@@ -520,6 +600,13 @@ export class Supervisor {
   }
 
   private onSlotGranted(e: SlotEntry): void {
+    const w = this.store.worker(e.holder);
+    if (w && this.config.projects.get(w.project)?.board === "service") {
+      // Unique to this laptop's run: the board refuses another laptop's id (§10).
+      const id = `${this.laptop ?? "laptop"}:${randomUUID()}`;
+      this.slotRuns.set(e, id);
+      this.boardReport(w, { op: "slot_run", project: w.project, external_id: id, name: e.label, status: "running", started_at: e.since });
+    }
     if (!e.holder.startsWith("interactive:")) return;
     const name = e.holder.slice("interactive:".length);
     this.notify(`Run slot given to ${name} (${e.label}). Tell ${name} to go; free_slot ${name} when it reports done.`, this.interactive.get(name));
@@ -645,7 +732,7 @@ export class Supervisor {
           const listed = [...may].flatMap(([p, rs]) => [...rs].map((r) => `${p}/${r}`)).join(", ");
           throw new SupervisorError(`${from} may not spawn ${req.project}/${req.role}; it may spawn ${listed || "nothing"}`);
         }
-        const w = this.spawn({
+        const w = await this.spawnJoined({
           project: req.project,
           role: req.role,
           task: req.task,
@@ -796,6 +883,7 @@ export class Supervisor {
           consultable: consult ? [] : project.consult.filter((r) => r !== w.role),
           consult: (r, question) => this.consult(w.id, r, question),
           answerConsult: (id, answer) => this.answerConsult(w.id, id, answer),
+          ...(project.board === "service" && !consult ? { board: this.boardTools(w.id, role, project) } : {}),
           ...(role.lead && !consult
             ? {
                 lead: {
@@ -838,6 +926,19 @@ export class Supervisor {
     });
     this.store.audit("supervisor", consult ? "start:consult" : "start", w.id, { role: role.name, cwd: role.dir, resume: w.resume_session, ...(consult ? { consult: consult.id } : {}) });
     this.runs.set(w.id, run);
+    const started = this.store.worker(w.id)!;
+    const ctx = this.boardCtx(started);
+    this.boardReport(started, {
+      op: "run_start",
+      project: w.project,
+      id: w.id,
+      model: w.model,
+      effort: w.effort,
+      started_at: started.started_at!,
+      resumed: w.resume_session !== null,
+      session: ctx.session,
+      tasks: ctx.tasks,
+    });
     if (role.lead && !consult) this.leadNews.set(w.id, new Inbox());
     this.roleStatus(role, w.id);
     if (!consult) this.progress(w, `${w.resume_session ? "resumed" : "started"}${powerNote(w, base)}`);
@@ -1073,6 +1174,8 @@ export class Supervisor {
       if (ok || held || stale) this.refusedHeads.delete(worktree);
       else this.refusedHeads.set(worktree, { head, oneMore });
       this.store.audit("supervisor", ok ? "land:ok" : held ? "land:held" : stale ? "land:stale" : flaky ? "land:flaky" : "land:failed", workerId, { code: r.code, head });
+      this.slotOutcomes.set(workerId, ok ? "passed" : held || stale ? "cancelled" : "failed");
+      if (ok) await this.reportPush(w, worktree, target ?? project.rebase);
       const last = landSummary(r.output);
       const moved = `stale, ${onto} moved during the land`;
       const failed = `${flaky ? "flaky" : "could not land"} (${r.timedOut ? "timed out" : `exit ${r.code}`})`;
@@ -1192,6 +1295,7 @@ export class Supervisor {
       const r = await runCommand([...spec.command, ...args], cwd, env, spec.timeoutMinutes * 60_000);
       const ok = r.code === 0;
       this.store.audit("supervisor", ok ? "run:ok" : "run:failed", workerId, { name, code: r.code });
+      if (spec.slot) this.slotOutcomes.set(workerId, ok ? "passed" : "failed");
       const output = r.output.length > LAND_OUTPUT_MAX ? `…${r.output.slice(-LAND_OUTPUT_MAX)}` : r.output;
       return { ok, output: `${name} exited ${r.timedOut ? "on timeout" : r.code}\n\n${output}` };
     } finally {
@@ -1309,6 +1413,19 @@ export class Supervisor {
       last_event_at: run ? new Date(run.lastEventAt).toISOString() : w.last_event_at,
     });
     this.store.audit("supervisor", `exit:${outcome.state}`, id, {});
+    if (run) {
+      const ended = this.store.worker(id)!;
+      // The run's own tokens, net of a resumed session's earlier ones (§9).
+      this.boardReport(ended, {
+        op: "run_end",
+        project: ended.project,
+        id,
+        ended_at: ended.ended_at!,
+        tokens: this.ownUsage(ended).tokens,
+        calls: run.ctx.length,
+        ctx: downsample(run.ctx, RUN_CTX_MAX),
+      });
+    }
     this.remoteEvent(this.store.worker(id)!, { event: "exit", state: outcome.state, checkpoint, ...(outcome.state === "done" ? {} : { error: outcome.state === "failed" ? outcome.error : outcome.reason }) });
     void this.boards?.refresh();
 
@@ -1442,24 +1559,117 @@ export class Supervisor {
   }
 
   private flushing = false;
+  private flushAgain = false;
 
   private flushOutbox(): void {
-    if (this.flushing) return;
-    const pending = this.store.outbox();
-    if (pending.length === 0) return;
+    if (this.flushing) {
+      this.flushAgain = true;
+      return;
+    }
+    if (this.store.outbox().length === 0) return;
     this.flushing = true;
     void (async () => {
       try {
-        for (const item of pending) {
-          await this.broker.request({ t: "send", as: this.config.name, to: [item.to_name], body: `(sent ${item.created_at}) ${item.body}` });
-          this.store.removeOutbox(item.seq);
-        }
-      } catch {
-        // Still unreachable; the next flush retries.
+        await this.flushMessages();
+        await this.flushBoardReports();
       } finally {
         this.flushing = false;
+        if (this.flushAgain) {
+          this.flushAgain = false;
+          this.flushOutbox();
+        }
       }
     })();
+  }
+
+  private async flushMessages(): Promise<void> {
+    try {
+      for (const item of this.store.outbox("message")) {
+        await this.broker.request({ t: "send", as: this.config.name, to: [item.to_name], body: `(sent ${item.created_at}) ${item.body}` });
+        this.store.removeOutbox(item.seq);
+      }
+    } catch {
+      // Still unreachable; the next flush retries.
+    }
+  }
+
+  /**
+   * The board reports, in order, each removed once the board has it. One the board refuses is final:
+   * logged and dropped, so it can't hold up the rest. One it can't take now waits, with all behind it.
+   */
+  private async flushBoardReports(): Promise<void> {
+    for (const item of this.store.outbox("board_op")) {
+      const { ctx, op } = JSON.parse(item.body) as { ctx: BoardCtx; op: BoardOpInput };
+      try {
+        await this.broker.boardOp(item.to_name, op, ctx, 0);
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (!code || !FINAL_BOARD_ERRORS.has(code)) return;
+        this.log.error("the board refused a report; dropped", { op: op.op, worker: ctx.worker, code, err: (err as Error).message });
+        this.store.audit("supervisor", "board:refused", ctx.worker, { op: op.op, code, message: (err as Error).message });
+      }
+      this.store.removeOutbox(item.seq);
+    }
+  }
+
+  // ---------- The board service (ADR 0001) ----------
+
+  /** What the supervisor says about a worker it speaks for (§4): from its row, as its spawn declared it. */
+  private boardCtx(w: WorkerRow): BoardCtx {
+    const d = w.declared_session ? (JSON.parse(w.declared_session) as DeclaredSession | null) : null;
+    const tasks = (storedTasks(w) ?? []).map((t) => t.toUpperCase()).filter((t) => ItemRef.safeParse(t).success);
+    return { worker: w.id, role: w.role, project: w.project, session: d ? boardSession(d) : null, tasks: tasks.slice(0, 50) };
+  }
+
+  /** One of the supervisor's own board reports (§9, §10), through the outbox, so a broker that is down loses none. */
+  private boardReport(w: WorkerRow, op: BoardOpInput): void {
+    if (this.config.projects.get(w.project)?.board !== "service") return;
+    this.store.addOutbox(this.roleOf(w).name, JSON.stringify({ ctx: this.boardCtx(w), op }), "board_op");
+    this.flushOutbox();
+  }
+
+  /** The board tools as a worker gets them: made as its role, with its ctx (§4, §8). */
+  private boardTools(workerId: string, role: RoleConfig, project: ProjectConfig): BoardToolDeps {
+    const ctx = () => this.boardCtx(this.worker(workerId));
+    const roots = [role.dir, project.path, join(this.config.stateDir, "handoffs")].map((r) => resolve(r));
+    return {
+      op: (op) => this.broker.boardOp(role.name, op, ctx()),
+      capture: (input) => this.captures.capture(role.name, input, ctx()),
+      project: async () => project.key,
+      // Only files of its own: its worktree, the project, the handoffs. Never a path that reaches anywhere else.
+      readHandoff: (path) => {
+        const full = resolve(role.dir, path);
+        if (!roots.some((r) => !relative(r, full).startsWith("..") && !isAbsolute(relative(r, full)))) {
+          throw new SupervisorError(`close_session reads a handoff in your worktree, the project or the handoffs folder, not ${path}`);
+        }
+        return readFileSync(full, "utf8");
+      },
+    };
+  }
+
+  /** What a land pushed (§10): the board ties a CI run on that commit to this worker. */
+  private async reportPush(w: WorkerRow, worktree: string, target: { remote: string; branch: string } | undefined): Promise<void> {
+    if (this.config.projects.get(w.project)?.board !== "service") return;
+    try {
+      const remote = target?.remote ?? "origin";
+      const sha = await git(worktree, ["rev-parse", "HEAD"]);
+      const url = await git(worktree, ["remote", "get-url", remote]);
+      const repo = repoName(url);
+      if (!repo) return;
+      this.boardReport(w, { op: "push", project: w.project, repo, branch: target?.branch ?? "main", sha });
+    } catch (err) {
+      this.log.warn("couldn't read what the land pushed", { worker: w.id, err: (err as Error).message });
+    }
+  }
+
+  private onSlotReleased(e: SlotEntry): void {
+    const id = this.slotRuns.get(e);
+    if (!id) return;
+    this.slotRuns.delete(e);
+    const w = this.store.worker(e.holder);
+    const status = this.slotOutcomes.get(e.holder) ?? "passed";
+    this.slotOutcomes.delete(e.holder);
+    if (w) this.boardReport(w, { op: "slot_run", project: w.project, external_id: id, name: e.label, status, started_at: e.since, ended_at: new Date().toISOString() });
   }
 
   private async registerWithRetry(identity: Identity): Promise<unknown> {
@@ -1849,6 +2059,23 @@ const SESSION_LABEL = /^[A-Za-z0-9][\w.-]{0,19}$/;
 
 /** The items a worker's spawn named, for a worker that carries on its task; null if its spawn named none. */
 const storedTasks = (w: WorkerRow): string[] | null => (w.tasks === null ? null : (JSON.parse(w.tasks) as string[]));
+
+/** owner/name from a git remote's URL (https or ssh), or null. */
+export function repoName(url: string): string | null {
+  const m = /[/:]([^/:]+\/[^/]+?)(\.git)?\/?$/.exec(url.trim());
+  return m ? m[1]! : null;
+}
+
+/** At most `max` points of a run's context per call, evenly taken, keeping the last (§9). */
+export function downsample(points: number[], max: number): number[] {
+  if (points.length <= max) return points;
+  const out: number[] = [];
+  for (let i = 0; i < max; i++) out.push(points[Math.round((i * (points.length - 1)) / (max - 1))]!);
+  return out;
+}
+
+/** A declared session as the board names it: a build with no label is build 1. */
+const boardSession = (d: DeclaredSession): SessionRef => ({ feature: d.feature.toUpperCase(), kind: d.kind, label: d.label ?? "1" });
 
 /** " on opus/high", plus what the spawn chose above the role's default, so a costlier run is visible. */
 export function powerNote(w: { model: string | null; effort: string | null }, role: { model: string | undefined; effort: Effort | undefined }): string {

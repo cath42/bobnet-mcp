@@ -1,6 +1,7 @@
 import type { Options, PermissionResult, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Identity } from "@bobnet/client/config";
-import type { RequestFrame } from "@bobnet/client/connection";
+import { BrokerError, type RequestFrame } from "@bobnet/client/connection";
+import type { BoardCtx, BoardOpInput, BoardResults } from "@bobnet/protocol";
 import type { Logger } from "@bobnet/client/log";
 import { parseSupervisorConfig, type SupervisorConfig } from "../src/config.ts";
 import type { BrokerLink } from "../src/supervisor.ts";
@@ -168,6 +169,19 @@ export class FakeBroker implements BrokerLink {
   }
 
   readonly results: Array<{ id: string; ok: boolean; message: string }> = [];
+
+  /** Board operations made, in order, with who and ctx. */
+  readonly boardOps: Array<{ as: string; ctx: BoardCtx | undefined; op: BoardOpInput }> = [];
+  /** How the board answers: a result, or a thrown BrokerError. Default: written, nothing more. */
+  board: (op: BoardOpInput, as: string, ctx: BoardCtx | undefined) => unknown = () => ({ ref: null, seq: 1 });
+  /** While false, board operations fail as the board being unreachable. */
+  boardUp = true;
+
+  async boardOp<K extends keyof BoardResults>(as: string, op: BoardOpInput & { op: K }, ctx?: BoardCtx): Promise<BoardResults[K]> {
+    if (!this.boardUp) throw new BrokerError("unavailable", "the board is unavailable since 2026-11-14T00:00:00.000Z; wait and retry");
+    this.boardOps.push({ as, ctx, op });
+    return this.board(op, as, ctx) as BoardResults[K];
+  }
 
   sendRaw(frame: Parameters<BrokerLink["sendRaw"]>[0]): void {
     if (frame.t === "ack") this.acks.push({ as: frame.as, ids: frame.ids });

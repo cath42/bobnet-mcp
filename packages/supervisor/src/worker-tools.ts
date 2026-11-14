@@ -1,4 +1,5 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { BOARD_TOOLS, type BoardToolDeps } from "@bobnet/client/board-tools";
 import type { PeerInfo } from "@bobnet/protocol";
 import { z } from "zod";
 
@@ -22,6 +23,8 @@ export interface WorkerToolDeps {
   consultable: string[];
   consult: (role: string, question: string) => Promise<string>;
   answerConsult: (id: string, answer: string) => void;
+  /** The board's tools (ADR 0001 §8), for a project on the board service: made as the role, with the worker's ctx. */
+  board?: BoardToolDeps;
   /** A lead's, as the interactive orchestrator has them: broadcasts, feed updates and its own status. */
   lead?: {
     broadcast: (body: string, scope: "team" | "all", urgent: boolean | undefined) => Promise<unknown>;
@@ -189,6 +192,18 @@ export function workerTools(deps: WorkerToolDeps) {
               }
             }),
           ]
+        : []),
+      ...(deps.board
+        ? BOARD_TOOLS.map((t) =>
+            tool(t.name, t.description, t.shape, async (a) => {
+              try {
+                return text(await t.run(deps.board!, a as Record<string, unknown>));
+              } catch (err) {
+                const code = (err as { code?: string }).code;
+                return failed(code ? new Error(`${code}: ${(err as Error).message}`) : err);
+              }
+            }),
+          )
         : []),
       tool(
         "checkpoint",

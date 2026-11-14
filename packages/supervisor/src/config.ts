@@ -171,10 +171,15 @@ const Project = z.object({
       ref: z.string().regex(/^[\w.-]+(\/[\w./-]+)?$/).optional(),
     })
     .optional(),
+  /**
+   * `service`: the project's board is BobNet's board service (ADR 0001 §8), not Backlog.md. Spawns
+   * join their declared session on it, and runs, pushes and slot runs are reported to it.
+   */
+  board: z.literal("service").optional(),
   /** Roles any worker in the project may consult mid-task. */
   consult: z.array(z.string()).default([]),
   roles: z.record(z.string(), Role),
-});
+}).refine((p) => !(p.board && p.backlog), { message: "a project's board is the service or a backlog, not both", path: ["board"] });
 
 const SupervisorFile = z.object({
   /** BobNet name of the orchestrator session on this laptop. */
@@ -274,6 +279,7 @@ export interface ProjectConfig {
   runs: Map<string, RunConfig>;
   holdFile: string | undefined;
   backlog: { dir: string; ref: string } | undefined;
+  board: "service" | undefined;
   consult: string[];
   roles: Map<string, RoleConfig>;
 }
@@ -394,6 +400,7 @@ export function parseSupervisorConfig(
       runs,
       holdFile: p.hold_file,
       backlog: p.backlog ? { dir: p.backlog.dir, ref: p.backlog.ref ?? (p.rebase?.onto ?? "origin/main") } : undefined,
+      board: p.board,
       consult: p.consult,
       roles,
     });

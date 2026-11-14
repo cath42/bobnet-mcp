@@ -57,6 +57,8 @@ const connection = new BrokerConnection({
   credentials: brokerConfig.credentials,
   log,
   onPush: (frame) => supervisor?.onPush(frame),
+  // Board reports and captures that waited for the broker go once it is back.
+  onReady: () => supervisor?.onConnected(),
   client: { package: ownPackage.name, version: ownPackage.version },
 });
 connection.start();

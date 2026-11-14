@@ -106,6 +106,10 @@ CREATE TABLE IF NOT EXISTS remote_requests (
 
 const now = () => new Date().toISOString();
 
+export const newWorkerId = () => `w_${randomUUID().slice(0, 8)}`;
+
+export type OutboxKind = "message" | "board_op";
+
 export class Store {
   private readonly db: DatabaseSync;
 
@@ -124,6 +128,9 @@ export class Store {
     if (!cols.has("declared_session")) this.db.exec("ALTER TABLE workers ADD COLUMN declared_session TEXT");
     if (!cols.has("spawned_by")) this.db.exec("ALTER TABLE workers ADD COLUMN spawned_by TEXT");
     if (!cols.has("run_as")) this.db.exec("ALTER TABLE workers ADD COLUMN run_as TEXT");
+    // The outbox also holds the supervisor's board reports (ADR 0001 §9): kind board_op, to_name the peer, body { ctx, op }.
+    const outCols = new Set((this.db.prepare("PRAGMA table_info(outbox)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!outCols.has("kind")) this.db.exec("ALTER TABLE outbox ADD COLUMN kind TEXT NOT NULL DEFAULT 'message'");
   }
 
   close(): void {
@@ -158,8 +165,10 @@ export class Store {
     declared_session?: string | null;
     spawned_by?: string | null;
     run_as?: "lead" | "worker";
+    /** Made beforehand when the board needs it before the row exists (a session join). */
+    id?: string;
   }): WorkerRow {
-    const id = `w_${randomUUID().slice(0, 8)}`;
+    const id = w.id ?? newWorkerId();
     this.run(
       `INSERT INTO workers (id, project, role, task, handoff, state, priority, resume_session, model, effort, tasks, declared_session, spawned_by, run_as, created_at)
        VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -273,12 +282,12 @@ export class Store {
   // ---------- Outbox ----------
 
   /** A notification the broker couldn't take (e.g. the orchestrator never registered). */
-  addOutbox(to: string, body: string): void {
-    this.run("INSERT INTO outbox (to_name, body, created_at) VALUES (?, ?, ?)", to, body, now());
+  addOutbox(to: string, body: string, kind: OutboxKind = "message"): void {
+    this.run("INSERT INTO outbox (to_name, body, created_at, kind) VALUES (?, ?, ?, ?)", to, body, now(), kind);
   }
 
-  outbox(): Array<{ seq: number; to_name: string; body: string; created_at: string }> {
-    return this.all("SELECT * FROM outbox ORDER BY seq");
+  outbox(kind?: OutboxKind): Array<{ seq: number; to_name: string; body: string; created_at: string; kind: OutboxKind }> {
+    return kind ? this.all("SELECT * FROM outbox WHERE kind = ? ORDER BY seq", kind) : this.all("SELECT * FROM outbox ORDER BY seq");
   }
 
   removeOutbox(seq: number): void {

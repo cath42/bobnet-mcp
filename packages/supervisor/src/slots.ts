@@ -37,15 +37,17 @@ export class RunSlots {
   private readonly readHold: () => Hold | null;
   private readonly onChange: () => void;
   private readonly onGrant: (entry: SlotEntry) => void;
+  private readonly onRelease: (entry: SlotEntry) => void;
   private readonly holders: SlotEntry[] = [];
   private readonly releases = new Map<SlotEntry, () => void>();
   private queue: Waiter[] = [];
 
-  constructor(opts: { size: number; readHold: () => Hold | null; onChange?: () => void; onGrant?: (entry: SlotEntry) => void }) {
+  constructor(opts: { size: number; readHold: () => Hold | null; onChange?: () => void; onGrant?: (entry: SlotEntry) => void; onRelease?: (entry: SlotEntry) => void }) {
     this.size = opts.size;
     this.readHold = opts.readHold;
     this.onChange = opts.onChange ?? (() => {});
     this.onGrant = opts.onGrant ?? (() => {});
+    this.onRelease = opts.onRelease ?? (() => {});
   }
 
   /** Waits for a slot; the returned function releases it (once). */
@@ -116,6 +118,7 @@ export class RunSlots {
         released = true;
         this.releases.delete(entry);
         this.holders.splice(this.holders.indexOf(entry), 1);
+        this.onRelease(entry);
         this.pump();
       };
       this.releases.set(entry, release);
