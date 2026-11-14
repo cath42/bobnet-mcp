@@ -20,7 +20,7 @@
 
 ## Open questions
 
-- Helix keeps Casper's questions as `Q-n` in `lead/questions.md`. With the board in BobNet, should
-  questions live in the service too, linked to the item they block? Peach's proposal: yes, a question
-  is a board record (open, answered, the answer verbatim). **For Casper.**
+- *Settled (Casper, 2026-11-13, C8):* questions only Casper can answer are board records (open or
+  answered, with the answer verbatim), linked to the item they hold up. Helix's `lead/questions.md`
+  moves over with its board ([migration.md](migration.md)). Criteria 1 and 2 read them from there.
 - `need: casper` comes from the structured session close (README T3), never from handoff files.

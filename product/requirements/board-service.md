@@ -44,6 +44,11 @@ layer. Nothing about the board lives in the project's repo. It replaces Backlog.
 10. Done features keep counts in lists, with their tasks loaded when opened, so Helix's size (~700
     tasks, ~29 features) stays fast on a phone. *Evidence: test with a Helix-sized board.*
 
+11. A backup of the whole board is taken every night: the supervisor on mbp-1 exports it as JSON
+    in a documented, versioned shape into a git repo on that laptop and commits it. The export can be
+    imported into an empty service. *Evidence: test of export then import; the repo's nightly
+    commits.* (Casper, 2026-11-13, C6)
+
 ## Must not break
 
 - One writer per item at a time. Helix has two writers by rule: the session PO writes the open

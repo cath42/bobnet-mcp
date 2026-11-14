@@ -40,15 +40,15 @@ has the largest board (~700 task files, 3 releases, ~29 features). Picard's writ
 | 5 | Start a session from the UI | [start-session.md](start-session.md) | Draft |
 | 6 | Who writes the board, and editing from the UI | [board-writes.md](board-writes.md) | Draft |
 | 7 | Capture backlog items without structuring them | [capture.md](capture.md) | Draft |
-| 8 | Bugs | [bugs.md](bugs.md) | Open |
+| 8 | Bugs | [bugs.md](bugs.md) | Draft |
 | 9 | Moving boards off Backlog.md | [migration.md](migration.md) | Draft |
 
 State: Open (questions before criteria), Draft (being written), Agreed (Casper agreed it), Deferred.
 
 **Release scope** (Casper, 2026-11-13): **release 1** is the board service (1), who writes (6),
 capture (7), Helix moved onto it (9) and the views (2, 3, 4). **A prototype comes first**, before any
-build. **Release 2** is starting a session from the UI (5). Bugs (8) join when their questions are
-settled.
+build. **Release 2** is starting a session from the UI (5). Bugs (8) are settled; which release
+they join is open (C9).
 
 ## Settled with Casper (2026-11-13)
 
@@ -77,29 +77,27 @@ extended: the board is a database. That reader may at most serve the one-off imp
 Each file lists its own. These cut across all of them.
 
 For Casper:
+- **C9: bugs in release 1?** A bug is a backlog item of type bug, so it costs little on top of
+  capture. *Peach's proposal:* include it in release 1.
 - **C1: releases.** *Settled (Casper, 2026-11-13): yes.* Release 1 is the service, Helix moved onto
   it, and the views, with the prototype first. See Release scope above.
 - **C2: who writes.** *Settled (Casper, 2026-11-13): yes, as proposed.* Casper edits his own gates on
   the dashboard directly; everything else is a request to the project's PO
   ([board-writes.md](board-writes.md)).
-- **C3: bugs.** Open: a proposal in [bugs.md](bugs.md) for Casper to accept or change.
+- **C3: bugs.** *Settled (Casper, 2026-11-13): yes to the proposal* in [bugs.md](bugs.md).
 - **C4: the service is in the path.** *Settled (Casper, 2026-11-13): acceptable.* Agents wait while
   the service is unreachable; captures queue on the laptop and are sent on reconnect.
 - **C5: where the board lives.** *Settled (Casper, 2026-11-13): agreed.* Every project's board lives
   in the broker's database on Cloudflare.
-- **C6: backup.** Casper asked for a recommendation, kept simple. *Peach's proposal:* once a night, the
+- **C6: backup.** *Settled (Casper, 2026-11-13: "keep it simple", then "ok"):* once a night, the
   supervisor on mbp-1 exports the whole board as JSON into a git repo on that laptop and commits it.
-  Nothing new to run or pay for, and git keeps every night's copy. Cloudflare's own 30-day recovery
-  covers mistakes in between. Awaiting Casper's yes.
-- **C7: deploys.** Casper didn't follow the first wording. Restated: **the board's content (features,
-  tasks, statuses) never needs a deploy.** Only a change to the service's software does, such as
-  adding a field or a new kind of item, and a deploy drops every agent's connection for a moment, as
-  today. *Peach's proposal:* keep today's rule (deploy only when Casper asks), and no separate test
-  copy of the broker, since the tests already run the broker locally. Awaiting Casper's yes.
-- **C8: Casper's questions on the board.** In Helix, the questions only Casper can answer (`Q-258`
-  and so on) are kept in a file, `lead/questions.md`. *Peach's proposal:* make them records in the
-  board, linked to the feature they hold up, so the "waits on Casper" list can show them with their
-  answers. Awaiting Casper's yes.
+  Cloudflare's 30-day recovery covers mistakes in between ([board-service.md](board-service.md) 11).
+- **C7: deploys.** *Settled (Casper, 2026-11-13): yes.* The board's content never needs a deploy;
+  only a change to the service's software does. Deploys stay as today: only when Casper asks. No
+  separate test copy of the broker; the tests run it locally.
+- **C8: Casper's questions on the board.** *Settled (Casper, 2026-11-13: "ok great, i like that"):*
+  questions only Casper can answer are records in the board, linked to what they hold up
+  ([waiting-on-casper.md](waiting-on-casper.md)).
 
 **Toad's advice under the new frame** (consult, 2026-11-13; advisory until Toad's ADR lands):
 
@@ -118,7 +116,7 @@ For Casper:
   sends it on reconnect, so no idea or bug is lost to a network blip.
 - **Toad decides** the schema, the event log, the tools and messages, the authorisation table,
   migration rules, the export format. **Peach decides** the kinds, their fields and workflow, and who
-  may write what. **Casper decides** C1 to C8.
+  may write what. **Casper decides** C1 to C9.
 
 ### Toad's first advice (superseded)
 
