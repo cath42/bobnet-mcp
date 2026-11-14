@@ -20,7 +20,11 @@ async function helix(o: Client): Promise<void> {
   const po = { read: true, fields: ["status", "content", "criteria"] as GrantField[] };
   await o.request({ t: "board_op", op: { op: "grant", project: "helix", agent: "Riker", role: "session PO", items: "open_feature", ...po } });
   await o.request({ t: "board_op", op: { op: "grant", project: "helix", agent: "Bill", role: "builder", read: true, items: "none", fields: [] } });
-  await o.request({ t: "board_op", op: { op: "session_join", project: "helix", session: { feature: "LAND-1", kind: "build", label: "1" } } });
+  // The session opens as a spawn opens it: by the supervisor of a laptop (here the other one), for its worker.
+  const sup = await Client.open(await laptopToken(2));
+  await sup.request({ t: "register", name: "supervisor", supervisor: true });
+  await sup.request({ t: "board_op", as: "supervisor", ctx: { ...ctx, worker: "w_spawn" }, op: { op: "session_join", project: "helix", session: ctx.session! } });
+  sup.ws.close();
 }
 
 const ctx: BoardCtx = { worker: "w_7", role: "po", project: "helix", session: { feature: "LAND-1", kind: "build", label: "1" }, tasks: ["LAND-2"] };
@@ -45,7 +49,7 @@ describe("board_op", () => {
       actor: { kind: "agent", who: "Riker@mbp-1", role: "po", worker: "w_7", session: { feature: "LAND-1", kind: "build", label: "1" } },
       changes: [{ field: "status", old: "Draft", new: "In Progress" }],
     });
-    await sup.request({ t: "board_op", as: "Riker", ctx, op: { op: "run_start", project: "helix", id: "w_7", agent: "Riker", role: "po", started_at: "2026-11-14T10:00:00.000Z", session: ctx.session } });
+    await sup.request({ t: "board_op", as: "Riker", ctx, op: { op: "run_start", project: "helix", id: "w_7", started_at: "2026-11-14T10:00:00.000Z", session: ctx.session } });
   });
 
   it("takes ctx, and the supervisor's operations, only over the laptop's pinned supervisor connection", async () => {
@@ -57,7 +61,7 @@ describe("board_op", () => {
     const riker = await agent(1, "Riker");
     const refused = riker.request({ t: "board_op", as: "Riker", ctx, op: { op: "update", project: "helix", ref: "LAND-2", set: { status: "In Progress" } } });
     await expect(refused).rejects.toMatchObject({ code: "forbidden", message: expect.stringMatching(/^Riker may not change status on LAND-2 in helix \(LAND-1 is open\)/) });
-    const start = { op: "run_start" as const, project: "helix", id: "w_7", agent: "Riker", role: "po", started_at: "2026-11-14T10:00:00.000Z", session: null };
+    const start = { op: "run_start" as const, project: "helix", id: "w_7", started_at: "2026-11-14T10:00:00.000Z", session: ctx.session };
     await expect(riker.request({ t: "board_op", as: "Riker", ctx, op: start })).rejects.toMatchObject({ code: "forbidden" });
     await expect(sup.request({ t: "board_op", as: "supervisor", ctx, op: start })).resolves.toMatchObject({ ref: "w_7" });
   });

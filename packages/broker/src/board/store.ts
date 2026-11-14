@@ -439,7 +439,9 @@ export class BoardStore {
 
   private createProject(tx: Tx, op: Op<"create_project">): BoardWritten {
     ownerOnly(tx.caller, "Creating a project");
-    if (op.prefix === "Q" || op.prefix === "A") throw new BoardError("invalid", "Prefixes Q and A are questions' and actions'");
+    for (const pre of [op.prefix, op.draft_prefix]) {
+      if (pre === "Q" || pre === "A") throw new BoardError("invalid", "Prefixes Q and A are questions' and actions'");
+    }
     if (this.sql.exec("SELECT 1 FROM projects WHERE key = ? OR prefix = ?", op.key, op.prefix).toArray().length > 0) {
       throw new BoardError("conflict", `A project ${op.key} or with prefix ${op.prefix} exists`);
     }
@@ -484,7 +486,7 @@ export class BoardStore {
   }
 
   /** An item's create; a capture's (§12), which anyone may make, as a backlog item that keeps who captured it. */
-  private create(tx: Tx, op: Op<"create">, capture?: { id: string; casper_words: string | null; dropped: string[] }): BoardWritten {
+  private create(tx: Tx, op: Op<"create">, capture?: { id: string; casper_words: string | null }): BoardWritten {
     const p = tx.project(this.project(op.project));
     let parent: ItemRow | null = null;
     let release: ReleaseRow | null = null;
@@ -508,10 +510,7 @@ export class BoardStore {
     if (!capture) this.rules.require(tx.caller, p, "create", scope, where);
     // A create-only grant makes Drafts: an item born further on takes the status right too.
     if (op.status !== undefined && op.status !== "Draft") this.rules.require(tx.caller, p, "status", scope, where);
-    if (op.release && capture && !this.rules.may(tx.caller, p, "triage", null)) {
-      // A capture never asks back: it is stored, without the release, and says so.
-      capture.dropped.push("release");
-    } else if (op.release) {
+    if (op.release) {
       release = this.release(p, op.release);
       if (op.kind === "feature") ownerOnly(tx.caller, "Putting a feature in a release");
       else this.rules.require(tx.caller, p, "triage", null, "the backlog");
@@ -919,7 +918,7 @@ export class BoardStore {
     const p = tx.project(this.project(op.project));
     // Who may spawn into a session is decided where the spawn is made; the board takes it from the supervisor.
     const ctx = supervisorOp(tx.caller, op);
-    if (ctx && !sameSession(ctx.session, op.session)) throw new BoardError("forbidden", "session_join joins the session its worker's spawn declared");
+    if (!sameSession(ctx.session, op.session)) throw new BoardError("forbidden", "session_join joins the session its worker's spawn declared");
     const feature = this.feature(p, op.session.feature);
     const ref = this.refOf(feature.pk);
     if (feature.archived_at) throw new BoardError("invalid", `${ref} is archived`);
@@ -951,7 +950,22 @@ export class BoardStore {
       if (had.project !== p.pk) throw new BoardError("conflict", `Capture ${op.capture_id} is already stored in another project`);
       return { ref: this.refOf(had.pk), seq: 0, duplicate: true, dropped: [] };
     }
+    // A capture never asks back (§12): a link it can't keep is dropped and named, never a refusal.
     const dropped: string[] = [];
+    const keep = <T>(field: string, value: T | null | undefined, ok: (v: T) => boolean): T | undefined => {
+      if (value === null || value === undefined) return undefined;
+      if (ok(value)) return value;
+      dropped.push(field);
+      return undefined;
+    };
+    const release = keep("release", op.release, (r) => {
+      const row = this.sql.exec<ReleaseRow>("SELECT * FROM releases WHERE project = ? AND ref = ?", p.pk, r).toArray()[0];
+      return row !== undefined && row.status !== "closed" && this.rules.may(tx.caller, p, "triage", null);
+    });
+    const bug = op.type === "bug";
+    const foundIn = keep("found_in", op.found_in, (f) => bug && this.sql.exec("SELECT 1 FROM item_refs r JOIN items i ON i.pk = r.item WHERE r.project = ? AND r.ref = ? AND i.kind = 'feature' AND i.archived_at IS NULL", p.pk, f).toArray().length > 0);
+    const bugWhere = keep("bug_where", op.bug_where, () => bug);
+    const blocksUse = keep("blocks_use", op.blocks_use || null, () => bug);
     const create: Op<"create"> = {
       op: "create",
       project: op.project,
@@ -959,12 +973,12 @@ export class BoardStore {
       type: op.type,
       title: op.title,
       ...(op.description !== undefined ? { description: op.description } : {}),
-      ...(op.release !== undefined ? { release: op.release } : {}),
-      ...(op.bug_where !== undefined ? { bug_where: op.bug_where } : {}),
-      ...(op.blocks_use !== undefined ? { blocks_use: op.blocks_use } : {}),
-      ...(op.found_in !== undefined ? { found_in: op.found_in } : {}),
+      ...(release ? { release } : {}),
+      ...(bugWhere ? { bug_where: bugWhere } : {}),
+      ...(blocksUse ? { blocks_use: blocksUse } : {}),
+      ...(foundIn ? { found_in: foundIn } : {}),
     };
-    const written = this.create(tx, create, { id: op.capture_id, casper_words: op.casper_words ?? null, dropped });
+    const written = this.create(tx, create, { id: op.capture_id, casper_words: op.casper_words ?? null });
     return { ...written, duplicate: false, dropped };
   }
 
@@ -976,7 +990,10 @@ export class BoardStore {
     const name = this.sessionName(s);
     if (s.ended_at) throw new BoardError("conflict", `${name} is closed already`);
     if (op.need === "casper" && op.waits_on.length === 0) throw new BoardError("invalid", "A close that needs Casper names the questions it waits on");
+    if (op.need !== "casper" && op.waits_on.length > 0) throw new BoardError("invalid", "Only a close that needs Casper waits on questions");
     const waits = [...new Set(op.waits_on)].map((r) => this.question(p, r));
+    const answered = waits.find((q) => q.state !== "open");
+    if (answered) throw new BoardError("invalid", `${answered.ref} is ${answered.state}: a close waits only on open questions`);
     const ofFeature = (refs: string[], what: string) =>
       [...new Set(refs)].map((r) => {
         const row = this.item(p, r);
@@ -1026,7 +1043,8 @@ export class BoardStore {
     const p = tx.project(this.project(op.project));
     this.rules.requireFlag(tx.caller, p, "questions");
     const holds = this.items(p, op.holds);
-    const holdSessions = op.holds_sessions.map((s) => this.session(p, s));
+    // One row per session held: the table's UNIQUE can't see a repeat, its item being NULL.
+    const holdSessions = [...new Map(op.holds_sessions.map((s) => this.session(p, s)).map((s) => [s.pk, s])).values()];
     const nb = op.needed_before;
     const nbItem = nb && "item" in nb ? this.item(p, nb.item) : null;
     const nbRelease = nb && "release" in nb ? this.release(p, nb.release) : null;
@@ -1097,8 +1115,13 @@ export class BoardStore {
   /** A worker's run (§9), once per id: a replay from the supervisor's outbox changes nothing. */
   private runStart(tx: Tx, op: Op<"run_start">): BoardWritten & { unknown_tasks: string[] } {
     const p = tx.project(this.project(op.project));
-    supervisorOp(tx.caller, op);
-    if (this.runRow(op.id)) return { ref: op.id, seq: 0, unknown_tasks: [] };
+    const ctx = supervisorOp(tx.caller, op);
+    // The run's row and its events name the same worker and session: the ctx's.
+    if (op.id !== ctx.worker) throw new BoardError("forbidden", `run_start ${op.id} is for worker ${ctx.worker}, whose run it is`);
+    if (!sameSession(op.session, ctx.session)) throw new BoardError("forbidden", `run_start ${op.id} is in the session its spawn declared`);
+    const had = this.runRow(op.id);
+    if (had && had.project !== p.pk) throw new BoardError("conflict", `Run ${op.id} is another project's`);
+    if (had) return { ref: op.id, seq: 0, unknown_tasks: [] };
     const session = op.session ? this.session(p, op.session) : null;
     // A run is recorded whatever its spawn named: ids that aren't items here are reported, not refused.
     const tasks: ItemRow[] = [];
@@ -1108,7 +1131,7 @@ export class BoardStore {
       if (row) tasks.push(row);
       else unknown.push(ref);
     }
-    const laptop = tx.caller.kind === "agent" ? tx.caller.laptop : "";
+    const caller = tx.caller as Extract<BoardCaller, { kind: "agent" }>;
     const pk = this.sql
       .exec<{ pk: number }>(
         `INSERT INTO runs (id, project, session, agent, role, laptop, model, effort, started_at, resumed, remote_url)
@@ -1116,9 +1139,9 @@ export class BoardStore {
         op.id,
         p.pk,
         session?.pk ?? null,
-        op.agent,
-        op.role,
-        laptop,
+        caller.name,
+        ctx.role,
+        caller.laptop,
         op.model ?? null,
         op.effort ?? null,
         op.started_at,
@@ -1128,8 +1151,8 @@ export class BoardStore {
       .one().pk;
     for (const t of tasks) this.sql.exec("INSERT INTO run_tasks (project, run, item) VALUES (?, ?, ?)", p.pk, pk, t.pk);
     const changes: Change[] = [
-      ["agent", null, op.agent],
-      ["role", null, op.role],
+      ["agent", null, caller.name],
+      ["role", null, ctx.role],
       ["session", null, session ? this.sessionName(session) : null],
       ["model", null, op.model],
       ["effort", null, op.effort],
@@ -1143,7 +1166,8 @@ export class BoardStore {
   /** A run's end with its tokens and context per call; a second end for an ended run changes nothing. */
   private runEnd(tx: Tx, op: Op<"run_end">): BoardWritten {
     const p = tx.project(this.project(op.project));
-    supervisorOp(tx.caller, op);
+    const ctx = supervisorOp(tx.caller, op);
+    if (op.id !== ctx.worker) throw new BoardError("forbidden", `run_end ${op.id} is for worker ${ctx.worker}, whose run it is`);
     const run = this.runRow(op.id);
     if (!run || run.project !== p.pk) throw new BoardError("invalid", `No run ${op.id} in ${p.key}`);
     if (run.ended_at) return { ref: op.id, seq: 0 };
@@ -1173,11 +1197,11 @@ export class BoardStore {
   /** What a land pushed (§10), once per (repo, sha). */
   private push(tx: Tx, op: Op<"push">): BoardWritten {
     const p = tx.project(this.project(op.project));
-    supervisorOp(tx.caller, op);
+    const ctx = supervisorOp(tx.caller, op);
     const ref = `${op.repo}@${op.sha.slice(0, 12)}`;
     if (this.sql.exec("SELECT 1 FROM pushes WHERE repo = ? AND sha = ?", op.repo, op.sha).toArray().length > 0) return { ref, seq: 0 };
-    const run = op.run ? this.runRow(op.run) : undefined;
-    if (op.run && (!run || run.project !== p.pk)) throw new BoardError("invalid", `No run ${op.run} in ${p.key}`);
+    // The worker who landed it, and so its run, session and tasks (§10).
+    const run = this.workerRun(p, ctx.worker);
     const pk = this.sql
       .exec<{ pk: number }>(
         "INSERT INTO pushes (project, repo, branch, sha, worker, run, at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING pk",
@@ -1185,28 +1209,29 @@ export class BoardStore {
         op.repo,
         op.branch,
         op.sha,
-        op.worker,
+        ctx.worker,
         run?.pk ?? null,
         tx.at,
       )
       .one().pk;
-    const changes: Change[] = [["repo", null, op.repo], ["branch", null, op.branch], ["sha", null, op.sha], ["worker", null, op.worker], ["run", null, op.run]];
+    const changes: Change[] = [["repo", null, op.repo], ["branch", null, op.branch], ["sha", null, op.sha], ["worker", null, ctx.worker], ["run", null, run?.id]];
     return { ref, seq: tx.event("push", "pushes", pk, ref, changes) };
   }
 
   /** A run-slot run (§10): made at its grant, its status and end updated at its release. */
   private slotRun(tx: Tx, op: Op<"slot_run">): BoardWritten {
     const p = tx.project(this.project(op.project));
-    supervisorOp(tx.caller, op);
+    const ctx = supervisorOp(tx.caller, op);
+    const laptop = (tx.caller as Extract<BoardCaller, { kind: "agent" }>).laptop;
     const ref = `slot ${op.external_id}`;
     const had = this.sql
-      .exec<{ pk: number; project: number; status: string; started_at: string | null; ended_at: string | null }>(
-        "SELECT pk, project, status, started_at, ended_at FROM ci_runs WHERE source = 'slot' AND external_id = ?",
+      .exec<{ pk: number; project: number; laptop: string | null; status: string; started_at: string | null; ended_at: string | null }>(
+        "SELECT pk, project, laptop, status, started_at, ended_at FROM ci_runs WHERE source = 'slot' AND external_id = ?",
         op.external_id,
       )
       .toArray()[0];
     if (had) {
-      if (had.project !== p.pk) throw new BoardError("conflict", `Slot run ${op.external_id} belongs to another project`);
+      if (had.project !== p.pk || had.laptop !== laptop) throw new BoardError("conflict", `Slot run ${op.external_id} is another ${had.project !== p.pk ? "project" : "laptop"}'s`);
       const changes: Change[] = [];
       const cols: Record<string, SqlStorageValue> = {};
       if (op.status !== had.status) (cols.status = op.status), changes.push(["status", had.status, op.status]);
@@ -1217,9 +1242,8 @@ export class BoardStore {
       this.sql.exec(`UPDATE ci_runs SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE pk = ?`, ...keys.map((k) => cols[k]!), had.pk);
       return { ref, seq: tx.event("slot_run", "ci_runs", had.pk, ref, changes) };
     }
-    const run = op.run ? this.runRow(op.run) : undefined;
-    if (op.run && (!run || run.project !== p.pk)) throw new BoardError("invalid", `No run ${op.run} in ${p.key}`);
-    const laptop = tx.caller.kind === "agent" ? tx.caller.laptop : null;
+    // The holder is the ctx's worker; its run, if it has one, ties the slot run to a session and tasks.
+    const run = this.workerRun(p, ctx.worker);
     const pk = this.sql
       .exec<{ pk: number }>(
         `INSERT INTO ci_runs (source, external_id, project, name, laptop, status, started_at, ended_at, worker, session)
@@ -1231,13 +1255,13 @@ export class BoardStore {
         op.status,
         op.started_at ?? null,
         op.ended_at ?? null,
-        op.worker ?? null,
+        ctx.worker,
         run?.session ?? null,
       )
       .one().pk;
     // The tie is direct: the holder's run names its session and tasks (§10).
     if (run) this.sql.exec("INSERT INTO ci_run_tasks (project, ci_run, item) SELECT project, ?, item FROM run_tasks WHERE run = ?", pk, run.pk);
-    const changes: Change[] = [["name", null, op.name], ["status", null, op.status], ["started_at", null, op.started_at], ["ended_at", null, op.ended_at], ["worker", null, op.worker], ["run", null, op.run]];
+    const changes: Change[] = [["name", null, op.name], ["status", null, op.status], ["started_at", null, op.started_at], ["ended_at", null, op.ended_at], ["worker", null, ctx.worker], ["run", null, run?.id]];
     return { ref, seq: tx.event("slot_run", "ci_runs", pk, ref, changes) };
   }
 
@@ -1388,6 +1412,12 @@ export class BoardStore {
 
   private runRow(id: string): RunRow | undefined {
     return this.sql.exec<RunRow>("SELECT * FROM runs WHERE id = ?", id).toArray()[0];
+  }
+
+  /** A worker's run in this project: its id is the worker's. */
+  private workerRun(p: ProjectRow, worker: string): RunRow | undefined {
+    const run = this.runRow(worker);
+    return run?.project === p.pk ? run : undefined;
   }
 
   // ---------- Lookups ----------
@@ -1568,20 +1598,18 @@ function ownerOnly(caller: BoardCaller, what: string): void {
 
 /**
  * The supervisor's own operations (ADR 0001 §4, §8): made only over the laptop's pinned supervisor
- * connection, for a worker of the project. The owner may join a session; nothing else of these is his.
+ * connection, for a worker of the project. None is the owner's: no operation opens a feature by hand.
  */
-function supervisorOp(caller: BoardCaller, op: { op: string; project: string }): BoardCtx | null {
-  if (caller.kind === "owner") {
-    if (op.op === "session_join") return null;
-    throw new BoardError("forbidden", `${op.op} is the supervisor's report, not the owner's`);
-  }
+function supervisorOp(caller: BoardCaller, op: { op: string; project: string }): BoardCtx {
+  if (caller.kind === "owner") throw new BoardError("forbidden", `${op.op} is the supervisor's, for a worker it runs; no one makes it by hand`);
   if (!caller.supervisor || !caller.ctx) throw new BoardError("forbidden", `${op.op} is made only by a laptop's supervisor, for a worker it runs`);
   if (caller.ctx.project !== op.project) throw new BoardError("forbidden", `${op.op} for ${op.project} comes from a worker of ${op.project}, not ${caller.ctx.project}`);
   return caller.ctx;
 }
 
-function sameSession(a: SessionRef | null, b: SessionRef): boolean {
-  return a !== null && a.feature === b.feature && a.kind === b.kind && a.label === b.label;
+function sameSession(a: SessionRef | null, b: SessionRef | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.feature === b.feature && a.kind === b.kind && a.label === b.label;
 }
 
 /** Context per call as the runs table keeps it: little-endian uint32s (§9). */

@@ -280,15 +280,15 @@ export const BoardOp = z.discriminatedUnion("op", [
     words: z.string().trim().min(1).max(4000),
   }),
 
-  // The supervisor's own (§6, §9, §10): authorised by the connection, idempotent by key.
+  // The supervisor's own (§6, §9, §10): authorised by the connection, idempotent by key. Who the
+  // worker is (its id, which is its run's, its role and its session) comes from the verified ctx.
   /** A spawn into a session (§6): creates it if new and opens its feature. */
   z.object({ op: z.literal("session_join"), ...project, session: SessionRef }),
   z.object({
     op: z.literal("run_start"),
     ...project,
+    /** The worker's id, as its ctx says. */
     id: runId,
-    agent: name,
-    role: z.string().min(1).max(40),
     model: z.string().max(100).nullable().optional(),
     effort: z.string().max(20).nullable().optional(),
     started_at: at,
@@ -314,10 +314,8 @@ export const BoardOp = z.discriminatedUnion("op", [
     repo: z.string().min(1).max(200),
     branch: z.string().min(1).max(200),
     sha,
-    worker: z.string().min(1).max(40),
-    run: runId.optional(),
   }),
-  /** A run-slot run (§10), reported at its grant and again at its release. */
+  /** A run-slot run (§10), reported at its grant and again at its release; external_id is unique to the laptop's run. */
   z.object({
     op: z.literal("slot_run"),
     ...project,
@@ -326,9 +324,6 @@ export const BoardOp = z.discriminatedUnion("op", [
     status: CiStatus,
     started_at: at.nullable().optional(),
     ended_at: at.nullable().optional(),
-    worker: z.string().min(1).max(40).nullable().optional(),
-    /** The holder's run: the slot run takes its session and tasks. */
-    run: runId.nullable().optional(),
   }),
 ]);
 export type BoardOp = z.infer<typeof BoardOp>;

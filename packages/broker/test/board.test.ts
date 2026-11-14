@@ -95,7 +95,7 @@ describe("records (criterion 0)", () => {
   it("keeps a run's tasks, pushes and events in the run's project, in the store", async () => {
     const { f1, t1 } = await helix();
     await ok(owner, { op: "create_project", key: "bobnet", name: "BobNet", prefix: "BOB" });
-    await ok(owner, { op: "session_join", project: "helix", session: { feature: f1, kind: "build", label: "1" } });
+    await join(f1);
     await runInDurableObject(board(), (_, state) => {
       const sql = state.storage.sql;
       const pk = (table: string, where = "1") => sql.exec<{ pk: number }>(`SELECT pk FROM ${table} WHERE ${where}`).one().pk;
@@ -171,7 +171,7 @@ describe("events (criterion 6)", () => {
   it("records every write with who, what, from what to what, in the item's history", async () => {
     const { f1, t1 } = await helix();
     await helixRules();
-    await ok(owner, { op: "session_join", project: "helix", session: { feature: f1, kind: "build", label: "1" } });
+    await join(f1);
     const riker = inSession("Riker", f1);
     const writes: Array<{ seq: number }> = [
       await ok(riker, { op: "update", project: "helix", ref: t1, set: { status: "In Progress", labels: ["ui"] }, reason: "build started" }),
@@ -240,7 +240,7 @@ describe("who may write what (ADR 0001 §5)", () => {
   it("has Helix's two PO rows: the session PO writes the open feature, Picard the rest", async () => {
     const { f1, f2, t1, t2 } = await helix();
     await helixRules();
-    await ok(owner, { op: "session_join", project: "helix", session: { feature: f1, kind: "build", label: "1" } });
+    await join(f1);
     expect((await item(f1)).open_since).not.toBeNull();
 
     const riker = inSession("Riker", f1);
@@ -263,7 +263,7 @@ describe("who may write what (ADR 0001 §5)", () => {
   it("checks a task moved between features against both", async () => {
     const { f1, f2, t2 } = await helix();
     await helixRules();
-    await ok(owner, { op: "session_join", project: "helix", session: { feature: f1, kind: "build", label: "1" } });
+    await join(f1);
     expect(await refused(agent("Picard"), { op: "update", project: "helix", ref: t2, set: { parent: f1 } })).toMatchObject({ code: "forbidden" });
     expect((await item(t2)).parent).toBe(f2);
   });
@@ -349,10 +349,13 @@ describe("progress (criterion 5)", () => {
 describe("sessions", () => {
   it("opens the feature when a session joins it, and refuses a feature that isn't one", async () => {
     const { f1, t1 } = await helix();
-    const first = await ok(owner, { op: "session_join", project: "helix", session: { feature: f1, kind: "build", label: "1" } });
+    const first = await join(f1);
     expect(first).toMatchObject({ ref: `${f1} build 1`, created: true });
-    expect(await ok(owner, { op: "session_join", project: "helix", session: { feature: f1, kind: "build", label: "1" } })).toMatchObject({ created: false });
-    expect(await refused(owner, { op: "session_join", project: "helix", session: { feature: t1, kind: "build", label: "1" } })).toMatchObject({ code: "invalid" });
+    expect(await join(f1)).toMatchObject({ created: false });
+    const onTask = { feature: t1, kind: "build" as const, label: "1" };
+    expect(await refused(sup("Sup", onTask), { op: "session_join", project: "helix", session: onTask })).toMatchObject({ code: "invalid" });
+    // No one opens a feature by hand, the owner included.
+    expect(await refused(owner, { op: "session_join", project: "helix", session: { feature: f1, kind: "build", label: "2" } })).toMatchObject({ code: "forbidden" });
     const f = await item(f1);
     expect(f.sessions).toEqual([{ feature: f1, kind: "build", label: "1", started_at: f.open_since, ended_at: null }]);
     expect(await refused(agent("Bill"), { op: "session_join", project: "helix", session: { feature: f1, kind: "build", label: "2" } })).toMatchObject({ code: "forbidden" });
@@ -392,6 +395,11 @@ const sup = (name: string, session: BoardCtx["session"], worker = `w_${name.toLo
   supervisor: true,
   ctx: { worker, role: name.toLowerCase(), project: "helix", session, tasks: [] },
 });
+/** The supervisor joining a worker into a build session of helix. */
+const join = (feature: string, label = "1") => {
+  const session = { feature, kind: "build" as const, label };
+  return ok(sup("Sup", session), { op: "session_join", project: "helix", session });
+};
 const at = (min: number) => new Date(Date.UTC(2026, 10, 14, 10, min)).toISOString();
 const tokens = (n: number) => ({ input: n, output: n, cache_read: n, cache_write: n });
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -413,7 +421,7 @@ describe("the supervisor's operations (ADR 0001 §4, §9, §10)", () => {
     const session = { feature: f1, kind: "build" as const, label: "1" };
     const bill = sup("Bill", session);
     await ok(bill, { op: "session_join", project: "helix", session });
-    const start = { op: "run_start" as const, project: "helix", id: "w_bill", agent: "Bill", role: "builder", started_at: at(0), session, tasks: [t1, "LAND-99"] };
+    const start = { op: "run_start" as const, project: "helix", id: "w_bill", started_at: at(0), session, tasks: [t1, "LAND-99"] };
     expect(await ok(bill, start)).toMatchObject({ unknown_tasks: ["LAND-99"] });
     expect(await ok(bill, start)).toMatchObject({ unknown_tasks: [] });
     const end = { op: "run_end" as const, project: "helix", id: "w_bill", ended_at: at(30), tokens: tokens(100), calls: 3, ctx: [1000, 70000, 0x10000000] };
@@ -428,12 +436,30 @@ describe("the supervisor's operations (ADR 0001 §4, §9, §10)", () => {
       const view = new DataView(blob);
       expect([0, 1, 2].map((i) => view.getUint32(i * 4, true))).toEqual([1000, 70000, 0x10000000]);
     });
-    expect(await refused(bill, { ...end, id: "w_nobody" })).toMatchObject({ code: "invalid" });
+    expect(await refused(bill, { ...end, id: "w_nobody" })).toMatchObject({ code: "forbidden" });
+    expect(await refused(sup("Nobody", null), { ...end, id: "w_nobody" })).toMatchObject({ code: "invalid" });
+  });
+
+  it("takes the run's worker, agent, role and session from the verified ctx, never from the op", async () => {
+    const { f1 } = await helix();
+    const session = { feature: f1, kind: "build" as const, label: "1" };
+    const bill = sup("Bill", session);
+    await ok(bill, { op: "session_join", project: "helix", session });
+    const start = { op: "run_start" as const, project: "helix", id: "w_bill", started_at: at(0), session };
+    expect(await refused(bill, { ...start, id: "w_other" })).toMatchObject({ code: "forbidden" });
+    expect(await refused(bill, { ...start, session: null })).toMatchObject({ code: "forbidden" });
+    await ok(bill, start);
+    const { session: s } = await ok(owner, { op: "get", project: "helix", session });
+    expect(s!.runs[0]).toMatchObject({ id: "w_bill", agent: "Bill", role: "bill" });
+    // The same run id from another project's worker is another project's run.
+    await ok(owner, { op: "create_project", key: "bobnet", name: "BobNet", prefix: "BOB" });
+    const other: BoardCaller = { kind: "agent", name: "Bill", laptop: "mbp-1", supervisor: true, ctx: { worker: "w_bill", role: "b", project: "bobnet", session: null, tasks: [] } };
+    expect(await refused(other, { ...start, project: "bobnet", session: null })).toMatchObject({ code: "conflict" });
   });
 
   it("keeps the supervisor's reports to its laptop's supervisor, for the worker's own project", async () => {
     await helix();
-    const start = { op: "run_start" as const, project: "helix", id: "w_x", agent: "Bill", role: "builder", started_at: at(0), session: null };
+    const start = { op: "run_start" as const, project: "helix", id: "w_x", started_at: at(0), session: null };
     expect(await refused(owner, start)).toMatchObject({ code: "forbidden" });
     expect(await refused({ ...sup("Bill", null), supervisor: false }, start)).toMatchObject({ code: "forbidden" });
     const elsewhere: BoardCaller = { kind: "agent", name: "Bill", laptop: "mbp-1", supervisor: true, ctx: { worker: "w_x", role: "b", project: "bobnet", session: null, tasks: [] } };
@@ -445,11 +471,11 @@ describe("the supervisor's operations (ADR 0001 §4, §9, §10)", () => {
     const session = { feature: f1, kind: "build" as const, label: "1" };
     const bill = sup("Bill", session);
     await ok(bill, { op: "session_join", project: "helix", session });
-    await ok(bill, { op: "run_start", project: "helix", id: "w_bill", agent: "Bill", role: "builder", started_at: at(0), session, tasks: [t1] });
-    const push = { op: "push" as const, project: "helix", repo: "cath42/helix", branch: "main", sha: "abcdef1234567", worker: "w_bill", run: "w_bill" };
+    await ok(bill, { op: "run_start", project: "helix", id: "w_bill", started_at: at(0), session, tasks: [t1] });
+    const push = { op: "push" as const, project: "helix", repo: "cath42/helix", branch: "main", sha: "abcdef1234567" };
     const pushed = await ok(bill, push);
     expect(await ok(bill, push)).toMatchObject({ seq: pushed.seq });
-    const slot = { op: "slot_run" as const, project: "helix", external_id: "s_1", name: "land", worker: "w_bill", run: "w_bill" };
+    const slot = { op: "slot_run" as const, project: "helix", external_id: "s_1", name: "land" };
     await ok(bill, { ...slot, status: "running", started_at: at(1) });
     await ok(bill, { ...slot, status: "passed", ended_at: at(4) });
     await runInDurableObject(board(), (_, state) => {
@@ -458,8 +484,11 @@ describe("the supervisor's operations (ADR 0001 §4, §9, §10)", () => {
         { status: "passed", laptop: "mbp-1", started_at: at(1), ended_at: at(4), tied: 1 },
       ]);
       expect(sql.exec<{ n: number }>("SELECT count(*) AS n FROM ci_run_tasks").one().n).toBe(1);
-      expect(sql.exec<{ n: number }>("SELECT count(*) AS n FROM pushes WHERE run IS NOT NULL").one().n).toBe(1);
+      expect(sql.exec<{ n: number }>("SELECT count(*) AS n FROM pushes WHERE run IS NOT NULL AND worker = 'w_bill'").one().n).toBe(1);
     });
+    // Another laptop's slot run of the same id is not this one's to change.
+    const elsewhere = { ...bill, laptop: "mbp-2" };
+    expect(await refused(elsewhere, { ...slot, status: "failed" })).toMatchObject({ code: "conflict" });
   });
 });
 
@@ -472,6 +501,18 @@ describe("capture (ADR 0001 §12)", () => {
     expect(await ok(agent("Stranger"), cap)).toMatchObject({ ref: first.ref, duplicate: true });
     expect(await item(first.ref!)).toMatchObject({ kind: "backlog", type: "task", status: "Draft", captured_by: "Stranger@mbp-1", casper_words: "it crawls" });
     expect((await item(first.ref!)).history.map((e) => e.op)).toEqual(["capture"]);
+  });
+
+  it("drops, and names, every link a capture can't keep, refusing only an unknown project", async () => {
+    const { r1, f1, t1 } = await helix();
+    await ok(owner, { op: "create_release", project: "helix", title: "Release 2" });
+    const cap = { op: "capture" as const, project: "helix", title: "Broken", type: "bug" as const };
+    const stale = await ok(owner, { ...cap, capture_id: uuid(4), release: "R9", found_in: t1, bug_where: "production", blocks_use: true });
+    expect(stale.dropped).toEqual(["release", "found_in"]);
+    expect(await item(stale.ref!)).toMatchObject({ release: null, found_in: null, bug_where: "production", blocks_use: true });
+    expect((await ok(owner, { ...cap, capture_id: uuid(5), type: "chore", bug_where: "staging", found_in: f1 })).dropped).toEqual(["found_in", "bug_where"]);
+    expect((await ok(owner, { ...cap, capture_id: uuid(6), release: r1, found_in: f1 })).dropped).toEqual([]);
+    expect(await refused(owner, { ...cap, capture_id: uuid(7), project: "nope" })).toMatchObject({ code: "invalid" });
   });
 
   it("keeps a capture's release only for someone who may triage, and says when it didn't", async () => {
@@ -512,8 +553,16 @@ describe("questions (ADR 0001 §7)", () => {
     });
   });
 
-  it("refuses a project prefix that reads as a question's", async () => {
+  it("refuses a project prefix, or draft prefix, that reads as a question's", async () => {
     expect(await refused(owner, { op: "create_project", key: "quiz", name: "Quiz", prefix: "Q" })).toMatchObject({ code: "invalid" });
+    expect(await refused(owner, { op: "create_project", key: "quiz", name: "Quiz", prefix: "QUIZ", draft_prefix: "A" })).toMatchObject({ code: "invalid" });
+  });
+
+  it("holds a session once however often the ask names it", async () => {
+    const { f1 } = await helix();
+    const session = await join(f1).then(() => ({ feature: f1, kind: "build" as const, label: "1" }));
+    await ok(owner, { op: "ask", project: "helix", text: "Go?", holds_sessions: [session, session] });
+    expect((await ok(owner, { op: "get", project: "helix", ref: "Q-1" })).question!.holds_sessions).toEqual([session]);
   });
 });
 
@@ -524,7 +573,7 @@ describe("close_session (ADR 0001 §6)", () => {
     const session = { feature: ids.f1, kind: "build" as const, label: "1" };
     const bill = sup("Bill", session);
     await ok(bill, { op: "session_join", project: "helix", session });
-    await ok(bill, { op: "run_start", project: "helix", id: "w_bill", agent: "Bill", role: "builder", started_at: at(0), session });
+    await ok(bill, { op: "run_start", project: "helix", id: "w_bill", started_at: at(0), session });
     await ok(bill, { op: "run_end", project: "helix", id: "w_bill", ended_at: at(9), tokens: tokens(10), calls: 1 });
     const riker = sup("Riker", session);
     return { ...ids, session, riker };
@@ -559,6 +608,10 @@ describe("close_session (ADR 0001 §6)", () => {
     // A move the closer may not make refuses the whole close.
     expect(await refused(riker, { ...close(session), moves: [{ task: t2, status: "Done" }] })).toMatchObject({ code: "forbidden" });
     await ok(agent("Picard"), { op: "ask", project: "helix", text: "Ship?" });
+    expect(await refused(agent("Picard"), { ...close(session), need: "answer", waits_on: ["Q-1"] })).toMatchObject({ code: "invalid" });
+    await ok(agent("Picard"), { op: "ask", project: "helix", text: "Answered?" });
+    await ok(agent("Picard"), { op: "record_answer", project: "helix", ref: "Q-2", words: "yes" });
+    expect(await refused(agent("Picard"), { ...close(session), need: "casper", waits_on: ["Q-2"] })).toMatchObject({ code: "invalid", message: /Q-2 is answered/ });
     await ok(agent("Picard"), { ...close(session), need: "casper", waits_on: ["Q-1"] });
     const { session: s } = await ok(owner, { op: "get", project: "helix", session });
     expect(s!.close).toMatchObject({ need: "casper", waits_on: ["Q-1"] });
