@@ -1,6 +1,6 @@
 # 0003. Owner authority for dashboard actions: device keys, not a travelling token
 
-- **Status:** proposed (Toad, 2026-11-14). Accepting it is Casper's.
+- **Status:** accepted (Casper, 2026-11-14, lead/2026-11-14-board-adr-and-review-decisions.md, "Later the same day").
 - **For:** review finding 2 (`architecture/reviews/2026-11-14-system-review.md`): the owner's JWT is a
   bearer token handed to laptops, and `README.md:47` claims more than holds. BOB-12 is its first
   step (§5).

@@ -1,6 +1,6 @@
 # 0004. System shape: the parts, who owns which state, principals and trust boundaries
 
-- **Status:** proposed (Toad, 2026-11-14). Accepting it is Casper's.
+- **Status:** accepted (Casper, 2026-11-14, lead/2026-11-14-board-adr-and-review-decisions.md, "Later the same day").
 - **For:** review findings 4 (the laptop token is the laptop's whole identity), 13 (teams scope
   presence only) and 6 (BobNet's rules in Helix's ADRs: the billing rule, ADR 0002 §8);
   `architecture/reviews/2026-11-14-system-review.md`. It is the map that ADR 0001-0003 and the

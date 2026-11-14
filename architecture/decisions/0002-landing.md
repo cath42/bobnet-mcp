@@ -1,6 +1,6 @@
 # 0002. Landing: the line, the run slot, preconditions, outcomes, rebase and holds
 
-- **Status:** proposed (Toad, 2026-11-14). Accepting it is Casper's.
+- **Status:** accepted (Casper, 2026-11-14, lead/2026-11-14-board-adr-and-review-decisions.md, "Later the same day").
 - **For:** review finding 1 (a stale tip fails late) and finding 6 (BobNet's rules live in Helix's
   ADRs), `architecture/reviews/2026-11-14-system-review.md`; BOB-11. It takes in what the review
   proposed as P6 (run slots and holds), because the code cites one source for both.
