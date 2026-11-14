@@ -309,6 +309,10 @@ client for interactive agents (`client/src/server.ts`):
 Owner-only operations (§5, §7) are in `BoardOp` but no MCP tool offers them. The supervisor's own
 operations are `session_join`, `run_start`, `run_end`, `push` and `slot_run` (§9, §10).
 
+`get`'s `ref` takes an `ItemAlias` (`protocol/src/board.ts`): an item's ref or any id it has had,
+such as Backlog.md's dotted `LAND-1.3`, so an old id still finds its item. Its reply names the
+item's primary ref. Writes and links keep `ItemRef`, so nothing is ever written under an old id.
+
 The existing `board` frame and `ProjectBoard` stay for projects still on Backlog.md, and are removed
 once the last one has moved (a later release says so). A project is on the service when the
 supervisor's config says `board: service` instead of `backlog:` (Casper's config; Luigi adds the
@@ -401,7 +405,12 @@ is `running` or `queued`. This is derived, not a worker state.
 
 ### 11. Export, backup and import (board-service 11, BOB-2 #11)
 
-- **`GET /v1/board/export`** (a laptop's identity) returns the whole board as one JSON document,
+- **Who:** both routes answer only the owner or a laptop; any other identity (CI's, §4) gets `403`.
+  The owner's export has every project. A laptop's has what its read grants cover: the projects a
+  `read` row names for any agent on that laptop (its laptop is `*` or that laptop, since a laptop
+  speaks for every name it hosts, ADR 0004 §3), every project for a `'*'` project row, and the rules
+  and events for every project only with at least one project (`Rules.readableByLaptop`).
+- **`GET /v1/board/export`** returns the board, as far as the caller may read it, as one JSON document,
   `{ format: "bobnet-board", version: 1, exported_at, last_event_seq, projects: [...] }`. Each project
   carries every table of §2 as arrays of its rows, with refs instead of `pk`s and `ctx` as a number
   array. Keys and rows are in a stable order, so the nightly git diff shows only what changed. The
@@ -410,10 +419,15 @@ is `running` or `queued`. This is derived, not a worker state.
   it knows.
 - **Nightly backup:** the supervisor on mbp-1, with `board_backup: {repo, at}` in its config, fetches
   the export, writes `board.json` and commits it. It is a backup and an exit route, never a second
-  store: nothing reads it back except an import.
+  store: nothing reads it back except an import. A full backup needs a `'*'` project `read` row for
+  an agent on the backing-up laptop (mbp-1); without one the backup holds only what that laptop's
+  rules cover, and its log names the projects it got.
 - **`POST /v1/board/import`** takes the same shape and imports into projects that don't exist yet. It
   refuses a project that does exist, so it can rebuild an empty service and it can bring a project
-  in, never merge. The history it brings is kept, plus one event: "imported from …".
+  in, never merge. The history it brings is kept, plus one event: "imported from …". Rules and events
+  for every project come in only to a board that has none; from a laptop, only to an empty board (no
+  projects, rules or events), which is the rebuild (`403` otherwise). Only the owner makes rules for
+  every project on a board in use.
 - **The Backlog.md import (BOB-9)** is a supervisor command that reads a project's Backlog.md at a
   named commit with today's reader (`board.ts` `parseBacklogItem`, the only Markdown reader that
   survives), plus Helix's `lead/questions.md` for `Q-n` and `A-n`. It writes that same export shape
