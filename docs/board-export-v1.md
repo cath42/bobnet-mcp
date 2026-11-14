@@ -6,6 +6,12 @@ it too. The zod schema is `BoardExportV1` in `packages/protocol/src/board-export
 what the fields mean. A changed shape is a new version number, and the importer reads every version
 it knows (`BoardExport`).
 
+**Who gets what.** The owner's export has every project. A laptop's has the projects that a read rule
+covers for any agent on that laptop (a rule's laptop is `*` or that laptop), since a laptop speaks for
+every name it hosts. A read rule for every project covers them all. The rules for every project and
+their history go out only with at least one project. The nightly backup is therefore as complete as
+its laptop's read rules: for all of the board, that laptop needs a `*` read rule.
+
 ## The document
 
 ```json
@@ -123,11 +129,13 @@ differ only in `exported_at`, and the nightly diff shows what changed.
 ## Import
 
 `POST /v1/board/import` with the document as the body, from a laptop or from the dashboard's own
-origin. It is all or nothing:
+origin. No other identity may export or import (`403`). It is all or nothing:
 
 - It brings new projects only. A project whose key or prefix the board has is refused (`409`); it
   never merges.
-- Rules for every project come in only to a board that has none.
+- Rules for every project come in only to a board that has none. From a laptop, they come in only
+  to an empty board (no projects, rules or history), which is the rebuild; otherwise `403`. Only the
+  owner makes rules for every project.
 - Every link must be to a record in the document, every id appears once (primary or alias), and
   every primary id is under the project's prefix or draft prefix (`400`).
 - The history is kept as it was, renumbered, plus one event per project: `import` on the project,

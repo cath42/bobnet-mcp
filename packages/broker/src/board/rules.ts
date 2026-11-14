@@ -68,6 +68,18 @@ export class Rules {
     return new Set(rows.map((r) => r.project!));
   }
 
+  /**
+   * Projects a laptop may read, for its export: those a read row covers for any agent on it, since a
+   * laptop speaks for every name it hosts (ADR 0004 §3). null means every one.
+   */
+  readableByLaptop(laptop: string): Set<number> | null {
+    const rows = this.sql
+      .exec<{ project: number | null }>("SELECT project FROM grants WHERE read = 1 AND (laptop = '*' OR lower(laptop) = lower(?))", laptop)
+      .toArray();
+    if (rows.some((r) => r.project === null)) return null;
+    return new Set(rows.map((r) => r.project!));
+  }
+
   requireRead(caller: BoardCaller, project: { pk: number; key: string }): void {
     if (caller.kind === "owner") return;
     if (!this.rows(project.pk, caller.name, caller.laptop).some((r) => r.read === 1)) {

@@ -442,9 +442,13 @@ export class BoardStore {
     for (const pre of [op.prefix, op.draft_prefix]) {
       if (pre === "Q" || pre === "A") throw new BoardError("invalid", "Prefixes Q and A are questions' and actions'");
     }
-    if (this.sql.exec("SELECT 1 FROM projects WHERE key = ? OR prefix = ?", op.key, op.prefix).toArray().length > 0) {
-      throw new BoardError("conflict", `A project ${op.key} or with prefix ${op.prefix} exists`);
+    if (this.sql.exec("SELECT 1 FROM projects WHERE key = ?", op.key).toArray().length > 0) throw new BoardError("conflict", `A project ${op.key} exists`);
+    for (const pre of [op.prefix, op.draft_prefix]) {
+      if (pre && this.sql.exec("SELECT 1 FROM projects WHERE prefix = ? OR draft_prefix = ?", pre, pre).toArray().length > 0) {
+        throw new BoardError("conflict", `A project with prefix ${pre} exists`);
+      }
     }
+    if (op.prefix === op.draft_prefix) throw new BoardError("invalid", "A project's prefix and draft prefix differ");
     const pk = this.sql
       .exec<{ pk: number }>(
         "INSERT INTO projects (key, name, prefix, draft_prefix, lead, po, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING pk",

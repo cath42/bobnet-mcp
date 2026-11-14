@@ -6,6 +6,7 @@ import {
   CriterionSection,
   GrantField,
   GrantItems,
+  ItemAlias,
   ItemKind,
   ItemRef,
   ItemStatus,
@@ -29,8 +30,6 @@ export const BOARD_EXPORT_FORMAT = "bobnet-board";
 const at = z.string().datetime({ offset: true });
 const text = z.string();
 const count = z.number().int().nonnegative();
-/** Any id an item has had: its ref, or an old one such as Backlog.md's `LAND-1.3`. */
-export const ItemAlias = z.string().regex(/^[A-Z][A-Z0-9]{0,9}-\d{1,6}(\.\d{1,4})*$/);
 
 const Criterion = z.object({
   section: CriterionSection,

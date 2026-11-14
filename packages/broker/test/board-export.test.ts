@@ -1,4 +1,4 @@
-import { BoardExportV1, type BoardCaller, type BoardCtx, type BoardOpInput, type BoardReply, type BoardResults, type ExportItem, type ExportProject } from "@bobnet/protocol";
+import { BoardExportV1, type BoardCaller, type BoardCtx, type BoardOpInput, type BoardReply, type BoardResults, type ExportItem, type ExportProject, type Identity } from "@bobnet/protocol";
 import { reset } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
@@ -24,13 +24,13 @@ async function ok<K extends keyof BoardResults>(caller: BoardCaller, op: BoardOp
   return reply.result as BoardResults[K];
 }
 
-const exported = async () => BoardExportV1.parse(await board().exportBoard());
-const imported = async (doc: unknown) => board().importBoard({ kind: "laptop", laptop: "mbp-1" }, doc);
+const exported = async (by: Identity = { kind: "owner", email: "owner@example.com" }) => BoardExportV1.parse(await board().exportBoard(by));
+const imported = async (doc: unknown, by: Identity = { kind: "laptop", laptop: "mbp-1" }) => board().importBoard(by, doc);
 
 /** Helix with a bit of everything: rules, a release, features and tasks, a session with a run and a push, and an answered question. */
 async function helix() {
   await ok(owner, { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", lead: "Picard@mbp-1", po: "Picard@mbp-1", repos: ["helix"] });
-  await ok(owner, { op: "grant", project: "helix", agent: "Picard", role: "backlog PO", read: true, items: "all", fields: ["status", "content", "create"], sessions: true, questions: true });
+  await ok(owner, { op: "grant", project: "helix", agent: "Picard", laptop: "mbp-1", role: "backlog PO", read: true, items: "all", fields: ["status", "content", "create"], sessions: true, questions: true });
   const r1 = (await ok(owner, { op: "create_release", project: "helix", title: "Release 1" })).ref!;
   const f1 = (await ok(owner, { op: "create", project: "helix", kind: "feature", type: "increment", title: "Roadmap", release: r1, labels: ["ui"] })).ref!;
   const t1 = (await ok(owner, { op: "create", project: "helix", kind: "task", type: "task", title: "Draw it", parent: f1, criteria: [{ text: "Drawn" }] })).ref!;
@@ -138,6 +138,21 @@ describe("export (ADR 0001 §11)", () => {
     expect(comparable(await exported())).toEqual(comparable(doc));
   });
 
+  it("gives a laptop only the projects its read rules cover, and the owner every one", async () => {
+    await helix();
+    await ok(owner, { op: "create_project", key: "bobnet", name: "BobNet", prefix: "BOB" });
+    const keys = async (by: Identity) => (await exported(by)).projects.map((p) => p.key);
+    expect(await keys({ kind: "owner", email: "owner@example.com" })).toEqual(["bobnet", "helix"]);
+    expect(await keys({ kind: "laptop", laptop: "mbp-1" })).toEqual(["helix"]);
+    expect(await keys({ kind: "laptop", laptop: "mbp-2" })).toEqual([]);
+    // A rule for every project gives every project, and its own rules go out with them.
+    await ok(owner, { op: "grant", project: "*", agent: "Mario", laptop: "mbp-2", role: "lead", read: true, items: "none", fields: [] });
+    const doc = await exported({ kind: "laptop", laptop: "mbp-2" });
+    expect(doc.projects.map((p) => p.key)).toEqual(["bobnet", "helix"]);
+    expect(doc.grants).toMatchObject([{ agent: "Mario", laptop: "mbp-2" }]);
+    expect((await exported({ kind: "laptop", laptop: "mbp-3" })).grants).toEqual([]);
+  });
+
   it("is a laptop's to fetch as JSON, by GET only", async () => {
     await helix();
     const res = await exports.default.fetch(`${ORIGIN}/v1/board/export`, { headers: { "cf-access-jwt-assertion": await laptopToken(1) } });
@@ -180,8 +195,9 @@ describe("import (ADR 0001 §11)", () => {
     ]);
     expect(await imported(doc)).toMatchObject({ ok: true, projects: [{ key: "bobnet", next_item: 8 }] });
     expect((await ok(owner, { op: "create", project: "bobnet", kind: "backlog", type: "task", title: "Next" })).ref).toBe("BOB-8");
-    // An old id still finds its item.
+    // An old id still finds its item, dotted or not; the reply names its ref.
     expect((await ok(owner, { op: "get", project: "bobnet", ref: "LAND-40" })).item).toMatchObject({ ref: "BOB-3" });
+    expect((await ok(owner, { op: "get", project: "bobnet", ref: "BOB-7.2" })).item).toMatchObject({ ref: "BOB-3" });
   });
 
   it("refuses Q and A as prefixes, an id twice, a link outside the document, and what isn't an export", async () => {
@@ -191,6 +207,16 @@ describe("import (ADR 0001 §11)", () => {
     expect(await imported(document({}, [{ ref: "LAND-1" }]))).toMatchObject({ ok: false, code: "invalid" });
     expect(await imported({ format: "bobnet-board", version: 2 })).toMatchObject({ ok: false, code: "invalid" });
     expect((await ok(owner, { op: "projects" })).projects).toEqual([]);
+  });
+
+  it("brings rules for every project from a laptop only into an empty board; the owner into one without any", async () => {
+    const rule = { agent: "Mario", laptop: "*", role: "lead", read: true, items: "all" as const, fields: [], sessions: false, questions: false, admin: true };
+    const global = { ...document(), grants: [rule] };
+    await ok(owner, { op: "create_project", key: "other", name: "Other", prefix: "OTH" });
+    expect(await imported(global)).toMatchObject({ ok: false, code: "forbidden" });
+    expect(await imported(global, { kind: "owner", email: "owner@example.com" })).toMatchObject({ ok: true });
+    await reset();
+    expect(await imported(global)).toMatchObject({ ok: true });
   });
 
   it("is posted as JSON by a laptop, or by the owner from the dashboard's own origin", async () => {

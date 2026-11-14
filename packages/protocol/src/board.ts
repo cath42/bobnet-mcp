@@ -42,6 +42,8 @@ export const ProjectKey = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 const prefix = z.string().regex(/^[A-Z][A-Z0-9]{0,9}$/);
 /** An item's id, `LAND-49`. */
 export const ItemRef = z.string().regex(/^[A-Z][A-Z0-9]{0,9}-\d{1,6}$/);
+/** Any id an item has had: its ref, or an old one such as Backlog.md's `LAND-1.3`. Only `get` takes one; a reply names the ref. */
+export const ItemAlias = z.string().regex(/^[A-Z][A-Z0-9]{0,9}-\d{1,6}(\.\d{1,4})*$/);
 /** A question's id, `Q-258`, or an action's, `A-17`: no project has prefix Q or A. */
 export const QuestionRef = z.string().regex(/^[QA]-\d{1,6}$/);
 /** A release's id within its project, `R1`. */
@@ -145,7 +147,7 @@ export const BoardOp = z.discriminatedUnion("op", [
   z.object({
     op: z.literal("get"),
     ...project,
-    ref: z.union([QuestionRef, ItemRef, ReleaseRef]).optional(),
+    ref: z.union([QuestionRef, ItemAlias, ReleaseRef]).optional(),
     session: SessionRef.optional(),
     history: z.boolean().optional(),
   }),

@@ -43,9 +43,9 @@ export class Board extends DurableObject<Env> {
     }
   }
 
-  /** The whole board as one document (§11), for GET /v1/board/export. */
-  async exportBoard(): Promise<BoardExportV1> {
-    return exportBoard(this.ctx.storage.sql);
+  /** The board as one document (§11), as far as `by` may read it, for GET /v1/board/export. */
+  async exportBoard(by: Identity): Promise<BoardExportV1> {
+    return exportBoard(this.ctx.storage.sql, by);
   }
 
   /** A document's projects into the board, all or nothing (§11), for POST /v1/board/import. */

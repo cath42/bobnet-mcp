@@ -46,9 +46,13 @@ export default {
     }
 
     // The board as one document (ADR 0001 §11): out for the nightly backup, in for new projects only.
+    if (url.pathname === "/v1/board/export" || url.pathname === "/v1/board/import") {
+      // The owner, or a laptop as far as its rules go; any other identity (CI's, §4) never gets the board.
+      if (identity.kind !== "owner" && identity.kind !== "laptop") return new Response("Forbidden", { status: 403 });
+    }
     if (url.pathname === "/v1/board/export") {
       if (req.method !== "GET") return new Response("Method not allowed", { status: 405 });
-      return json(await env.BOARD.getByName(BOARD).exportBoard());
+      return json(await env.BOARD.getByName(BOARD).exportBoard(identity));
     }
     if (url.pathname === "/v1/board/import") {
       if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });

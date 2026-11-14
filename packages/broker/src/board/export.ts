@@ -14,6 +14,7 @@ import {
   sessionKey,
 } from "@bobnet/protocol";
 import { BoardError } from "./errors.ts";
+import { Rules } from "./rules.ts";
 
 // Export and import (ADR 0001 §11): the whole board as one document, rows with
 // refs instead of pks, in a stable order so the nightly git diff shows only what
@@ -42,7 +43,12 @@ function ctxBlob(points: number[]): ArrayBuffer {
 
 // ---------- Export ----------
 
-export function exportBoard(sql: SqlStorage, source: string | null = "BobNet's board"): BoardExportV1 {
+/**
+ * The board as one document for `by`: the owner gets every project; a laptop gets the projects its
+ * read rules cover, and the rules for every project only with at least one of them.
+ */
+export function exportBoard(sql: SqlStorage, by: Identity, source: string | null = "BobNet's board"): BoardExportV1 {
+  const readable = by.kind === "owner" ? null : new Rules(sql).readableByLaptop(by.laptop);
   const all = <T extends Row>(q: string, ...args: unknown[]) => sql.exec<T>(q, ...args).toArray();
   const itemRef = new Map(all<Rows<{ item: number; ref: string }>>("SELECT item, ref FROM item_refs WHERE is_primary = 1").map((r) => [r.item, r.ref]));
   const releaseRef = new Map(all<Rows<{ pk: number; ref: string }>>("SELECT pk, ref FROM releases").map((r) => [r.pk, r.ref]));
@@ -122,7 +128,7 @@ export function exportBoard(sql: SqlStorage, source: string | null = "BobNet's b
       })),
     }));
 
-  const projects = all<Row>("SELECT * FROM projects ORDER BY key").map((p): ExportProject => {
+  const projects = all<Row>("SELECT * FROM projects ORDER BY key").filter((p) => readable === null || readable.has(p["pk"] as number)).map((p): ExportProject => {
     const pk = p["pk"] as number;
     const tasksOf = (q: string, of: unknown) => all<Rows<{ item: number }>>(q, of).map((t) => ref(t.item)!).sort();
     return {
@@ -285,8 +291,8 @@ export function exportBoard(sql: SqlStorage, source: string | null = "BobNet's b
     exported_at: new Date().toISOString(),
     source,
     last_event_seq: last,
-    grants: grants("project IS NULL"),
-    events: events("project IS NULL"),
+    grants: projects.length > 0 ? grants("project IS NULL") : [],
+    events: projects.length > 0 ? events("project IS NULL") : [],
     projects,
   };
 }
@@ -336,8 +342,14 @@ export function importBoard(sql: SqlStorage, by: Importer, input: unknown): Extr
     }
     keys.add(p.key);
   }
-  if ((doc.grants.length > 0 || doc.events.length > 0) && exists("SELECT 1 FROM events WHERE project IS NULL UNION ALL SELECT 1 FROM grants WHERE project IS NULL")) {
-    throw new BoardError("conflict", "The board has rules for every project; an import brings them only into a board without any");
+  if (doc.grants.length > 0 || doc.events.length > 0) {
+    // Only the owner makes rules for every project; a laptop brings them only to rebuild an empty board.
+    if (by.kind !== "owner" && exists("SELECT 1 FROM projects UNION ALL SELECT 1 FROM grants UNION ALL SELECT 1 FROM events")) {
+      throw new BoardError("forbidden", "Only the owner brings rules for every project into a board that isn't empty");
+    }
+    if (exists("SELECT 1 FROM events WHERE project IS NULL UNION ALL SELECT 1 FROM grants WHERE project IS NULL")) {
+      throw new BoardError("conflict", "The board has rules for every project; an import brings them only into a board without any");
+    }
   }
 
   const at = new Date().toISOString();

@@ -70,14 +70,15 @@ export class BoardBackup {
       const doc = parsed.data;
       const path = join(repo, FILE);
       if (existsSync(path) && sameBoard(readFileSync(path, "utf8"), doc)) {
-        log.info("board backup: unchanged", { repo });
+        log.info("board backup: unchanged", { repo, projects: doc.projects.length });
         return null;
       }
       writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`);
       await this.git(["add", FILE], repo);
       await this.git(["commit", "--quiet", "-m", `board backup: ${doc.projects.length} projects through event ${doc.last_event_seq}`, "--", FILE], repo);
       const sha = (await this.git(["rev-parse", "HEAD"], repo)).trim();
-      log.info("board backup: committed", { repo, sha, last_event_seq: doc.last_event_seq });
+      // A laptop's export holds only what its read rules cover, so a partial backup shows here.
+      log.info("board backup: committed", { repo, sha, projects: doc.projects.map((p) => p.key), last_event_seq: doc.last_event_seq });
       return sha;
     } catch (err) {
       log.error("board backup failed", { repo, err: (err as Error).message });
