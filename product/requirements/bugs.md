@@ -13,11 +13,11 @@ A bug is captured like any backlog item ([capture.md](capture.md)), with type `b
 into a feature when it is found. It waits in the project's triage list until the PO decides which
 feature or release fixes it.
 
-1. **Capture.** You or any agent records it in one step: what happened, where (staging or
+1. **Capture.** Casper or any agent records it in one step: what happened, where (staging or
    production), and the feature it was found in, if known.
 2. **Triage.** The PO slots it like any backlog item: into a feature (usually a "fixes" session), into
    a release, or closes it with a reason.
-3. **Urgent ones.** A bug marked "blocks use" also shows on your "waits on Casper" list, so you decide
+3. **Urgent ones.** A bug marked "blocks use" also shows on the "waits on Casper" list, so Casper decides
    whether it jumps the queue.
 4. **Review findings are not bugs.** A review session's blockers and majors stay tasks of the feature
    under review, as in Helix today, because that feature isn't done yet.
