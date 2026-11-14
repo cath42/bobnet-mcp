@@ -1,0 +1,22 @@
+project_name: "BobNet"
+default_status: "Draft"
+statuses: ["Draft", "Ready", "In Progress", "In Review", "Done"]
+labels: []
+date_format: yyyy-mm-dd
+max_column_width: 20
+auto_open_browser: false
+default_port: 6420
+remote_operations: false
+auto_commit: false
+filesystem_only: false
+bypass_git_hooks: false
+check_active_branches: true
+active_branch_days: 30
+task_prefix: "BOB"
+backlog_directory: "product/backlog"
+types: ["increment", "task", "spike", "bug", "chore"]
+definition_of_done:
+  - "Landed on v2 (land: pnpm -r typecheck and pnpm -r test pass)"
+  - "Acceptance criteria pass, evidence linked (test, phone and desktop screenshot, or dashboard check)"
+  - "Architect (Toad) signed off if it touches the protocol, the broker store or how the parts fit (or: not applicable, because ...)"
+  - "Live only after a release and a restart: say whether it needs one"
