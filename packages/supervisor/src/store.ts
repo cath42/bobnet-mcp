@@ -248,7 +248,7 @@ export class Store {
 
   // ---------- Inbox ----------
 
-  /** Stores a message for a role with no running worker; false if already stored. */
+  /** Stores a directed message for a role, before it is acked; false if already stored (a redelivery). */
   addInbox(project: string, role: string, msg: Envelope): boolean {
     if (this.one("SELECT 1 AS x FROM inbox WHERE id = ?", msg.id)) return false;
     this.run(
@@ -265,6 +265,7 @@ export class Store {
     ).map((r) => JSON.parse(r.envelope) as Envelope);
   }
 
+  /** A worker's turn has taken these messages. */
   consumeInbox(ids: string[], workerId: string): void {
     for (const id of ids) this.run("UPDATE inbox SET consumed_by = ? WHERE id = ?", workerId, id);
   }

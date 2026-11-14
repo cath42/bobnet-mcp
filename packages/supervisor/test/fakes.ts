@@ -12,6 +12,8 @@ export const quiet: Logger = { debug() {}, info() {}, warn() {}, error() {} };
 export class FakeSession implements QueryHandle {
   readonly options: Options;
   readonly inputs: string[] = [];
+  /** Each input's uuid, as the supervisor stamped it. */
+  readonly uuids: Array<string | undefined> = [];
   private readonly queue: SDKMessage[] = [];
   private wake: (() => void) | null = null;
   private ended = false;
@@ -32,6 +34,7 @@ export class FakeSession implements QueryHandle {
       for await (const m of params.prompt) {
         const c = m.message.content;
         this.inputs.push(typeof c === "string" ? c : JSON.stringify(c));
+        this.uuids.push(m.uuid);
       }
       // As the SDK: with its input closed, the session ends, unless a background command holds it open.
       if (!this.background) this.end();
@@ -46,6 +49,11 @@ export class FakeSession implements QueryHandle {
 
   say(text: string, usage = { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }): void {
     this.emit({ type: "assistant", message: { content: [{ type: "text", text }], usage } } as unknown as SDKMessage);
+  }
+
+  /** A turn takes input i: as the CLI, its first reply carries that input's uuid. */
+  take(i: number): void {
+    this.emit({ type: "assistant", user_message_uuid: this.uuids[i], message: { content: [{ type: "text", text: "on it" }], usage: { input_tokens: 1, output_tokens: 1 } } } as unknown as SDKMessage);
   }
 
   /** Asks permission the way the CLI would, through canUseTool. */

@@ -589,18 +589,24 @@ export class Supervisor {
       ack();
       return;
     }
+    // Stored before the ack, and consumed only when a worker's turn takes it: neither a crash nor a
+    // worker ending first loses it. Already stored is a redelivery (an ack lost in a reconnect): acked, not handed on again.
+    const fresh = this.store.addInbox(role.project, role.key, msg);
+    ack();
+    if (!fresh) return;
     const digest = active ? news?.takeDigest() : undefined;
     // A session whose input has closed (its turn done, a background command keeping it open) can't take
     // a message: it waits in the inbox for the role's next worker, as with no worker running.
-    if (active && active[1].inject(digest ? `${formatInbound(msg)}\n\n${digest}` : formatInbound(msg))) {
+    if (active && active[1].inject(digest ? `${formatInbound(msg)}\n\n${digest}` : formatInbound(msg), [msg.id])) {
       this.store.audit("broker", "inject", active[0], { message: msg.id, from: msg.from });
-    } else if (this.store.addInbox(role.project, role.key, msg)) {
-      // An update, not a message: it reaches the orchestrator's digest without waking it.
-      this.broker
-        .request({ t: "update", as: role.name, text: `message from ${msg.from} waits in my inbox for my next worker (none running; spawn one if it should be handled now)` })
-        .catch(() => {});
+    } else {
+      this.inboxUpdate(role, `message from ${msg.from} waits in my inbox for my next worker (none running; spawn one if it should be handled now)`);
     }
-    ack();
+  }
+
+  /** An update, not a message: it reaches the orchestrator's digest without waking it. */
+  private inboxUpdate(role: RoleConfig, text: string): void {
+    this.broker.request({ t: "update", as: role.name, text }).catch(() => {});
   }
 
   // ---------- Remote requests (remote.ts) ----------
@@ -760,6 +766,9 @@ export class Supervisor {
       id: w.id,
       role: { ...role, writeRoots: [...role.writeRoots, join(this.config.stateDir, "handoffs"), ...this.config.sandboxWrite] },
       prompt: consult ? w.task : buildPrompt(w.task, handoff, waiting),
+      promptRefs: waiting.map((m) => m.id),
+      // Consumed only once a turn takes it: a worker that ends first leaves it for the role's next one.
+      onInputTaken: (refs) => this.store.consumeInbox(refs, w.id),
       systemAppend: role.lead ? leadAppend(role, project.orchestrator) : systemAppend(role, project.orchestrator),
       resumeSession: w.resume_session,
       logPath: this.logPath(w),
@@ -827,7 +836,6 @@ export class Supervisor {
       handoff,
       usage: JSON.stringify({ cum: ZERO_USAGE, base: baseline }),
     });
-    if (waiting.length > 0) this.store.consumeInbox(waiting.map((m) => m.id), w.id);
     this.store.audit("supervisor", consult ? "start:consult" : "start", w.id, { role: role.name, cwd: role.dir, resume: w.resume_session, ...(consult ? { consult: consult.id } : {}) });
     this.runs.set(w.id, run);
     if (role.lead && !consult) this.leadNews.set(w.id, new Inbox());
@@ -1254,6 +1262,13 @@ export class Supervisor {
   private onExit(id: string, outcome: Outcome): void {
     const run = this.runs.get(id);
     this.runs.delete(id);
+    // Unread input stays unconsumed in the inbox: the role's next worker gets it with its brief.
+    const unread = run?.untakenRefs() ?? [];
+    const ended = this.store.worker(id);
+    if (unread.length > 0 && ended) {
+      this.store.audit("supervisor", "inbox:returned", id, { messages: unread });
+      this.inboxUpdate(this.roleOf(ended), `${unread.length === 1 ? "a message" : `${unread.length} messages`} I hadn't read wait${unread.length === 1 ? "s" : ""} in my inbox for my next worker`);
+    }
     this.leadNews.delete(id);
     const exited = this.store.worker(id);
     if (exited) this.roleStatus(this.roleOf(exited), this.activeRun(exited.project, exited.role));

@@ -756,8 +756,57 @@ describe("BobNet messages", () => {
     await until(() => sessions.length === 1 && sessions[0]!.inputs.length === 1);
     expect(sessions[0]!.inputs[0]).toContain("Messages that arrived for you while no worker was running");
     expect(sessions[0]!.inputs[0]).toContain("LAND-41 is Ready");
-    expect(store.waiting("helix", "bill")).toEqual([]);
+    // Still waiting until the worker's first turn takes its brief.
+    expect(store.waiting("helix", "bill")).toHaveLength(1);
+    sessions[0]!.take(0);
+    await until(() => store.waiting("helix", "bill").length === 0);
     expect(w.id).toBeTruthy();
+  });
+
+  it("stores a message for a running worker before acking it, so a supervisor that dies before the worker takes it hands it on", async () => {
+    const first = await setup();
+    first.sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => first.sessions.length === 1);
+    first.sup.onPush({ t: "deliver", to: "Bill@mbp-1", wake: true, msg: msg() });
+    await until(() => first.sessions[0]!.inputs.length === 2);
+    expect(first.broker.acks).toContainEqual({ as: "Bill", ids: ["m_x1"] });
+    expect(store.waiting("helix", "bill").map((m) => m.id)).toEqual(["m_x1"]);
+    // The supervisor dies before the worker's turn takes it; on restart the role's next worker gets it.
+    const second = await setup();
+    second.sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => second.sessions.length === 1 && second.sessions[0]!.inputs.length === 1);
+    expect(second.sessions[0]!.inputs[0]).toMatch(/Messages that arrived for you[\s\S]*LAND-41 is Ready/);
+  });
+
+  it("injects a redelivered message once", async () => {
+    const { sup, broker, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    sup.onPush({ t: "deliver", to: "Bill@mbp-1", wake: true, msg: msg() });
+    // The ack was lost in a reconnect: the broker delivers it again, and it is acked again.
+    sup.onPush({ t: "deliver", to: "Bill@mbp-1", wake: true, msg: msg() });
+    await tick(30);
+    expect(sessions[0]!.inputs.filter((i) => i.includes("m_x1"))).toHaveLength(1);
+    expect(broker.acks.filter((a) => a.ids.includes("m_x1"))).toHaveLength(2);
+  });
+
+  it("returns what a worker ended without taking to the inbox, for the role's next worker, and keeps what it took", async () => {
+    const { sup, sessions } = await setup();
+    const w = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    sup.onPush({ t: "deliver", to: "Bill@mbp-1", wake: true, msg: msg({ id: "m_taken", body: "first" }) });
+    await until(() => sessions[0]!.inputs.length === 2);
+    sessions[0]!.take(1);
+    await until(() => store.waiting("helix", "bill").length === 0);
+    sup.onPush({ t: "deliver", to: "Bill@mbp-1", wake: true, msg: msg({ id: "m_unread", body: "second" }) });
+    await until(() => sessions[0]!.inputs.length === 3);
+    sessions[0]!.finish("done before reading it");
+    await until(() => sup.status(w.id).state === "done");
+    expect(store.waiting("helix", "bill").map((m) => m.id)).toEqual(["m_unread"]);
+    sup.spawn({ project: "helix", role: "bill", task: "t2" });
+    await until(() => sessions.length === 2 && sessions[1]!.inputs.length === 1);
+    expect(sessions[1]!.inputs[0]).toContain("second");
+    expect(sessions[1]!.inputs[0]).not.toContain("m_taken");
   });
 
   it("drops quiet broadcasts for workers but acks them", async () => {

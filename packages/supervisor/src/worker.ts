@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { CanUseTool, HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -63,9 +64,9 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
   private ended = false;
 
   /** False once the input has closed: nothing will read it. */
-  push(text: string): boolean {
+  push(text: string, uuid?: string): boolean {
     if (this.ended) return false;
-    this.items.push({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null, priority: "next" });
+    this.items.push({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null, priority: "next", ...(uuid ? { uuid: uuid as SDKUserMessage["uuid"] & string } : {}) });
     this.wake?.();
     return true;
   }
@@ -123,6 +124,10 @@ export interface WorkerRunOptions {
   onToolResult?: (toolUseId: string) => void;
   /** A turn was interrupted to hand the worker a message: its tool calls won't return. */
   onInterrupted?: () => void;
+  /** Inbox messages the brief carries: taken, with it, by the worker's first turn. */
+  promptRefs?: string[];
+  /** A turn has taken input that carried these inbox messages (the CLI stamps its reply with the input's uuid). */
+  onInputTaken?: (refs: string[]) => void;
   onExit: (outcome: Outcome) => void;
 }
 
@@ -154,6 +159,8 @@ export class WorkerRun {
 
   private readonly opts: WorkerRunOptions;
   private readonly input = new InputQueue();
+  /** Input handed to the session and not yet taken by a turn, by uuid: the inbox messages it carries. */
+  private readonly untaken = new Map<string, string[]>();
   private readonly abort = new AbortController();
   private query: QueryHandle | null = null;
   private log: WriteStream | null = null;
@@ -222,7 +229,7 @@ export class WorkerRun {
         : {}),
     };
 
-    this.input.push(this.opts.prompt);
+    this.input.push(this.opts.prompt, this.stamp(this.opts.promptRefs ?? []));
     this.query = this.opts.queryFn({ prompt: this.input, options });
     if (role.maxRuntimeMinutes !== undefined) {
       this.runtimeTimer = setTimeout(() => void this.stop(`max runtime of ${role.maxRuntimeMinutes} minutes reached`), role.maxRuntimeMinutes * 60_000);
@@ -240,11 +247,41 @@ export class WorkerRun {
     };
   }
 
-  /** Hands the running worker a message, as its next user turn; false if its input has closed. */
-  inject(text: string): boolean {
-    if (!this.input.push(text)) return false;
+  /**
+   * Hands the running worker a message, as its next user turn; false if its input has closed.
+   * `refs` are the inbox messages it carries, reported through onInputTaken once a turn takes it.
+   */
+  inject(text: string, refs: string[] = []): boolean {
+    const uuid = this.stamp(refs);
+    if (!this.input.push(text, uuid)) {
+      if (uuid) this.untaken.delete(uuid);
+      return false;
+    }
     this.idle = false;
     return true;
+  }
+
+  /** Inbox messages handed to the session that no turn has taken yet. */
+  untakenRefs(): string[] {
+    return [...this.untaken.values()].flat();
+  }
+
+  /** A uuid for input carrying inbox messages, so the turn that takes it can be told; none for other input. */
+  private stamp(refs: string[]): string | undefined {
+    if (refs.length === 0) return undefined;
+    const uuid = randomUUID();
+    this.untaken.set(uuid, refs);
+    return uuid;
+  }
+
+  /** The CLI stamps a turn's reply with the uuid of each input it takes (user_message_uuid), and echoes a replayed input with its own. */
+  private taken(msg: SDKMessage): void {
+    if (this.untaken.size === 0) return;
+    const uuid = msg.type === "assistant" ? msg.user_message_uuid : msg.type === "user" && "isReplay" in msg && msg.isReplay ? msg.uuid : undefined;
+    const refs = uuid ? this.untaken.get(uuid) : undefined;
+    if (!refs) return;
+    this.untaken.delete(uuid!);
+    this.opts.onInputTaken?.(refs);
   }
 
   /**
@@ -325,6 +362,7 @@ export class WorkerRun {
         this.lastEventAt = Date.now();
         this.write(msg);
         this.track(msg);
+        this.taken(msg);
         this.opts.onEvent(msg);
         if (msg.type === "system" && msg.subtype === "init" && this.opts.remoteControl && !this.remote) void this.startRemoteControl();
         if (msg.type === "assistant") {
