@@ -17,7 +17,9 @@ they land, and cut releases.
 
 ## Releases
 
-You cut releases: tag `v2.0.0-rc.N` on `origin/v2`, push the tag, `git archive` it into
+You cut releases: set every `package.json` version (root and `packages/*`) to `2.0.0-rc.N` in one
+commit and land it (BOB-16: agents report it on the dashboard; Toad agreed 2026-11-14), tag
+`v2.0.0-rc.N` on that commit on `origin/v2`, push the tag, `git archive` it into
 `~/.local/share/bobnet/<tag>`, `pnpm install --frozen-lockfile` there. Then tell poe it's ready,
 with the plist change and the checks. poe picks the restart; you never do, and you never announce
 one. A restart ends you too: leave a handoff first.
