@@ -31,10 +31,11 @@ This file is loaded for every role. Your own rules are in your role's folder:
 - **Usage is tokens, never dollars** (a Max subscription), in the UI and in reports.
 - **The dashboard has its own look** (`packages/broker/public/style.css`), never another product's,
   and works on a phone and a tablet.
-- **Boards: today in their repos, moving into BobNet.** Today a project's board is Backlog.md files
-  in its repo, written by that project's product owner with its own tools, never by BobNet's code.
-  Casper's frame (2026-11-13) makes the board a BobNet service (API and MCP) that retires Backlog.md;
-  its shape is still open (`product/requirements/README.md`, C1-C7). Build nothing that writes a
-  project's board until a feature for it is Ready.
+- **Boards live in BobNet** (Casper, 2026-11-13; `product/requirements/README.md`, C1, C2, C5).
+  Every project's board is typed records in the broker's database, read and written through
+  BobNet's API and MCP; Backlog.md is retired. A project's product owner writes its board; Casper
+  edits only his own gates (release scope, release order, release close) on the dashboard, and
+  anything else from the UI is a request to that project's PO. Until a project has moved (Helix is
+  BOB-9), its board is still Backlog.md in its repo, written only by its PO, never by BobNet.
 - Questions only Casper can answer go to Mario, who asks Casper. Peach asks Casper directly about
   requirements, in Peach's own conversations.
