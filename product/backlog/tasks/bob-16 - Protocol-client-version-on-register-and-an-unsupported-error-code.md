@@ -4,6 +4,7 @@ title: 'Protocol: client version on register, and an unsupported error code'
 status: Ready
 assignee: []
 created_date: '2026-11-14 16:33'
+updated_date: '2026-11-14 16:42'
 labels: []
 dependencies: []
 references:
@@ -20,9 +21,11 @@ System review chore 11 [finding 8]. Ordered just before BOB-2 because BOB-2 grow
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 `register` carries the client's version; the broker stores it and the dashboard shows it per agent. Evidence: a broker test and a dashboard check
+- [ ] #1 `register` carries an optional `client: {package, version, protocol}`; the broker stores it and the dashboard shows it per agent. Evidence: a broker test and a dashboard check
 - [ ] #2 A frame type the broker doesn't know is answered with an `unsupported` error code, not dropped or crashed on. Evidence: a protocol/broker test
-- [ ] #3 An old client without a version still registers. Evidence: a test
+- [ ] #3 An old client without `client` still registers (holds by construction: the field is optional). Evidence: a test
+- [ ] #4 Given `unsupported`, the client says "the broker doesn't know <frame>; it is older than this client", not a bare error. Evidence: a client test
+- [ ] #5 Ships in the broker deploy before BOB-2's (the client message helps only once this broker is deployed). Evidence: release order noted on the board
 <!-- AC:END -->
 
 ## Definition of Done

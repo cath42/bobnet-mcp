@@ -6,6 +6,7 @@ title: >-
 status: Ready
 assignee: []
 created_date: '2026-11-14 16:33'
+updated_date: '2026-11-14 16:42'
 labels: []
 dependencies: []
 references:
@@ -23,8 +24,8 @@ System review chore 14 [finding 11]. The end-to-end test is ordered before BOB-2
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 The `fatal: ambiguous argument 'origin/main'` noise from board.test (lines 250-253) is gone (`stdio` or `ref: main`). Evidence: pnpm -r test output is clean
-- [ ] #2 One test runs a real client against a real broker: register, send, receive. Evidence: the test
-- [ ] #3 Playwright is either a pinned devDependency or the rule 'use the machine's' is written down, with the reason. Evidence: package.json or the written rule
+- [ ] #2 One test runs the real `BrokerConnection` against the vitest-pool-workers broker: register, send, receive. BOB-2's board_op tests build on this harness. Evidence: the test
+- [ ] #3 Playwright is a pinned devDependency: `playwright-core` at exactly 1.63.0 (matching chromium-1243) in packages/broker devDependencies, never shipped; take.mjs imports it normally (no PLAYWRIGHT env var, no borrowing Helix's tree) and its header gives the one-time install `pnpm --filter @bobnet/broker exec playwright-core install chromium`. Evidence: package.json, the lockfile and take.mjs's header
 <!-- AC:END -->
 
 ## Definition of Done
