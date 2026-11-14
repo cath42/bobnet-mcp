@@ -37,11 +37,14 @@ the demo" but sits under "When you have time".
 1. Session outcomes have no source today: LAND-49's six sessions are hand-transcribed; three have no close
    file. The steps view needs Toad's structured session close before it can be built.
 2. "Open" isn't on Helix's board (LAND-49 says Ready after six sessions): the service has to keep it.
+   Settled by Peach (board-writes.md): the service keeps the open feature, set and cleared by sessions.
 3. Helix rarely ticks criteria (LAND-22 Done at 3 of 138): criteria are a weak progress measure on today's
    data. Worth raising with Picard before Helix's move (BOB-9).
 4. The blocks-use bug, the pending permission and session token counts are marked "example": no record exists.
 5. Only mbp-1 is in the sample.
-6. "Fixes" as its own session kind is still Peach's question (shown as a build labelled Fixes).
+6. "Fixes" is a build label, not a session kind (Peach, steps-view.md), as the prototype shows it.
+
+Peach accepted BOB-1.1 (Done); BOB-1 is In Review for your verdict (v2 e297bba).
 
 ## After your verdict
 
