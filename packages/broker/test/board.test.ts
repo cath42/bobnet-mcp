@@ -92,6 +92,27 @@ describe("records (criterion 0)", () => {
     });
   });
 
+  it("keeps a run's tasks, pushes and events in the run's project, in the store", async () => {
+    const { f1, t1 } = await helix();
+    await ok(owner, { op: "create_project", key: "bobnet", name: "BobNet", prefix: "BOB" });
+    await ok(owner, { op: "session_join", project: "helix", session: { feature: f1, kind: "build", label: "1" } });
+    await runInDurableObject(board(), (_, state) => {
+      const sql = state.storage.sql;
+      const pk = (table: string, where = "1") => sql.exec<{ pk: number }>(`SELECT pk FROM ${table} WHERE ${where}`).one().pk;
+      const helixPk = pk("projects", "key = 'helix'");
+      const bobnet = pk("projects", "key = 'bobnet'");
+      const task = sql.exec<{ item: number }>("SELECT item FROM item_refs WHERE ref = ?", t1).one().item;
+      const run = sql
+        .exec<{ pk: number }>("INSERT INTO runs (id, project, agent, role, laptop, started_at) VALUES ('w_1/1', ?, 'Bill', 'builder', 'mbp-1', 'now') RETURNING pk", bobnet)
+        .one().pk;
+      expect(() => sql.exec("INSERT INTO run_tasks (project, run, item) VALUES (?, ?, ?)", helixPk, run, task)).toThrow(/FOREIGN KEY constraint failed/);
+      expect(() => sql.exec("INSERT INTO pushes (project, repo, branch, sha, worker, run, at) VALUES (?, 'r', 'b', 's', 'w_1', ?, 'now')", helixPk, run)).toThrow(/FOREIGN KEY constraint failed/);
+      expect(() =>
+        sql.exec("INSERT INTO events (at, project, actor_kind, actor, session, op, tbl, pk) VALUES ('now', ?, 'board', 'x', ?, 'x', 'x', 1)", bobnet, pk("sessions")),
+      ).toThrow(/FOREIGN KEY constraint failed/);
+    });
+  });
+
   it("keeps a task's release its feature's and a feature parentless", async () => {
     const { r1, f1, f2 } = await helix();
     expect(await refused(owner, { op: "create", project: "helix", kind: "task", type: "task", title: "x", parent: f1, release: r1 })).toMatchObject({ code: "invalid" });
@@ -257,6 +278,28 @@ describe("who may write what (ADR 0001 §5)", () => {
       code: "forbidden",
     });
     await ok(owner, { op: "criteria", project: "helix", ref: "LAND-4", change: { action: "check", n: 1, evidence: "demo" } });
+  });
+
+  it("lets a create-only grant make Drafts, and nothing further on", async () => {
+    await helix();
+    await ok(owner, { op: "grant", project: "helix", agent: "Wesley", role: "capturer", read: true, items: "all", fields: ["create"] });
+    expect(await refused(agent("Wesley"), { op: "create", project: "helix", kind: "backlog", type: "chore", title: "Done already", status: "Done" })).toMatchObject({
+      code: "forbidden",
+      message: expect.stringMatching(/^Wesley may not change status on the backlog in helix/),
+    });
+    await ok(agent("Wesley"), { op: "create", project: "helix", kind: "backlog", type: "chore", title: "A draft", status: "Draft" });
+  });
+
+  it("never gives a new rule a revoked rule's history", async () => {
+    await helix();
+    await ok(owner, { op: "grant", project: "helix", agent: "Bill", role: "builder", read: true, items: "none", fields: [] });
+    await ok(owner, { op: "revoke", project: "helix", agent: "Bill" });
+    await ok(owner, { op: "grant", project: "helix", agent: "Data", role: "builder", read: true, items: "none", fields: [] });
+    await runInDurableObject(board(), (_, state) => {
+      const events = state.storage.sql.exec<{ op: string; pk: number }>("SELECT op, pk FROM events WHERE tbl = 'grants' ORDER BY seq").toArray();
+      expect(events.map((e) => e.op)).toEqual(["grant", "revoke", "grant"]);
+      expect(events[2]!.pk).not.toBe(events[0]!.pk);
+    });
   });
 
   it("lets the owner or an admin change the rules, and records it", async () => {

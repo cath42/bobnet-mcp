@@ -36,7 +36,9 @@ export class Board extends DurableObject<Env> {
       // The schema is the backstop for a link or a value the operation layer let through.
       const message = err instanceof Error ? err.message : String(err);
       if (/constraint failed/i.test(message)) return { ok: false, code: "invalid", message: `Refused by the board's schema: ${message}` };
-      throw err;
+      // A bug here is not an outage: answered as such, so no agent retries it for a minute.
+      console.error("board error", { op: op.op, err: message });
+      return { ok: false, code: "invalid", message: `Board error: ${message}` };
     }
   }
 }

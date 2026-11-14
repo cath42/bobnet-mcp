@@ -252,6 +252,7 @@ export const BOARD_MIGRATIONS: readonly string[] = [
     calls       INTEGER NOT NULL DEFAULT 0 CHECK (calls >= 0),
     ctx         BLOB,                      -- context per call: little-endian uint32s, up to 2000
     remote_url  TEXT,
+    UNIQUE (project, pk),
     FOREIGN KEY (project, session) REFERENCES sessions (project, pk)
   );
   CREATE INDEX runs_session ON runs (session);
@@ -259,9 +260,10 @@ export const BOARD_MIGRATIONS: readonly string[] = [
   -- The tasks a run's spawn declared.
   CREATE TABLE run_tasks (
     project INTEGER NOT NULL REFERENCES projects (pk),
-    run     INTEGER NOT NULL REFERENCES runs (pk),
+    run     INTEGER NOT NULL,
     item    INTEGER NOT NULL,
     PRIMARY KEY (run, item),
+    FOREIGN KEY (project, run) REFERENCES runs (project, pk),
     FOREIGN KEY (project, item) REFERENCES items (project, pk)
   );
 
@@ -273,9 +275,10 @@ export const BOARD_MIGRATIONS: readonly string[] = [
     branch  TEXT NOT NULL,
     sha     TEXT NOT NULL,
     worker  TEXT NOT NULL,
-    run     INTEGER REFERENCES runs (pk),
+    run     INTEGER,
     at      TEXT NOT NULL,
-    UNIQUE (repo, sha)
+    UNIQUE (repo, sha),
+    FOREIGN KEY (project, run) REFERENCES runs (project, pk)
   );
 
   -- CI runs from anywhere, and run-slot runs (source 'slot').
@@ -296,20 +299,23 @@ export const BOARD_MIGRATIONS: readonly string[] = [
     worker      TEXT,
     session     INTEGER,
     UNIQUE (source, external_id),
+    UNIQUE (project, pk),
     FOREIGN KEY (project, session) REFERENCES sessions (project, pk)
   );
 
   CREATE TABLE ci_run_tasks (
     project INTEGER NOT NULL REFERENCES projects (pk),
-    ci_run  INTEGER NOT NULL REFERENCES ci_runs (pk),
+    ci_run  INTEGER NOT NULL,
     item    INTEGER NOT NULL,
     PRIMARY KEY (ci_run, item),
+    FOREIGN KEY (project, ci_run) REFERENCES ci_runs (project, pk),
     FOREIGN KEY (project, item) REFERENCES items (project, pk)
   );
 
   -- Who may write what (§5): one row per project (NULL: every project) and agent.
+  -- AUTOINCREMENT: a revoked rule's pk is never reused, so its history stays its own.
   CREATE TABLE grants (
-    pk        INTEGER PRIMARY KEY,
+    pk        INTEGER PRIMARY KEY AUTOINCREMENT,
     project   INTEGER REFERENCES projects (pk),
     agent     TEXT NOT NULL,
     laptop    TEXT NOT NULL DEFAULT '*',
@@ -337,13 +343,14 @@ export const BOARD_MIGRATIONS: readonly string[] = [
     actor      TEXT NOT NULL,                      -- an address or the owner's email
     role       TEXT,
     worker     TEXT,
-    session    INTEGER REFERENCES sessions (pk),
+    session    INTEGER,
     op         TEXT NOT NULL,
     tbl        TEXT NOT NULL,
     pk         INTEGER NOT NULL,
     ref        TEXT,
     reason     TEXT,
-    undo_of    INTEGER REFERENCES events (seq)
+    undo_of    INTEGER REFERENCES events (seq),
+    FOREIGN KEY (project, session) REFERENCES sessions (project, pk)
   );
   CREATE INDEX events_record ON events (tbl, pk);
   CREATE INDEX events_session ON events (session);

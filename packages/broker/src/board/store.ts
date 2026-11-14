@@ -426,7 +426,10 @@ export class BoardStore {
     if (op.kind !== "backlog" && op.parent_hint) throw new BoardError("invalid", "Only a backlog item has a parent_hint");
     if (op.type !== "bug" && (op.bug_where || op.blocks_use || op.found_in)) throw new BoardError("invalid", "Bug fields are for items of type bug");
     const scope = parent ? this.scope(parent) : null;
-    this.rules.require(tx.caller, p, "create", scope, parent ? `${scope!.ref}'s tasks` : `${op.kind === "feature" ? "features" : "the backlog"}`);
+    const where = parent ? `${scope!.ref}'s tasks` : `${op.kind === "feature" ? "features" : "the backlog"}`;
+    this.rules.require(tx.caller, p, "create", scope, where);
+    // A create-only grant makes Drafts: an item born further on takes the status right too.
+    if (op.status !== undefined && op.status !== "Draft") this.rules.require(tx.caller, p, "status", scope, where);
     if (op.release) {
       release = this.release(p, op.release);
       if (op.kind === "feature") ownerOnly(tx.caller, "Putting a feature in a release");
