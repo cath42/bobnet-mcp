@@ -221,6 +221,16 @@ const SupervisorFile = z.object({
       z.object({ spawn: z.record(z.string(), z.array(z.string()).min(1)) }),
     )
     .default({}),
+  /**
+   * The board's nightly backup (ADR 0001 §11): at `at` (HH:MM, this laptop's time) the board's export
+   * is written to `board.json` in the git repository `repo` and committed. Never read back but by an import.
+   */
+  board_backup: z
+    .object({
+      repo: path,
+      at: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "must be HH:MM"),
+    })
+    .optional(),
   projects: z.record(z.string(), Project),
 });
 
@@ -301,6 +311,8 @@ export interface SupervisorConfig {
   sandboxWrite: string[];
   /** Remote requesters, by lowercase address: project → roles each may spawn. */
   remote: Map<string, Map<string, Set<string>>>;
+  /** The board's nightly backup, if this laptop makes it. */
+  boardBackup: { repo: string; at: string } | undefined;
   projects: Map<string, ProjectConfig>;
 }
 
@@ -434,6 +446,7 @@ export function parseSupervisorConfig(
     consultEffort: file.consult_effort,
     sandboxWrite: file.sandbox_write,
     remote,
+    boardBackup: file.board_backup,
     projects,
   };
 }

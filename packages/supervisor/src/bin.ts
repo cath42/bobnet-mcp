@@ -6,6 +6,7 @@ import { loadConfig } from "@bobnet/client/config";
 import { BrokerConnection } from "@bobnet/client/connection";
 import { createLogger } from "@bobnet/client/log";
 import ownPackage from "../package.json" with { type: "json" };
+import { BoardBackup, exportFetcher } from "./board-backup.ts";
 import { configDir, loadSupervisorConfig } from "./config.ts";
 import { installLaunchAgent } from "./launchd.ts";
 import { installSystemdUnit } from "./systemd.ts";
@@ -86,6 +87,12 @@ try {
   process.exit(1);
 }
 
+// The board's nightly backup, on the laptop whose config names a repository for it.
+const backup = config.boardBackup
+  ? new BoardBackup({ ...config.boardBackup, fetchExport: exportFetcher(brokerConfig.url, brokerConfig.credentials), log })
+  : null;
+backup?.start();
+
 const token = ensureToken(join(dir, "supervisor.token"));
 const http = await serveMcp(supervisor, { port: config.mcpPort, token, log });
 log.info("supervisor ready", { mcp: `http://127.0.0.1:${config.mcpPort}/mcp`, projects: [...config.projects.keys()] });
@@ -93,6 +100,7 @@ log.info("supervisor ready", { mcp: `http://127.0.0.1:${config.mcpPort}/mcp`, pr
 const shutdown = async () => {
   log.info("shutting down");
   http.close();
+  backup?.stop();
   await supervisor?.shutdown();
   connection.stop();
   store.close();
