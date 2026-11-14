@@ -5,8 +5,10 @@
 ## Criteria
 
 1. One list across projects of what waits on Casper: open questions (Helix's `Q-n` in
-   `lead/questions.md`), sessions closed with `need: casper`, review-gated items, and pending
-   permission requests. Each item has its project, feature, age and a link. *Evidence: test;
+   `lead/questions.md`), actions only Casper can do (Helix's `A-n` in the same file, e.g. A-17,
+   which holds up LAND-49.14), sessions closed with `need: casper`, review-gated items, and pending
+   permission requests. Actions are their own kind of record, like questions (C8), linked to what
+   they hold up. Each item has its project, feature, age and a link. *Evidence: test;
    screenshot on phone.* (Picard input, need 3)
 2. An item leaves the list when its source says it is answered. The list keeps no state of its own.
    *Evidence: test.*

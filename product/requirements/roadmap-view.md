@@ -13,8 +13,12 @@ order, each with its features in their order and where each stands.
 2. A release lists its features in the board's order, each with its state: Draft, Ready, open (in
    progress), in review, done. *Evidence: test.* (Picard input, need 1 and 2)
 3. Order is shown explicitly (1, 2, 3...), not only implied by id. *Evidence: screenshot.* (Picard input)
+   A feature without a recorded order comes after the ordered ones, by id, still numbered.
 4. Each feature shows progress as acceptance criteria checked of total, across its tasks.
-   *Evidence: test.* (Picard input: AC are the progress measure)
+   *Evidence: test.* (Picard input: AC are the progress measure) The count is always the real one: a
+   Done feature with unticked criteria shows Done and its real count, with a muted "Done, criteria
+   not ticked" note. Status never overrides the count. (Peach, 2026-11-13, on Daisy's question:
+   most of Helix's Done features have their criteria unticked, e.g. LAND-22 at 3 of 138.)
 5. Each feature shows the agents working on it now, from the sessions the spawns declared. Nothing
    is guessed from a brief. *Evidence: test.*
 6. A project summary across projects: per project, the open feature, the next Ready feature, and

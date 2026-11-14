@@ -15,14 +15,17 @@ in the service reads or writes Markdown after it.
    count-and-sample check against the board at a named commit.*
 2. Helix's drafts become backlog items ([capture.md](capture.md)). A task with status `Draft` stays a
    task with status Draft. The two are not mixed. *Evidence: test.* (Picard input)
-3. "Was LAND-n.m" re-creations are linked, so the old and new item show as one, with the old id
+3. Features without an ordinal (in Helix's R1: LAND-39 to 44 and 49) are imported after the ordered
+   ones in their release, by id, for the PO to reorder. Helix's `A-n` actions move over with its
+   `Q-n` questions. Unticked criteria are imported as they are, unticked. *Evidence: test.*
+4. "Was LAND-n.m" re-creations are linked, so the old and new item show as one, with the old id
    findable. *Evidence: test.* (Picard input)
-4. The move is one cut-over per project, at a moment the project's PO and orchestrator agree. Nothing
+5. The move is one cut-over per project, at a moment the project's PO and orchestrator agree. Nothing
    is written to both. After it, the project's Backlog.md folder is removed from its repo by its PO,
    with a pointer to the service. *Evidence: the cut-over commit.*
-5. The project's agents' instructions (CLAUDE.md, skills) point to the MCP tools instead of the
+6. The project's agents' instructions (CLAUDE.md, skills) point to the MCP tools instead of the
    Backlog.md tools, the same day. *Evidence: the changed files.*
-6. Items' history before the move stays readable in the repo's git history. The service's history
+7. Items' history before the move stays readable in the repo's git history. The service's history
    starts at the move. *Evidence: dashboard check.*
 
 ## Must not break
