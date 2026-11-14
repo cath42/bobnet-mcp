@@ -138,7 +138,7 @@ type: task`,
 describe("the board", () => {
   it("is read from git at the backlog's ref, with sessions, past runs and commits", async () => {
     const repo = mkdtempSync(join(tmpdir(), "bobnet-board-"));
-    const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "Riker", GIT_COMMITTER_NAME: "Riker" } });
     git("init", "-q", "-b", "main");
     git("config", "user.email", "t@example.com");
     git("config", "user.name", "Riker");
