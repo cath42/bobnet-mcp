@@ -125,3 +125,7 @@ For Casper:
 Under the first frame (consult, 2026-11-13): each supervisor reads its repos and sends a shaped board,
 the broker holds it as a cache only; session closes become structured records the supervisor keeps;
 project layout is named in the supervisor's config.
+
+## Decisions recorded 2026-11-14
+
+- Casper agreed to a shorter Access session for the dashboard app (his Cloudflare setting; no board item). Source: lead/2026-11-14-board-adr-and-review-decisions.md. ADRs 0002, 0003, 0004 accepted; their work is BOB-24 (Helix citations) and BOB-25 (device keys).
