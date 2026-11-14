@@ -19,3 +19,18 @@ Casper, verbatim:
 Consequences: ADR 0001 accepted (with the four additions); BobNet migrates first; Luigi fixes findings 1-3
 first, then BOB-2 in ADR 0001's build order; Toad writes P1, P4, P5 (proposed; accepting them is Casper's).
 Dashboard answers for Helix's questions come with BOB-9, after BobNet's pilot.
+
+## Later the same day
+
+Mario asked: 1. accept ADRs 0002 (landing), 0003 (owner authority), 0004 (system shape)? 2. one release once
+BOB-11..13 are in, or BOB-11 out now? 3. shorten the Access session length for the dashboard app (Casper's
+setting; narrows the window a live owner token can be replayed, until signed actions land)?
+
+Casper, verbatim:
+
+> 1. Accepted, 2. One when done 3. Yes
+
+Consequences: 0002-0004 accepted; DRAFT-2 (device keys, ADR 0003) and chore 8 (Helix ADR citations, ADR
+0002 §8) can leave Draft; one release (rc.28) after BOB-11, 12, 13, with `land.target: origin/v2` on the
+bobnet project; Casper shortens the dashboard app's Access session (length to settle; Cloudflare Zero Trust
+> Access > Applications > the dashboard app > Session duration).
