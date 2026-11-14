@@ -1,9 +1,10 @@
 ---
 id: BOB-2
-title: 'Read every project''s board from its repo, across laptops'
+title: 'The board service: a database with API and MCP tools'
 status: Draft
 assignee: []
 created_date: '2026-11-14 03:59'
+updated_date: '2026-11-14 04:24'
 labels: []
 milestone: m-0
 dependencies:
@@ -17,7 +18,7 @@ ordinal: 2000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Capability 1, product/requirements/board-sources.md, with Toad's transport (README Q3). Acceptance criteria to be written after BOB-1 is accepted.
+Capability 1, product/requirements/board-service.md: every project's board as typed records in the broker's database (Casper 2026-11-13, C5), read and written by agents through MCP tools on the BobNet channel. Schema and tools are Toad's ADR. Acceptance criteria to be written after BOB-1 is accepted.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Definition of Done

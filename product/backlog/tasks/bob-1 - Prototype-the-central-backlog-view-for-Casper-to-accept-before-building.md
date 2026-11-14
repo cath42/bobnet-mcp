@@ -4,6 +4,7 @@ title: 'Prototype the central backlog view, for Casper to accept before building
 status: Draft
 assignee: []
 created_date: '2026-11-14 03:59'
+updated_date: '2026-11-14 04:24'
 labels: []
 milestone: m-0
 dependencies: []
@@ -31,6 +32,8 @@ Casper, 2026-11-13: a prototype before we start building. A clickable prototype 
 - [ ] #4 Built from a sample of Helix's real board (LAND-49 and its release, ~700 tasks' worth of counts), not invented data. Evidence: the sample's source named in the prototype
 - [ ] #5 BobNet's own look (packages/broker/public/style.css), usable on a phone and a tablet. Evidence: screenshots
 - [ ] #6 Casper accepted it, or his corrections are recorded in the requirements. Evidence: Casper's words, verbatim, in the feature's notes
+- [ ] #7 Capture on a phone in one field, and a project's triage list of backlog items (capture.md 4-6). Evidence: prototype screenshots, phone and desktop
+- [ ] #8 Casper's gates editable on the dashboard: release scope, order of releases, closing a release (board-writes.md, C2). Evidence: prototype screenshots
 <!-- AC:END -->
 
 ## Definition of Done

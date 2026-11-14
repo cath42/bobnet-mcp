@@ -8,6 +8,7 @@ labels: []
 milestone: m-0
 dependencies:
   - BOB-1
+  - BOB-2
 references:
   - product/requirements/roadmap-view.md
 type: increment
