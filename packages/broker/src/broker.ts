@@ -1,6 +1,9 @@
 import {
   type Action,
   addressKey,
+  BOARD_READS,
+  type BoardCaller,
+  type BoardReply,
   CLIENT_FRAME_TYPES,
   ClientFrame,
   type ClientInfo,
@@ -36,6 +39,8 @@ const UPDATE_RETENTION_MS = 30 * 24 * 3600_000;
 const DASHBOARD_ITEMS = 50;
 /** Session updates are the owner's progress view: more of them than of traffic. */
 const DASHBOARD_UPDATES = 200;
+/** Every project's board is one `Board` object (ADR 0001 §1). */
+const BOARD = "board";
 
 interface Conn {
   connId: string;
@@ -133,7 +138,8 @@ export class Broker extends DurableObject<Env> {
       }
       const parsed = ClientFrame.safeParse(raw);
       if (!parsed.success) throw new FrameError("bad_frame", parsed.error.issues[0]?.message ?? "Invalid frame");
-      this.dispatch(ws, conn, parsed.data);
+      if (parsed.data.t === "board_op") await this.boardOp(conn, parsed.data);
+      else this.dispatch(ws, conn, parsed.data);
     } catch (err) {
       if (!(err instanceof FrameError)) throw err;
       this.send(ws, { t: "error", rid, code: err.code, message: err.message });
@@ -339,6 +345,43 @@ export class Broker extends DurableObject<Env> {
   private ack(conn: Conn, as: string, ids: string[]): void {
     const peer = this.hosted(conn, as);
     for (const id of ids) this.sql.exec("DELETE FROM deliveries WHERE message_id = ? AND to_key = ?", id, peer.key);
+  }
+
+  // ---------- Board ----------
+
+  /**
+   * A board operation, made by the `Board` object (ADR 0001 §1). The only frame that awaits, so
+   * other frames (a register, a takeover, a disconnect) may run while it does: the caller is read
+   * before the call and passed as values, and anything needed after it is read again then.
+   */
+  private async boardOp(conn: Conn, frame: Extract<ClientFrame, { t: "board_op" }>): Promise<void> {
+    const caller = this.boardCaller(conn, frame);
+    const write = !BOARD_READS.includes(frame.op.op);
+    if (write) this.audit(conn, "board_op", { op: frame.op.op, as: frame.as ?? null });
+    let reply: BoardReply;
+    try {
+      // RPC's types can't carry an `unknown` result; the reply is the protocol's.
+      reply = (await this.env.BOARD.getByName(BOARD).apply(caller, frame.op)) as unknown as BoardReply;
+    } catch (err) {
+      reply = { ok: false, code: "unavailable", message: `The board can't be reached (${err instanceof Error ? err.message : String(err)}); retry` };
+    }
+    // Committed, whatever became of the caller's socket meanwhile: the owners refetch.
+    if (reply.ok && reply.changed) this.toOwners({ t: "board_changed", ...reply.changed });
+    const ws = this.socket(conn.connId);
+    if (!ws) return;
+    if (reply.ok) this.ok(ws, frame.rid, reply.result);
+    else this.send(ws, { t: "error", rid: frame.rid, code: reply.code, message: reply.message });
+  }
+
+  /** Who makes a board operation (ADR 0001 §4): the owner, or a peer this connection hosts, with what its supervisor says. */
+  private boardCaller(conn: Conn, frame: Extract<ClientFrame, { t: "board_op" }>): BoardCaller {
+    if (conn.identity.kind === "owner") {
+      if (frame.as !== undefined || frame.ctx !== undefined) throw new FrameError("bad_frame", "The owner's board operations name no peer and no ctx");
+      return { kind: "owner", email: conn.identity.email };
+    }
+    if (frame.as === undefined) throw new FrameError("bad_frame", "A board operation names the peer it is made as");
+    const peer = this.hosted(conn, frame.as);
+    return { kind: "agent", name: peer.name, laptop: peer.laptop, ctx: frame.ctx ?? null };
   }
 
   // ---------- Dashboard ----------

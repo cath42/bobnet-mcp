@@ -2,7 +2,7 @@ import { BrokerConnection, type ConnectionOptions, type PushFrame } from "@bobne
 import type { Logger } from "@bobnet/client/log";
 import type { PeerInfo, ServerFrame } from "@bobnet/protocol";
 import { afterEach, describe, expect, it } from "vitest";
-import { laptopToken, upgrade } from "./helpers.ts";
+import { Client, laptopToken, ORIGIN, ownerToken, upgrade } from "./helpers.ts";
 
 // The real client against the real broker: BOB-2's board_op tests build on this harness.
 
@@ -101,9 +101,25 @@ describe("client to broker", () => {
   it("says the broker is older than this client for a frame it doesn't know", async () => {
     const bob = await connect(1);
     await bob.register({ name: "Bob" });
-    await expect(bob.request({ t: "board_op", as: "Bob" } as never)).rejects.toMatchObject({
+    await expect(bob.request({ t: "board_close", as: "Bob" } as never)).rejects.toMatchObject({
       code: "unsupported",
-      message: "the broker doesn't know board_op; it is older than this client",
+      message: "the broker doesn't know board_close; it is older than this client",
+    });
+  });
+
+  it("makes board operations as its peer, refused with the board's reason", async () => {
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    await owner.request({ t: "board_op", op: { op: "create_project", key: "bobnet", name: "BobNet", prefix: "BOB" } });
+    await owner.request({ t: "board_op", op: { op: "grant", project: "bobnet", agent: "Peach", role: "PO", read: true, items: "all", fields: ["create"] } });
+
+    const peach = await connect(1);
+    await peach.register({ name: "Peach" });
+    const created = await peach.request<{ ref: string }>({ t: "board_op", as: "Peach", op: { op: "create", project: "bobnet", kind: "backlog", type: "chore", title: "Tidy the board" } });
+    expect(created.ref).toBe("BOB-1");
+    await expect(owner.next((f) => f.t === "board_changed" && f.refs.includes("BOB-1"))).resolves.toMatchObject({ project: "bobnet", seq: 3 });
+    await expect(peach.request({ t: "board_op", as: "Peach", op: { op: "update", project: "bobnet", ref: "BOB-1", set: { status: "Done" } } })).rejects.toMatchObject({
+      code: "forbidden",
+      message: "Peach may not change status on BOB-1 in bobnet; only the owner may",
     });
   });
 });

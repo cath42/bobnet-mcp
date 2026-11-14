@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BoardOp } from "../src/index.ts";
+import { BoardOp, ClientFrame } from "../src/index.ts";
 
 describe("BoardOp", () => {
   it("parses an item's create with its criteria, defaulting each to an acceptance criterion", () => {
@@ -22,5 +22,17 @@ describe("BoardOp", () => {
     const grant = { op: "grant", agent: "Mario", role: "lead", read: true, items: "none", fields: [] };
     expect(BoardOp.parse({ ...grant, project: "*" })).toMatchObject({ project: "*", laptop: "*", admin: false });
     expect(BoardOp.safeParse({ ...grant, project: "**" }).success).toBe(false);
+  });
+});
+
+describe("board_op frame", () => {
+  it("carries the operation, the peer and the supervisor's ctx", () => {
+    const ctx = { worker: "w_1", role: "po", project: "helix", session: { feature: "LAND-49", kind: "build", label: "3" }, tasks: ["LAND-50"] };
+    const f = ClientFrame.parse({ t: "board_op", rid: "1", as: "Riker", ctx, op: { op: "get", project: "helix", ref: "LAND-50" } });
+    expect(f).toMatchObject({ t: "board_op", as: "Riker", ctx });
+  });
+
+  it("is sent without a peer by the owner's socket", () => {
+    expect(ClientFrame.safeParse({ t: "board_op", rid: "1", op: { op: "projects" } }).success).toBe(true);
   });
 });

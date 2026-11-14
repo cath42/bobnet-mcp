@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BoardCtx, BoardOp, type BoardResults } from "./board.ts";
 
 // Wire protocol v1: JSON text frames over one WebSocket per connection.
 // A connection authenticates as a laptop (or as the owner, for the UI) and
@@ -369,6 +370,12 @@ export const AckFrame = z.object({
   ids: z.array(z.string().max(64)).min(1).max(256),
 });
 
+/**
+ * A board operation (ADR 0001 §8). A laptop makes it `as` a peer it hosts, and a supervisor adds
+ * `ctx` for the worker it speaks for; the owner's socket names no peer.
+ */
+export const BoardOpFrame = z.object({ t: z.literal("board_op"), rid, as: segment.optional(), ctx: BoardCtx.optional(), op: BoardOp });
+
 export const ClientFrame = z.discriminatedUnion("t", [
   RegisterFrame,
   DeregisterFrame,
@@ -383,6 +390,7 @@ export const ClientFrame = z.discriminatedUnion("t", [
   ActionFrame,
   ActionResultFrame,
   AckFrame,
+  BoardOpFrame,
 ]);
 export type ClientFrame = z.infer<typeof ClientFrame>;
 
@@ -404,6 +412,10 @@ export const ErrorCode = z.enum([
   "offline",
   /** A frame type the broker doesn't know: the client is newer than the broker. */
   "unsupported",
+  /** Board operations (ADR 0001 §8): refused as invalid, in conflict with the board, or the board can't be reached. */
+  "invalid",
+  "conflict",
+  "unavailable",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
@@ -423,6 +435,8 @@ export type ServerFrame =
   | { t: "update"; item: UpdateItem }
   | { t: "traffic"; item: TrafficItem }
   | { t: "action_result"; id: string; laptop: string; ok: boolean; message: string }
+  /** A board write committed: refetch what shows these records. */
+  | { t: "board_changed"; project: string; seq: number; refs: string[] }
   // To a laptop's supervisor. `token` is the owner's Access JWT, for the
   // supervisor to verify itself: the broker alone can't act as the owner.
   | { t: "action"; id: string; to: string; by: string; token: string; action: Action };
@@ -440,4 +454,6 @@ export interface Results {
   update: { seq: number };
   dashboard: Dashboard;
   action: { id: string };
+  /** Per operation: `BoardResults[op]`. */
+  board_op: BoardResults[keyof BoardResults];
 }

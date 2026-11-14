@@ -238,8 +238,8 @@ describe("frames", () => {
 
   it("answers a frame type it doesn't know with unsupported, keeping the socket", async () => {
     const c = await agent(1, "Bob");
-    c.raw(JSON.stringify({ t: "board_op", rid: "n1", as: "Bob", op: "create" }));
-    expect(await c.next((f) => f.t === "error" && f.rid === "n1")).toMatchObject({ code: "unsupported", message: expect.stringContaining("board_op") });
+    c.raw(JSON.stringify({ t: "board_close", rid: "n1", as: "Bob", op: "create" }));
+    expect(await c.next((f) => f.t === "error" && f.rid === "n1")).toMatchObject({ code: "unsupported", message: expect.stringContaining("board_close") });
     c.raw(JSON.stringify({ rid: "n2" }));
     expect(await c.next((f) => f.t === "error" && f.rid === "n2")).toMatchObject({ code: "bad_frame" });
     await expect(c.request({ t: "peers" })).resolves.toBeDefined();

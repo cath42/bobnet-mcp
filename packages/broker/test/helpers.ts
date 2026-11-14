@@ -1,4 +1,5 @@
 import type { ClientFrame, ServerFrame } from "@bobnet/protocol";
+import type { z } from "zod";
 import { env, exports } from "cloudflare:workers";
 import { importJWK, type JWTPayload, SignJWT } from "jose";
 
@@ -27,7 +28,8 @@ export async function upgrade(token: string | null, headers: Record<string, stri
   });
 }
 
-type Req = ClientFrame extends infer F ? (F extends { rid: string } ? Omit<F, "rid"> : never) : never;
+/** What a test sends: a frame as it is written, before the protocol's defaults. */
+type Req = z.input<typeof ClientFrame> extends infer F ? (F extends { rid: string } ? Omit<F, "rid"> : never) : never;
 
 /** A test client: records every frame and lets a test await specific ones. */
 export class Client {
