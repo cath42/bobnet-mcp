@@ -1,7 +1,7 @@
 ---
 id: BOB-4
 title: 'A feature''s sessions, outcomes and tasks'
-status: Draft
+status: Ready
 assignee: []
 created_date: '2026-11-14 03:59'
 updated_date: '2026-11-14 15:05'
@@ -29,7 +29,7 @@ Capability 3, product/requirements/steps-view.md, as the approved prototype show
 - [ ] #3 Under each session, the tasks it moved with the status it left them in and their criteria; tasks no session touched under 'In no session yet'; the board's current status of every task in a list beside or below the chain. Evidence: test (steps-view.md 4)
 - [ ] #4 An 'On it now' card lists each running agent as agent, session, task; the same agent shows live on its task's rows with state (working, waiting on you) and tokens. Source: what spawn_worker declared (session, tasks), never a brief; leads and consults show as Other work. Evidence: test with a running worker on two tasks; screenshots (steps-view.md 3, 8)
 - [ ] #5 Inside a session, the chart of context per call, in tokens, for the session and per agent, as today's dashboard has it. Evidence: dashboard check against today's chart on the same session (steps-view.md 10)
-- [ ] #6 A feature that waits on a CI run, any CI anywhere, shows it and how long the run has gone (Casper: 'Any CI running anywhere'); a laptop's run shows through the run slot. Evidence: test with a running and a finished run; dashboard check (steps-view.md 11)
+- [ ] #6 A feature that waits on a CI run, any CI anywhere, shows it and how long the run has gone (Casper: 'Any CI running anywhere'); a laptop's run shows through the run slot. A CI run ties to an agent only through a push its land made; any other run shows on its project and branch. 'Usually' (the run's usual time) appears once a name has three passing runs. Evidence: test with a running and a finished run; dashboard check (steps-view.md 11)
 - [ ] #7 A link to each session's handoff file and to its Remote Control session where there is one. Evidence: dashboard check (steps-view.md 6)
 - [ ] #8 Usage shows as tokens, never money. Evidence: test (steps-view.md 7)
 - [ ] #9 Phone and tablet in BobNet's own look. Evidence: screenshots on phone and desktop (steps-view.md 9)

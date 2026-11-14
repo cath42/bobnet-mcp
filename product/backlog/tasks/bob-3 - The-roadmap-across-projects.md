@@ -1,7 +1,7 @@
 ---
 id: BOB-3
 title: The roadmap across projects
-status: Draft
+status: Ready
 assignee: []
 created_date: '2026-11-14 03:59'
 updated_date: '2026-11-14 15:05'

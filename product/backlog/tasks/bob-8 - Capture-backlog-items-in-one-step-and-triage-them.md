@@ -1,7 +1,7 @@
 ---
 id: BOB-8
 title: 'Capture backlog items in one step, and triage them'
-status: Draft
+status: Ready
 assignee: []
 created_date: '2026-11-14 04:24'
 updated_date: '2026-11-14 15:05'
@@ -28,7 +28,7 @@ Capability 7, product/requirements/capture.md: one MCP call, never blocks, queue
 - [ ] #3 A captured item records who captured it, in which session, and Casper's words verbatim when his. Evidence: test (capture.md 3)
 - [ ] #4 Casper captures from the dashboard in one field, with the project preset from the screen; the first sentence becomes the title, the whole text is kept; + Capture stays in the header on every screen; bottom sheet on a phone, 16 px text. Evidence: screenshot on phone and desktop (capture.md 6, prototype notes 12, 27)
 - [ ] #5 Per project, a triage list of backlog items: bugs first, then oldest; 25 rows then Show all; totals (items, bugs, oldest, median age, captured this week); per release for those that have one. Evidence: test; screenshot on phone (capture.md 4, prototype notes 25)
-- [ ] #6 The PO triages: slot into a feature (it becomes a task), make a feature, put in a release or take out, or drop with a reason; the id never changes. These are the PO's actions, not on Casper's dashboard. Evidence: test (capture.md 5, prototype notes 26)
+- [ ] #6 The PO triages: slot into a feature (it becomes a task), make a feature, set or clear a backlog item's release (a triage field, not release scope; a feature's release stays Casper's), or drop it, which archives it with a reason; the id never changes. These are the PO's actions, not on Casper's dashboard. Evidence: test (capture.md 5, prototype notes 26)
 - [ ] #7 Drafts that carry a parent hint or a milestone keep it as a field for the PO to clear or set (Picard, 2026-11-14). Evidence: test
 <!-- AC:END -->
 

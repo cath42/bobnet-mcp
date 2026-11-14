@@ -1,7 +1,7 @@
 ---
 id: BOB-10
 title: 'Bugs: capture, triage, ''blocks use'' to Casper, close on fix'
-status: Draft
+status: Ready
 assignee: []
 created_date: '2026-11-14 04:36'
 updated_date: '2026-11-14 15:05'

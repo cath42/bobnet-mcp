@@ -1,6 +1,6 @@
 # 9. Moving boards off Backlog.md
 
-**Who needs it:** Helix first (the main stakeholder and the largest board), then BobNet's own board,
+**Who needs it:** BobNet's own board first, as the pilot (Casper, 2026-11-14), then Helix (the main stakeholder and the largest board),
 then any other project that joins. Casper, for whom retiring Backlog.md is a goal (2026-11-13).
 
 **What it is:** each project's Backlog.md board is imported into the service's database once, after
@@ -36,6 +36,5 @@ in the service reads or writes Markdown after it.
 
 ## Open questions
 
-- Order of projects: Helix first, then BobNet's own board? **For Casper (C1).**
-- Does BobNet's own board (`product/backlog`, set up 2026-11-13 on Backlog.md) stay on Backlog.md
-  until the service exists? Peach's view: yes, then it moves like Helix's.
+- *Settled (Casper, 2026-11-14, "2. Yes"):* BobNet's own board moves first, as the pilot, through the same
+  import path, then Helix (BOB-9). BobNet's board stays on Backlog.md until then.

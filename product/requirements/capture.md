@@ -18,8 +18,9 @@ feature, makes it a feature of its own, or drops it.
 4. Backlog items show as a triage list per project, and per release for those that have one, with
    count and age. *Evidence: test; screenshot on phone.* (Picard input, need 4: drafts as a triage
    queue)
-5. Triage can slot an item into a feature (it becomes a task), make it a feature, put it in a release
-   or take it out, or drop it with a reason. It keeps its id throughout. *Evidence: test.*
+5. Triage can slot an item into a feature (it becomes a task), make it a feature, set or clear its release
+   (a triage field, not release scope), or drop it (archived with a reason). It keeps its id throughout.
+   A feature made from an item is in no release; Casper's gate places it (Peach, 2026-11-14, on Toad's ruling request). *Evidence: test.*
 6. Casper can capture from the dashboard too, in one field, on a phone. *Evidence: screenshot on
    phone.*
 

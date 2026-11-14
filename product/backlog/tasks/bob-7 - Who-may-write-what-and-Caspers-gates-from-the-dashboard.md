@@ -1,7 +1,7 @@
 ---
 id: BOB-7
 title: 'Who may write what, and Casper''s gates from the dashboard'
-status: Draft
+status: Ready
 assignee: []
 created_date: '2026-11-14 04:24'
 updated_date: '2026-11-14 15:05'
@@ -25,9 +25,9 @@ Capability 6, product/requirements/board-writes.md, as the approved prototype sh
 <!-- AC:BEGIN -->
 - [ ] #1 Each role's write access is set per project: which items (all, the open feature's, none) and which fields (status, order, release). A write outside it is refused with the reason. Evidence: test (board-writes.md 1)
 - [ ] #2 Helix's rule can be expressed: the open feature's items by its session PO, the rest by the backlog PO, Casper's gates by Casper. Builders read but don't move status. Evidence: test with Helix's roles (board-writes.md 2, 3)
-- [ ] #3 Casper's gates on the dashboard: move a feature or backlog item into or out of a release, reorder releases, close a release. Behind 'Edit your gates', each change saves at once with Undo; a moved feature goes last in its new release. Other edits are requests to the PO. Evidence: test; screenshots on phone and desktop (board-writes.md 4, prototype notes 18, 19)
+- [ ] #3 Casper's gates on the dashboard: move a feature into or out of a release (a feature's release is Casper's alone; a feature promoted from a backlog item is in no release until his gate places it), reorder releases, close a release. Behind 'Edit your gates', each change saves at once with Undo; a moved feature goes last in its new release. Other edits are requests to the PO. Evidence: test; screenshots on phone and desktop (board-writes.md 4, prototype notes 18, 19)
 - [ ] #4 Closing a release with features not Done opens a dialog naming each, with where it goes (default the next open release); nothing is closed with work silently left. A closed release stays on the roadmap, folded, and takes no features. Evidence: test; screenshot (board-writes.md 5, prototype notes 20, 21)
-- [ ] #5 Casper's answer to a question and allow/deny of a permission are his own writes; another role is refused. Evidence: test (BOB-5)
+- [ ] #5 Casper's answer to a question and allow/deny of a permission are his own writes on the dashboard; another role is refused, except the lead or PO recording an answer he gave in conversation, marked 'via conversation'. Evidence: test (BOB-5)
 - [ ] #6 Every write carries who made it, in the item's history. Evidence: test (board-writes.md 6)
 <!-- AC:END -->
 

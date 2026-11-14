@@ -14,8 +14,8 @@ rather than by convention.
 2. Helix's rule can be expressed: the open feature's items by its session PO, the rest by the backlog
    PO, Casper's gates by Casper. *Evidence: test with Helix's roles.* (Picard input)
 3. Builders read the board but don't move status. *Evidence: test.* (Picard input)
-4. Casper's gates on the dashboard (C2) are: moving a feature or backlog item into or out of a
-   release, reordering releases, and closing a release. Editing a release's goal or any other text
+4. Casper's gates on the dashboard (C2) are: moving a feature into or out of a
+   release (a backlog item's release is a triage field, set by the PO and Casper; Peach, 2026-11-14), reordering releases, and closing a release. Editing a release's goal or any other text
    is a request to the PO. *Evidence: test.* (Peach, 2026-11-13, on Daisy's question)
 5. Closing a release that still has features not Done is allowed only after a confirmation that
    names each open feature and where it goes (another release, or out of any release). Nothing is

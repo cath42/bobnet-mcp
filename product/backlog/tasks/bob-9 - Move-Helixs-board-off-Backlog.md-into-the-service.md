@@ -1,7 +1,7 @@
 ---
 id: BOB-9
 title: Move Helix's board off Backlog.md into the service
-status: Draft
+status: Ready
 assignee: []
 created_date: '2026-11-14 04:24'
 updated_date: '2026-11-14 15:05'
@@ -9,6 +9,7 @@ labels: []
 milestone: m-0
 dependencies:
   - BOB-2
+  - BOB-14
 references:
   - product/requirements/migration.md
 type: increment
@@ -44,5 +45,5 @@ Capability 9, product/requirements/migration.md: a one-off import of Helix's who
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Needs BOB-2, BOB-7 and BOB-8 in the broker, and Picard's date. Picard's answers (2026-11-14) are in migration.md. Release 1.
+Needs BOB-2, BOB-7 and BOB-8 in the broker, BOB-14 (BobNet's own board moves first as the pilot, Casper 2026-11-14), and Picard's date. Picard's answers (2026-11-14) are in migration.md. Release 1.
 <!-- SECTION:PLAN:END -->
