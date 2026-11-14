@@ -4,6 +4,9 @@
   2. Yes"). Proposed by Toad the same day; amended on acceptance with the four points from the system
   review (`architecture/reviews/2026-11-14-system-review.md`, "How ADR 0001 fits") and the migration
   order. Before the build starts, Luigi fixes the review's findings 1-3 (decision 3).
+  **Amended 2026-11-14** (Toad, cleared by Mario; narrows the accepted decision): the supervisor's
+  own operations and `ctx` are authorized by the supervisor's connection (§4, §6), and
+  `not_open_feature` is worded as built (§5). From the BOB-2 step 1 review.
 - **For:** BOB-2 (the service) and BOB-7 (who writes); BOB-3, 4, 5, 8, 9 and 10 build on it.
 - **Reads:** product/requirements/ (all), product/backlog/tasks/bob-2..10, design/BOB-1/notes.md and
   spec.md, lead/BOB-1-casper-feedback.md, Peach's message on criterion 0 (2026-11-14).
@@ -156,6 +159,15 @@ messages today. Agents get board access only through tools that stamp who they a
 a token. Unlike dashboard actions, which a supervisor verifies against Casper's own JWT, Casper's
 board writes are trusted to the broker that holds the board.
 
+**Amendment, 2026-11-14: the supervisor's connection.** `Broker` passes `supervisor: true` in an
+agent's `BoardCaller` when the frame comes on the connection that hosts the laptop's supervisor peer
+(registered with `supervisor: true`, pinned as the laptop's reporter by BOB-12). Only then does
+`Board` take `ctx`. On any other connection the broker drops it to null, so the operation is the
+peer's own with no session. The supervisor's own operations (`session_join`, `run_start`, `run_end`,
+`push`, `slot_run`, §8) are authorized by that connection, not by a grant. They need `supervisor`,
+a `ctx`, and `ctx.project` equal to the operation's project. They are made `as` the worker's role
+peer, which the supervisor registers at start, and the owner may not make them.
+
 ### 5. Who may write what (BOB-7)
 
 **The rule table is board data**, one row per project and agent:
@@ -168,9 +180,12 @@ close sessions), `questions` (may ask Casper and record his answers given in con
 (may change this table).
 
 - `open_feature` means items under a feature that is open **and** that the caller's declared session
-  is on (supervisor `ctx`). `not_open_feature` is everything else. Helix's rule is two rows: the
-  session PO with `open_feature`, Picard with `not_open_feature` (board-writes 2). Builders have
-  `read` and nothing else (board-writes 3).
+  is on (supervisor `ctx`). `not_open_feature` covers items whose feature isn't open, and items under
+  no feature (backlog items, releases). It never covers an open feature, whoever's session is on it
+  (amended 2026-11-14; "everything else" would have let Picard write the open feature). Helix's rule
+  is two rows: the session PO with `open_feature`, Picard with `not_open_feature` (board-writes 2).
+  So slotting into an open feature is the session PO's. Builders have `read` and nothing else
+  (board-writes 3).
 - **Fixed rules that no grant changes:**
   - **Anyone may capture**, into any project (README T2).
   - **Casper's gates are the owner's alone:** a feature's release, the order of releases, closing a
@@ -195,6 +210,13 @@ project on the service, the supervisor calls `session_join` before the worker st
 session if it doesn't exist, sets the feature's `open_since`, and is refused if the feature isn't a
 feature of that project or the session is closed (name another label). Spawn waits for that answer
 (§12). The worker's run is recorded against the session (§9).
+
+**Amendment, 2026-11-14:** the supervisor sends `session_join` `as` the spawned worker's role, with
+that worker's `ctx`, and `ctx.session` equals the operation's session. It is authorized by the
+supervisor's connection (§4), not by the `sessions` grant. A builder spawned into a build session
+holds no grants, and its spawn must work. Who may spawn into a session is decided where the spawn
+is made: the orchestrator's `spawn_worker` and the `remote` allowlist. The `sessions` grant gates
+`close_session`.
 
 A session ends with **`close_session`**, an MCP tool for an agent holding `sessions` (the lead or the
 session PO):
