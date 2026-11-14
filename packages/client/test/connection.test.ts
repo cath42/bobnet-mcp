@@ -1,4 +1,4 @@
-import { PING, PONG, type ServerFrame } from "@bobnet/protocol";
+import { PING, PONG, PROTOCOL_VERSION, type ServerFrame } from "@bobnet/protocol";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket as WsClient, WebSocketServer } from "ws";
@@ -34,6 +34,7 @@ function fakeBroker(opts: { refuseRegisters?: number } = {}) {
       }
       if (f["t"] === "peers") send({ t: "ok", rid: f["rid"] as string, result: { peers: [] } });
       if (f["t"] === "send") send({ t: "error", rid: f["rid"] as string, code: "unknown_peer", message: "No such peer: X" });
+      if (f["t"] === "board_op") send({ t: "error", rid: f["rid"] as string, code: "unsupported", message: "Unknown frame type: board_op" });
     });
     ws.on("close", () => sockets.delete(ws));
   });
@@ -91,6 +92,24 @@ describe("BrokerConnection", () => {
     const c = connect(b.url);
     await expect(c.register({ name: "Mario", team: "bobnet" })).resolves.toEqual({ address: "Mario@mbp-1", queued: 0 });
     await expect(c.request({ t: "send", as: "Mario", to: ["X"], body: "hi" })).rejects.toMatchObject({ code: "unknown_peer" });
+  });
+
+  it("says the broker is older than this client when it doesn't know a frame", async () => {
+    const b = fakeBroker();
+    cleanup.push(b.close);
+    const c = connect(b.url);
+    await expect(c.request({ t: "board_op" } as never)).rejects.toMatchObject({
+      code: "unsupported",
+      message: "the broker doesn't know board_op; it is older than this client",
+    });
+  });
+
+  it("registers with this client's package, version and protocol", async () => {
+    const b = fakeBroker();
+    cleanup.push(b.close);
+    const c = connect(b.url);
+    await c.register({ name: "Bill" });
+    expect(b.frames.find((f) => f["t"] === "register")!["client"]).toEqual({ package: "@bobnet/client", version: expect.stringMatching(/^\d+\.\d+\.\d+/), protocol: PROTOCOL_VERSION });
   });
 
   it("hands deliveries and presence to onPush", async () => {

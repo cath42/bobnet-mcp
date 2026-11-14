@@ -56,6 +56,14 @@ export const Envelope = z.object({
 });
 export type Envelope = z.infer<typeof Envelope>;
 
+/** Which client a peer runs, as it said when it registered. */
+export const ClientInfo = z.object({
+  package: z.string().min(1).max(64),
+  version: z.string().min(1).max(64),
+  protocol: z.number().int().positive(),
+});
+export type ClientInfo = z.infer<typeof ClientInfo>;
+
 export const PeerInfo = z.object({
   address: z.string(),
   name: z.string(),
@@ -66,6 +74,8 @@ export const PeerInfo = z.object({
   status: z.string().nullable(),
   online: z.boolean(),
   last_seen: z.string(),
+  /** Null for a client too old to say; absent from a broker too old to keep it. */
+  client: ClientInfo.nullable().optional(),
 });
 export type PeerInfo = z.infer<typeof PeerInfo>;
 
@@ -286,6 +296,8 @@ export const RegisterFrame = z.object({
    * takes for the laptop and whom dashboard actions go to. Pinned until it is gone.
    */
   supervisor: z.literal(true).optional(),
+  /** Which client this is. Optional: clients before it still register. */
+  client: ClientInfo.optional(),
 });
 
 export const DeregisterFrame = z.object({ t: z.literal("deregister"), rid, as: segment });
@@ -372,6 +384,9 @@ export const ClientFrame = z.discriminatedUnion("t", [
 ]);
 export type ClientFrame = z.infer<typeof ClientFrame>;
 
+/** Every frame type this protocol knows; any other `t` is answered `unsupported`. */
+export const CLIENT_FRAME_TYPES: readonly string[] = ClientFrame.options.map((o) => o.shape.t.value);
+
 // ---------- Broker → client ----------
 
 export const ErrorCode = z.enum([
@@ -385,6 +400,8 @@ export const ErrorCode = z.enum([
   "secret_detected",
   "unknown_message",
   "offline",
+  /** A frame type the broker doesn't know: the client is newer than the broker. */
+  "unsupported",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 

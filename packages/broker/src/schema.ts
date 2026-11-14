@@ -93,6 +93,10 @@ const MIGRATIONS: readonly string[] = [
     name   TEXT NOT NULL
   );
   `,
+  `
+  -- The client each peer said it runs: JSON {package, version, protocol}; NULL for older clients.
+  ALTER TABLE peers ADD COLUMN client TEXT;
+  `,
 ];
 
 export function migrate(sql: SqlStorage): void {

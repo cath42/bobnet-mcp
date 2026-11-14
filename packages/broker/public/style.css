@@ -83,7 +83,7 @@ th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--idle); margin-right: 6px; vertical-align: 1px; }
 .dot.on { background: var(--ok); }
 td .addr { font-weight: 600; }
-td .team { color: var(--muted); font-size: 12px; }
+td .team, td .client { color: var(--muted); font-size: 12px; }
 
 .totals { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
 .totals div { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 14px; }

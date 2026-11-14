@@ -25,6 +25,21 @@ describe("registration", () => {
     ]);
   });
 
+  it("keeps the client's package, version and protocol, and registers an old client that sends none", async () => {
+    const client = { package: "@bobnet/client", version: "0.2.0", protocol: 1 };
+    const bob = await Client.open(await laptopToken(1));
+    await bob.request({ t: "register", name: "Bob", client });
+    const old = await agent(1, "Riker");
+    const { peers } = await old.request<{ peers: PeerInfo[] }>({ t: "peers" });
+    expect(peers.map((p) => [p.name, p.client])).toEqual([
+      ["Bob", client],
+      ["Riker", null],
+    ]);
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const d = await owner.request({ t: "dashboard" });
+    expect(d.peers.find((p: PeerInfo) => p.name === "Bob").client).toEqual(client);
+  });
+
   it("refuses a name that is online on another connection, and allows takeover once it's gone", async () => {
     const first = await agent(1, "Riker");
     const second = await Client.open(await laptopToken(1));
@@ -218,6 +233,15 @@ describe("frames", () => {
     expect(await c.next((f) => f.t === "error" && f.rid === "x1")).toMatchObject({ code: "bad_frame" });
     c.raw(JSON.stringify({ t: "peers", rid: "big", pad: "x".repeat(70_000) }));
     expect(await c.next((f) => f.t === "error" && f.rid === "big")).toMatchObject({ code: "frame_too_large" });
+    await expect(c.request({ t: "peers" })).resolves.toBeDefined();
+  });
+
+  it("answers a frame type it doesn't know with unsupported, keeping the socket", async () => {
+    const c = await agent(1, "Bob");
+    c.raw(JSON.stringify({ t: "board_op", rid: "n1", as: "Bob", op: "create" }));
+    expect(await c.next((f) => f.t === "error" && f.rid === "n1")).toMatchObject({ code: "unsupported", message: expect.stringContaining("board_op") });
+    c.raw(JSON.stringify({ rid: "n2" }));
+    expect(await c.next((f) => f.t === "error" && f.rid === "n2")).toMatchObject({ code: "bad_frame" });
     await expect(c.request({ t: "peers" })).resolves.toBeDefined();
   });
 });

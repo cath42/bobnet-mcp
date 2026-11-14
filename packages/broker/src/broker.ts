@@ -1,7 +1,9 @@
 import {
   type Action,
   addressKey,
+  CLIENT_FRAME_TYPES,
   ClientFrame,
+  type ClientInfo,
   type Dashboard,
   type LaptopSnapshot,
   type ProjectBoard,
@@ -52,6 +54,7 @@ interface PeerRow {
   conn_id: string | null;
   last_seen: string;
   instance: string | null;
+  client: string | null;
   [k: string]: SqlStorageValue;
 }
 
@@ -124,6 +127,9 @@ export class Broker extends DurableObject<Env> {
       const limit = t === "board" || t === "report" ? LIMITS.boardFrameBytes : LIMITS.frameBytes;
       if (encoder.encode(data).byteLength > limit) {
         throw new FrameError("frame_too_large", `Frames are limited to ${limit} bytes`);
+      }
+      if (typeof t === "string" && !CLIENT_FRAME_TYPES.includes(t)) {
+        throw new FrameError("unsupported", `This broker doesn't know the frame type ${JSON.stringify(t)}`);
       }
       const parsed = ClientFrame.safeParse(raw);
       if (!parsed.success) throw new FrameError("bad_frame", parsed.error.issues[0]?.message ?? "Invalid frame");
@@ -220,11 +226,11 @@ export class Broker extends DurableObject<Env> {
 
     const peer = this.sql
       .exec<PeerRow>(
-        `INSERT INTO peers (key, name, laptop, team, purpose, expertise, status, conn_id, last_seen, instance)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+        `INSERT INTO peers (key, name, laptop, team, purpose, expertise, status, conn_id, last_seen, instance, client)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
          ON CONFLICT (key) DO UPDATE SET name = excluded.name, team = excluded.team, purpose = excluded.purpose,
            expertise = excluded.expertise, conn_id = excluded.conn_id, last_seen = excluded.last_seen,
-           instance = excluded.instance
+           instance = excluded.instance, client = excluded.client
          RETURNING *`,
         key,
         frame.name,
@@ -235,6 +241,7 @@ export class Broker extends DurableObject<Env> {
         conn.connId,
         new Date().toISOString(),
         frame.instance ?? null,
+        frame.client ? JSON.stringify(frame.client) : null,
       )
       .one();
 
@@ -572,6 +579,7 @@ export class Broker extends DurableObject<Env> {
       status: p.status,
       online: p.conn_id !== null && this.isLive(p.conn_id),
       last_seen: p.last_seen,
+      client: p.client ? (JSON.parse(p.client) as ClientInfo) : null,
     };
   }
 

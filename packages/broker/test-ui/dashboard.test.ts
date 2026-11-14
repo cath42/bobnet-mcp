@@ -72,8 +72,8 @@ const board = {
 
 const dashboard = {
   peers: [
-    { address: "Bob@mbp-1", name: "Bob", laptop: "mbp-1", team: "land", purpose: null, expertise: [], status: "running build 3", online: true, last_seen: iso(1), connected_at: iso(30), stats: { sent_24h: 2, received_24h: 5, inbox: 0 } },
-    { address: "Riker@mbp-1", name: "Riker", laptop: "mbp-1", team: "land", purpose: null, expertise: [], status: null, online: false, last_seen: iso(60), connected_at: null, stats: { sent_24h: 0, received_24h: 1, inbox: 1 } },
+    { address: "Bob@mbp-1", name: "Bob", laptop: "mbp-1", team: "land", purpose: null, expertise: [], status: "running build 3", online: true, last_seen: iso(1), connected_at: iso(30), client: { package: "@bobnet/supervisor", version: "0.2.0", protocol: 1 }, stats: { sent_24h: 2, received_24h: 5, inbox: 0 } },
+    { address: "Riker@mbp-1", name: "Riker", laptop: "mbp-1", team: "land", purpose: null, expertise: [], status: null, online: false, last_seen: iso(60), connected_at: null, client: null, stats: { sent_24h: 0, received_24h: 1, inbox: 1 } },
   ],
   laptops: [
     {
@@ -290,6 +290,8 @@ describe("Sessions", () => {
     expect($("traffic").textContent).toContain("supervisor@mbp-1 → Bob@mbp-1");
     expect($("laptops").textContent).toContain("1 of 3 slots busy");
     expect($("agents-count").textContent).toBe("1 online of 2");
+    const rows = [...$("agents").querySelectorAll("tbody tr")].map((r) => r.querySelector(".client")?.textContent);
+    expect(rows).toEqual(["supervisor 0.2.0 · protocol 1", "client version unknown"]);
     const ended = $("ended").textContent!;
     expect(ended).toContain("Write a <b>haiku</b>");
     expect($("ended").querySelector("b")).toBeNull();

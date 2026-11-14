@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { type ClientFrame, type ErrorCode, PING, PONG, type ServerFrame } from "@bobnet/protocol";
+import { readFileSync } from "node:fs";
+import { type ClientFrame, type ClientInfo, type ErrorCode, PING, PONG, PROTOCOL_VERSION, type ServerFrame } from "@bobnet/protocol";
 import type { Credentials, Identity } from "./config.ts";
 import type { Logger } from "./log.ts";
 
@@ -22,7 +23,11 @@ export class BrokerError extends Error {
   }
 }
 
+/** This package, as it tells the broker on register unless the host names itself. */
+const OWN_PACKAGE = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { name: string; version: string };
+
 interface Pending {
+  t: string;
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
@@ -35,6 +40,8 @@ export interface ConnectionOptions {
   onPush: (frame: PushFrame) => void;
   /** Called after every (re)connect once registrations are restored. */
   onReady?: (laptop: string) => void;
+  /** The package hosting this connection, sent on register. Defaults to @bobnet/client. */
+  client?: Omit<ClientInfo, "protocol">;
   /** For tests: a WebSocket constructor that accepts headers. */
   WebSocketImpl?: new (url: string, init: { headers: Record<string, string> }) => WebSocket;
 }
@@ -56,6 +63,7 @@ export class BrokerConnection {
   private readonly registrations = new Map<string, Identity>();
   /** Sent with every registration, so the broker knows a reconnect from this process. */
   private readonly instance = randomUUID();
+  private readonly client: ClientInfo;
   /** Registrations a reconnect couldn't restore yet; retried until they are. */
   private readonly unrestored = new Set<string>();
   private retryTimer: NodeJS.Timeout | null = null;
@@ -67,6 +75,8 @@ export class BrokerConnection {
 
   constructor(opts: ConnectionOptions) {
     this.opts = opts;
+    const { name, version } = OWN_PACKAGE;
+    this.client = { ...(opts.client ?? { package: name, version }), protocol: PROTOCOL_VERSION };
   }
 
   start(): void {
@@ -87,7 +97,7 @@ export class BrokerConnection {
 
   /** Remembers the identity so reconnects restore it, then registers. */
   async register(identity: Identity): Promise<{ address: string; queued: number }> {
-    const result = await this.request<{ address: string; queued: number }>({ t: "register", ...identity, instance: this.instance });
+    const result = await this.request<{ address: string; queued: number }>({ t: "register", ...identity, instance: this.instance, client: this.client });
     this.registrations.set(identity.name.toLowerCase(), identity);
     this.unrestored.delete(identity.name.toLowerCase());
     return result;
@@ -119,7 +129,7 @@ export class BrokerConnection {
         this.pending.delete(rid);
         reject(new BrokerError("timeout", `No reply to ${frame.t} within ${REQUEST_TIMEOUT_MS} ms`));
       }, REQUEST_TIMEOUT_MS);
-      this.pending.set(rid, { resolve: resolve as (r: unknown) => void, reject, timer });
+      this.pending.set(rid, { t: frame.t, resolve: resolve as (r: unknown) => void, reject, timer });
       this.ws!.send(JSON.stringify({ ...frame, rid }));
     });
   }
@@ -184,6 +194,7 @@ export class BrokerConnection {
         this.pending.delete(frame.rid!);
         clearTimeout(p.timer);
         if (frame.t === "ok") p.resolve(frame.result);
+        else if (frame.code === "unsupported") p.reject(new BrokerError(frame.code, `the broker doesn't know ${p.t}; it is older than this client`));
         else p.reject(new BrokerError(frame.code, frame.message));
         return;
       }
@@ -200,7 +211,7 @@ export class BrokerConnection {
     this.startPings();
     for (const [key, identity] of this.registrations) {
       try {
-        await this.sendRequest({ t: "register", ...identity, instance: this.instance });
+        await this.sendRequest({ t: "register", ...identity, instance: this.instance, client: this.client });
         this.unrestored.delete(key);
       } catch (err) {
         this.unrestored.add(key);
@@ -240,7 +251,7 @@ export class BrokerConnection {
           continue;
         }
         try {
-          await this.sendRequest({ t: "register", ...identity, instance: this.instance });
+          await this.sendRequest({ t: "register", ...identity, instance: this.instance, client: this.client });
           this.unrestored.delete(key);
           this.opts.log.info("re-registered", { name: identity.name });
         } catch {

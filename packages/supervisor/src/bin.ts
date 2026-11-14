@@ -51,11 +51,13 @@ const brokerConfig = loadConfig();
 const store = new Store(join(config.stateDir, "supervisor.db"));
 
 let supervisor: Supervisor | null = null;
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { name: string; version: string };
 const connection = new BrokerConnection({
   url: brokerConfig.url,
   credentials: brokerConfig.credentials,
   log,
   onPush: (frame) => supervisor?.onPush(frame),
+  client: { package: pkg.name, version: pkg.version },
 });
 connection.start();
 

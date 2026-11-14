@@ -678,6 +678,9 @@ function workerCard(w) {
       w.calls ? h("span", null, `${w.calls} calls, last context ${fmtTokens(w.context ?? 0)}`) : null));
 }
 
+/** Which client an agent runs: "supervisor 0.2.0 · protocol 1". */
+const clientLabel = (c) => c ? `${c.package.replace(/^@bobnet\//, "")} ${c.version} · protocol ${c.protocol}` : "client version unknown";
+
 function viewSessions() {
   const items = state.updates.map((u) => ({ ...u, task: taskRef(u.text) }));
   const shown = state.taskFilter ? items.filter((u) => u.task === state.taskFilter) : items;
@@ -703,7 +706,7 @@ function viewSessions() {
       h("div", { class: "table-wrap" }, h("table", { id: "agents" },
         h("thead", null, h("tr", null, h("th", null, "Agent"), h("th", null, "Status"), h("th", { class: "num" }, "Up"), h("th", { class: "num" }, "In / out 24h"), h("th", { class: "num" }, "Inbox"))),
         h("tbody", null, peers.map((p) => h("tr", null,
-          h("td", null, h("span", { class: `dot${p.online ? " on" : ""}` }), h("span", { class: "addr" }, p.address), p.team ? h("div", { class: "team" }, p.team) : null),
+          h("td", null, h("span", { class: `dot${p.online ? " on" : ""}` }), h("span", { class: "addr" }, p.address), p.team ? h("div", { class: "team" }, p.team) : null, h("div", { class: "client" }, clientLabel(p.client))),
           h("td", null, p.status ?? (p.online ? "" : `last seen ${since(p.last_seen)} ago`)),
           h("td", { class: "num" }, p.online && p.connected_at ? ago(p.connected_at) : "–"),
           h("td", { class: "num" }, `${p.stats.received_24h} / ${p.stats.sent_24h}`),

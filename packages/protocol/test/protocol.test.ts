@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressKey, ClientFrame, findSecret, parseRecipient } from "../src/index.ts";
+import { addressKey, CLIENT_FRAME_TYPES, ClientFrame, findSecret, parseRecipient, PROTOCOL_VERSION } from "../src/index.ts";
 
 describe("parseRecipient", () => {
   it("resolves a bare name to the sender's laptop", () => {
@@ -42,5 +42,16 @@ describe("ClientFrame", () => {
   it("rejects unknown frame types and missing fields", () => {
     expect(ClientFrame.safeParse({ t: "nope", rid: "1" }).success).toBe(false);
     expect(ClientFrame.safeParse({ t: "send", rid: "1", as: "Bob", to: [], body: "hi" }).success).toBe(false);
+  });
+  it("takes a register with or without the client's package, version and protocol", () => {
+    const client = { package: "@bobnet/client", version: "0.2.0", protocol: PROTOCOL_VERSION };
+    expect(ClientFrame.parse({ t: "register", rid: "1", name: "Bob", client })).toMatchObject({ client });
+    expect(ClientFrame.parse({ t: "register", rid: "1", name: "Bob" })).not.toHaveProperty("client");
+    expect(ClientFrame.safeParse({ t: "register", rid: "1", name: "Bob", client: { package: "x" } }).success).toBe(false);
+  });
+  it("lists every client frame type, for the broker to tell an unknown one", () => {
+    expect(CLIENT_FRAME_TYPES).toContain("register");
+    expect(CLIENT_FRAME_TYPES).toContain("ack");
+    expect(CLIENT_FRAME_TYPES).toHaveLength(ClientFrame.options.length);
   });
 });
