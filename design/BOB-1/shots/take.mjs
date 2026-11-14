@@ -33,7 +33,27 @@ const shots = [
   ["c9-waits-with-bug", "waits", [(p) => p.click("#capture-open"), (p) => p.fill("#cap-text", "Sign-in loops back to the start page on staging after choosing Google. Can't get into the demo account."),
     (p) => p.getByRole("button", { name: "Bug", exact: true }).click(), (p) => p.check("#cap-blocks"), (p) => p.getByRole("button", { name: "Capture", exact: true }).click()], true],
   ["c9-triage-bugs", "triage/helix", [(p) => p.getByRole("button", { name: /^Bugs/ }).click()], true],
+  // Round 2: context per call on a session card (a string in place of "full page" shoots that element)
+  ["r2-ctx-running", "feature/LAND-49", [(p) => running(p).getByRole("button", { name: /Context per call/ }).click()], ".step[data-state=running]"],
+  ["r2-ctx-running-agent", "feature/LAND-49", [(p) => running(p).getByRole("button", { name: /Context per call/ }).click(), (p) => running(p).locator(".seg").getByRole("button", { name: "Marvin" }).click()], ".step[data-state=running]"],
+  ["r2-ctx-closed-agent", "feature/LAND-49", [(p) => build1(p).getByRole("button", { name: /Context per call/ }).click(), (p) => build1(p).locator(".seg").getByRole("button", { name: "Howard" }).click()], ".step:nth-child(2)"],
+  // Round 2: answering from the dashboard
+  ["r2-answer-question", "waits", [(p) => item(p, "How does staging get").getByRole("button", { name: "Answer" }).click(), (p) => item(p, "How does staging get").locator("input[value=a]").check(),
+    (p) => item(p, "How does staging get").locator("textarea").fill("Yes, (a). I'll add Northfield Energy with one area tonight; rerun C11 tomorrow morning.")], false],
+  ["r2-answered", "waits", [(p) => item(p, "How does staging get").getByRole("button", { name: "Answer" }).click(), (p) => item(p, "How does staging get").locator("input[value=a]").check(),
+    (p) => item(p, "How does staging get").locator("textarea").fill("Yes, (a). I'll add Northfield Energy with one area tonight; rerun C11 tomorrow morning."),
+    (p) => p.getByRole("button", { name: "Send answer" }).click()], true],
+  ["r2-answer-overview", "overview", [(p) => p.locator(".ov-needs li", { hasText: "How does staging get" }).getByRole("button", { name: "Answer" }).click()], false],
+  ["r2-answer-action", "waits", [(p) => item(p, "Try claude.ai").getByRole("button", { name: "Mark done" }).click()], "li:has(form.answer)"],
+  ["r2-answer-permission", "waits", [(p) => item(p, "kill 33987").getByRole("button", { name: "Allow or deny" }).click()], "li:has(form.answer)"],
+  // Round 2: waiting on CI / a run
+  ["r2-ci-overview", "overview", [], false],
+  ["r2-ci-feature", "feature/LAND-49", [], false],
+  ["r2-ci-states", "states", [], true],
 ];
+const running = (p) => p.locator(".step[data-state=running]");
+const build1 = (p) => p.locator(".step").nth(1);
+const item = (p, text) => p.locator(".waits li", { hasText: text });
 
 const only = process.argv[2];
 const browser = await chromium.launch();
@@ -48,7 +68,9 @@ try {
       await p.goto(`${page0}#${hash}`);
       for (const s of steps) await s(p);
       await p.waitForTimeout(150);
-      await p.screenshot({ path: join(here, `${name}-${w}.png`), fullPage: full });
+      const path = join(here, `${name}-${w}.png`);
+      if (typeof full === "string") { await p.addStyleTag({ content: "header { position: static !important; }" }); await p.locator(full).first().screenshot({ path }); }
+      else await p.screenshot({ path, fullPage: full });
       if (errors.length) throw new Error(`${name} at ${w}: ${errors.join("; ")}`);
       await ctx.close();
     }

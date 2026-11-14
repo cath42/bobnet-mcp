@@ -25,6 +25,7 @@ const proj = (key) => R.projects.find((p) => p.key === key);
 const state = {
   rel: {}, captured: { helix: [], bobnet: [] }, waits: [...R.waits], expanded: new Set(), undo: null,
   triageFilter: "all", triageAll: false, waitsProj: "all",
+  answered: [], answering: null, ctx: new Map(),
 };
 for (const p of R.projects) {
   state.rel[p.key] = [
@@ -75,20 +76,38 @@ function toast(text, undo) {
 
 const waitCount = () => state.waits.length;
 
+// ---------- Waiting on a run: CI (GitHub Actions) or the laptop's run slot (land, e2e) ----------
+
+const mins = (iso) => Math.round((new Date(R.now.slice(0, 16)) - new Date(iso)) / 6e4);
+const runFor = (iso) => dur(iso, R.now.slice(0, 16));
+// Running long: half again its usual time (the median of the last runs of that workflow or slot label).
+const isLong = (w) => mins(w.since) > w.usual * 1.5;
+const waitShort = (w) => `${w.kind === "ci" ? "waiting on CI" : `waiting on a run (${w.label})`} · ${runFor(w.since)}`;
+const runLink = (w) => (w.kind === "ci"
+  ? h("a", { href: "#source", class: "run-link", title: `${w.source}: ${w.repo}, ${w.branch}. Opens the run on GitHub.` }, `${w.workflow} › ${w.job} #${w.run} ↗`)
+  : h("span", { class: "run-link" }, `run slot on ${w.laptop}: `, h("b", null, w.label)));
+function runLine(w, ex0) {
+  return h("div", { class: `runw${isLong(w) ? " long" : ""}` }, h("i", { class: "ring", "aria-hidden": "true" }),
+    h("span", null, h("b", null, w.kind === "ci" ? "Waiting on CI" : "Waiting on a run"), ` · ${runFor(w.since)} · `, runLink(w),
+      h("span", { class: "muted" }, w.kind === "ci" ? ` · ${w.source}, ${w.repo} ${w.branch}` : ` · held by ${w.holder}: ${w.what}`),
+      h("span", { class: "muted" }, ` · ${isLong(w) ? "running long, " : ""}usually about ${w.usual} min`), " ", ex(ex0)));
+}
+
 // Who works on what right now. A worker declares its session {feature, kind, label} and its tasks at spawn,
 // so agent -> session -> tasks is known. Leads and consults declare no session: "Other work".
 function working() {
   const out = [];
   for (const p of R.projects) for (const f of allFeatures(p.key)) for (const s of R.sessions[f.id] ?? [])
-    if (s.state === "running") for (const a of s.agents ?? []) out.push({ ...a, p, f, s });
+    if (s.state === "running") for (const a of s.agents ?? []) out.push({ ...a, tokens: agentTokens(f, s, a.name), p, f, s });
   for (const a of R.other ?? []) out.push({ ...a, p: proj(a.project), f: null, s: null, tasks: [] });
   return out;
 }
 const onTask = (fid, n) => working().filter((a) => a.f?.id === fid && a.tasks.includes(n));
 const taskTitle = (fid, n) => { const b = R.projects.map((p) => S[p.key]).find((b) => b.feature === fid); return b?.tasks.find((t) => short(t.id) === n)?.title; };
-const STATE_DOT = { working: "on", "waiting on you": "warn", idle: "" };
+const STATE_DOT = { working: "on", "waiting on you": "warn", "waiting on CI": "run", "waiting on a run": "run", idle: "" };
+const stateText = (a) => (a.waitsOn ? waitShort(a.waitsOn) : a.state);
 const agentChip = (a, withSession) => h("span", { class: "who", dataset: { state: a.state } },
-  h("i", { class: `dot ${STATE_DOT[a.state] ?? ""}`, "aria-hidden": "true" }), h("b", null, a.name), ` ${a.role} · ${a.state} · ${tok(a.tokens)} tokens`,
+  h("i", { class: `dot ${STATE_DOT[a.state] ?? ""}`, "aria-hidden": "true" }), h("b", null, a.name), ` ${a.role} · ${stateText(a)} · ${tok(a.tokens)} tokens`,
   withSession && a.s ? ` · ${a.s.label}` : "", " ", ex(a.example));
 
 // ---------- Overview: what needs Casper, who is working on what, where each project stands ----------
@@ -101,10 +120,12 @@ function overview() {
     h("div", { class: "ov" },
       h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count" }, ws.length)),
         h("div", { class: "card" },
-          blocking.length ? h("ul", { class: "lines" }, blocking.map((w) => h("li", { class: "hold" },
+          blocking.length ? h("ul", { class: "lines" }, blocking.map((w) => h("li", { class: `hold${answerable(w) ? " can" : ""}` },
             badge(w.kind === "bug" ? "bug" : w.kind, KIND[w.kind]),
             h("a", { href: "#waits", class: "l-t" }, w.text),
-            h("span", { class: "l-m" }, `${proj(w.project).name}${w.feature ? ` · ${w.feature}` : ""} · holds up ${w.holds}`, " ", ex(w.example)))))
+            answerable(w) ? answerToggle(w, true) : null,
+            h("span", { class: "l-m" }, `${proj(w.project).name}${w.feature ? ` · ${w.feature}` : ""} · holds up ${w.holds}`, " ", ex(w.example)),
+            state.answering === w.id ? answerBox(w) : null)))
             : h("p", { class: "muted", style: "margin:0" }, "Nothing is held up by you."),
           h("a", { href: "#waits", class: "more" }, rest ? `${plural(blocking.length, "holds", "hold")} work up · ${rest} more when you have time →` : "Waits on you →"))),
       h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length)),
@@ -124,7 +145,9 @@ function nowLine(a) {
       a.f ? [h("a", { class: "id", href: `#feature/${a.f.id}` }, a.f.id), h("span", { class: "muted" }, `${a.s.label} › `),
         a.tasks.map((t) => h("a", { href: `#feature/${a.f.id}`, class: "l-task", title: taskTitle(a.f.id, t) ?? "" }, h("span", { class: "id" }, t), taskTitle(a.f.id, t)?.replace(/^[^:]{0,40}:\s*/, "") ?? ""))]
         : h("span", { class: "muted", style: "font-style:italic" }, "Other work (no session)")),
-    h("span", { class: "l-m" }, a.state === "working" ? null : h("span", { style: "color:var(--warn)" }, `${a.state} · `), `${tok(a.tokens)} tokens`, " ", ex(a.example)));
+    h("span", { class: "l-m" }, a.waitsOn ? h("span", { class: `l-run${isLong(a.waitsOn) ? " long" : ""}` }, `${waitShort(a.waitsOn)} · `)
+      : a.state === "working" ? null : h("span", { style: "color:var(--warn)" }, `${a.state} · `), `${tok(a.tokens)} tokens`, " ", ex(a.example)),
+    a.waitsOn ? h("span", { class: "l-runname" }, h("i", { class: "ring", "aria-hidden": "true" }), runLink(a.waitsOn)) : null);
 }
 
 function projectRow(p) {
@@ -292,11 +315,11 @@ function feature(id) {
           h("span", null, `${plural(ss.length, "session")}`), h("span", { style: agents.length ? "color:var(--ok)" : "" }, agents.length ? `${plural(agents.length, "agent")} on it now` : "nobody on it now"))),
       agents.length ? h("section", { class: "card on-now" }, h("h2", { style: "margin:0" }, "On it now"),
         h("ul", { class: "lines" }, agents.map((a) => h("li", null, agentChip(a, false), h("span", { class: "l-m" }, `${a.s.label} › `,
-          a.tasks.map((n) => [h("span", { class: "id" }, n), taskTitle(id, n) ?? ""])))))) : null,
+          a.tasks.map((n) => [h("span", { class: "id" }, n), taskTitle(id, n) ?? ""])), a.waitsOn ? runLine(a.waitsOn) : null)))) : null,
       wait ? h("a", { href: "#next", class: "banner", style: "text-decoration:none;color:inherit" }, h("b", { style: "color:var(--warn)" }, "Next: waits on you"), h("span", null, `${wait.id.replace("#", " #")} · ${wait.text}`)) : null,
       h("div", { class: "two" },
         h("section", null, h("h2", null, "Sessions, in the order they ran"),
-          ss.length ? h("ol", { class: "steps" }, ss.map((s, i) => stepItem(p, s, byShort, i === ss.length - 1)), nextItem(nx, wait))
+          ss.length ? h("ol", { class: "steps" }, ss.map((s, i) => stepItem(p, f, s, ss, byShort, i === ss.length - 1)), nextItem(nx, wait))
             : h("div", { class: "empty-card" }, "No session has run on this feature yet. Next: a design session, once it is Ready.")),
         h("aside", null, h("h2", null, "Tasks ", h("span", { class: "count" }, tasks.length)),
           loose.length ? h("div", { class: "card", style: "margin-bottom:10px" }, h("div", { class: "muted" }, "In no session yet"), h("ul", { class: "tasks" }, loose.map((t) => taskLi(t, t.status, onTask(id, short(t.id)), true)))) : null,
@@ -310,10 +333,10 @@ function taskLi(t, st, on = [], withSession = false) {
     on.length ? h("span", { class: "on-it" }, on.map((a) => agentChip(a, withSession))) : null);
 }
 
-function stepItem(p, s, byShort, last) {
+function stepItem(p, f, s, ss, byShort, last) {
   const helix = p.key === "helix";
   const live = s.state === "running";
-  const moved = s.moved.map(([n, st]) => { const t = byShort.get(n); return t ? taskLi(t, st, live ? (s.agents ?? []).filter((a) => a.tasks.includes(n)).map((a) => ({ ...a, s })) : []) : null; });
+  const moved = s.moved.map(([n, st]) => { const t = byShort.get(n); return t ? taskLi(t, st, live ? (s.agents ?? []).filter((a) => a.tasks.includes(n)).map((a) => ({ ...a, tokens: agentTokens(f, s, a.name), s })) : []) : null; });
   const closedN = s.moved.filter((m) => m[1] === "Done").length;
   return h("li", { class: "step", dataset: { kind: s.kind, state: s.state } }, h("span", { class: "dot2", "aria-hidden": "true" }),
     h("div", { class: "card" },
@@ -323,14 +346,17 @@ function stepItem(p, s, byShort, last) {
         h("span", null, `${plural(s.blockers, "blocker")} · ${plural(s.majors, "major")}`),
         s.minors ? h("span", null, `${s.minors} minors, fixed`) : null, s.back ? h("span", null, `${s.back} sent back`) : null,
         h("span", null, closedN ? `closed ${plural(closedN, "task")}` : `moved ${plural(s.moved.length, "task")}`),
-        s.tokens ? h("span", { class: "muted" }, `${tok(s.tokens)} tokens`, " ", ex(s.tokensExample)) : null) : null,
-      (s.agents ?? []).map((a) => h("div", { class: "agent", dataset: { state: a.state } }, h("b", null, a.name, " ", h("span", { class: "muted" }, `${a.role} · ${a.state}${a.tasks?.length ? ` · on ${a.tasks.join(", ")}` : ""}`), " ", ex(a.example)), h("span", { class: "d" }, a.checkpoint),
-        h("span", { class: "d" }, `${a.model} · ${a.laptop} · ${dur(s.start, R.now.slice(0, 16))} · ${tok(a.tokens)} tokens · context ${tok(a.ctx)}`))),
+        h("span", { class: "muted" }, `${tok(sessionTokens(f, s))} tokens`, " ", ex(true))) : null,
+      (s.agents ?? []).map((a) => h("div", { class: "agent", dataset: { state: a.state } }, h("b", null, a.name, " ", h("span", { class: "muted" }, `${a.role} · ${a.waitsOn ? (a.waitsOn.kind === "ci" ? "waiting on CI" : "waiting on a run") : a.state}${a.tasks?.length ? ` · on ${a.tasks.join(", ")}` : ""}`), " ", ex(a.example)),
+        a.waitsOn ? runLine(a.waitsOn) : null, h("span", { class: "d" }, a.checkpoint),
+        h("span", { class: "d" }, `${a.model} · ${a.laptop} · ${dur(s.start, R.now.slice(0, 16))} · ${tok(agentTokens(f, s, a.name))} tokens · context ${tok(a.ctx)}`))),
       h("div", { class: "sub" }, s.summary),
       h("div", { class: "links" },
         s.handoff ? h("a", { href: "#source", title: helix ? `~/.local/state/bobnet/handoffs/helix/${s.handoff}` : s.handoff }, "Handoff") : h("span", { class: "off" }, "No handoff file"),
         s.commit ? h("a", { href: "#source", title: `helix-navigator-picard ${s.commit}` }, `Close ${s.commit.slice(0, 7)}`) : null,
-        s.rc ? h("a", { href: "#source" }, "Remote Control") : h("span", { class: "off" }, s.state === "running" ? "No Remote Control" : "")),
+        s.rc ? h("a", { href: "#source" }, "Remote Control") : h("span", { class: "off" }, s.state === "running" ? "No Remote Control" : ""),
+        ctxToggle(f, s)),
+      state.ctx.has(ctxKey(f, s)) ? ctxPanel(f, s, ss) : null,
       moved.length ? h("details", { open: last || null }, h("summary", null, live ? `Tasks it is on (${moved.length})` : `Tasks it moved (${moved.length})`), h("ul", { class: "tasks" }, moved)) : null));
 }
 
@@ -342,6 +368,195 @@ function nextItem(nx, wait) {
       wait ? h("div", null, h("a", { class: "id", href: "#waits" }, wait.id.replace("#", " #")), h("b", null, wait.text)) : null,
       wait?.rec ? h("div", { class: "sub" }, "Recommended: ", wait.rec) : null,
       h("div", { class: "sub" }, "Then: ", nx.then)));
+}
+
+// ---------- Context per call, inside a session (today's Usage chart, moved onto each session card) ----------
+// No usage record was sampled: every run below is example data, made up from a seed so it is the same on each load.
+// In the service a session's runs are the workers that declared it at spawn, each with its calls' context sizes.
+
+function rng(seed) {
+  let a = [...seed].reduce((n, c) => Math.imul(n ^ c.charCodeAt(0), 2654435761) >>> 0, 7);
+  return () => { a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+function genCtx(seed, n, end) {
+  const r = rng(`${seed}:ctx`), pts = [];
+  let v = 14000 + r() * 8000;
+  for (let i = 0; i < n; i++) { v += 250 + r() * 2000 + (r() < 0.06 ? 5000 + r() * 12000 : 0); pts.push(Math.round(Math.min(v, 165000))); }
+  return end ? pts.map((x) => Math.round((x * end) / pts.at(-1))) : pts;
+}
+const CREW = {
+  design: [["Calvin", "designer", 2], ["Riker", "architect", 1]],
+  build: [["Howard", "engineer", 3], ["Homer", "engineer", 2], ["Marvin", "tester", 2]],
+  review: [["Luke", "reviewer", 2], ["Calvin", "designer", 1], ["Marvin", "tester", 1]],
+};
+const ctxKey = (f, s) => `${f.id}:${s.label}`;
+const runsCache = new Map();
+function sessionRuns(f, s) {
+  const key = ctxKey(f, s);
+  if (runsCache.has(key)) return runsCache.get(key);
+  const small = /^Fixes/.test(s.label) ? 0.5 : 1;
+  const crew = s.agents ? s.agents.map((a) => [a.name, a.role, a.name === "Marvin" ? 2 : 1, a]) : CREW[s.kind] ?? [];
+  const out = [];
+  crew.forEach(([name, role, nRuns, live], ci) => {
+    for (let k = 0; k < nRuns; k++) {
+      const seed = `${key}:${name}:${k}`, r = rng(seed), now = live && k === nRuns - 1;
+      const n = now ? Math.round(32 + r() * 22) : Math.round((50 + r() * 110) * small);
+      out.push({ id: seed, name, role, model: live?.model ?? "Opus 5.5", laptop: live?.laptop ?? "mbp-1", ctx: genCtx(seed, n, now ? live.ctx : null), order: k * 10 + ci });
+    }
+  });
+  out.sort((a, b) => a.order - b.order);
+  runsCache.set(key, out);
+  return out;
+}
+// A run's tokens: every call reads its context (cache reads included), plus what it writes.
+const runTokens = (r) => r.ctx.reduce((n, v) => n + v, 0) + r.ctx.length * 700;
+const agentTokens = (f, s, name) => sessionRuns(f, s).filter((r) => r.name === name).reduce((n, r) => n + runTokens(r), 0);
+const sessionTokens = (f, s) => sessionRuns(f, s).reduce((n, r) => n + runTokens(r), 0);
+
+/** One agent's runs as one line: the call count carries on, and each new worker starts from a small context again. */
+function roleLine(runs) {
+  const pts = [], resets = [];
+  for (const r of runs) { if (pts.length) resets.push({ at: pts.length + 1 }); pts.push(...r.ctx); }
+  return { pts, resets };
+}
+const quantile = (xs, q) => { const v = [...xs].sort((a, c) => a - c); const i = (v.length - 1) * q; return v[Math.floor(i)] + (v[Math.ceil(i)] - v[Math.floor(i)]) * (i % 1); };
+/** The middle half and median of earlier runs at each call, while at least three runs reach it. */
+function bandOf(runs) {
+  const out = [];
+  for (let i = 0; ; i++) { const xs = runs.filter((c) => c.length > i).map((c) => c[i]); if (xs.length < 3) break; out.push([quantile(xs, 0.25), quantile(xs, 0.5), quantile(xs, 0.75)]); }
+  return out.length ? out : null;
+}
+function niceStep(max, n = 4) { const step0 = max / n, mag = 10 ** Math.floor(Math.log10(step0 || 1)); return [1, 2, 2.5, 5, 10].map((x) => x * mag).find((x) => x >= step0); }
+const sv = (tag, attrs, ...kids) => {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs ?? {})) if (v != null) el.setAttribute(k, v);
+  for (const c of kids.flat()) if (c != null) el.append(c instanceof Node ? c : String(c));
+  return el;
+};
+// Charts are drawn once their box is on the page, at its width, so their text stays at its set size.
+const later = [];
+
+function ctxToggle(f, s) {
+  const open = state.ctx.has(ctxKey(f, s));
+  const calls = sessionRuns(f, s).reduce((n, r) => n + r.ctx.length, 0);
+  return h("button", { type: "button", class: "ctx-btn", "aria-expanded": String(open), onclick: () => { open ? state.ctx.delete(ctxKey(f, s)) : state.ctx.set(ctxKey(f, s), {}); render(); } },
+    `Context per call · ${calls} calls`, h("span", { class: "chev", "aria-hidden": "true" }, open ? "▴" : "▾"));
+}
+
+function ctxSeries(f, s, ss, agent) {
+  const runs = sessionRuns(f, s);
+  const prev = ss.slice(0, ss.indexOf(s)).reverse().find((x) => x.kind === s.kind);
+  const prevRuns = prev ? sessionRuns(f, prev) : [];
+  const live = s.state === "running";
+  if (!agent) {
+    const cum = (rs) => { let t = 0; return rs.flatMap((r) => r.ctx).map((v) => (t += v)); };
+    return {
+      series: [{ name: `${s.label}${live ? " so far" : ""}`, pts: cum(runs), color: "var(--accent)", style: "solid", w: 2.5 },
+        prev ? { name: prev.label, pts: cum(prevRuns), color: "var(--muted)", style: "dash", w: 2 } : null].filter(Boolean),
+      band: null, cum: true,
+      note: `Every call in the session, in order, across all its agents, with its context summed: where the line ends is the session's tokens read. A steeper line means each call carries more context.${prev ? ` Dashed: ${prev.label}, ${f.id}'s ${s.kind} before it.` : ""}`,
+    };
+  }
+  const mine = runs.filter((r) => r.name === agent), role = mine[0]?.role;
+  const now = roleLine(mine), pr = roleLine(prevRuns.filter((r) => r.role === role));
+  const earlier = ss.filter((x) => x !== s && x.state === "closed").flatMap((x) => sessionRuns(f, x)).filter((r) => r.role === role);
+  const band = bandOf(earlier.map((r) => r.ctx));
+  return {
+    series: [{ name: `${agent}${live ? ", now" : ""}`, pts: now.pts, resets: now.resets, color: "var(--accent)", style: "solid", w: 2.5 },
+      pr.pts.length ? { name: `${role}s, ${prev.label}`, pts: pr.pts, resets: pr.resets, color: "var(--muted)", style: "dash", w: 2 } : null].filter(Boolean),
+    band,
+    note: `${agent}'s runs in ${s.label}, one after another. The count of calls carries on; a new worker starts again from a small context, so the line drops there (dotted).${band ? ` The grey band is the middle half of ${earlier.length} earlier ${role} runs on ${f.id} at the same call, the line in it their median.` : ""}`,
+  };
+}
+
+function drawCtx(wrap, holder, { series, band }, W) {
+  const H = W < 500 ? 220 : 250, L = 46, R = W < 500 ? 12 : 120, T = 14, B = 28;
+  const xMax = Math.max(10, ...series.map((x) => x.pts.length), band?.length ?? 0);
+  const yMax0 = Math.max(1, ...series.flatMap((x) => x.pts), ...(band ?? []).map((x) => x[2]));
+  const step = niceStep(yMax0), yMax = Math.ceil(yMax0 / step) * step;
+  const yt = Array.from({ length: Math.round(yMax / step) + 1 }, (_, i) => i * step);
+  const xs = niceStep(xMax, W < 500 ? 4 : 6), xt = Array.from({ length: Math.floor(xMax / xs) + 1 }, (_, i) => i * xs);
+  const x = (i) => L + (i / xMax) * (W - L - R), y = (v) => T + (1 - v / yMax) * (H - T - B);
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Context size per call" });
+  svg.append(sv("g", { class: "grid" }, yt.map((v) => sv("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }))));
+  svg.append(sv("g", { class: "axis" }, yt.map((v) => sv("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, tok(v))), xt.map((v) => sv("text", { x: x(v), y: H - 8, "text-anchor": "middle" }, String(v))), sv("text", { x: W - R, y: H - 8, dx: R > 40 ? 6 : -2, "text-anchor": R > 40 ? "start" : "end" }, R > 40 ? "calls" : "")));
+  if (band) {
+    svg.append(sv("polygon", { points: [...band.map((q, i) => `${x(i + 1)},${y(q[2])}`), ...band.map((q, i) => `${x(i + 1)},${y(q[0])}`).reverse()].join(" "), fill: "var(--idle)", "fill-opacity": 0.18 }));
+    svg.append(sv("polyline", { points: band.map((q, i) => `${x(i + 1)},${y(q[1])}`).join(" "), fill: "none", stroke: "var(--idle)", "stroke-width": 1.5 }));
+  }
+  const dash = { solid: null, dash: "6 4", dot: "1.5 4" }, labels = [];
+  for (const sr of series) {
+    if (!sr.pts.length) continue;
+    // An agent's line breaks at each new worker, so the drop reads as a restart, not a fall.
+    const cuts = [0, ...(sr.resets ?? []).map((r) => r.at - 1), sr.pts.length];
+    for (let k = 0; k < cuts.length - 1; k++) svg.append(sv("polyline", { points: sr.pts.slice(cuts[k], cuts[k + 1]).map((v, j) => `${x(cuts[k] + j + 1)},${y(v)}`).join(" "), fill: "none", stroke: sr.color, "stroke-width": sr.w, "stroke-dasharray": dash[sr.style], "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    for (const r of sr.resets ?? []) svg.append(sv("line", { x1: x(r.at - 0.5), x2: x(r.at - 0.5), y1: T, y2: H - B, stroke: sr.color, "stroke-width": 1, "stroke-dasharray": "2 3", "stroke-opacity": 0.6 }));
+    labels.push({ y: y(sr.pts.at(-1)), x: x(sr.pts.length), text: sr.name, m: sr.style !== "solid" });
+  }
+  // Direct labels at line ends on a wide chart; on a phone the key carries them.
+  if (R > 60) {
+    labels.sort((a, c) => a.y - c.y);
+    for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i - 1].y < 14) labels[i].y = labels[i - 1].y + 14;
+    for (const l of labels) svg.append(sv("text", { class: `lab${l.m ? " m" : ""}`, x: l.x + 6, y: l.y + 4 }, l.text));
+  }
+  const cross = sv("line", { y1: T, y2: H - B, stroke: "var(--muted)", "stroke-width": 1, visibility: "hidden" });
+  const hit = sv("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent" });
+  svg.append(cross, hit);
+  const tip = wrap.querySelector(".tip");
+  const leave = () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); };
+  const move = (ev) => {
+    const r = svg.getBoundingClientRect(), px = ((ev.clientX - r.left) / r.width) * W;
+    const i = Math.round(((px - L) / (W - L - R)) * xMax);
+    if (i < 1 || i > xMax) return leave();
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+    const rows = series.filter((sr) => sr.pts.length >= i).map((sr) => [sr, sr.pts[i - 1]]).sort((a, c) => c[1] - a[1]);
+    tip.replaceChildren(h("b", null, `Call ${i}`), ...rows.map(([sr, v]) => h("div", { class: "row" }, h("span", null, h("i", { class: sr.style === "solid" ? "" : "dash", style: `--k:${sr.color}` }), sr.name), h("span", null, tok(v)))),
+      band?.[i - 1] ? h("div", { class: "row muted" }, h("span", null, "earlier runs, median"), h("span", null, tok(band[i - 1][1]))) : null);
+    tip.hidden = false;
+    const wr = wrap.getBoundingClientRect();
+    tip.style.left = `${Math.max(4, Math.min(ev.clientX - wr.left + 14, wr.width - 200))}px`;
+    tip.style.top = `${ev.clientY - wr.top + 10}px`;
+  };
+  hit.addEventListener("pointermove", move); hit.addEventListener("pointerdown", move); hit.addEventListener("pointerleave", leave);
+  holder.replaceChildren(svg);
+}
+
+function ctxPanel(f, s, ss) {
+  const key = ctxKey(f, s), view = state.ctx.get(key);
+  const runs = sessionRuns(f, s), names = [...new Set(runs.map((r) => r.name))];
+  const data = ctxSeries(f, s, ss, view.agent);
+  const set = (agent) => { state.ctx.set(key, { agent }); render(); };
+  const sum = (rs, fn) => rs.reduce((n, r) => n + fn(r), 0);
+  const rows = names.map((n) => [n, runs.filter((r) => r.name === n)]).sort((a, c) => sum(c[1], runTokens) - sum(a[1], runTokens));
+  const rmax = sum(rows[0][1], runTokens);
+  const holder = h("div", { class: "plot" });
+  const wrap = h("div", { class: "chart" },
+    h("div", { class: "bar-row", style: "margin:0" },
+      h("span", { class: "seg" }, h("button", { type: "button", "aria-pressed": String(!view.agent), onclick: () => set(null) }, "Whole session"),
+        names.map((n) => h("button", { type: "button", "aria-pressed": String(view.agent === n), onclick: () => set(n) }, n))),
+      ex(true)),
+    holder,
+    h("div", { class: "key" }, data.series.map((sr) => h("span", null, h("i", { class: sr.style === "solid" ? "" : sr.style, style: `--k:${sr.color}` }), `${sr.name} · ${sr.pts.length} calls${data.cum ? ` · ${tok(sr.pts.at(-1))}` : ""}`)),
+      data.band ? h("span", null, h("i", { class: "band", style: "--k:var(--idle)" }), "earlier runs, middle half and median") : null,
+      data.series.some((sr) => sr.resets?.length) ? h("span", null, h("i", { class: "dot", style: "--k:var(--muted)" }), "a new worker starts") : null),
+    h("div", { class: "note", style: "margin:0" }, data.note),
+    h("div", { class: "tip", hidden: true }));
+  later.push(() => drawCtx(wrap, holder, data, Math.max(260, Math.min(760, holder.clientWidth))));
+  return h("div", { class: "ctxp" }, wrap,
+    h("div", { class: "table-wrap" }, h("table", { class: "stack ctx-agents" },
+      h("thead", null, h("tr", null, h("th", null, "Agent"), h("th", null, "Model"), h("th", { class: "num" }, "Runs"), h("th", { class: "num" }, "Calls"), h("th", { class: "num" }, "Peak context"), h("th", null, ""), h("th", { class: "num" }, "Tokens"))),
+      h("tbody", null, rows.map(([n, rs]) => h("tr", { class: "pick", tabindex: "0", "aria-selected": String(view.agent === n), title: "Show its context per call", onclick: () => set(n), onkeydown: (e) => e.key === "Enter" && set(n) },
+        h("td", null, h("b", null, n), h("div", { class: "cp" }, `${rs[0].role} · ${rs[0].laptop}`)),
+        h("td", { "data-label": "Model" }, rs[0].model),
+        h("td", { class: "num", "data-label": "Runs" }, rs.length),
+        h("td", { class: "num", "data-label": "Calls" }, sum(rs, (r) => r.ctx.length)),
+        h("td", { class: "num", "data-label": "Peak context" }, tok(Math.max(...rs.flatMap((r) => r.ctx)))),
+        h("td", { class: "full bar" }, h("div", { class: "meter" }, h("i", { style: `width:${(sum(rs, runTokens) / rmax) * 100}%` }))),
+        h("td", { class: "num", "data-label": "Tokens" }, tok(sum(rs, runTokens))))),
+        h("tr", { class: "total" }, h("td", null, h("b", null, "Session")), h("td", { "data-label": "" }), h("td", { class: "num", "data-label": "Runs" }, runs.length),
+          h("td", { class: "num", "data-label": "Calls" }, sum(runs, (r) => r.ctx.length)), h("td", { class: "num", "data-label": "Peak context" }, tok(Math.max(...runs.flatMap((r) => r.ctx)))), h("td", { class: "full bar" }),
+          h("td", { class: "num", "data-label": "Tokens" }, h("b", null, tok(sum(runs, runTokens)))))))),
+    h("p", { class: "note", style: "margin:0" }, "Pick an agent, above or in the table, to see its own line. Tokens count everything a run read and wrote, cache reads included."));
 }
 
 // ---------- What waits on Casper ----------
@@ -360,7 +575,70 @@ function waitItem(w) {
       w.before ? h("span", null, `Needed before ${w.before}`) : null,
       h("span", null, `from ${w.from}`),
       w.session ? h("span", null, w.session) : null,
-      h("a", { href: "#source" }, w.kind === "question" || w.kind === "action" ? "Open in lead/questions.md" : w.kind === "permission" ? "Open in the supervisor" : "Open")));
+      h("a", { href: "#source" }, w.kind === "question" || w.kind === "action" ? "Open in lead/questions.md" : w.kind === "permission" ? "Open in the supervisor" : "Open"),
+      answerable(w) && state.answering !== w.id ? answerToggle(w) : null),
+    state.answering === w.id ? answerBox(w) : null);
+}
+
+// ---------- Answering from the dashboard: a question, an action done, a permission ----------
+
+const answerable = (w) => ["question", "action", "permission"].includes(w.kind);
+const ANSWER_VERB = { question: "Answer", action: "Mark done", permission: "Allow or deny" };
+const answerToggle = (w, small) => h("button", { type: "button", class: `answer-btn${small ? " small" : ""}`, "aria-expanded": String(state.answering === w.id),
+  onclick: () => { state.answering = state.answering === w.id ? null : w.id; render(); $(`ans-${w.id}`)?.querySelector("input, textarea")?.focus(); } },
+  state.answering === w.id ? "Close" : ANSWER_VERB[w.kind]);
+
+function answerBox(w) {
+  const p = proj(w.project);
+  // Who hears of it: a question or action goes to the project's lead; a permission to the agent that asked.
+  const to = w.kind === "permission" ? `${w.from}` : `${p.lead}, ${p.name}'s lead`;
+  const close = () => { state.answering = null; render(); };
+  const form = h("form", { class: "answer", id: `ans-${w.id}`, onsubmit: (e) => { e.preventDefault(); send(e.submitter?.value); } });
+  const words = () => form.querySelector("textarea").value.trim();
+  const picked = () => { const r = form.querySelector("input[type=radio]:checked"); return r ? w.options.find((o) => o.k === r.value) : null; };
+  const sendBtn = () => form.querySelector("button[type=submit]");
+  const check = () => { if (w.kind === "question") sendBtn().disabled = !(picked() || words()); };
+  function send(verdict) {
+    const o = picked(), text = words();
+    const answer = w.kind === "question" ? { option: o?.text ?? null, words: text } : w.kind === "action" ? { option: "Done", words: text } : { option: verdict === "deny" ? "Denied" : "Allowed", words: text };
+    const before = [...state.waits];
+    state.waits = state.waits.filter((x) => x.id !== w.id);
+    state.answered.unshift({ ...w, answer, at: R.now, to });
+    state.answering = null;
+    render();
+    toast(`${w.kind === "question" ? "Answered" : w.kind === "action" ? "Marked done:" : answer.option} ${w.id === "PERM" ? `${w.from}'s request` : w.id}. Recorded as your words; ${to} got a message.`,
+      () => { state.waits = before; state.answered = state.answered.filter((x) => x.id !== w.id); });
+  }
+  const foot = (...btns) => h("div", { class: "foot" }, h("span", { class: "who-gets" }, w.kind === "permission" ? `${w.from} gets your decision and note.` : `Recorded on ${w.id} as yours, word for word; ${to} gets a message.`),
+    h("button", { type: "button", onclick: close }, "Cancel"), ...btns);
+  if (w.kind === "question") {
+    form.append(
+      h("fieldset", null, h("legend", null, "Pick one"),
+        (w.options ?? []).map((o) => h("label", { class: `opt-row${o.rec ? " rec" : ""}` }, h("input", { type: "radio", name: `o-${w.id}`, value: o.k, onchange: check }),
+          h("span", null, o.text, o.rec ? h("span", { class: "rec-tag" }, "recommended") : null)))),
+      h("label", { class: "words" }, h("span", null, w.options?.length ? "Your words (optional with an option; enough on their own)" : "Your answer"),
+        h("textarea", { rows: 2, oninput: check, placeholder: "Write what you want them to read." })),
+      foot(h("button", { type: "submit", class: "primary", disabled: true }, "Send answer")));
+  } else if (w.kind === "action") {
+    form.append(h("label", { class: "words" }, h("span", null, "Note (optional)"), h("textarea", { rows: 2, placeholder: "Anything they should know, e.g. which app worked." })),
+      foot(h("button", { type: "submit", class: "primary" }, "Mark done")));
+  } else {
+    form.append(h("div", { class: "pending-yes" }, h("b", null, "Pending Casper's yes"), " Allow and deny from here are designed but not agreed; until they are, this stays a link to the supervisor."),
+      h("label", { class: "words" }, h("span", null, `Note to ${w.from} (optional)`), h("textarea", { rows: 2, placeholder: "e.g. go ahead, it's idle" })),
+      foot(h("button", { type: "submit", class: "danger", value: "deny" }, "Deny"), h("button", { type: "submit", class: "primary", value: "allow" }, "Allow")));
+  }
+  return form;
+}
+
+function answeredItem(w) {
+  const a = w.answer;
+  return h("li", { class: "answered" },
+    h("div", { class: "top" }, badge("done", w.kind === "permission" ? a.option.toLowerCase() : w.kind === "action" ? "done" : "answered"), h("span", { class: "id" }, w.id.replace(/^PERM$/, "")),
+      h("span", { class: "muted" }, proj(w.project).name, w.feature ? ` · ${w.feature}` : ""), h("span", { class: "age" }, `today ${hm(w.at)}`)),
+    h("div", { class: "q" }, w.text),
+    h("div", { class: "said" }, a.option && w.kind === "question" ? h("div", null, h("span", { class: "muted" }, "You picked "), a.option) : null,
+      a.words ? h("blockquote", null, `“${a.words}”`) : null),
+    h("div", { class: "meta" }, h("span", null, `${w.to} got a message`), h("span", null, "from the dashboard")));
 }
 
 function waits() {
@@ -375,7 +653,9 @@ function waits() {
       blocking.length ? h("ul", { class: "list waits" }, blocking.map(waitItem)) : h("div", { class: "empty-card" }, "Nothing is held up by you.")),
     h("section", null, h("h2", null, "When you have time ", h("span", { class: "count" }, rest.length)),
       rest.length ? h("ul", { class: "list waits" }, rest.map(waitItem)) : h("div", { class: "empty-card" }, "Nothing else waits on you.")),
-    h("p", { class: "note" }, "You answer where you do today: in the project's conversation or its files. An item leaves this list when its source says it is answered; the list keeps nothing of its own. A session that closed with need: casper shows on the question it waits for."),
+    state.answered.length ? h("section", null, h("h2", null, "Answered from here today ", h("span", { class: "count" }, state.answered.length)),
+      h("ul", { class: "list waits" }, state.answered.map(answeredItem))) : null,
+    h("p", { class: "note" }, "Answer a question, mark an action done or (pending your yes) allow a permission right here; you can still answer in the project's conversation or its files. Your answer is kept on the item word for word and the project's lead gets a message; the item leaves the list. A session that closed with need: casper shows on the question it waits for."),
   ];
 }
 
@@ -491,6 +771,14 @@ function states() {
     h("section", { class: "state-demo" }, h("h2", null, "Loading"), h("div", { class: "empty-card" }, "Reading the board…")),
     h("section", { class: "state-demo" }, h("h2", null, "Nothing waits on you"), h("div", { class: "empty-card" }, "Nothing waits on you. The count leaves the tab.")),
     h("section", { class: "state-demo" }, h("h2", null, "A project with no releases yet"), h("div", { class: "empty-card" }, "Envision has no releases yet. Its PO makes the first one.")),
+    h("section", { class: "state-demo" }, h("h2", null, "Waiting on a run"),
+      h("div", { class: "card", style: "gap:10px" },
+        runLine({ kind: "ci", source: "GitHub Actions", repo: "helix-navigator", workflow: "CI", job: "e2e (staging)", run: 4812, branch: "main", since: "2026-11-13T21:08", usual: 10 }, true),
+        runLine({ kind: "ci", source: "GitHub Actions", repo: "helix-navigator", workflow: "Deploy staging", job: "migrate", run: 4807, branch: "main", since: "2026-11-13T20:39", usual: 12 }, true),
+        runLine({ kind: "slot", laptop: "mbp-1", label: "e2e", holder: "Marvin", what: "qa/e2e/c11-rerun.sh against staging", since: "2026-11-13T20:57", usual: 25 }, true),
+        h("div", { class: "runw failed" }, h("i", { class: "ring", "aria-hidden": "true" }), h("span", null, h("b", null, "CI failed"), " after 14 min · ", h("a", { href: "#source", class: "run-link" }, "CI › unit #4809 ↗"), h("span", { class: "muted" }, " · Marvin has it; the line goes when he moves on"), " ", ex(true))),
+        h("div", { class: "runw queued" }, h("i", { class: "ring", "aria-hidden": "true" }), h("span", null, h("b", null, "Waiting for the run slot"), " · 2 min · ", h("span", { class: "run-link" }, "run slot on mbp-1: ", h("b", null, "land")), h("span", { class: "muted" }, " · Luigi holds it (e2e, 23 min)"), " ", ex(true)))),
+      h("p", { class: "note", style: "margin:0" }, "In order: CI running as usual; a run past half again its usual time (amber, \"running long\"); a local run holding the laptop's run slot; a run that failed (red, until the agent moves on); an agent queued behind another's run. A run that passes leaves the line at once.")),
     h("section", { class: "state-demo" }, h("h2", null, "A capture while the board is down"), h("div", { class: "toast", style: "position:static;margin:0" }, "Captured. It waits on this device and goes to Helix's triage list when the board is back.")),
   ];
 }
@@ -504,11 +792,13 @@ function render() {
   const v = views[route] ?? views.overview;
   $("view").className = route === "feature" || route === "roadmap" || route === "overview" ? "wide" : "";
   $("view").replaceChildren(...v().filter(Boolean));
+  for (const fn of later.splice(0)) fn();
   for (const el of document.querySelectorAll("#tabs a")) el.toggleAttribute("aria-current", el.getAttribute("href").slice(1).split("/")[0] === route);
   $("wait-count").textContent = waitCount() || "";
 }
 $("proto").replaceChildren("Prototype of release 1 · data: a sample of Helix's real board (", S.helix.source.repo, " at ", S.helix.source.commit, ", ", S.helix.counts.tasks, " tasks) and BobNet's own · ",
   h("a", { href: "#source" }, "source"), " · ", h("a", { href: "#states" }, "states"));
 $("capture-open").addEventListener("click", openCapture);
+let resized; addEventListener("resize", () => { clearTimeout(resized); resized = setTimeout(render, 150); });
 addEventListener("hashchange", () => { $("toast").hidden = true; render(); scrollTo(0, 0); });
 render();
