@@ -70,7 +70,13 @@ read is his own owner row.
 
 The file is `product/bobnet-grants.json` (BOB-14 #7), passed as `--grants`: Peach writes everything and
 asks Casper; Mario reads and asks Casper; Daisy, Toad and Luigi read only; nobody has `admin` (the owner
-changes rules); no `sessions` (the supervisor joins sessions itself). All on mbp-1.
+changes rules; Mario has asked Casper, none until he answers). `sessions` (it gates `close_session`, ADR 0001 §6)
+is held by Mario (lead) and Peach (session PO); the supervisor joins sessions itself, not by grant. All on mbp-1.
+
+**Ids keep their dotted form (Casper, 2026-11-15, to Mario).** An imported task keeps `BOB-14.3` as its id, not a
+flat number (Toad's import review, "If Casper picks dotted ids"). This supersedes "flat id is fine" in answer 1
+only for tasks: a container that becomes a feature is still a feature, and its id is its own. Toad amends ADR 0001 §2
+and `ItemRef`; Luigi changes the store and the import before BOB-9; Mario schedules both.
 
 **Helix's board (asked Picard, open):** (a) containers → features, same as BobNet; (b) R1 "Partner
 demo" came out closed because it is archived: right?; (c) assignee/priority/references: references go
