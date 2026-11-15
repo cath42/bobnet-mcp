@@ -130,9 +130,57 @@ grey band, but say so in the chart note, or skip runs whose `calls` differs from
 On Luigi's other decisions: session state (closed / running / waiting) derived on read, one detail
 row at a time, and the existing `duration()` are all dashboard matters. The protocol is unaffected.
 
+## Added: BOB-26 (6d4ef04, Luigi `w_53a2f2f6`), for rc.34 and the same broker deploy
+
+Mario asked in m_e908605b. Read: `supervisor.ts` `expireOrphans` and its two call sites, `store.ts`
+`resumedAfter` and `settleRequest`, `mcp.ts`, `app.js` `staleReport`/`pendingAll`. The land of my
+review (fec8029) ran the whole suite with 6d4ef04 in: supervisor 220 and the UI suite 66 pass.
+
+**Signed off. No blocker or major.** One minor and one nit, both can follow.
+
+- **Parts and versions.** It touches only the supervisor's local store and the dashboard. No protocol
+  change and no board change. `expired` was already a `RequestState` (`store.ts:49`), and the snapshot
+  lists only `open` and `orphaned` (`supervisor.ts:1869`), so expired requests just stop being sent.
+  An rc.34 supervisor works with today's broker, and the new dashboard with an rc.32 or rc.33
+  supervisor. Only rc.34 clears mbp-1's list: those orphans come from a supervisor that is reporting,
+  so the dashboard's stale rule doesn't hide them. Luigi says the same.
+- **The expiry rules are right.** No `session_id`: `answer()` would resume nothing. Role gone: spawn
+  would throw. A later worker with `resume_session` = this worker's session: answering would fork it.
+  This also covers a worker with two orphaned requests. Once one is answered and resumes the session,
+  the other expires within a minute instead of forking it. That's what we want. The 24 h TTL as a
+  supervisor constant is fine: it's local policy, not config Casper has to own. `settleRequest` only
+  moves `open`/`orphaned`, so the minute sweep and an answer racing it can't both settle one request.
+  The audit row records why.
+- **The stale rule.** `laptop_reports.at` is the broker's time of receipt (`broker.ts:445`), and the
+  supervisor reports every 60 s regardless (`REPORT_HEARTBEAT_MS`), so three missed reports is the
+  right signal. Hiding the requests on the client instead of sweeping them on the broker is also
+  right: the stale report is the only sign a supervisor is down, and an action sent to it would
+  reach nobody.
+
+**Minor 6: the stale rule uses the browser's clock against the broker's.** `staleReport` compares
+`Date.now()` in the browser with the broker's `at`. A phone or tablet whose clock is more than 3 min
+off would mark every laptop stale and offer no requests at all. The Laptops card used the same rule
+before, but there it only changed a badge; now it hides what Casper must answer. Fix: the dashboard
+keeps the offset from a broker time it already receives (the `dashboard` reply, or `at` on a report
+just received), or it judges staleness by how long ago this tab last received a report from that
+laptop. Dashboard only, no protocol change. If a broker `now` is needed, it's an additive field on
+the `dashboard` result.
+
+**Nit: nobody is told when the sweep expires a request.** At start, an orphan that can't resume
+expires before the restart notice, which now leaves it out. The worker is still named as failed, so
+that's fine. The 24 h expiry later on is silent apart from the audit. The lead was told about the
+request when it was orphaned, so this is acceptable. One line to the orchestrator ("expired: why")
+would close the loop cheaply. Leave it to Mario.
+
+For Daisy: Needs you now drops a stale laptop's requests without a word. Should the Overview say
+"<laptop> hasn't reported for N min" while it has unoffered requests? Today only the Laptops card
+on Sessions says it.
+
 ## For Mario
 
 - Finding 1 goes to Luigi before the deploy. With it landed, BOB-4 is deploy-ready: broker only, no
   migration, no client or supervisor release, and rc.33 can go live in either order. 2-5 can ride
   along or follow.
-- ADR 0001 §9 and §10 amended (this commit).
+- ADR 0001 §9 and §10 amended (fec8029).
+- BOB-26 (6d4ef04) is signed off for rc.34 and goes in the same broker deploy. Minor 6 (clock skew)
+  can follow.
