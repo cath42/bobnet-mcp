@@ -96,7 +96,10 @@ export const BOARD_TOOLS: BoardTool[] = [
     name: "board_capture",
     description:
       "Capture something to triage: a title and a sentence. Anyone may, into any project. Never waits: it is queued on this laptop and sent, " +
-      "and answers its id if the board is there, else that it is queued. casper_words: what Casper said, verbatim.",
+      "and answers its id if the board is there, else that it is queued. casper_words: what Casper said, verbatim. " +
+      "type bug: delivered behaviour that breaks an accepted criterion, found after Done; give bug_where (staging|production), found_in (the feature) if known, " +
+      "and blocks_use if it stops Casper using it (it then waits on him until slotted or closed). A review's blocker or major is not a bug: it is a task of the feature " +
+      "under review (close_session); other findings are backlog items of type task or chore.",
     shape: {
       project: projectArg,
       title: z.string().min(1).max(300),
@@ -122,7 +125,8 @@ export const BOARD_TOOLS: BoardTool[] = [
       `Change the board, checked against your rights per field. op is one of ${WRITES.join(", ")}; fields are that operation's: ` +
       "create {kind feature|task|backlog, type, title, parent?, description?, criteria?: [{text, section?}], …}; update {ref, set: {status?, title?, description?, notes?, labels?, deps?, parent?, …}, reason?}; " +
       "criteria {ref, change: {action add|edit|check|uncheck, n?, text?, evidence?, reason?}}; slot {ref, feature}; promote {ref}; archive {ref, reason}; restore {ref}; " +
-      "order {scope features|backlog, release?, refs}.",
+      "order {scope features|backlog, release?, refs}. A bug is Done once its fix has landed and its criteria (\"It no longer happens\") are checked, the landed commit as evidence; " +
+      "a bug closed without a fix is archived with a reason.",
     shape: { project: projectArg, op: z.enum(WRITES), fields },
     run: async (deps, a) => deps.op(checked({ ...(a["fields"] as Record<string, unknown>), op: a["op"], project: await project(deps, a) })),
   },
@@ -146,7 +150,7 @@ export const BOARD_TOOLS: BoardTool[] = [
   {
     name: "close_session",
     description:
-      "Close a session at its boundary (the lead or session PO). Applies moves as status writes, records findings (tasks of the feature), " +
+      "Close a session at its boundary (the lead or session PO). Applies moves as status writes, records findings (blockers and majors: tasks of the feature under review, never bugs), " +
       "stores the handoff file's text, and closes the feature's open state with its last session. need casper names waits_on (question refs). Tasks moved and tokens come from the board.",
     shape: {
       project: projectArg,

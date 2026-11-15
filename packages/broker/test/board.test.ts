@@ -1105,6 +1105,79 @@ describe("close_session (ADR 0001 §6)", () => {
   });
 });
 
+describe("bugs (BOB-10, bugs.md)", () => {
+  const NO_LONGER = { section: "ac", n: 1, text: "It no longer happens", state: "open", evidence: null };
+
+  it("captures a bug in one call: what happened, where, the feature it was found in, with its one criterion (bugs.md 1)", async () => {
+    const { f1 } = await helix();
+    const got = await ok(agent("Data"), {
+      op: "capture", project: "helix", capture_id: uuid(30), title: "Login fails on a phone", description: "Twice today, on production.", type: "bug", bug_where: "production", found_in: f1,
+    });
+    expect(got.dropped).toEqual([]);
+    const bug = await item(got.ref!);
+    expect(bug).toMatchObject({ kind: "backlog", type: "bug", status: "Draft", description: "Twice today, on production.", bug_where: "production", found_in: f1, blocks_use: false });
+    expect(bug.criteria).toMatchObject([NO_LONGER]);
+    // It waits in the triage list, marked as a bug (bugs.md 2).
+    expect((await ok(owner, { op: "list", project: "helix", of: "backlog", type: "bug" })).items!.map((i) => [i.ref, i.type, i.bug_where])).toEqual([[got.ref, "bug", "production"]]);
+    // A bug made with its own criteria keeps them as given.
+    const own = (await ok(owner, { op: "create", project: "helix", kind: "backlog", type: "bug", title: "Slow chart", criteria: [{ text: "Loads in 2 s" }] })).ref!;
+    expect((await item(own)).criteria.map((c) => c.text)).toEqual(["Loads in 2 s"]);
+  });
+
+  it("gives an item that becomes a bug the criterion only when it has none", async () => {
+    const { t1, t2 } = await helix();
+    await ok(owner, { op: "update", project: "helix", ref: t2, set: { type: "bug" } });
+    expect((await item(t2)).criteria).toMatchObject([NO_LONGER]);
+    expect((await item(t2)).history.at(-1)!.changes).toContainEqual({ field: "ac #1", old: null, new: "It no longer happens" });
+    await ok(owner, { op: "update", project: "helix", ref: t1, set: { type: "bug" } });
+    expect((await item(t1)).criteria.map((c) => c.text)).toEqual(["Drawn", "Shown"]);
+  });
+
+  it("closes a bug only once every criterion is checked with evidence; without a fix, by archiving it with a reason (bugs.md 4)", async () => {
+    const { f1, t1 } = await helix();
+    await helixRules();
+    const picard = agent("Picard");
+    const bug = (await ok(agent("Data"), { op: "capture", project: "helix", capture_id: uuid(31), title: "Crashes", type: "bug" })).ref!;
+    await ok(picard, { op: "slot", project: "helix", ref: bug, feature: f1 });
+    const done = { op: "update", project: "helix", ref: bug, set: { status: "Done" } } as const;
+    expect(await refused(picard, done)).toMatchObject({ code: "conflict", message: expect.stringMatching(/is a bug: it is Done once its fix has landed .*archive it with a reason$/) });
+    expect((await refused(picard, { op: "criteria", project: "helix", ref: bug, change: { action: "check", n: 1 } } as BoardOpInput)).code).toBe("invalid");
+    await ok(picard, { op: "criteria", project: "helix", ref: bug, change: { action: "check", n: 1, evidence: "Fixed in 0b8a185, landed on v2; no crash in 20 tries" } });
+    await ok(picard, done);
+    expect(await item(bug)).toMatchObject({ status: "Done", criteria: [{ state: "checked", evidence: "Fixed in 0b8a185, landed on v2; no crash in 20 tries" }] });
+    // Every criterion, not only the first.
+    await ok(owner, { op: "update", project: "helix", ref: t1, set: { type: "bug" } });
+    await ok(picard, { op: "criteria", project: "helix", ref: t1, change: { action: "check", n: 1, evidence: "seen" } });
+    expect((await refused(picard, { op: "update", project: "helix", ref: t1, set: { status: "Done" } })).code).toBe("conflict");
+    // Nor made Done in one write: with the type, or at birth.
+    const t3 = (await ok(owner, { op: "create", project: "helix", kind: "task", type: "task", title: "Plain", parent: f1 })).ref!;
+    expect((await refused(owner, { op: "update", project: "helix", ref: t3, set: { type: "bug", status: "Done" } })).code).toBe("conflict");
+    expect((await item(t3)).criteria).toEqual([]);
+    expect((await refused(owner, { op: "create", project: "helix", kind: "backlog", type: "bug", title: "Gone", status: "Done" })).code).toBe("conflict");
+    // Without a fix: archive, which takes a reason.
+    const wontfix = (await ok(agent("Data"), { op: "capture", project: "helix", capture_id: uuid(32), title: "Odd font", type: "bug" })).ref!;
+    expect((await refused(picard, { op: "archive", project: "helix", ref: wontfix } as BoardOpInput)).code).toBe("invalid");
+    await ok(picard, { op: "archive", project: "helix", ref: wontfix, reason: "Works as designed" });
+    expect(await item(wontfix)).toMatchObject({ archive_reason: "Works as designed" });
+  });
+
+  it("keeps a bug that blocks use on what waits on Casper until it is slotted or closed (bugs.md 3)", async () => {
+    const { f1 } = await helix();
+    await helixRules();
+    const picard = agent("Picard");
+    const cap = async (n: number) => (await ok(agent("Data"), { op: "capture", project: "helix", capture_id: uuid(n), title: `Blocks ${n}`, type: "bug", blocks_use: true, bug_where: "staging" })).ref!;
+    const [a, b, c] = [await cap(33), await cap(34), await cap(35)];
+    const bugs = async () => (await ok(owner, { op: "waits" })).waits.filter((w) => w.kind === "bug").map((w) => w.ref);
+    expect(await bugs()).toEqual([a, b, c]);
+    await ok(picard, { op: "slot", project: "helix", ref: a, feature: f1 });
+    await ok(picard, { op: "criteria", project: "helix", ref: b, change: { action: "check", n: 1, evidence: "landed abc1234" } });
+    await ok(picard, { op: "update", project: "helix", ref: b, set: { status: "Done" } });
+    expect(await bugs()).toEqual([c]);
+    await ok(picard, { op: "archive", project: "helix", ref: c, reason: "duplicate of " + a });
+    expect(await bugs()).toEqual([]);
+  });
+});
+
 describe("the views' reads: waits, overview, the roadmap's counts (ADR 0001 §7, design/BOB-1/spec.md)", () => {
   const waits = (caller: BoardCaller = owner, extra: Partial<{ project: string; since: string }> = {}) => ok(caller, { op: "waits", ...extra });
 

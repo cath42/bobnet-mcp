@@ -785,6 +785,7 @@ export class BoardStore {
     }
     if (op.kind !== "backlog" && op.parent_hint) throw new BoardError("invalid", "Only a backlog item has a parent_hint");
     if (op.type !== "bug" && (op.bug_where || op.blocks_use || op.found_in)) throw new BoardError("invalid", "Bug fields are for items of type bug");
+    if (op.type === "bug" && op.status === "Done") throw new BoardError("conflict", `A bug is born open: ${BUG_DONE}`);
     const scope = parent ? this.scope(parent) : null;
     const where = parent ? `${scope!.ref}'s tasks` : `${op.kind === "feature" ? "features" : "the backlog"}`;
     if (!capture) this.rules.require(tx.caller, p, "create", scope, where);
@@ -865,7 +866,9 @@ export class BoardStore {
       changes.push(["dep", null, this.refOf(dep.pk)]);
     }
     const n = { ac: 0, dod: 0 };
-    for (const c of op.criteria ?? []) {
+    const criteria = [...(op.criteria ?? [])];
+    if (op.type === "bug" && !criteria.some((c) => c.section === "ac")) criteria.unshift({ section: "ac", text: NO_LONGER, casper_gate: false });
+    for (const c of criteria) {
       const ord = ++n[c.section];
       this.sql.exec("INSERT INTO criteria (item, section, ord, text, casper_gate) VALUES (?, ?, ?, ?, ?)", pk, c.section, ord, c.text, c.casper_gate ? 1 : 0);
       changes.push([`${c.section} #${ord}`, null, c.text]);
@@ -913,12 +916,23 @@ export class BoardStore {
       field("blocks_use", 0, false, row.blocks_use === 1);
       if (row.found_in !== null) field("found_in", null, null, this.refOf(row.found_in));
     } else {
+      // A bug's one criterion, when it becomes one with none; an ac list it has is kept as it is.
+      if (row.type !== "bug" && this.acOf(row.pk).total === 0) {
+        this.sql.exec("INSERT INTO criteria (item, section, ord, text, casper_gate) VALUES (?, 'ac', 1, ?, 0)", row.pk, NO_LONGER);
+        changes.push(["ac #1", null, NO_LONGER]);
+      }
       if (set.bug_where !== undefined) field("bug_where", set.bug_where);
       if (set.blocks_use !== undefined) field("blocks_use", set.blocks_use ? 1 : 0, set.blocks_use, row.blocks_use === 1);
       if (set.found_in !== undefined) {
         const f = set.found_in === null ? null : this.feature(p, set.found_in);
         field("found_in", f?.pk ?? null, set.found_in, row.found_in === null ? null : this.refOf(row.found_in));
       }
+    }
+
+    // bugs.md 4: Done once the fix has landed, the commit as the evidence; closing without one is archive, with a reason.
+    if (type === "bug" && set.status === "Done" && row.status !== "Done") {
+      const ac = this.acOf(row.pk);
+      if (ac.total === 0 || ac.open > 0) throw new BoardError("conflict", `${ref} is a bug: ${BUG_DONE}`);
     }
 
     if (set.parent !== undefined) {
@@ -2038,6 +2052,12 @@ export class BoardStore {
   }
 
   /** An item of this project by any id it has had. A ref from another project is refused as such. */
+  /** An item's acceptance criteria: how many, and how many still open. */
+  private acOf(item: number): { total: number; open: number } {
+    const c = this.sql.exec<{ total: number; open: number | null }>("SELECT count(*) AS total, sum(state = 'open') AS open FROM criteria WHERE item = ? AND section = 'ac'", item).one();
+    return { total: c.total, open: c.open ?? 0 };
+  }
+
   private item(p: ProjectRow, ref: string): ItemRow {
     const row = this.sql.exec<ItemRow>("SELECT i.* FROM item_refs r JOIN items i ON i.pk = r.item WHERE r.project = ? AND r.ref = ?", p.pk, ref).toArray()[0];
     if (row) return row;
@@ -2251,6 +2271,10 @@ function oldestFirst(a: WaitRecord, b: WaitRecord): number {
 function openRelease(r: ReleaseRow): void {
   if (r.status === "closed") throw new BoardError("conflict", `${r.ref} is closed: a closed release takes no items`);
 }
+
+/** A bug's acceptance criterion (bugs.md 5), given when it is created or becomes a bug with none. */
+export const NO_LONGER = "It no longer happens";
+const BUG_DONE = `it is Done once its fix has landed and every criterion ("${NO_LONGER}") is checked, with the landed commit as the evidence; to close it without a fix, archive it with a reason`;
 
 function summary(r: SummaryRow): ItemSummary {
   return {

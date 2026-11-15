@@ -1,7 +1,7 @@
-// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8) at phone, tablet and desktop
+// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10) at phone, tablet and desktop
 // widths, against a fake broker in the page holding a copy of BobNet's board (2026-11-14; its backlog
 // 2026-11-15). The page is public/ as served.
-//   node test-ui/shots.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob7-*.png, bob8-*.png)
+//   node test-ui/shots.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob7-*.png, bob8-*.png, bob10-*.png)
 // Chromium: pnpm --filter @bobnet/broker exec playwright-core install chromium (once per machine).
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -136,6 +136,9 @@ const all = [
   ["bob8-gates-backlog-item", "triage/bobnet/edit", [(p) => p.selectOption('select[aria-label="Release of BOB-11"]', "R2")], false],
   ["bob8-capture", "triage/bobnet", capture, false],
   ["bob8-triage-after-capture", "triage/bobnet", [...capture, (p) => p.getByRole("button", { name: "Capture", exact: true }).click()], false, "table.triage .now"],
+  // BOB-10: a bug captured in one field (#1), then first in the triage list, marked (#2).
+  ["bob10-capture-bug", "triage/bobnet", capture, false],
+  ["bob10-triage-bugs", "triage/bobnet", [...capture, (p) => p.getByRole("button", { name: "Capture", exact: true }).click(), (p) => p.getByRole("button", { name: /^Bugs / }).click()], true, "table.triage .now"],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 

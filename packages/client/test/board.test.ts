@@ -258,6 +258,12 @@ describe("the board tools in the channel client", () => {
     const names = (await client.listTools()).tools.map((t) => t.name);
     expect(names).toEqual(expect.arrayContaining(["board_list", "board_get", "board_capture", "board_write", "board_ask", "close_session", "board_grants"]));
     expect(BOARD_TOOLS).toHaveLength(7);
+    // The kinds, as BOB-10 #5 defines them, are in the tools' descriptions.
+    const said = (n: string) => BOARD_TOOLS.find((t) => t.name === n)!.description;
+    expect(said("board_capture")).toMatch(/type bug: delivered behaviour that breaks an accepted criterion, found after Done/);
+    expect(said("board_capture")).toMatch(/A review's blocker or major is not a bug: it is a task of the feature under review/);
+    expect(said("board_write")).toMatch(/A bug is Done once its fix has landed/);
+    expect(said("close_session")).toMatch(/tasks of the feature under review, never bugs/);
   });
 
   it("sends operations as the session's own name, with no ctx, and defaults the project to its only one", async () => {
@@ -284,6 +290,10 @@ describe("the board tools in the channel client", () => {
     const { broker, call } = await session((op) => (op["op"] === "capture" ? { ok: { ref: "LAND-9", seq: 1, duplicate: false, dropped: [] } } : { ok: { ref: "x", seq: 2 } }));
     expect(JSON.parse((await call("board_capture", { project: "helix", title: "Slow", sentence: "The chart crawls." })).text)).toMatchObject({ ref: "LAND-9", queued: false });
     expect(broker.ops.at(-1)).toMatchObject({ op: { op: "capture", title: "Slow", description: "The chart crawls.", capture_id: expect.any(String) } });
+    // A bug in one call: what happened, where, the feature it was found in, and whether it blocks use (BOB-10 #1).
+    await call("board_capture", { project: "helix", title: "Login fails", sentence: "Twice today.", type: "bug", bug_where: "production", found_in: "LAND-1", blocks_use: true });
+    expect(broker.ops.at(-1)).toMatchObject({ op: { op: "capture", title: "Login fails", description: "Twice today.", type: "bug", bug_where: "production", found_in: "LAND-1", blocks_use: true } });
+    expect((await call("board_capture", { project: "helix", title: "x", bug_where: "prod" })).text).toMatch(/bad_arguments/);
 
     const handoff = join(dir(), "handoff.md");
     writeFileSync(handoff, "# Handoff\nAll done.");
