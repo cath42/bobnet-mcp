@@ -7,7 +7,7 @@ Broker not deployed since BOB-12; the deploy is Casper's.
 - Toad (w_39a3303d): done, d64d65b (architecture/reviews/2026-11-14-backlog-import-review.md).
 - Peach (w_bf298cca): done, 9e6c4d1 (product/requirements/migration.md "Import answers").
 - Luigi (w_92cfd796): done, f34a0f2 (§7 service side) and 6724d0e (#12 test); no migrations.
-- Toad (w_e78313f8): review of f34a0f2 and 6724d0e, and Luigi's two open questions.
+- Toad (w_e78313f8): signed off f34a0f2 and 6724d0e (architecture/reviews/2026-11-14-bob5-service-review.md, e975ccf).
 - Luigi (w_8ca50011): item 0 below.
 
 ## Next, in order
@@ -19,12 +19,17 @@ Broker not deployed since BOB-12; the deploy is Casper's.
    wait on Picard and may add more.
    Also the supervisor: a message injected mid-turn never gets inbox consumed_by, so it reaches
    the role's next worker again (poe's check 3 after rc.28; worker.ts taken()). Told poe.
+0b. Luigi, before BOB-14 or the dashboard answer UI: the bob5 review's R1 (an optional operation
+   key on writes, board migration 2 op_keys, the connection resends a keyed write), its finding 2,
+   R2 (record_answer messages the lead and the asker, not the recorder). Finding 3 (receivers
+   recognise BobNet@board) before dashboard answers go live. Finding 1 rides with item 0.
 1. BOB-2: close_release and undo; step 4 view data; CI (POST /v1/runs, the gh adapter).
 2. BOB-14, the pilot: broker deploy (Casper), `--post`, then `board: service` in bobnet's config.
 3. BOB-9, Helix, at Picard's date.
 
 ## Waiting on Casper
-- The broker deploy: migrations 6 and 7, the Board DO (wrangler migration v2, Board migration 1).
+- The broker deploy: migrations 6 and 7, the Board DO (wrangler migration v2, Board migration 1;
+  Board migration 2 once 0b lands).
 - Task ids on import: flat renumbering with the old id as an alias, or dotted ids kept. Mario
   leans dotted; Toad recommends dotted for imported ids, LAND-n for new ones, ItemRef widened
   additively (the review's "If Casper picks dotted ids" section). If dotted: Toad amends ADR 0001 §2 and ItemRef, Luigi changes store and import
