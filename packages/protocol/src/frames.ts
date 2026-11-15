@@ -299,6 +299,11 @@ export const RegisterFrame = z.object({
    * takes for the laptop and whom dashboard actions go to. Pinned until it is gone.
    */
   supervisor: z.literal(true).optional(),
+  /**
+   * The supervisor's projects on the board service (ADR 0001 §10), from its config: the only ones it may
+   * report CI runs for. Sent on every register, so a changed list replaces the last.
+   */
+  projects: z.array(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/)).max(100).optional(),
   /** Which client this is. Optional: clients before it still register. */
   client: ClientInfo.optional(),
 });

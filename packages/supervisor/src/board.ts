@@ -315,9 +315,9 @@ export interface BoardDeps {
   transcriptsDir?: string;
 }
 
-type Exec = (cmd: string, args: string[], cwd: string) => Promise<string>;
+export type Exec = (cmd: string, args: string[], cwd: string) => Promise<string>;
 
-const exec: Exec = (cmd, args, cwd) =>
+export const exec: Exec = (cmd, args, cwd) =>
   new Promise((resolve, reject) =>
     execFile(cmd, args, { cwd, encoding: "utf8", timeout: EXEC_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 }, (err, out) => (err ? reject(err) : resolve(out))),
   );

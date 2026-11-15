@@ -97,6 +97,9 @@ export interface CiCaller {
 }
 type Caller = BoardCaller | CiCaller;
 
+/** The source a supervisor's gh adapter reports as, whatever its message says (§10). */
+const GH_SOURCE = "github-actions";
+
 /** A CI run's statuses that are final: a later start changes nothing. */
 const CI_ENDED = new Set(["passed", "failed", "cancelled"]);
 
@@ -610,6 +613,7 @@ export class BoardStore {
     caller: BoardCaller,
     op: Exclude<BoardOp, Op<BoardReadName>>,
   ): { result: Written; changed: { project: string; seq: number; refs: string[] } | null; messages: BoardMessage[] } {
+    if (op.op === "ci_run") return this.ciRun(GH_SOURCE, ghRun(caller, op));
     const tx = new Tx(this.sql, caller);
     const result = this.apply(tx, op);
     if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null, messages: [] };
@@ -699,7 +703,7 @@ export class BoardStore {
       case "slot_run":
         return this.slotRun(tx, op);
       case "ci_run":
-        throw new BoardError("forbidden", "A CI run is reported by its CI system: POST /v1/runs with a CI token");
+        throw new BoardError("forbidden", "A CI run is reported by its CI system or a supervisor's gh adapter");
     }
   }
 
@@ -2208,6 +2212,19 @@ function ctxBlob(points: number[]): ArrayBuffer {
   const view = new DataView(buf);
   points.forEach((v, i) => view.setUint32(i * 4, v, true));
   return buf;
+}
+
+/**
+ * A supervisor's gh adapter's run (§10): over its pinned connection, for a project its config puts on
+ * the service, as registered. It has no worker, so no ctx; this is the only supervisor op without one.
+ */
+function ghRun(caller: BoardCaller, op: Op<"ci_run">): Op<"ci_run"> {
+  if (caller.kind !== "agent" || !caller.supervisor) throw new BoardError("forbidden", "A CI run is reported by its CI system (POST /v1/runs) or a supervisor's gh adapter");
+  if (op.project === undefined) throw new BoardError("invalid", "A supervisor's CI run names its project");
+  if (!(caller.serves ?? []).includes(op.project)) {
+    throw new BoardError("forbidden", `${caller.laptop}'s supervisor didn't register ${op.project} as a project it serves on the board, so it reports none of its CI runs`);
+  }
+  return op;
 }
 
 function oldestFirst(a: WaitRecord, b: WaitRecord): number {

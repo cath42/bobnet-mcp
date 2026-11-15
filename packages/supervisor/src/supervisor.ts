@@ -25,6 +25,7 @@ import type { PushFrame, RequestFrame } from "@bobnet/client/connection";
 import type { Logger } from "@bobnet/client/log";
 import type { OwnerCheck } from "./owner.ts";
 import { EFFORTS, type Effort, type ProjectConfig, type RoleConfig, type RunConfig, type SupervisorConfig } from "./config.ts";
+import { CI_POLL_MS, GhCiPoll, repoName } from "./ci-poll.ts";
 import { assignSessions, Boards, type DeclaredSession, sessionName, workerTasks } from "./board.ts";
 import { Inbox } from "@bobnet/client/inbox";
 import type { BoardToolDeps } from "@bobnet/client/board-tools";
@@ -177,6 +178,8 @@ export class Supervisor {
   private holdTimer: NodeJS.Timeout | null = null;
   private lastHold = "";
   private readonly boards: Boards | null;
+  private readonly ciPoll: GhCiPoll;
+  private ciTimer: NodeJS.Timeout | null = null;
 
   constructor(deps: {
     config: SupervisorConfig;
@@ -193,7 +196,10 @@ export class Supervisor {
     sandboxCheck?: () => Promise<string | null>;
     /** The capture queue's folder; defaults to ~/.local/state/bobnet/capture-queue. */
     captureDir?: string;
+    /** The gh adapter (ADR 0001 §10); defaults to one that runs git and gh. */
+    ciPoll?: GhCiPoll;
   }) {
+    this.ciPoll = deps.ciPoll ?? new GhCiPoll(deps.log);
     this.ownerCheck = deps.ownerCheck ?? null;
     this.sandboxCheck = deps.sandboxCheck ?? sandboxProblem;
     this.config = deps.config;
@@ -258,7 +264,14 @@ export class Supervisor {
       this.store.markOrphaned(r.id);
     }
 
-    const me = (await this.registerWithRetry({ name: this.config.name, ...(this.config.team ? { team: this.config.team } : {}), purpose: "BobNet supervisor: runs role agents headless on this laptop", supervisor: true })) as { address?: string } | undefined;
+    const me = (await this.registerWithRetry({
+      name: this.config.name,
+      ...(this.config.team ? { team: this.config.team } : {}),
+      purpose: "BobNet supervisor: runs role agents headless on this laptop",
+      supervisor: true,
+      // The projects it may report CI runs for (ADR 0001 §10): those its config puts on the service.
+      projects: this.serviceProjects().map((p) => p.key),
+    })) as { address?: string } | undefined;
     // The laptop as the broker knows it (from its token), not the hostname: workers' Remote Control names carry it.
     this.laptop = me?.address?.split("@")[1] ?? null;
     for (const role of this.roles()) {
@@ -295,6 +308,9 @@ export class Supervisor {
     const heartbeat = setInterval(() => this.report(true), REPORT_HEARTBEAT_MS);
     heartbeat.unref();
     this.boards?.start();
+    void this.pollCi();
+    this.ciTimer = setInterval(() => void this.pollCi(), CI_POLL_MS);
+    this.ciTimer.unref();
     this.stallTimer.unref();
     this.schedule();
     this.writeStatus();
@@ -302,6 +318,7 @@ export class Supervisor {
 
   async shutdown(): Promise<void> {
     this.boards?.stop();
+    if (this.ciTimer) clearInterval(this.ciTimer);
     if (this.stallTimer) clearInterval(this.stallTimer);
     if (this.holdTimer) clearInterval(this.holdTimer);
     if (this.reportTimer) clearTimeout(this.reportTimer);
@@ -1611,25 +1628,42 @@ export class Supervisor {
    * or one that doesn't parse. One the board can't take now waits, with all behind it.
    */
   private async flushBoardReports(): Promise<void> {
-    const names = new Set(this.roles().map((r) => r.name.toLowerCase()));
+    // The roles' reports, and the supervisor's own: the gh adapter's CI runs, which have no worker.
+    const names = new Set([...this.roles().map((r) => r.name.toLowerCase()), this.config.name.toLowerCase()]);
     for (const item of this.store.outbox("board_op")) {
-      let report: { ctx: BoardCtx; op: BoardOpInput } | null = null;
+      let report: { ctx: BoardCtx | null; op: BoardOpInput } | null = null;
       try {
-        report = JSON.parse(item.body) as { ctx: BoardCtx; op: BoardOpInput };
+        report = JSON.parse(item.body) as { ctx: BoardCtx | null; op: BoardOpInput };
         if (!names.has(item.to_name.toLowerCase())) throw Object.assign(new Error(`${item.to_name} is no longer a role here`), { code: "not_hosted" });
-        await this.broker.boardOp(item.to_name, report.op, report.ctx, 0);
+        await this.broker.boardOp(item.to_name, report.op, report.ctx ?? undefined, 0);
       } catch (err) {
         const code = (err as { code?: string }).code ?? (report ? undefined : "bad_row");
         const final = code !== undefined && (FINAL_BOARD_ERRORS.has(code) || code === "bad_row" || (code === "not_hosted" && !names.has(item.to_name.toLowerCase())));
         if (!final) return;
-        this.log.error("a board report can't be made; dropped", { op: report?.op.op, worker: report?.ctx.worker, code, err: (err as Error).message });
-        this.store.audit("supervisor", "board:refused", report?.ctx.worker ?? null, { op: report?.op.op ?? null, code, message: (err as Error).message });
+        this.log.error("a board report can't be made; dropped", { op: report?.op.op, worker: report?.ctx?.worker, code, err: (err as Error).message });
+        this.store.audit("supervisor", "board:refused", report?.ctx?.worker ?? null, { op: report?.op.op ?? null, code, message: (err as Error).message });
       }
       this.store.removeOutbox(item.seq);
     }
   }
 
   // ---------- The board service (ADR 0001) ----------
+
+  private serviceProjects(): ProjectConfig[] {
+    return [...this.config.projects.values()].filter((p) => p.board === "service");
+  }
+
+  /**
+   * The gh adapter (§10): the service projects' GitHub Actions runs, each change once, through the
+   * outbox as the supervisor's own reports. The broker takes them only for the projects it registered.
+   */
+  async pollCi(): Promise<void> {
+    const projects = this.serviceProjects();
+    if (projects.length === 0) return;
+    const ops = await this.ciPoll.poll(projects);
+    for (const op of ops) this.store.addOutbox(this.config.name, JSON.stringify({ ctx: null, op }), "board_op");
+    if (ops.length > 0) this.flushOutbox();
+  }
 
   /** What the supervisor says about a worker it speaks for (§4): from its row, as its spawn declared it. */
   private boardCtx(w: WorkerRow): BoardCtx {
@@ -2089,10 +2123,7 @@ const SESSION_LABEL = /^[A-Za-z0-9][\w.-]{0,19}$/;
 const storedTasks = (w: WorkerRow): string[] | null => (w.tasks === null ? null : (JSON.parse(w.tasks) as string[]));
 
 /** owner/name from a git remote's URL (https or ssh), or null. */
-export function repoName(url: string): string | null {
-  const m = /[/:]([^/:]+\/[^/]+?)(\.git)?\/?$/.exec(url.trim());
-  return m ? m[1]! : null;
-}
+export { repoName } from "./ci-poll.ts";
 
 /** At most `max` points of a run's context per call, evenly taken, keeping the last (§9). */
 export function downsample(points: number[], max: number): number[] {

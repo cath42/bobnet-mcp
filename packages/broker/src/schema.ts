@@ -97,6 +97,11 @@ const MIGRATIONS: readonly string[] = [
   -- The client each peer said it runs: JSON {package, version, protocol}; NULL for older clients.
   ALTER TABLE peers ADD COLUMN client TEXT;
   `,
+  `
+  -- The supervisor's projects on the board service, as it last registered them: JSON [key]; NULL for
+  -- older supervisors, which then report no CI runs (ADR 0001 §10).
+  ALTER TABLE laptop_supervisors ADD COLUMN projects TEXT;
+  `,
 ];
 
 export function migrate(sql: SqlStorage, migrations: readonly string[] = MIGRATIONS): void {

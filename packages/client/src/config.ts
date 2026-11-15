@@ -22,6 +22,8 @@ export interface Identity {
   expertise?: string[];
   /** This name is its laptop's supervisor (the supervisor's own name only). */
   supervisor?: true;
+  /** The supervisor's projects on the board service, the only ones it reports CI runs for (ADR 0001 §10). */
+  projects?: string[];
 }
 
 export interface ClientConfig {

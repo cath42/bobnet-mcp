@@ -86,7 +86,15 @@ export type BoardCtx = z.infer<typeof BoardCtx>;
  */
 export type BoardCaller =
   | { kind: "owner"; email: string }
-  | { kind: "agent"; name: string; laptop: string; supervisor: boolean; ctx: BoardCtx | null };
+  | {
+      kind: "agent";
+      name: string;
+      laptop: string;
+      supervisor: boolean;
+      ctx: BoardCtx | null;
+      /** The supervisor's projects on the service, as it registered them (§10); set only when `supervisor`. */
+      serves?: string[];
+    };
 
 const NewCriterion = z.object({
   text: z.string().trim().min(1).max(1000),
@@ -362,6 +370,8 @@ export const BoardOp = z.discriminatedUnion("op", [
   /**
    * A CI run from anywhere (§10), posted to /v1/runs with a CI token at its start and its end: upserted
    * by the token's source and `external_id`. `project` may be left out when `repo` is one project's.
+   * A supervisor's gh adapter sends it too, ctx-less, as source github-actions, for a project it serves:
+   * the one supervisor operation without a worker, and no precedent for another.
    */
   z.object({
     op: z.literal("ci_run"),
@@ -394,7 +404,7 @@ export type BoardOpName = BoardOp["op"];
 export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview";
 export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview"] satisfies BoardReadName[];
 /** The supervisor's own operations, which only its connection makes (§8). */
-export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_end", "push", "slot_run"];
+export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_end", "push", "slot_run", "ci_run"];
 
 // ---------- Records ----------
 

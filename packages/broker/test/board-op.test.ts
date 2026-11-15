@@ -157,4 +157,23 @@ describe("the board's messages (ADR 0001 §7)", () => {
     expect(await errorCode(o.request({ t: "board_op", op: { op: "answer_question", project: "helix", ref: "Q-1", words: "Yes" } }))).toBe("invalid");
     expect(await picard.never((f) => f.t === "deliver")).toBe(true);
   });
+
+  it("takes a supervisor's CI run only for a project it registered as on the service (ADR 0001 §10)", async () => {
+    const o = await owner();
+    await helix(o);
+    const run = { op: "ci_run" as const, project: "helix", external_id: "55-1", name: "CI", status: "running" as const };
+    const sup = await agent(1, "supervisor");
+    // An older supervisor registers no projects: it reports no CI runs.
+    await sup.request({ t: "register", name: "supervisor", supervisor: true });
+    await expect(sup.request({ t: "board_op", as: "supervisor", op: run })).rejects.toMatchObject({ code: "forbidden", message: expect.stringMatching(/didn't register helix/) });
+    // Registered again with helix: the list is replaced, and the run is the gh adapter's, with no worker.
+    await sup.request({ t: "register", name: "supervisor", supervisor: true, projects: ["helix"] });
+    await expect(sup.request({ t: "board_op", as: "supervisor", op: run })).resolves.toMatchObject({ ref: "github-actions 55-1", tied: null });
+    await expect(sup.request({ t: "board_op", as: "supervisor", op: { ...run, project: undefined } })).rejects.toMatchObject({ code: "invalid" });
+    // A peer on another connection is not the supervisor, whatever it registered.
+    const riker = await agent(1, "Riker");
+    await expect(riker.request({ t: "board_op", as: "Riker", op: run })).rejects.toMatchObject({ code: "forbidden" });
+    await sup.request({ t: "register", name: "supervisor", supervisor: true, projects: [] });
+    await expect(sup.request({ t: "board_op", as: "supervisor", op: { ...run, status: "passed" } })).rejects.toMatchObject({ code: "forbidden" });
+  });
 });

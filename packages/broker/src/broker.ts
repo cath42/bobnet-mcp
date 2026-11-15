@@ -257,7 +257,12 @@ export class Broker extends DurableObject<Env> {
       .one();
 
     if (frame.supervisor) {
-      this.sql.exec("INSERT INTO laptop_supervisors (laptop, name) VALUES (?, ?) ON CONFLICT (laptop) DO UPDATE SET name = excluded.name", laptop, frame.name);
+      this.sql.exec(
+        "INSERT INTO laptop_supervisors (laptop, name, projects) VALUES (?, ?, ?) ON CONFLICT (laptop) DO UPDATE SET name = excluded.name, projects = excluded.projects",
+        laptop,
+        frame.name,
+        JSON.stringify(frame.projects ?? []),
+      );
       this.sql.exec("UPDATE laptop_reports SET reporter = ? WHERE laptop = ?", frame.name, laptop);
       if (pinned !== frame.name) this.audit(conn, "supervisor", { laptop, name: frame.name, was: pinned ?? null });
     }
@@ -420,7 +425,9 @@ export class Broker extends DurableObject<Env> {
     const pinned = this.supervisorOf(peer.laptop);
     const sup = pinned === undefined ? undefined : this.peer(addressKey({ name: pinned, laptop: peer.laptop }));
     const supervisor = sup !== undefined && sup.conn_id === conn.connId;
-    return { kind: "agent", name: peer.name, laptop: peer.laptop, supervisor, ctx: supervisor ? (frame.ctx ?? null) : null };
+    if (!supervisor) return { kind: "agent", name: peer.name, laptop: peer.laptop, supervisor, ctx: null };
+    const serves = this.sql.exec<{ projects: string | null }>("SELECT projects FROM laptop_supervisors WHERE laptop = ?", peer.laptop).toArray()[0]?.projects;
+    return { kind: "agent", name: peer.name, laptop: peer.laptop, supervisor, ctx: frame.ctx ?? null, serves: serves ? (JSON.parse(serves) as string[]) : [] };
   }
 
   // ---------- Dashboard ----------
