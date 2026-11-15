@@ -141,6 +141,8 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   (supervisor.ts ~990, worker.ts ~445). Toad consult c_af36fbd6: new op run_remote, set-once, by
   (project, id), https only, no row created; ADR 0001 §9 line (Toad). Luigi w_d1122105 builds it (BOB-4 build remote).
   Rollout: broker deploy (Casper) first, then rc.35 + restart (poe).
+- Luigi w_d1122105: run_remote landed 8a2fba3 (session closed). Toad w_80368342 reviews it + ADR 0001 §9 line.
+  Then: broker deploy (asked Casper ~16:55Z), rc.35, poe restart, Peach re-checks BOB-4 AC 7.
 ## Release-1 close: what's left
 - rc.34 live (poe) -> outbox drains -> BOB-10 AC 5 (worker's close_session description), BOB-4 AC 5-7
   live data; close the open sessions (after the drain).
