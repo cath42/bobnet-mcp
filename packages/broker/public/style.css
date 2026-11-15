@@ -221,3 +221,60 @@ main.wide { max-width: 1320px; }
 /* Session kinds on the usage chart: a validated categorical set (build, design, review, retro). */
 :root { --k-build: #2a78d6; --k-design: #eb6834; --k-review: #1baf7a; --k-retro: #eda100; }
 @media (prefers-color-scheme: dark) { :root { --k-build: #3987e5; --k-design: #d95926; --k-review: #199e70; --k-retro: #c98500; } }
+
+/* ---------- The roadmap from the board, and Casper's gates (design/BOB-1, from its proto.css) ---------- */
+.ord { display: inline-block; min-width: 1.8em; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--muted); }
+.ord.unset { font-weight: 400; font-style: italic; }
+.id { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent); white-space: nowrap; margin-right: 6px; text-decoration: none; }
+.badge[data-state="open"] { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.badge[data-state="in review"] { color: var(--accent); border-style: dotted; }
+.badge[data-state="in progress"] { color: var(--accent); }
+.badge[data-state="closed"] { color: var(--muted); }
+.sub-note { font-size: 12px; color: var(--muted); font-style: italic; }
+.release { display: grid; gap: 8px; }
+.rel-h { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.rel-h .n { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted); min-width: 1.2em; }
+.rel-h b { font-size: 16px; }
+.rel-h .muted { font-size: 13px; }
+.rel-h .gate { margin-left: auto; display: flex; gap: 6px; }
+.rel-h .gate button { min-height: 32px; padding: 2px 10px; }
+.counts-line { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); }
+.crit { display: grid; gap: 3px; min-width: 120px; }
+.crit .m { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+tr.done td { color: var(--muted); }
+tr.done td .title { font-weight: 400; }
+tr.is-open td:first-child { box-shadow: inset 3px 0 0 var(--ok); }
+tr.fold td { text-align: center; padding: 4px; }
+tr.fold button { min-height: 28px; font-size: 13px; border: 0; color: var(--accent); background: transparent; }
+td .now { font-size: 12px; color: var(--ok); }
+td .now.idle { color: var(--muted); }
+td select.move { font: inherit; font-size: 13px; padding: 3px 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); max-width: 100%; }
+.gates-btn { margin-left: auto; }
+.banner.editing { border-left-color: var(--accent); }
+.banner.down { border-left-color: var(--bad); }
+.empty-card { background: var(--surface); border: 1px dashed var(--line); border-radius: var(--radius); padding: 18px 14px; color: var(--muted); font-size: 14px; text-align: center; }
+.toast button.undo { margin-left: 10px; min-height: 28px; padding: 2px 10px; }
+@media (max-width: 760px) {
+  table.stack tr.is-open { box-shadow: inset 3px 0 0 var(--ok); }
+  table.stack tr.is-open td:first-child { box-shadow: none; }
+  table.stack tr.done { grid-template-columns: auto 1fr; padding: 6px 12px; }
+  table.stack tr.done td:not(.keep) { display: none; }
+  table.stack tr.fold { display: block; }
+  .rel-h .gate { margin-left: 0; width: 100%; }
+  .rel-h .gate button { flex: 1; min-height: 40px; }
+}
+
+/* The close-release confirmation: a sheet on a phone, a dialog above that (notes 12) */
+dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text); padding: 16px; width: min(520px, calc(100vw - 32px)); }
+dialog::backdrop { background: color-mix(in srgb, var(--text) 30%, transparent); }
+dialog form { display: grid; gap: 12px; }
+dialog h2 { margin: 0; }
+dialog p { margin: 0; font-size: 14px; }
+dialog .foot { display: flex; gap: 8px; justify-content: flex-end; }
+@media (max-width: 600px) {
+  dialog { margin: auto 0 0; width: 100vw; max-width: 100vw; border-radius: var(--radius) var(--radius) 0 0; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+  dialog .foot button { flex: 1; min-height: 44px; }
+}
+.dest { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.dest li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 14px; padding: 6px 0; border-top: 1px solid var(--line); }
+.dest select { font: inherit; font-size: 14px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); max-width: 50vw; }

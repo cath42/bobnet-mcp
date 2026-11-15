@@ -57,9 +57,10 @@ function s(tag, attrs, ...children) {
 const sentActions = new Map();
 let toastTimer = null;
 
-function toast(text, ok = true) {
+/** A toast; with `undo`, an Undo button that takes the change back. */
+function toast(text, ok = true, undo = null) {
   const el = $("toast");
-  el.textContent = text;
+  el.replaceChildren(text, undo ? button("Undo", "undo", () => { el.hidden = true; undo(); }) : "");
   el.dataset.ok = String(ok);
   el.hidden = false;
   clearTimeout(toastTimer);
@@ -392,7 +393,8 @@ function details(key, attrs, ...children) {
   return d;
 }
 
-function viewRoadmap() {
+/** A project still on its supervisor's Backlog.md board: features in columns by where they stand. */
+function viewBacklogRoadmap() {
   const b = current();
   if (!b?.backlog) return [empty(b)];
   const m = backlogModel(b);
@@ -438,6 +440,247 @@ function viewRoadmap() {
     h("section", null, details("drafts", null, h("summary", null, "Drafts, not yet placed ", h("span", { class: "count" }, b.backlog.drafts.length)),
       h("ul", { class: "feed" }, [...b.backlog.drafts].sort((a, c) => (c.updated ?? "").localeCompare(a.updated ?? "")).map((d) => h("li", null, h("time", null, (d.updated ?? "").slice(5, 10)), h("span", null, h("b", null, d.id), " ", d.title)))))),
   ];
+}
+
+// ---------- The board service: the roadmap and Casper's gates ----------
+
+/**
+ * Projects whose board is in the service (ADR 0001) read it over the owner's socket; the rest still show
+ * their supervisor's Backlog.md board. Casper's gates (board-writes 4, 5; design/BOB-1/spec.md) are his
+ * own writes: each saves at once, with Undo in its toast.
+ */
+const svc = { projects: null, roadmaps: new Map(), loading: new Set(), again: new Set() };
+/** Board operations sent and not yet answered, by rid. */
+const sentOps = new Map();
+
+function boardOp(op, write = false) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Not connected; try again in a moment."));
+  const id = String(++rid);
+  // A write carries a key, made once per write, so the board takes it once (ADR 0001 §12).
+  ws.send(JSON.stringify({ t: "board_op", rid: id, op, ...(write ? { key: crypto.randomUUID() } : {}) }));
+  return new Promise((resolve, reject) => sentOps.set(id, { resolve, reject }));
+}
+
+async function listAll(op, field) {
+  const out = [];
+  let cursor = null;
+  do {
+    const r = await boardOp(cursor ? { ...op, cursor } : op);
+    out.push(...(r[field] ?? []));
+    cursor = r.cursor;
+  } while (cursor);
+  return out;
+}
+
+async function loadProjects() {
+  try {
+    svc.projects = (await boardOp({ op: "projects" })).projects;
+  } catch {
+    svc.projects = [];
+  }
+  for (const key of svc.roadmaps.keys()) loadRoadmap(key);
+  if (viewName() === "roadmap") scheduleRender();
+}
+
+async function loadRoadmap(key) {
+  // A change while it reads: read again once it is done.
+  if (svc.loading.has(key)) return void svc.again.add(key);
+  svc.loading.add(key);
+  try {
+    const [releases, features] = await Promise.all([listAll({ op: "list", project: key, of: "releases" }, "releases"), listAll({ op: "list", project: key, of: "features" }, "items")]);
+    svc.roadmaps.set(key, { releases, features, error: null });
+  } catch (err) {
+    svc.roadmaps.set(key, { ...(svc.roadmaps.get(key) ?? { releases: [], features: [] }), error: err.message });
+  } finally {
+    svc.loading.delete(key);
+  }
+  if (viewName() === "roadmap") scheduleRender();
+  if (svc.again.delete(key)) await loadRoadmap(key);
+}
+
+/** `#roadmap/<project>[/edit]`, or the project picked above, when its board is in the service; null for a Backlog.md one. */
+function roadmapRoute() {
+  const [, key, mode] = location.hash.slice(1).split("/");
+  const keys = (svc.projects ?? []).map((p) => p.key);
+  const edit = mode === "edit";
+  if (keys.includes(key)) return { key, edit };
+  if (keys.includes(state.project)) return { key: state.project, edit };
+  if (current()?.backlog || !keys.length) return null;
+  return { key: keys[0], edit };
+}
+
+function viewRoadmap() {
+  const route = roadmapRoute();
+  return route ? viewBoardRoadmap(route.key, route.edit) : viewBacklogRoadmap();
+}
+
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const badge = (st, text = st) => h("span", { class: "badge", dataset: { state: st } }, text);
+const meterOf = (done, total, cls = "ok") => h("div", { class: "meter", role: "img", "aria-label": `${done} of ${total}` }, h("i", { class: cls, style: `width:${total ? (done / total) * 100 : 0}%` }));
+/** "1–19, 21–22" */
+function ranges(ns) {
+  const out = [];
+  let a = null, b = null;
+  for (const n of ns) {
+    if (a !== null && n === b + 1) b = n;
+    else { if (a !== null) out.push(a === b ? `${a}` : `${a}–${b}`); a = b = n; }
+  }
+  if (a !== null) out.push(a === b ? `${a}` : `${a}–${b}`);
+  return out.join(", ");
+}
+/** open: a session is on it (the board's open feature) and it isn't Done (notes 15). */
+const featureState = (f) => (f.status === "Done" ? "done" : f.open_since ? "open" : f.status.toLowerCase());
+const poOf = (p) => (p?.po ? shortName(p.po) : "the project's PO");
+
+function viewBoardRoadmap(key, edit) {
+  const p = svc.projects.find((x) => x.key === key);
+  const data = svc.roadmaps.get(key);
+  if (!data && !svc.loading.has(key)) loadRoadmap(key);
+  const to = (k, e) => `#roadmap/${k}${e ? "/edit" : ""}`;
+  const rels = data?.releases ?? [];
+  const bar = h("div", { class: "bar-row" },
+    svc.projects.length > 1 ? h("span", { class: "seg" }, svc.projects.map((q) => h("button", { type: "button", "aria-pressed": String(q.key === key), onclick: () => (location.hash = to(q.key, edit)) }, q.name))) : h("b", null, p.name),
+    data ? h("span", { class: "muted" }, `${plural(rels.length, "release")} · ${plural(data.features.length, "feature")}`) : null,
+    rels.length || data?.features.length ? h("button", { type: "button", class: `gates-btn${edit ? " primary" : ""}`, onclick: () => (location.hash = to(key, !edit)) }, edit ? "Done" : "Edit your gates") : null);
+  if (!data) return [bar, h("div", { class: "empty-card" }, "Reading the board…")];
+  const out = [bar];
+  if (data.error) out.push(h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, data.error)));
+  if (edit) {
+    out.push(h("div", { class: "banner editing" }, h("b", null, "Your gates"),
+      h("span", null, `Move a feature into or out of a release, change the order of releases, close a release. Changes save as you make them, each with Undo, and go in the board's history as yours. Anything else is a request to ${poOf(p)}.`)));
+  }
+  if (!rels.length) out.push(h("div", { class: "empty-card" }, `${p.name} has no releases yet. Its PO makes the first one.`));
+  rels.forEach((r, i) => out.push(releaseSection(key, data, r, i, edit)));
+  const none = data.features.filter((f) => f.release === null);
+  if (none.length) out.push(releaseSection(key, data, null, null, edit));
+  out.push(h("p", { class: "note" }, `Order inside a release is ${poOf(p)}'s; the order of releases is yours. A number in italics: the board has no order for it, so it follows the ordered ones by id. Criteria: acceptance criteria ticked, the feature's own and its tasks'.`));
+  return out;
+}
+
+/** One release and its features in their order; `r` null is "Not in a release". */
+function releaseSection(key, data, r, i, edit) {
+  const fs = data.features.filter((f) => f.release === (r?.ref ?? null));
+  const done = fs.filter((f) => f.status === "Done");
+  const closed = r?.status === "closed";
+  // A closed release stays on the roadmap, folded (notes 21); more than three done features fold into one row (notes 10).
+  const shut = closed && !state.open.has(`rel:${key}:${r.ref}`);
+  const folded = !closed && done.length > 3 && !state.open.has(`done:${key}:${r?.ref ?? "-"}`);
+  const cols = edit ? 5 : 4;
+  const rows = [];
+  if (folded) {
+    rows.push(h("tr", { class: "fold" }, h("td", { colspan: cols, class: "full" },
+      button(`${done.length} done (${ranges(fs.flatMap((f, j) => (f.status === "Done" ? [j + 1] : [])))}): show them`, "", () => { state.open.add(`done:${key}:${r?.ref ?? "-"}`); render(); }))));
+  }
+  fs.forEach((f, j) => { if (!(folded && f.status === "Done")) rows.push(featureRow(key, data, r, f, j + 1, edit)); });
+  const relState = !r ? null : closed ? "closed" : fs.length && done.length === fs.length ? "all done" : r.status === "open" ? "open" : null;
+  const rels = data.releases;
+  const b = r?.backlog;
+  return h("section", { class: "release", id: r ? `rel-${r.ref}` : "rel-none" },
+    h("div", { class: "rel-h" },
+      r ? h("span", { class: "n" }, i + 1) : null,
+      h("b", null, r ? r.title : "Not in a release"),
+      relState ? badge(relState === "all done" ? "done" : relState, relState) : null,
+      h("span", { class: "muted" }, r ? `${r.features.done} of ${plural(r.features.total, "feature")} done${closed && r.closed_at ? ` · closed ${r.closed_at.slice(0, 10)}` : ""}` : plural(fs.length, "feature")),
+      edit && r ? h("span", { class: "gate" },
+        h("button", { type: "button", disabled: i === 0 || null, "aria-label": `Move ${r.title} earlier`, onclick: () => moveRelease(key, rels, i, -1) }, "↑ Earlier"),
+        h("button", { type: "button", disabled: i === rels.length - 1 || null, "aria-label": `Move ${r.title} later`, onclick: () => moveRelease(key, rels, i, 1) }, "↓ Later"),
+        closed ? null : button("Close release", "danger", () => closeRelease(key, data, r))) : null),
+    b ? h("div", { class: "counts-line" }, h("span", null, plural(b.items, "backlog item")), h("span", null, plural(b.bugs, "open bug")), b.oldest ? h("span", null, `oldest ${duration(Date.now() - Date.parse(b.oldest)).split(" ")[0]}`) : null) : null,
+    shut
+      ? h("div", { class: "table-wrap" }, h("table", { class: "stack" }, h("tbody", null, h("tr", { class: "fold" }, h("td", { colspan: cols, class: "full" },
+          button(fs.length ? `Closed, folded: ${plural(fs.length, "feature")}. Show them` : "Closed, with no features", "", () => { state.open.add(`rel:${key}:${r.ref}`); render(); }))))))
+      : fs.length
+        ? h("div", { class: "table-wrap" }, h("table", { class: "stack" },
+            h("thead", null, h("tr", null, h("th", null, "# Feature"), h("th", null, "State"), h("th", null, "Criteria"), h("th", null, "Tasks"), edit ? h("th", null, "Release") : null)),
+            h("tbody", null, rows)))
+        : h("div", { class: "empty-card" }, "No features in this release yet."));
+}
+
+function featureRow(key, data, r, f, n, edit) {
+  const st = featureState(f);
+  const on = running().filter((w) => w.project === key && (w.session ?? "").split(" ")[0] === f.ref);
+  const unticked = f.status === "Done" && f.progress.total && f.progress.checked < f.progress.total;
+  const { checked, total } = f.progress;
+  // A closed release drops out of the move selects (notes 21), except as where a feature in it is now.
+  const options = [...data.releases.filter((x) => x.status !== "closed" || x.ref === r?.ref).map((x) => [x.ref, x.title]), ["", "No release"]];
+  return h("tr", { class: `${st === "done" ? "done" : ""}${st === "open" ? " is-open" : ""}` },
+    h("td", { class: "wide keep", "data-label": "" },
+      h("span", { class: `ord${f.ord === null ? " unset" : ""}`, title: f.ord === null ? "No order on the board: after the ordered ones, by id" : `Order ${n}` }, r ? n : "·"),
+      h("span", { class: "id" }, f.ref), h("span", { class: "title" }, f.title),
+      on.length ? h("div", { class: "now" }, `● ${on.map((w) => w.name).join(", ")} on it now`) : st === "open" ? h("div", { class: "now idle" }, "open · nobody on it now") : null),
+    h("td", { "data-label": "State" }, badge(st), unticked ? h("div", { class: "sub-note" }, "Done, criteria not ticked") : null),
+    h("td", { "data-label": "Criteria" }, total ? h("div", { class: "crit" }, meterOf(checked, total, st === "done" ? "idle" : "ok"), h("span", { class: "m" }, `${checked} of ${total}`)) : h("span", { class: "muted" }, "none yet")),
+    h("td", { "data-label": "Tasks" }, f.tasks?.total ? `${f.tasks.done} of ${f.tasks.total} done` : h("span", { class: "muted" }, "none yet")),
+    edit ? h("td", { "data-label": "Release" }, h("select", { class: "move", "aria-label": `Release of ${f.ref}`, onchange: (e) => moveFeature(key, data, f, e.target.value || null, e.target) },
+      options.map(([v, label]) => h("option", { value: v, selected: v === (r?.ref ?? "") || null }, label)))) : null);
+}
+
+// ---------- Casper's gates: each saves at once, Undo in the toast ----------
+
+/** Sends a gate, then refreshes the project; a refusal says why, in red. */
+async function gate(key, op, said, undoOp) {
+  try {
+    const res = await boardOp(op, true);
+    toast(said, true, () => undoGate(key, typeof undoOp === "function" ? undoOp(res) : undoOp));
+  } catch (err) {
+    toast(err.message, false);
+  }
+  await loadRoadmap(key);
+}
+
+async function undoGate(key, op) {
+  try {
+    await boardOp(op, true);
+    toast("Undone.");
+  } catch (err) {
+    toast(err.message, false);
+  }
+  await loadRoadmap(key);
+}
+
+function moveFeature(key, data, f, to, select) {
+  if (select) select.disabled = true;
+  const dest = data.releases.find((x) => x.ref === to);
+  const po = poOf(svc.projects.find((x) => x.key === key));
+  // A moved feature goes last in its new release; the PO orders it (notes 19).
+  gate(key, { op: "set_release", project: key, ref: f.ref, release: to }, `Moved ${f.ref} to ${dest ? dest.title : "no release"}, last in its order (${po} orders it). Recorded as yours.`,
+    (res) => ({ op: "undo", project: key, seq: res.seq }));
+}
+
+/** Its Undo is the order before, sent again: an order of releases isn't the board's `undo`. */
+function moveRelease(key, rels, i, d) {
+  const before = rels.map((x) => x.ref);
+  const after = [...before];
+  const j = i + d;
+  [after[i], after[j]] = [after[j], after[i]];
+  gate(key, { op: "order_releases", project: key, refs: after }, `${rels[i].title} is now release ${j + 1}.`, { op: "order_releases", project: key, refs: before });
+}
+
+/** Closing names each feature not Done and where it goes (board-writes 5): by default the next open release (notes 20). */
+function closeRelease(key, data, r) {
+  const open = data.features.filter((f) => f.release === r.ref && f.status !== "Done");
+  const others = data.releases.filter((x) => x.ref !== r.ref && x.status !== "closed");
+  const i = data.releases.indexOf(r);
+  const next = data.releases.slice(i + 1).find((x) => x.status !== "closed") ?? null;
+  const dlg = $("confirm");
+  const finish = () => {
+    const moves = open.map((f) => ({ feature: f.ref, to: dlg.querySelector(`select[data-ref="${f.ref}"]`).value || null }));
+    dlg.close();
+    gate(key, { op: "close_release", project: key, ref: r.ref, moves }, `Closed ${r.title}${open.length ? `; ${plural(open.length, "open feature")} moved` : ""}.`, (res) => ({ op: "undo", project: key, seq: res.seq }));
+  };
+  dlg.replaceChildren(h("form", { method: "dialog", onsubmit: (e) => { e.preventDefault(); finish(); } },
+    h("h2", { id: "confirm-h" }, `Close ${r.title}?`),
+    open.length
+      ? [h("p", null, `${plural(open.length, "feature")} in it ${open.length === 1 ? "isn't" : "aren't"} done. Each goes where you pick:`),
+         h("ul", { class: "dest" }, open.map((f) => h("li", null,
+           h("span", null, h("span", { class: "id" }, f.ref), f.title.length > 60 ? `${f.title.slice(0, 60)}…` : f.title, " ", badge(featureState(f))),
+           h("select", { "data-ref": f.ref, "aria-label": `Where ${f.ref} goes` },
+             others.map((x) => h("option", { value: x.ref, selected: x === next || null }, `To ${x.title}`)),
+             h("option", { value: "", selected: next === null || null }, "Out of any release")))))]
+      : h("p", null, `${r.features.total ? "Every feature in it is done." : "It has no features."} Closing it records that ${r.title} is finished; it stays on the roadmap, folded, and takes no features.`),
+    h("div", { class: "foot" }, button("Cancel", "", () => dlg.close()), h("button", { type: "submit", class: "danger" }, `Close ${r.ref}`))));
+  if (typeof dlg.showModal === "function") dlg.showModal();
+  else dlg.setAttribute("open", "");
 }
 
 // ---------- Rendering: usage ----------
@@ -717,16 +960,17 @@ function viewSessions() {
 // ---------- Views ----------
 
 const VIEWS = { now: viewNow, feature: viewFeature, roadmap: viewRoadmap, usage: viewUsage, sessions: viewSessions };
-const viewName = () => (VIEWS[location.hash.slice(1)] ? location.hash.slice(1) : "now");
+const viewName = () => (VIEWS[location.hash.slice(1).split("/")[0]] ? location.hash.slice(1).split("/")[0] : "now");
 
 function render() {
   const v = viewName();
-  for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href") === `#${v}`);
+  for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${v}`);
   $("now-count").textContent = running().length ? String(running().length) : "";
-  const all = projects();
+  const keys = [...new Set([...projects().map((e) => e.board.project), ...(svc.projects ?? []).map((p) => p.key)])];
+  const shown = v === "roadmap" ? (roadmapRoute()?.key ?? current()?.project) : current()?.project;
   const pick = $("project");
-  pick.hidden = all.length < 2;
-  pick.replaceChildren(...all.map((e) => h("option", { value: e.board.project, selected: e.board.project === current()?.project || null }, e.board.project)));
+  pick.hidden = keys.length < 2;
+  pick.replaceChildren(...keys.map((k) => h("option", { value: k, selected: k === shown || null }, k)));
   $("view").classList.toggle("wide", v === "feature" || v === "roadmap");
   $("view").replaceChildren(...VIEWS[v]().filter(Boolean));
 }
@@ -745,6 +989,7 @@ $("project").addEventListener("change", (e) => {
   state.project = e.target.value;
   state.inc = null;
   state.release = null;
+  if (viewName() === "roadmap" && location.hash.includes("/")) location.hash = "roadmap";
   render();
 });
 window.addEventListener("hashchange", () => {
@@ -789,8 +1034,14 @@ function connect() {
       case "welcome":
         backoff = 1000;
         dashboardRid = request("dashboard");
+        loadProjects();
         break;
       case "error":
+        if (sentOps.has(f.rid)) {
+          sentOps.get(f.rid).reject(new Error(f.message));
+          sentOps.delete(f.rid);
+          break;
+        }
         if (sentActions.has(f.rid)) {
           const b = sentActions.get(f.rid);
           sentActions.delete(f.rid);
@@ -802,6 +1053,11 @@ function connect() {
         toast(f.message, f.ok);
         break;
       case "ok":
+        if (sentOps.has(f.rid)) {
+          sentOps.get(f.rid).resolve(f.result);
+          sentOps.delete(f.rid);
+          break;
+        }
         if (sentActions.has(f.rid)) {
           sentActions.delete(f.rid);
           toast("Sent; waiting for the supervisor…");
@@ -834,6 +1090,10 @@ function connect() {
         state.boards.set(`${f.laptop}|${f.board.project}`, { laptop: f.laptop, at: f.at, board: f.board });
         scheduleRender();
         break;
+      case "board_changed":
+        if (!svc.projects?.some((p) => p.key === f.project)) loadProjects();
+        else if (svc.roadmaps.has(f.project)) loadRoadmap(f.project);
+        break;
       case "update":
         state.updates = [f.item, ...state.updates].slice(0, UPDATES_MAX);
         if (viewName() === "sessions") scheduleRender();
@@ -846,6 +1106,8 @@ function connect() {
   });
   ws.addEventListener("close", () => {
     setConn("down");
+    for (const op of sentOps.values()) op.reject(new Error("The connection dropped; try again in a moment."));
+    sentOps.clear();
     setTimeout(connect, backoff);
     backoff = Math.min(backoff * 2, 30_000);
   });

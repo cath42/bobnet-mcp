@@ -414,3 +414,189 @@ describe("live frames", () => {
     expect(view().querySelectorAll(".col")[0]!.textContent).toContain("Switch to a company");
   });
 });
+
+describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
+  const answered = new Set<unknown>();
+  /** The board operations the page sent and the test hasn't answered, oldest first. */
+  const pending = (name?: string) =>
+    FakeSocket.last.sent.filter((f) => f["t"] === "board_op" && !answered.has(f["rid"]) && (!name || (f["op"] as { op: string }).op === name)) as Array<{ rid: string; key?: string; op: Record<string, unknown> }>;
+  const reply = (f: { rid: string }, result: unknown) => {
+    answered.add(f.rid);
+    FakeSocket.last.frame({ t: "ok", rid: f.rid, result });
+  };
+  const refuse = (f: { rid: string }, message: string) => {
+    answered.add(f.rid);
+    FakeSocket.last.frame({ t: "error", rid: f.rid, code: "conflict", message });
+  };
+
+  const rel = (ref: string, title: string, status: string, done: number, total: number, over: Record<string, unknown> = {}) => ({
+    ref, title, goal: null, status, ord: Number(ref.slice(1)), spec_url: null, closed_at: status === "closed" ? "2026-11-10T10:00:00.000Z" : null, closed_by: null,
+    features: { done, total }, backlog: { items: 2, bugs: 1, oldest: iso(60 * 24 * 3) }, ...over,
+  });
+  const feat = (ref: string, release: string | null, status: string, over: Record<string, unknown> = {}) => ({
+    ref, kind: "feature", type: "increment", status, title: `${ref} title`, parent: null, release, ord: 1000, labels: [], progress: { checked: 0, total: 0 },
+    tasks: { done: 0, total: 0 }, open_since: null, archived_at: null, ...over,
+  });
+  const releases = [rel("R1", "R1 Central backlog view", "open", 5, 6), rel("R2", "R2 Start a session", "planned", 0, 1), rel("R3", "R3 Old", "closed", 1, 1)];
+  const features = [
+    ...["BOB-1", "BOB-2", "BOB-3", "BOB-4", "BOB-5"].map((r) => feat(r, "R1", "Done", { progress: { checked: 2, total: 2 } })),
+    feat("BOB-7", "R1", "Ready", { title: "Who may write what", open_since: iso(30), progress: { checked: 3, total: 10 } }),
+    feat("BOB-8", "R2", "Ready"),
+    feat("BOB-6", "R3", "Done"),
+    feat("BOB-20", null, "Draft", { ord: null }),
+  ];
+  /** Answers every list the page is waiting on with the board above. */
+  const lists = async (rs = releases, fs = features) => {
+    for (const f of pending("list")) reply(f, f.op["of"] === "releases" ? { releases: rs, total: rs.length, cursor: null } : { items: fs, total: fs.length, cursor: null });
+    await settle();
+  };
+  const toastEl = () => $("toast");
+
+  it("reads the service's projects on connect, and shows a project still on Backlog.md as before", async () => {
+    const [projects] = pending("projects");
+    expect(projects).toBeDefined();
+    reply(projects!, { projects: [{ key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] }] });
+    await go("#roadmap");
+    expect(view().querySelector(".col-h")).not.toBeNull();
+    expect([...$("project").querySelectorAll("option")].map((o) => o.textContent)).toEqual(["helix", "bobnet"]);
+  });
+
+  it("numbers releases and features in their order, folds done ones and a closed release, and puts features in no release last", async () => {
+    await go("#roadmap/bobnet");
+    expect(view().textContent).toContain("Reading the board…");
+    await lists();
+    const sections = [...view().querySelectorAll("section.release")];
+    expect(sections.map((s) => s.querySelector(".rel-h b")!.textContent)).toEqual(["R1 Central backlog view", "R2 Start a session", "R3 Old", "Not in a release"]);
+    expect(sections.map((s) => s.querySelector(".rel-h .n")?.textContent ?? null)).toEqual(["1", "2", "3", null]);
+    const r1 = sections[0]!;
+    expect(r1.textContent).toContain("5 of 6 features done");
+    expect(r1.textContent).toContain("2 backlog items");
+    expect(r1.querySelector("tr.fold")!.textContent).toBe("5 done (1–5): show them");
+    const open = r1.querySelector("tr.is-open")!;
+    expect(open.textContent).toContain("BOB-7");
+    expect(open.textContent).toContain("open · nobody on it now");
+    expect(open.textContent).toContain("3 of 10");
+    expect(sections[2]!.querySelector(".badge")!.textContent).toBe("closed");
+    expect(sections[2]!.textContent).toContain("Closed, folded: 1 feature. Show them");
+    expect(sections[2]!.textContent).not.toContain("BOB-6");
+    expect(sections[3]!.querySelector(".ord.unset")).not.toBeNull();
+    // Nothing to change until Edit your gates.
+    expect(view().querySelector("select.move")).toBeNull();
+    expect(view().querySelector(".gate")).toBeNull();
+    expect(view().querySelector(".gates-btn")!.textContent).toBe("Edit your gates");
+  });
+
+  it("turns the gates on behind Edit your gates, naming the PO for anything else", async () => {
+    (view().querySelector(".gates-btn") as HTMLButtonElement).click();
+    await settle();
+    expect(location.hash).toBe("#roadmap/bobnet/edit");
+    await lists();
+    expect(view().querySelector(".banner.editing")!.textContent).toContain("Anything else is a request to Peach.");
+    const select = view().querySelector('select[aria-label="Release of BOB-7"]') as HTMLSelectElement;
+    // A closed release takes no features.
+    expect([...select.options].map((o) => o.value)).toEqual(["R1", "R2", ""]);
+    expect(select.value).toBe("R1");
+    const gates = [...view().querySelectorAll(".rel-h .gate")];
+    expect((gates[0]!.querySelector('[aria-label^="Move R1"][aria-label$="earlier"]') as HTMLButtonElement).disabled).toBe(true);
+    expect((gates[2]!.querySelector('[aria-label$="later"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(gates[2]!.textContent).not.toContain("Close release");
+    expect(view().querySelector(".gates-btn")!.textContent).toBe("Done");
+  });
+
+  it("moves a feature at once, last in its new release, with Undo", async () => {
+    const select = view().querySelector('select[aria-label="Release of BOB-7"]') as HTMLSelectElement;
+    select.value = "R2";
+    select.dispatchEvent(new Event("change"));
+    const [move] = pending("set_release");
+    expect(move!.op).toEqual({ op: "set_release", project: "bobnet", ref: "BOB-7", release: "R2" });
+    expect(move!.key).toEqual(expect.any(String));
+    reply(move!, { ref: "BOB-7", seq: 41 });
+    await settle();
+    expect(toastEl().textContent).toContain("Moved BOB-7 to R2 Start a session, last in its order (Peach orders it). Recorded as yours.");
+    await lists();
+    (toastEl().querySelector("button.undo") as HTMLButtonElement).click();
+    const [undo] = pending("undo");
+    expect(undo!.op).toEqual({ op: "undo", project: "bobnet", seq: 41 });
+    reply(undo!, { ref: "BOB-7", seq: 42, told: [] });
+    await settle();
+    expect(toastEl().textContent).toBe("Undone.");
+    await lists();
+  });
+
+  it("moves a feature out of any release, and says why when the board refuses", async () => {
+    const select = view().querySelector('select[aria-label="Release of BOB-8"]') as HTMLSelectElement;
+    select.value = "";
+    select.dispatchEvent(new Event("change"));
+    const [move] = pending("set_release");
+    expect(move!.op["release"]).toBeNull();
+    refuse(move!, "R2 is closed: a closed release takes no features");
+    await settle();
+    expect(toastEl().dataset["ok"]).toBe("false");
+    expect(toastEl().textContent).toBe("R2 is closed: a closed release takes no features");
+    await lists();
+  });
+
+  it("reorders releases, its Undo the order before", async () => {
+    (view().querySelector('[aria-label="Move R1 Central backlog view later"]') as HTMLButtonElement).click();
+    const [order] = pending("order_releases");
+    expect(order!.op).toEqual({ op: "order_releases", project: "bobnet", refs: ["R2", "R1", "R3"] });
+    reply(order!, { ref: null, seq: 50 });
+    await settle();
+    expect(toastEl().textContent).toContain("R1 Central backlog view is now release 2.");
+    await lists();
+    (toastEl().querySelector("button.undo") as HTMLButtonElement).click();
+    const [back] = pending("order_releases");
+    expect(back!.op).toEqual({ op: "order_releases", project: "bobnet", refs: ["R1", "R2", "R3"] });
+    reply(back!, { ref: null, seq: 51 });
+    await settle();
+    await lists();
+  });
+
+  it("closes a release only after naming each feature not done and where it goes, the next open release by default", async () => {
+    const r1 = view().querySelector("#rel-R1")!;
+    (r1.querySelector(".gate button.danger") as HTMLButtonElement).click();
+    const dlg = $("confirm");
+    expect(dlg.querySelector("h2")!.textContent).toBe("Close R1 Central backlog view?");
+    const items = [...dlg.querySelectorAll(".dest li")];
+    expect(items.map((li) => li.querySelector(".id")!.textContent)).toEqual(["BOB-7"]);
+    const where = dlg.querySelector('select[data-ref="BOB-7"]') as HTMLSelectElement;
+    expect(where.value).toBe("R2");
+    expect([...where.options].map((o) => o.textContent)).toEqual(["To R2 Start a session", "Out of any release"]);
+    expect(pending("close_release")).toEqual([]);
+    dlg.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+    const [close] = pending("close_release");
+    expect(close!.op).toEqual({ op: "close_release", project: "bobnet", ref: "R1", moves: [{ feature: "BOB-7", to: "R2" }] });
+    reply(close!, { ref: "R1", seq: 60 });
+    await settle();
+    expect(toastEl().textContent).toContain("Closed R1 Central backlog view; 1 open feature moved.");
+    await lists();
+    (toastEl().querySelector("button.undo") as HTMLButtonElement).click();
+    expect(pending("undo")[0]!.op).toEqual({ op: "undo", project: "bobnet", seq: 60 });
+    reply(pending("undo")[0]!, { ref: "R1", seq: 61, told: [] });
+    await settle();
+    await lists();
+  });
+
+  it("closes a release with every feature done in one sentence", async () => {
+    const done = features.map((f) => (f.release === "R1" ? { ...f, status: "Done", open_since: null } : f));
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 70, refs: ["BOB-7"] });
+    await lists(releases, done);
+    (view().querySelector("#rel-R1 .gate button.danger") as HTMLButtonElement).click();
+    const dlg = $("confirm");
+    expect(dlg.querySelector(".dest")).toBeNull();
+    expect(dlg.querySelector("p")!.textContent).toContain("Every feature in it is done.");
+    dlg.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+    expect(pending("close_release")[0]!.op["moves"]).toEqual([]);
+    reply(pending("close_release")[0]!, { ref: "R1", seq: 71 });
+    await settle();
+    await lists();
+  });
+
+  it("refetches the project when the board changes", async () => {
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 80, refs: ["BOB-8"] });
+    expect(pending("list").length).toBe(2);
+    await lists(releases, features.map((f) => (f.ref === "BOB-8" ? { ...f, title: "Capture in one step" } : f)));
+    expect(view().textContent).toContain("Capture in one step");
+    expect(view().textContent).not.toMatch(/\$\d/);
+  });
+});
