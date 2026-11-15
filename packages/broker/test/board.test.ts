@@ -731,6 +731,73 @@ describe("capture (ADR 0001 §12)", () => {
   });
 });
 
+describe("triage (capture 3-5, BOB-8)", () => {
+  it("records the session a capture was made in, and Casper's words as given", async () => {
+    const { f1 } = await helix();
+    await join(f1);
+    const session = { feature: f1, kind: "build" as const, label: "1" };
+    const words = "The chart is slow on a phone. It took ten seconds this morning.";
+    const got = await ok(sup("Data", session), { op: "capture", project: "helix", capture_id: uuid(10), title: "The chart is slow on a phone.", casper_words: words });
+    const it_ = await item(got.ref!);
+    expect(it_).toMatchObject({ captured_by: "Data@mbp-1", casper_words: words });
+    expect(it_.history[0]!.actor).toMatchObject({ who: "Data@mbp-1", session });
+  });
+
+  it("lists the backlog with each row's triage fields: when, who, Casper's words, the bug's fields, the hint", async () => {
+    const { r1, f1 } = await helix();
+    const bug = await ok(agent("Data"), { op: "capture", project: "helix", capture_id: uuid(11), title: "Login fails", type: "bug", bug_where: "production", blocks_use: true, casper_words: "can't log in" });
+    await ok(owner, { op: "create", project: "helix", kind: "backlog", type: "task", title: "Hinted", parent_hint: f1, release: r1 });
+    const rows = (await ok(owner, { op: "list", project: "helix", of: "backlog" })).items!;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ ref: bug.ref, type: "bug", captured_by: "Data@mbp-1", casper_words: "can't log in", bug_where: "production", blocks_use: true, parent_hint: null, release: null });
+    expect(rows[0]!.created_at).toMatch(/^\d{4}-/);
+    expect(rows[1]).toMatchObject({ title: "Hinted", captured_by: null, casper_words: null, blocks_use: false, parent_hint: f1, release: r1 });
+    // A feature's or task's row carries no triage fields.
+    const features = (await ok(owner, { op: "list", project: "helix", of: "features" })).items!;
+    expect(features[0]).not.toHaveProperty("casper_words");
+    expect(features[0]!.created_at).toMatch(/^\d{4}-/);
+  });
+
+  it("lets the PO slot, promote, set or clear an item's release, and drop it with a reason, each keeping its id; a builder none of them", async () => {
+    const { r1, f1 } = await helix();
+    await helixRules();
+    const cap = (n: number, title: string) => ok(agent("Data"), { op: "capture", project: "helix", capture_id: uuid(n), title }).then((r) => r.ref!);
+    const [a, b, c] = [await cap(20, "Slot me"), await cap(21, "Make me a feature"), await cap(22, "Drop me")];
+    const picard = agent("Picard");
+    for (const op of [
+      { op: "slot", project: "helix", ref: a, feature: f1 },
+      { op: "promote", project: "helix", ref: b },
+      { op: "update", project: "helix", ref: c, set: { release: r1 } },
+      { op: "archive", project: "helix", ref: c, reason: "no" },
+    ] as BoardOpInput[]) {
+      expect((await refused(agent("Bill"), op)).code).toBe("forbidden");
+    }
+    await ok(picard, { op: "update", project: "helix", ref: c, set: { release: r1 } });
+    expect((await item(c)).release).toBe(r1);
+    await ok(picard, { op: "update", project: "helix", ref: c, set: { release: null } });
+    expect((await item(c)).release).toBeNull();
+    await ok(picard, { op: "slot", project: "helix", ref: a, feature: f1 });
+    expect(await item(a)).toMatchObject({ ref: a, kind: "task", parent: f1 });
+    await ok(picard, { op: "promote", project: "helix", ref: b });
+    expect(await item(b)).toMatchObject({ ref: b, kind: "feature", release: null });
+    await ok(picard, { op: "archive", project: "helix", ref: c, reason: "Done elsewhere" });
+    expect(await item(c)).toMatchObject({ ref: c, archive_reason: "Done elsewhere" });
+    expect((await ok(owner, { op: "list", project: "helix", of: "backlog" })).total).toBe(0);
+    expect((await ok(owner, { op: "list", project: "helix", of: "backlog", archived: true })).items!.map((i) => i.ref)).toEqual([c]);
+  });
+
+  it("keeps a migrated draft's parent hint and milestone as fields the PO clears or sets (AC 7)", async () => {
+    const { r1, f1, f2 } = await helix();
+    await helixRules();
+    const d = (await ok(owner, { op: "create", project: "helix", kind: "backlog", type: "task", title: "DRAFT-46", parent_hint: f1, release: r1 })).ref!;
+    expect(await item(d)).toMatchObject({ parent_hint: f1, release: r1 });
+    await ok(agent("Picard"), { op: "update", project: "helix", ref: d, set: { parent_hint: f2, release: null } });
+    expect(await item(d)).toMatchObject({ parent_hint: f2, release: null });
+    await ok(agent("Picard"), { op: "update", project: "helix", ref: d, set: { parent_hint: null } });
+    expect((await item(d)).parent_hint).toBeNull();
+  });
+});
+
 describe("questions (ADR 0001 §7)", () => {
   it("asks with options and holds, and records an answer from conversation once, verbatim", async () => {
     const { f1, t1 } = await helix();

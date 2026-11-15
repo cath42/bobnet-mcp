@@ -15,14 +15,17 @@
       <a href="#now">Now <span class="count" id="now-count"></span></a>
       <a href="#feature">Feature</a>
       <a href="#roadmap">Roadmap</a>
+      <a href="#triage">Triage</a>
       <a href="#usage">Usage</a>
       <a href="#sessions">Sessions</a>
     </nav>
     <select id="project" aria-label="Project" hidden></select>
+    <button type="button" class="primary capture-btn" id="capture-open" aria-haspopup="dialog" hidden>+ Capture</button>
     <span id="conn" class="conn" data-state="connecting">connecting</span>
   </header>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <main id="view"></main>
   <dialog id="confirm" aria-labelledby="confirm-h"></dialog>
+  <dialog id="capture" aria-labelledby="capture-h"></dialog>
 </body>
 </html>

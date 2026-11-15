@@ -275,6 +275,23 @@ dialog .foot { display: flex; gap: 8px; justify-content: flex-end; }
   dialog { margin: auto 0 0; width: 100vw; max-width: 100vw; border-radius: var(--radius) var(--radius) 0 0; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
   dialog .foot button { flex: 1; min-height: 44px; }
 }
+/* Capture: one field on any screen, a bottom sheet on a phone; 16 px so the phone doesn't zoom (notes 12, 27) */
+.capture-btn { min-height: 32px; padding: 4px 12px; }
+.capture-btn[hidden] { display: none; }
+dialog textarea { font: inherit; font-size: 16px; width: 100%; min-height: 96px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); resize: vertical; }
+dialog .opt { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 14px; }
+dialog .opt > span:first-child { color: var(--muted); font-size: 12px; min-width: 4.5em; }
+dialog label.check { display: inline-flex; gap: 6px; align-items: center; }
+dialog label.check input { width: 18px; height: 18px; accent-color: var(--bad); }
+dialog .note { margin: 0; }
+@media (max-width: 760px) { .capture-btn { margin-left: auto; } }
+/* Triage: totals, bugs among them in red */
+.badge[data-state="bug"] { color: var(--bad); }
+table.triage td.age { white-space: nowrap; }
+.seg.filters { max-width: 100%; overflow-x: auto; }
+.seg.filters button { white-space: nowrap; }
+.totals .hot { border-left: 3px solid var(--bad); }
+.totals .hot b { color: var(--bad); }
 .dest { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .dest li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 14px; padding: 6px 0; border-top: 1px solid var(--line); }
 .dest select { font: inherit; font-size: 14px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); max-width: 50vw; }

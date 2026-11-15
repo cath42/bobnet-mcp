@@ -19,6 +19,8 @@ const state = {
   openCards: new Set(),
   open: new Set(),
   chart: { mode: "session", role: null, run: null },
+  /** Triage's filter (all, bugs, none or a release) and whether past 25 rows show. */
+  triage: { filter: "all", all: false },
   last: 10,
 };
 /** Updates kept in the page: the broker's snapshot plus what arrives live. */
@@ -480,7 +482,8 @@ async function loadProjects() {
     svc.projects = [];
   }
   for (const key of svc.roadmaps.keys()) loadRoadmap(key);
-  if (viewName() === "roadmap") scheduleRender();
+  for (const key of backlogs.keys()) loadBacklog(key);
+  scheduleRender();
 }
 
 async function loadRoadmap(key) {
@@ -692,6 +695,207 @@ function closeRelease(key, data, r) {
     h("div", { class: "foot" }, button("Cancel", "", () => dlg.close()), h("button", { type: "submit", class: "danger" }, `Close ${r.ref}`))));
   if (typeof dlg.showModal === "function") dlg.showModal();
   else dlg.setAttribute("open", "");
+}
+
+// ---------- Triage: a project's backlog items, bugs first (capture 4, 5; spec: Triage) ----------
+
+/** "<project>" → { items, releases, error }: the whole triage list, read once and refetched on board_changed. */
+const backlogs = new Map();
+/** Items captured from this page, marked "just captured" on the list. */
+const capturedHere = new Set();
+
+async function loadBacklog(key) {
+  const busy = `triage:${key}`;
+  if (svc.loading.has(busy)) return void svc.again.add(busy);
+  svc.loading.add(busy);
+  try {
+    const [releases, items] = await Promise.all([listAll({ op: "list", project: key, of: "releases" }, "releases"), listAll({ op: "list", project: key, of: "backlog" }, "items")]);
+    backlogs.set(key, { releases, items, error: null });
+  } catch (err) {
+    backlogs.set(key, { ...(backlogs.get(key) ?? { releases: [], items: [] }), error: err.message });
+  } finally {
+    svc.loading.delete(busy);
+  }
+  if (viewName() === "triage") scheduleRender();
+  if (svc.again.delete(busy)) await loadBacklog(key);
+}
+
+/** `#triage/<project>[/edit]`, or the project picked above, or the first in the service. */
+function triageRoute() {
+  const [, key, mode] = location.hash.slice(1).split("/");
+  const keys = (svc.projects ?? []).map((p) => p.key);
+  const edit = mode === "edit";
+  if (keys.includes(key)) return { key, edit };
+  if (keys.includes(state.project)) return { key: state.project, edit };
+  return keys.length ? { key: keys[0], edit } : null;
+}
+
+const DAY = 86_400_000;
+const days = (iso) => Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / DAY));
+const age = (iso) => { const d = days(iso); return d === 0 ? "today" : d === 1 ? "1 day" : `${d} days`; };
+const isBug = (d) => d.type === "bug";
+
+function viewTriage() {
+  const route = triageRoute();
+  if (!route) return [h("div", { class: "empty-card" }, svc.projects ? "No project's board is in the service yet." : "Reading the board…")];
+  const { key, edit } = route;
+  const p = svc.projects.find((x) => x.key === key);
+  const data = backlogs.get(key);
+  if (!data && !svc.loading.has(`triage:${key}`)) loadBacklog(key);
+  const to = (k, e) => `#triage/${k}${e ? "/edit" : ""}`;
+  const all = data?.items ?? [];
+  // Releases to filter by and move into: those still open, and any a listed item names.
+  const rels = (data?.releases ?? []).filter((r) => r.status !== "closed" || all.some((d) => d.release === r.ref));
+  const f = rels.some((r) => r.ref === state.triage.filter) || ["all", "bugs", "none"].includes(state.triage.filter) ? state.triage.filter : "all";
+  const pick = (v, label) => h("button", { type: "button", "aria-pressed": String(f === v), onclick: () => { state.triage = { filter: v, all: false }; render(); } }, label);
+  const bar = h("div", { class: "bar-row" },
+    svc.projects.length > 1 ? h("span", { class: "seg" }, svc.projects.map((q) => h("button", { type: "button", "aria-pressed": String(q.key === key), onclick: () => (location.hash = to(q.key, edit)) }, q.name))) : h("b", null, p.name),
+    all.length ? h("span", { class: "seg filters" }, pick("all", `All ${all.length}`), pick("bugs", `Bugs ${all.filter(isBug).length}`),
+      rels.map((r) => pick(r.ref, `${r.ref} ${all.filter((d) => d.release === r.ref).length}`)), pick("none", `No release ${all.filter((d) => !d.release).length}`)) : null,
+    all.length && rels.length ? h("button", { type: "button", class: `gates-btn${edit ? " primary" : ""}`, onclick: () => (location.hash = to(key, !edit)) }, edit ? "Done" : "Edit your gates") : null);
+  if (!data) return [bar, h("div", { class: "empty-card" }, "Reading the board…")];
+  const out = [bar];
+  if (data.error) out.push(h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, data.error)));
+  if (edit) out.push(h("div", { class: "banner editing" }, h("b", null, "Your gates"), h("span", null, `Put an item in a release or take it out. Everything else on an item is ${poOf(p)}'s triage.`)));
+  if (!all.length) {
+    out.push(h("div", { class: "empty-card" }, `Nothing to triage in ${p.name}. Capture something with + Capture; it lands here.`));
+    return out;
+  }
+  const shown = all.filter((d) => f === "all" || (f === "bugs" ? isBug(d) : f === "none" ? !d.release : d.release === f))
+    .sort((a, c) => isBug(c) - isBug(a) || a.created_at.localeCompare(c.created_at) || a.ref.localeCompare(c.ref, undefined, { numeric: true }));
+  const cut = state.triage.all ? shown : shown.slice(0, 25);
+  const ages = all.map((d) => days(d.created_at)).sort((a, c) => a - c);
+  const bugs = all.filter(isBug).length;
+  out.push(h("div", { class: "totals" },
+    h("div", null, h("b", null, all.length), h("span", null, "backlog items")),
+    h("div", { class: bugs ? "hot" : "" }, h("b", null, bugs), h("span", null, "open bugs")),
+    h("div", null, h("b", null, `${ages.at(-1)} d`), h("span", null, "oldest")),
+    h("div", null, h("b", null, `${ages[Math.floor(ages.length / 2)]} d`), h("span", null, "median age")),
+    h("div", null, h("b", null, ages.filter((d) => d < 7).length), h("span", null, "captured this week"))));
+  const options = [...rels.filter((r) => r.status !== "closed").map((r) => [r.ref, r.title]), ["", "No release"]];
+  out.push(shown.length
+    ? h("div", { class: "table-wrap" }, h("table", { class: "stack triage" },
+        h("thead", null, h("tr", null, h("th", null, "Item"), h("th", null, "Type"), h("th", null, "Release"), h("th", null, "Age"))),
+        h("tbody", null,
+          cut.map((d) => h("tr", { class: capturedHere.has(`${key}:${d.ref}`) ? "is-open" : "" },
+            h("td", { class: "wide keep", "data-label": "" }, h("span", { class: "id" }, d.ref), h("span", { class: "title" }, d.title),
+              d.casper_words ? h("div", { class: "sub" }, `Casper: “${d.casper_words}”`) : null,
+              capturedHere.has(`${key}:${d.ref}`) ? h("div", { class: "now" }, "just captured, from the dashboard") : null),
+            h("td", { "data-label": "Type" }, isBug(d) ? badge("bug", d.blocks_use ? "bug · blocks use" : "bug") : h("span", { class: "muted" }, d.type)),
+            h("td", { "data-label": "Release" }, edit
+              ? h("select", { class: "move", "aria-label": `Release of ${d.ref}`, onchange: (e) => moveItem(key, data, d, e.target.value || null, e.target) },
+                  options.map(([v, label]) => h("option", { value: v, selected: v === (d.release ?? "") || null }, label)))
+              : d.release ?? h("span", { class: "muted" }, "none")),
+            h("td", { "data-label": "Age", class: "age" }, age(d.created_at)))),
+          shown.length > cut.length ? h("tr", { class: "fold" }, h("td", { colspan: 4, class: "full" }, button(`Show all ${shown.length}`, "", () => { state.triage.all = true; render(); }))) : null)))
+    : h("div", { class: "empty-card" }, "No items here."));
+  out.push(h("p", { class: "note" }, `Bugs first, then oldest first. Triage is ${poOf(p)}'s, with the board tools: slot into a feature, make it a feature, put it in a release or take it out, drop it with a reason; each keeps its id. Putting one in a release is also yours, under Edit your gates.`));
+  return out;
+}
+
+/** Casper's gate on a backlog item: its release (notes 26). Its Undo puts the release before back. */
+async function moveItem(key, data, d, to, select) {
+  if (select) select.disabled = true;
+  const before = d.release ?? null;
+  const name = (ref) => (ref ? `in ${data.releases.find((r) => r.ref === ref)?.title ?? ref}` : "in no release");
+  const send = async (release, said, undo) => {
+    try {
+      const res = await boardOp({ op: "update", project: key, ref: d.ref, set: { release } }, true);
+      toast(said, true, undo && res.seq ? undo : null);
+    } catch (err) {
+      toast(err.message, false);
+    }
+    await loadBacklog(key);
+  };
+  await send(to, `${d.ref} is ${name(to)}. Recorded as yours.`, () => send(before, "Undone.", null));
+}
+
+// ---------- Capture: one field, on any screen (capture 6; spec: Capture) ----------
+
+/** Captures made while the board was away, sent on the next welcome (README C4). */
+const QUEUE = "bobnet.captures";
+const queued = () => { try { return JSON.parse(localStorage.getItem(QUEUE) ?? "[]"); } catch { return []; } };
+const setQueued = (ops) => (ops.length ? localStorage.setItem(QUEUE, JSON.stringify(ops)) : localStorage.removeItem(QUEUE));
+
+/** The first sentence, or line, is the title; the whole text is kept as Casper's words. */
+const titleOf = (text) => text.split(/(?<=[.!?])\s|\n/)[0].trim().slice(0, 300);
+
+/** The project on screen, else the one picked above, else the first. */
+function captureProject() {
+  const keys = (svc.projects ?? []).map((p) => p.key);
+  const [v, key] = location.hash.slice(1).split("/");
+  if ((v === "roadmap" || v === "triage") && keys.includes(key)) return key;
+  if (v === "triage") return triageRoute()?.key ?? keys[0];
+  if (v === "roadmap") return roadmapRoute()?.key ?? keys[0];
+  return keys.includes(state.project) ? state.project : keys[0];
+}
+
+function openCapture() {
+  const dlg = $("capture");
+  let key = captureProject();
+  let bug = false, where = "staging", blocks = false;
+  const nameOf = (k) => svc.projects.find((p) => p.key === k)?.name ?? k;
+  const keep = (fn) => { const v = $("cap-text")?.value ?? ""; fn(); $("cap-text").value = v; $("cap-text").focus(); };
+  const draw = () => dlg.replaceChildren(h("form", { method: "dialog", onsubmit: (e) => { e.preventDefault(); submit(); } },
+    h("h2", { id: "capture-h" }, "Capture"),
+    h("textarea", { id: "cap-text", "aria-label": "What to capture", placeholder: "What is it? A title and a sentence is enough.", required: true }),
+    svc.projects.length > 1 ? h("div", { class: "opt" }, h("span", null, "Project"), h("span", { class: "seg" }, svc.projects.map((p) => h("button", { type: "button", "aria-pressed": String(p.key === key), onclick: () => keep(() => { key = p.key; draw(); }) }, p.name)))) : null,
+    h("div", { class: "opt" }, h("span", null, "Is it a bug?"), h("span", { class: "seg" },
+      h("button", { type: "button", "aria-pressed": String(!bug), onclick: () => keep(() => { bug = false; draw(); }) }, "No"),
+      h("button", { type: "button", "aria-pressed": String(bug), onclick: () => keep(() => { bug = true; draw(); }) }, "Bug"))),
+    bug ? h("div", { class: "opt" }, h("span", null, "Where"), h("span", { class: "seg" }, ["staging", "production"].map((w) => h("button", { type: "button", "aria-pressed": String(where === w), onclick: () => keep(() => { where = w; draw(); }) }, w))),
+      h("label", { class: "check" }, h("input", { type: "checkbox", id: "cap-blocks", checked: blocks || null, onchange: (e) => keep(() => { blocks = e.target.checked; draw(); }) }), "Blocks use")) : null,
+    h("p", { class: "note" }, bug && blocks ? "A bug that blocks use also goes on Waits on you until it is slotted or closed." : `It goes to ${nameOf(key)}'s triage list, with your words as you typed them. Release and feature are set at triage.`),
+    h("div", { class: "foot" }, button("Cancel", "", () => dlg.close()), h("button", { type: "submit", class: "primary" }, "Capture"))));
+  const submit = () => {
+    const text = $("cap-text").value.trim();
+    if (!text) return $("cap-text").focus();
+    dlg.close();
+    capture(key, nameOf(key), {
+      op: "capture", project: key, capture_id: crypto.randomUUID(), title: titleOf(text), casper_words: text, type: bug ? "bug" : "task",
+      ...(bug ? { bug_where: where, ...(blocks ? { blocks_use: true } : {}) } : {}),
+    });
+  };
+  draw();
+  if (typeof dlg.showModal === "function") dlg.showModal();
+  else dlg.setAttribute("open", "");
+  $("cap-text").focus();
+}
+
+/** Never asks back: with the board away, it waits on this device and goes when the board is back. */
+async function capture(key, name, op) {
+  const also = op.blocks_use ? ", and on Waits on you" : "";
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    setQueued([...queued(), op]);
+    return toast(`Captured. It waits on this device and goes to ${name}'s triage list when the board is back.`);
+  }
+  try {
+    const res = await boardOp(op, true);
+    capturedHere.add(`${key}:${res.ref}`);
+    toast(`Captured as ${res.ref} in ${name}'s triage list${also}.`);
+  } catch (err) {
+    toast(err.message, false);
+  }
+  if (backlogs.has(key)) await loadBacklog(key);
+}
+
+/** Sends what waited on this device; each leaves the queue once the board has answered it. */
+async function flushCaptures() {
+  const ops = queued();
+  let sent = 0;
+  for (const op of ops) {
+    try {
+      const res = await boardOp(op, true);
+      capturedHere.add(`${op.project}:${res.ref}`);
+      sent++;
+    } catch (err) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      toast(`A capture that waited on this device was refused: ${err.message}`, false);
+    }
+    setQueued(queued().filter((x) => x.capture_id !== op.capture_id));
+    if (backlogs.has(op.project)) loadBacklog(op.project);
+  }
+  if (sent) toast(`Sent ${plural(sent, "capture")} that waited on this device.`);
 }
 
 // ---------- Rendering: usage ----------
@@ -970,7 +1174,7 @@ function viewSessions() {
 
 // ---------- Views ----------
 
-const VIEWS = { now: viewNow, feature: viewFeature, roadmap: viewRoadmap, usage: viewUsage, sessions: viewSessions };
+const VIEWS = { now: viewNow, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions };
 const viewName = () => (VIEWS[location.hash.slice(1).split("/")[0]] ? location.hash.slice(1).split("/")[0] : "now");
 
 function render() {
@@ -978,10 +1182,12 @@ function render() {
   for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${v}`);
   $("now-count").textContent = running().length ? String(running().length) : "";
   const keys = [...new Set([...projects().map((e) => e.board.project), ...(svc.projects ?? []).map((p) => p.key)])];
-  const shown = v === "roadmap" ? (roadmapRoute()?.key ?? current()?.project) : current()?.project;
+  const shown = v === "roadmap" ? (roadmapRoute()?.key ?? current()?.project) : v === "triage" ? triageRoute()?.key : current()?.project;
   const pick = $("project");
   pick.hidden = keys.length < 2;
   pick.replaceChildren(...keys.map((k) => h("option", { value: k, selected: k === shown || null }, k)));
+  // Capture always has a project (Casper, 2026-11-13): only once the service has one.
+  $("capture-open").hidden = !svc.projects?.length;
   $("view").classList.toggle("wide", v === "feature" || v === "roadmap");
   $("view").replaceChildren(...VIEWS[v]().filter(Boolean));
 }
@@ -996,11 +1202,13 @@ function scheduleRender() {
   }, 250);
 }
 
+$("capture-open").addEventListener("click", openCapture);
 $("project").addEventListener("change", (e) => {
   state.project = e.target.value;
   state.inc = null;
   state.release = null;
   if (viewName() === "roadmap" && location.hash.includes("/")) location.hash = "roadmap";
+  if (viewName() === "triage" && location.hash.includes("/")) location.hash = "triage";
   render();
 });
 window.addEventListener("hashchange", () => {
@@ -1048,6 +1256,7 @@ function connect() {
         // A write the drop cut off goes again under its key: the board answers a repeat with its first reply (Toad, BOB-7 review).
         for (const op of sentOps.values()) if (op.frame) ws.send(op.frame);
         loadProjects();
+        flushCaptures();
         break;
       case "error":
         if (sentOps.has(f.rid)) {
@@ -1105,7 +1314,10 @@ function connect() {
         break;
       case "board_changed":
         if (!svc.projects?.some((p) => p.key === f.project)) loadProjects();
-        else if (svc.roadmaps.has(f.project)) loadRoadmap(f.project);
+        else {
+          if (svc.roadmaps.has(f.project)) loadRoadmap(f.project);
+          if (backlogs.has(f.project)) loadBacklog(f.project);
+        }
         break;
       case "update":
         state.updates = [f.item, ...state.updates].slice(0, UPDATES_MAX);

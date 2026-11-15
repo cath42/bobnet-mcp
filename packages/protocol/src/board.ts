@@ -511,6 +511,13 @@ export interface ItemSummary {
   tasks: { done: number; total: number } | null;
   open_since: string | null;
   archived_at: string | null;
+  created_at: string;
+  /** A backlog item's triage fields, on the triage list's rows (capture 3, 4; spec: Triage); a feature's or task's has none. */
+  captured_by?: string | null;
+  casper_words?: string | null;
+  bug_where?: BugWhere | null;
+  blocks_use?: boolean;
+  parent_hint?: string | null;
 }
 
 export interface CriterionRecord {

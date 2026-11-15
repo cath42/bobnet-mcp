@@ -203,6 +203,7 @@ const TOKENS = "coalesce(sum(input), 0) AS input, coalesce(sum(output), 0) AS ou
 type SummaryRow = ItemRow & {
   ref: string;
   parent_ref: string | null;
+  parent_hint_ref: string | null;
   release_ref: string | null;
   labels: string | null;
   ac_total: number;
@@ -218,6 +219,7 @@ const SUMMARY = `
   SELECT i.*,
     (SELECT ref FROM item_refs WHERE item = i.pk AND is_primary = 1) AS ref,
     (SELECT ref FROM item_refs WHERE item = i.parent AND is_primary = 1) AS parent_ref,
+    (SELECT ref FROM item_refs WHERE item = i.parent_hint AND is_primary = 1) AS parent_hint_ref,
     (SELECT ref FROM releases WHERE pk = coalesce(i.release, (SELECT f.release FROM items f WHERE f.pk = i.parent))) AS release_ref,
     (SELECT group_concat(label, char(31)) FROM (SELECT label FROM item_labels WHERE item = i.pk ORDER BY label)) AS labels,
     (SELECT count(*) FROM criteria c WHERE c.item = i.pk AND c.section = 'ac')
@@ -2265,5 +2267,9 @@ function summary(r: SummaryRow): ItemSummary {
     tasks: r.kind === "feature" ? { done: r.tasks_done ?? 0, total: r.tasks_total ?? 0 } : null,
     open_since: r.open_since,
     archived_at: r.archived_at,
+    created_at: r.created_at,
+    ...(r.kind === "backlog"
+      ? { captured_by: r.captured_by, casper_words: r.casper_words, bug_where: r.bug_where, blocks_use: r.blocks_use === 1, parent_hint: r.parent_hint_ref }
+      : {}),
   };
 }

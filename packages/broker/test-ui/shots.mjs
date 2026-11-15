@@ -1,6 +1,7 @@
-// Screenshots of the roadmap's gates (BOB-7) at phone, tablet and desktop widths, against a fake broker
-// in the page holding a copy of BobNet's board (2026-11-14). The page is public/ as served.
-//   node test-ui/shots.mjs            (from packages/broker; writes test-ui/shots/bob7-*.png)
+// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8) at phone, tablet and desktop
+// widths, against a fake broker in the page holding a copy of BobNet's board (2026-11-14; its backlog
+// 2026-11-15). The page is public/ as served.
+//   node test-ui/shots.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob7-*.png, bob8-*.png)
 // Chromium: pnpm --filter @bobnet/broker exec playwright-core install chromium (once per machine).
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -53,6 +54,21 @@ function fakeBroker() {
     ],
   };
   board.features.forEach((x, i) => (x.ord = (i + 1) * 1000));
+  // BobNet's backlog as imported (BOB-14), all chores in no release; their ages are made up, a few hours to a few days.
+  const b = (ref, title, hoursAgo, over = {}) => ({
+    ref, kind: "backlog", type: "chore", status: "Ready", title, parent: null, release: null, ord: null, labels: [], progress: { checked: 0, total: 0 }, tasks: null,
+    open_since: null, archived_at: null, created_at: iso(hoursAgo * 60), captured_by: "Peach@mbp-1", casper_words: null, bug_where: null, blocks_use: false, parent_hint: null, ...over,
+  });
+  board.backlog = [
+    b("BOB-11", "Land refuses a stale tip before the check", 80), b("BOB-12", "Owner JWT: pin the laptop reporter, correct the README claim", 80),
+    b("BOB-13", "Supervisor stores an inbound message before acking it", 80), b("BOB-15", "Guard Keychain reads and correct the worker-isolation claim", 60),
+    b("BOB-16", "Protocol: client version on register, and an unsupported error code", 60), b("BOB-22", "Tests: silence board.test noise, one client-to-broker end-to-end test, Playwright decision", 30),
+    b("BOB-21", "Tokens only: cost_usd optional, then remove the brief fallbacks", 30), b("BOB-17", "Broker: boards after the dashboard reply; sweep old reports", 30),
+    b("BOB-24", "Replace Helix's ADR citations and Helix-specific strings in code", 20), b("BOB-18", "Split the Supervisor class, one step at a time", 20),
+    b("BOB-19", "Type-check the dashboard's app.js", 20), b("BOB-20", "Message store: numbered migrations and a daily retention sweep", 6),
+    b("BOB-23", "Broker: internal error with the rid, audit tail read, stale-report banner", 6),
+  ];
+  let next = 26;
   const releaseRecord = (r, i) => {
     const fs = board.features.filter((x) => x.release === r.ref);
     return { goal: null, ord: i + 1, spec_url: null, closed_at: r.status === "closed" ? new Date().toISOString() : null, closed_by: null, ...r,
@@ -63,7 +79,17 @@ function fakeBroker() {
   const answer = (op) => {
     switch (op.op) {
       case "projects": return { projects: [{ key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] }] };
-      case "list": return op.of === "releases" ? { releases: board.releases.map(releaseRecord), total: board.releases.length, cursor: null } : { items: board.features, total: board.features.length, cursor: null };
+      case "list": {
+        if (op.of === "releases") return { releases: board.releases.map(releaseRecord), total: board.releases.length, cursor: null };
+        const items = op.of === "backlog" ? board.backlog : board.features;
+        return { items, total: items.length, cursor: null };
+      }
+      case "update": { const x = board.backlog.find((y) => y.ref === op.ref); Object.assign(x, op.set); return { ref: op.ref, seq: ++seq }; }
+      case "capture": {
+        const ref = `BOB-${next++}`;
+        board.backlog.push(b(ref, op.title, 0, { type: op.type, casper_words: op.casper_words, captured_by: "owner@example.com", bug_where: op.bug_where ?? null, blocks_use: !!op.blocks_use }));
+        return { ref, seq: ++seq, duplicate: false, dropped: [] };
+      }
       case "set_release": { const x = board.features.find((y) => y.ref === op.ref); x.release = op.release; x.ord = last(op.release); return { ref: op.ref, seq: ++seq }; }
       case "order_releases": board.releases.sort((a, b) => op.refs.indexOf(a.ref) - op.refs.indexOf(b.ref)); return { ref: null, seq: ++seq };
       case "close_release":
@@ -96,15 +122,24 @@ function fakeBroker() {
 }
 
 const widths = { 390: [390, 844], 1024: [1024, 768], 1440: [1440, 900] };
+const words = "The roadmap jumps to the top on my phone when I move a feature. Happens every time, on the train too.";
+const capture = [(p) => p.click("#capture-open"), (p) => p.fill("#cap-text", words), (p) => p.getByRole("button", { name: "Bug", exact: true }).click(),
+  (p) => p.getByRole("button", { name: "production" }).click(), (p) => p.check("#cap-blocks")];
 // [file, hash, steps, full page?, what to wait for after the steps]
-const shots = [
+const all = [
   ["bob7-roadmap", "roadmap/bobnet", [], true],
   ["bob7-gates-edit", "roadmap/bobnet/edit", [], true],
   ["bob7-gates-moved", "roadmap/bobnet/edit", [(p) => p.selectOption('select[aria-label="Release of BOB-25"]', "R2")], false],
   ["bob7-close-release", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click()], false],
+  ["bob8-triage", "triage/bobnet", [], true],
+  ["bob8-triage-edit", "triage/bobnet/edit", [], true],
+  ["bob8-gates-backlog-item", "triage/bobnet/edit", [(p) => p.selectOption('select[aria-label="Release of BOB-11"]', "R2")], false],
+  ["bob8-capture", "triage/bobnet", capture, false],
+  ["bob8-triage-after-capture", "triage/bobnet", [...capture, (p) => p.getByRole("button", { name: "Capture", exact: true }).click()], false, "table.triage .now"],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 
+const shots = all.filter(([name]) => name.startsWith(process.argv[2] ?? ""));
 const browser = await chromium.launch();
 try {
   for (const [name, hash, steps, full, until] of shots) {
@@ -112,7 +147,7 @@ try {
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2 });
       await page.addInitScript(fakeBroker);
       await page.goto(`${base}#${hash}`);
-      await page.waitForSelector("section.release");
+      await page.waitForSelector(hash.startsWith("triage") ? ".totals" : "section.release");
       for (const step of steps) {
         await step(page);
         await page.waitForTimeout(400);

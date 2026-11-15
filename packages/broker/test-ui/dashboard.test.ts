@@ -647,3 +647,193 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     expect(view().textContent).not.toMatch(/\$\d/);
   });
 });
+
+describe("triage and capture (BOB-8)", () => {
+  let mark = 0;
+  beforeAll(() => {
+    mark = FakeSocket.last.sent.length;
+  });
+  const answered = new Set<unknown>();
+  const pending = (name?: string) =>
+    FakeSocket.last.sent
+      .slice(FakeSocket.last.sent.length < mark ? 0 : mark)
+      .filter((f) => f["t"] === "board_op" && !answered.has(f["rid"]) && (!name || (f["op"] as { op: string }).op === name)) as Array<{ rid: string; key?: string; op: Record<string, unknown> }>;
+  const reply = (f: { rid: string }, result: unknown) => {
+    answered.add(f.rid);
+    FakeSocket.last.frame({ t: "ok", rid: f.rid, result });
+  };
+  const releases = [
+    { ref: "R1", title: "R1 Central backlog view", goal: null, status: "open", ord: 1, spec_url: null, closed_at: null, closed_by: null, features: { done: 1, total: 3 } },
+    { ref: "R2", title: "R2 Start a session", goal: null, status: "planned", ord: 2, spec_url: null, closed_at: null, closed_by: null, features: { done: 0, total: 1 } },
+    { ref: "R3", title: "R3 Old", goal: null, status: "closed", ord: 3, spec_url: null, closed_at: iso(9000), closed_by: "owner@example.com", features: { done: 1, total: 1 } },
+  ];
+  const backlogItem = (n: number, over: Record<string, unknown> = {}) => ({
+    ref: `BOB-${100 + n}`, kind: "backlog", type: "task", status: "Draft", title: `Item ${n}`, parent: null, release: null, ord: n * 1000, labels: [],
+    progress: { checked: 0, total: 0 }, tasks: null, open_since: null, archived_at: null, created_at: iso(60 * 24 * (n + 1)),
+    captured_by: "Peach@mbp-1", casper_words: null, bug_where: null, blocks_use: false, parent_hint: null, ...over,
+  });
+  // 30 items, a day apart (BOB-101 is 2 days old, BOB-130 31 days); two bugs, one that blocks use; three in R1.
+  const items = Array.from({ length: 30 }, (_, i) => backlogItem(i + 1, {
+    ...(i === 4 ? { type: "bug", bug_where: "production", blocks_use: true, casper_words: "Login fails on a phone. Twice today." } : {}),
+    ...(i === 1 ? { type: "bug" } : {}),
+    ...(i < 3 ? { release: "R1" } : {}),
+  }));
+  const lists = async (its = items) => {
+    for (const f of pending("list")) reply(f, f.op["of"] === "releases" ? { releases, total: releases.length, cursor: null } : { items: its, total: its.length, cursor: null });
+    await settle();
+  };
+  const rows = () => [...view().querySelectorAll("table.triage tbody tr:not(.fold)")];
+
+  it("lists a project's backlog items, bugs first then oldest, 25 rows then Show all, with the totals", async () => {
+    await go("#triage/bobnet");
+    expect(view().textContent).toContain("Reading the board…");
+    const asked = pending("list").map((f) => [f.op["of"], f.op["project"]]);
+    expect(asked).toEqual([["releases", "bobnet"], ["backlog", "bobnet"]]);
+    await lists();
+    expect([...view().querySelectorAll(".totals div")].map((d) => d.textContent)).toEqual([
+      "30backlog items", "2open bugs", "31 doldest", "17 dmedian age", "5captured this week",
+    ]);
+    expect(view().querySelector(".totals .hot")!.textContent).toBe("2open bugs");
+    const r = rows();
+    expect(r).toHaveLength(25);
+    expect(r.map((x) => x.querySelector(".id")!.textContent).slice(0, 4)).toEqual(["BOB-105", "BOB-102", "BOB-130", "BOB-129"]);
+    expect(r[0]!.textContent).toContain("bug · blocks use");
+    expect(r[0]!.querySelector(".sub")!.textContent).toBe("Casper: “Login fails on a phone. Twice today.”");
+    expect(r[0]!.textContent).toContain("6 days");
+    expect(r[1]!.querySelector(".badge")!.textContent).toBe("bug");
+    expect(r[1]!.textContent).toContain("R1");
+    expect(r[2]!.textContent).toContain("none");
+    const fold = view().querySelector("table.triage tr.fold button") as HTMLButtonElement;
+    expect(fold.textContent).toBe("Show all 30");
+    fold.click();
+    expect(rows()).toHaveLength(30);
+    expect(view().querySelector(".note")!.textContent).toContain("Triage is Peach's, with the board tools");
+    // Nothing to change until Edit your gates.
+    expect(view().querySelector("select.move")).toBeNull();
+  });
+
+  it("filters by bugs, by release and by no release, with counts", async () => {
+    const filters = [...view().querySelectorAll(".seg.filters button")] as HTMLButtonElement[];
+    expect(filters.map((b) => b.textContent)).toEqual(["All 30", "Bugs 2", "R1 3", "R2 0", "No release 27"]);
+    filters[1]!.click();
+    expect(rows().map((x) => x.querySelector(".id")!.textContent)).toEqual(["BOB-105", "BOB-102"]);
+    (view().querySelectorAll(".seg.filters button")[2] as HTMLButtonElement).click();
+    expect(rows().map((x) => x.querySelector(".id")!.textContent)).toEqual(["BOB-102", "BOB-103", "BOB-101"]);
+    (view().querySelectorAll(".seg.filters button")[4] as HTMLButtonElement).click();
+    expect(rows()).toHaveLength(25);
+    (view().querySelectorAll(".seg.filters button")[0] as HTMLButtonElement).click();
+  });
+
+  it("puts an item in a release or takes it out behind Edit your gates, at once, with Undo (c8-gates-backlog-item)", async () => {
+    (view().querySelector(".gates-btn") as HTMLButtonElement).click();
+    await settle();
+    expect(location.hash).toBe("#triage/bobnet/edit");
+    await lists();
+    expect(view().querySelector(".banner.editing")!.textContent).toContain("Everything else on an item is Peach's triage.");
+    const select = view().querySelector('select[aria-label="Release of BOB-130"]') as HTMLSelectElement;
+    // A closed release takes nothing.
+    expect([...select.options].map((o) => o.value)).toEqual(["R1", "R2", ""]);
+    expect((select.querySelector("option[selected]") as HTMLOptionElement).value).toBe("");
+    select.value = "R2";
+    select.dispatchEvent(new Event("change"));
+    const [move] = pending("update");
+    expect(move!.op).toEqual({ op: "update", project: "bobnet", ref: "BOB-130", set: { release: "R2" } });
+    expect(move!.key).toEqual(expect.any(String));
+    reply(move!, { ref: "BOB-130", seq: 200 });
+    await settle();
+    expect($("toast").textContent).toContain("BOB-130 is in R2 Start a session. Recorded as yours.");
+    await lists();
+    ($("toast").querySelector("button.undo") as HTMLButtonElement).click();
+    const [back] = pending("update");
+    expect(back!.op).toEqual({ op: "update", project: "bobnet", ref: "BOB-130", set: { release: null } });
+    reply(back!, { ref: "BOB-130", seq: 201 });
+    await settle();
+    expect($("toast").textContent).toBe("Undone.");
+    await lists();
+    await go("#triage/bobnet");
+    await lists();
+  });
+
+  it("captures in one field from the header, the project preset, the first sentence the title and the whole text Casper's words", async () => {
+    const open = $("capture-open") as HTMLButtonElement;
+    expect(open.hidden).toBe(false);
+    open.click();
+    const dlg = $("capture");
+    expect(dlg.querySelector("h2")!.textContent).toBe("Capture");
+    const text = dlg.querySelector("textarea") as HTMLTextAreaElement;
+    expect(text.placeholder).toBe("What is it? A title and a sentence is enough.");
+    expect(dlg.textContent).toContain("It goes to BobNet's triage list");
+    text.value = "The roadmap jumps on a phone. It scrolls back to the top when a feature moves.";
+    // Bug adds where and blocks use, keeping what was typed.
+    ([...dlg.querySelectorAll("button")].find((b) => b.textContent === "Bug") as HTMLButtonElement).click();
+    ([...dlg.querySelectorAll("button")].find((b) => b.textContent === "production") as HTMLButtonElement).click();
+    const blocks = dlg.querySelector("#cap-blocks") as HTMLInputElement;
+    blocks.checked = true;
+    blocks.dispatchEvent(new Event("change"));
+    expect(dlg.textContent).toContain("also goes on Waits on you");
+    expect((dlg.querySelector("textarea") as HTMLTextAreaElement).value).toContain("The roadmap jumps");
+    dlg.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+    const [cap] = pending("capture");
+    expect(cap!.op).toEqual({
+      op: "capture", project: "bobnet", capture_id: expect.stringMatching(/^[0-9a-f-]{36}$/), title: "The roadmap jumps on a phone.",
+      casper_words: "The roadmap jumps on a phone. It scrolls back to the top when a feature moves.", type: "bug", bug_where: "production", blocks_use: true,
+    });
+    reply(cap!, { ref: "BOB-131", seq: 210, duplicate: false, dropped: [] });
+    await settle();
+    expect($("toast").textContent).toBe("Captured as BOB-131 in BobNet's triage list, and on Waits on you.");
+    await lists([backlogItem(31, { ref: "BOB-131", title: "The roadmap jumps on a phone.", type: "bug", blocks_use: true, created_at: new Date().toISOString(), casper_words: cap!.op["casper_words"] }), ...items]);
+    // Bugs first, then oldest: the new bug comes after the two older ones.
+    const fresh = rows()[2]!;
+    expect(fresh.querySelector(".id")!.textContent).toBe("BOB-131");
+    expect(fresh.textContent).toContain("just captured, from the dashboard");
+    expect(fresh.textContent).toContain("today");
+  });
+
+  it("captures a plain item with only its text", async () => {
+    $("capture-open").click();
+    const dlg = $("capture");
+    (dlg.querySelector("textarea") as HTMLTextAreaElement).value = "Show tokens per release\nso Casper sees the cost of each";
+    dlg.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+    const [cap] = pending("capture");
+    expect(cap!.op).toMatchObject({ title: "Show tokens per release", type: "task", casper_words: "Show tokens per release\nso Casper sees the cost of each" });
+    expect(cap!.op).not.toHaveProperty("bug_where");
+    reply(cap!, { ref: "BOB-132", seq: 211, duplicate: false, dropped: [] });
+    await settle();
+    expect($("toast").textContent).toBe("Captured as BOB-132 in BobNet's triage list.");
+    await lists();
+  });
+
+  it("keeps a capture on this device while the board is away and sends it, same id, once it is back", async () => {
+    const old = FakeSocket.last;
+    old.readyState = 3;
+    $("capture-open").click();
+    const dlg = $("capture");
+    (dlg.querySelector("textarea") as HTMLTextAreaElement).value = "Offline idea. Written on the train.";
+    dlg.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+    expect($("toast").textContent).toBe("Captured. It waits on this device and goes to BobNet's triage list when the board is back.");
+    const stored = JSON.parse(localStorage.getItem("bobnet.captures")!);
+    expect(stored).toHaveLength(1);
+    old.dispatchEvent(new Event("close"));
+    await new Promise((r) => setTimeout(r, 2100));
+    expect(FakeSocket.last).not.toBe(old);
+    mark = 0;
+    FakeSocket.last.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
+    reply(pending("projects")[0]!, { projects: [{ key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] }] });
+    await settle();
+    const [cap] = pending("capture");
+    expect(cap!.op).toEqual(stored[0]);
+    reply(cap!, { ref: "BOB-133", seq: 212, duplicate: false, dropped: [] });
+    await settle();
+    expect(localStorage.getItem("bobnet.captures")).toBeNull();
+    expect($("toast").textContent).toBe("Sent 1 capture that waited on this device.");
+    await lists();
+  });
+
+  it("refetches on board_changed, and says when there is nothing to triage", async () => {
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 300, refs: ["BOB-101"] });
+    expect(pending("list").map((f) => f.op["of"])).toContain("backlog");
+    await lists([]);
+    expect(view().querySelector(".empty-card")!.textContent).toBe("Nothing to triage in BobNet. Capture something with + Capture; it lands here.");
+    expect(view().querySelector(".totals")).toBeNull();
+  });
+});
