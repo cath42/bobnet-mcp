@@ -1,7 +1,7 @@
 # Plan (Mario)
 
-Updated 2026-11-15 00:31Z, after the rc.28 restart. Live: v2.0.0-rc.28 (v2 15fb27e, BOB-11..13).
-Broker not deployed since BOB-12; the deploy is Casper's.
+Updated 2026-11-15 02:10Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41cbc1dc), deployed on
+Casper's go through poe; ubu1 on rc.29; mbp-1's supervisor restarts into rc.29 next.
 
 ## Running
 - Toad (w_39a3303d): done, d64d65b (architecture/reviews/2026-11-14-backlog-import-review.md).
@@ -28,8 +28,7 @@ Broker not deployed since BOB-12; the deploy is Casper's.
 3. BOB-9, Helix, at Picard's date.
 
 ## Waiting on Casper
-- The broker deploy: migrations 6 and 7, the Board DO (wrangler migration v2, Board migration 1;
-  Board migration 2 once 0b lands).
+- The next broker deploy: Board migration 2 once 0b lands.
 - Task ids on import: flat renumbering with the old id as an alias, or dotted ids kept. Mario
   leans dotted; Toad recommends dotted for imported ids, LAND-n for new ones, ItemRef widened
   additively (the review's "If Casper picks dotted ids" section). If dotted: Toad amends ADR 0001 §2 and ItemRef, Luigi changes store and import
