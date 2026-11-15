@@ -217,6 +217,17 @@ export const BoardOp = z.discriminatedUnion("op", [
   /** Casper's gates (§5): a feature's release and the order of releases. */
   z.object({ op: z.literal("set_release"), ...item, release: ReleaseRef.nullable(), reason: reason.optional() }),
   z.object({ op: z.literal("order_releases"), ...project, refs: z.array(ReleaseRef).min(1).max(200) }),
+  /**
+   * Casper closes a release (§5): every feature in it not Done and not archived goes somewhere, to
+   * another release that isn't closed or out of any (`to` null), last in its new release. Undo takes
+   * the whole close back.
+   */
+  z.object({
+    op: z.literal("close_release"),
+    ...project,
+    ref: ReleaseRef,
+    moves: z.array(z.object({ feature: ItemRef, to: ReleaseRef.nullable() })).max(200).default([]),
+  }),
   /** A project's rule for one agent; `project` "*" is every project (owner only). */
   z.object({
     op: z.literal("grant"),
@@ -299,8 +310,9 @@ export const BoardOp = z.discriminatedUnion("op", [
   /** Casper marks an action done from the dashboard (§7), with an optional note. Write-once, the owner's alone. */
   z.object({ op: z.literal("mark_done"), ...project, ref: QuestionRef, note: z.string().trim().min(1).max(4000).optional() }),
   /**
-   * The owner takes back one of his own events, as a new event (§5, §7). For now only his dashboard
-   * answer or done mark, within two minutes: the question reopens.
+   * The owner takes back one of his own events, as a new event (§5, §7), within two minutes: his
+   * dashboard answer or done mark (the question reopens), a feature's release, or a release's close
+   * (the release reopens and its features go back). An order of releases is undone by the inverse order.
    */
   z.object({ op: z.literal("undo"), ...project, seq: z.number().int().positive() }),
 
@@ -546,6 +558,7 @@ export interface BoardResults {
   order: BoardWritten;
   set_release: BoardWritten;
   order_releases: BoardWritten;
+  close_release: BoardWritten;
   grant: BoardWritten;
   revoke: BoardWritten;
   capture: BoardWritten & { duplicate: boolean; dropped: string[] };

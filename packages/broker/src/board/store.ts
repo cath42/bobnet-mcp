@@ -83,6 +83,19 @@ interface ItemRow {
   [k: string]: SqlStorageValue;
 }
 
+/** An event as undo reads it. */
+interface UndoneEvent {
+  seq: number;
+  at: string;
+  op: string;
+  tbl: string;
+  pk: number;
+  ref: string | null;
+  actor_kind: string;
+  actor: string;
+  [k: string]: SqlStorageValue;
+}
+
 interface ReleaseRow {
   pk: number;
   ref: string;
@@ -454,6 +467,8 @@ export class BoardStore {
         return this.setRelease(tx, op);
       case "order_releases":
         return this.orderReleases(tx, op);
+      case "close_release":
+        return this.closeRelease(tx, op);
       case "grant":
         return this.grant(tx, op);
       case "revoke":
@@ -903,6 +918,47 @@ export class BoardStore {
     return { ref: null, seq };
   }
 
+  /**
+   * Casper closes a release (§5): each feature in it that isn't Done or archived needs a destination,
+   * so nothing is closed with work silently left. The features' events come first and the release's
+   * last: its seq is the one undo takes, and the moves are the close events just before it.
+   */
+  private closeRelease(tx: Tx, op: Op<"close_release">): BoardWritten {
+    ownerOnly(tx.caller, "Closing a release");
+    const p = tx.project(this.project(op.project));
+    const r = this.release(p, op.ref);
+    if (r.status === "closed") throw new BoardError("conflict", `${r.ref} is closed already`);
+    const moves = new Map<number, { row: ItemRow; ref: string; to: ReleaseRow | null }>();
+    for (const m of op.moves) {
+      const row = this.feature(p, m.feature);
+      const ref = this.refOf(row.pk);
+      if (row.release !== r.pk) throw new BoardError("invalid", `${ref} is not in ${r.ref}`);
+      if (row.status === "Done") throw new BoardError("invalid", `${ref} is Done: it stays in ${r.ref}`);
+      if (moves.has(row.pk)) throw new BoardError("invalid", `${ref} is moved twice`);
+      const to = m.to === null ? null : this.release(p, m.to);
+      if (to?.pk === r.pk) throw new BoardError("invalid", `${ref} can't go to ${r.ref}: it is the release being closed`);
+      if (to) openRelease(to);
+      moves.set(row.pk, { row, ref, to });
+    }
+    const left = this.sql
+      .exec<{ pk: number }>("SELECT pk FROM items WHERE project = ? AND kind = 'feature' AND release = ? AND status != 'Done' AND archived_at IS NULL ORDER BY pk", p.pk, r.pk)
+      .toArray()
+      .filter((f) => !moves.has(f.pk))
+      .map((f) => this.refOf(f.pk));
+    if (left.length > 0) {
+      throw new BoardError("invalid", `Closing ${r.ref} would leave ${left.join(", ")} not Done in it: say where each goes, another release or none`);
+    }
+    for (const { row, ref, to } of moves.values()) {
+      // Last in its new release, as Casper's move puts it (notes 19).
+      const ord = this.nextOrd(`SELECT max(ord) AS m FROM items WHERE project = ? AND kind = 'feature' AND release ${to ? "= ?" : "IS NULL"}`, p.pk, ...(to ? [to.pk] : []));
+      this.setItem(row.pk, { release: to?.pk ?? null, ord }, tx.at);
+      tx.event("close_release", "items", row.pk, ref, [["release", r.ref, to?.ref ?? null], ["ord", row.ord, ord]]);
+    }
+    this.sql.exec("UPDATE releases SET status = 'closed', closed_at = ?, closed_by = ? WHERE pk = ?", tx.at, tx.who, r.pk);
+    const changes: Change[] = [["status", r.status, "closed"], ["closed_at", null, tx.at], ["closed_by", null, tx.who]];
+    return { ref: r.ref, seq: tx.event("close_release", "releases", r.pk, r.ref, changes) };
+  }
+
   private grant(tx: Tx, op: Op<"grant">): BoardWritten {
     const p = op.project === "*" ? null : tx.project(this.project(op.project));
     if (p) this.rules.requireFlag(tx.caller, p, "admin");
@@ -1217,23 +1273,25 @@ export class BoardStore {
   }
 
   /**
-   * The owner takes back one of his own events, as a new event that names it (§5). For now only his
-   * dashboard answer or done mark, within two minutes (§7): the question reopens, the history keeps
-   * what he withdrew, and the lead hears it.
+   * The owner takes back one of his own events, as a new event that names it (§5), within two
+   * minutes: his dashboard answer or done mark (§7), a feature's release, or a release's close. An
+   * order of releases isn't undone here: the dashboard sends the inverse order.
    */
   private undo(tx: Tx, op: Op<"undo">): BoardWritten & { told: string[] } {
     ownerOnly(tx.caller, "Undo");
     const p = tx.project(this.project(op.project));
     const e = this.sql
-      .exec<{ seq: number; at: string; op: string; tbl: string; pk: number | null; actor_kind: string }>(
-        "SELECT seq, at, op, tbl, pk, actor_kind FROM events WHERE seq = ? AND project = ?",
-        op.seq,
-        p.pk,
-      )
+      .exec<UndoneEvent>("SELECT seq, at, op, tbl, pk, ref, actor_kind, actor FROM events WHERE seq = ? AND project = ?", op.seq, p.pk)
       .toArray()[0];
     if (!e) throw new BoardError("invalid", `No event ${op.seq} in ${p.key}`);
+    if (e.actor_kind === "owner" && (e.op === "set_release" || e.op === "close_release")) {
+      if (e.op === "close_release" && e.tbl !== "releases") throw new BoardError("invalid", `Event ${op.seq} is one of a close's moves: undo the close, not one of its moves`);
+      if (this.sql.exec("SELECT 1 FROM events WHERE undo_of = ?", e.seq).toArray().length > 0) throw new BoardError("conflict", `Event ${op.seq} on ${e.ref} is undone already`);
+      if (Date.parse(tx.at) - Date.parse(e.at) > UNDO_MS) throw new BoardError("conflict", `Too late to undo event ${op.seq} on ${e.ref}: Undo lasts two minutes; make the change again instead`);
+      return { ...(e.op === "set_release" ? this.undoSetRelease(tx, p, e) : this.undoClose(tx, p, e)), told: [] };
+    }
     if (e.tbl !== "questions" || (e.op !== "answer_question" && e.op !== "mark_done") || e.actor_kind !== "owner") {
-      throw new BoardError("invalid", `Event ${op.seq} is a ${e.op}: undo takes back only Casper's answer or done mark from the dashboard`);
+      throw new BoardError("invalid", `Event ${op.seq} is a ${e.op}: undo takes back only Casper's answer or done mark, a feature's release or a release's close, from the dashboard`);
     }
     const q = this.questionRow(e.pk!);
     const last = this.sql
@@ -1259,6 +1317,67 @@ export class BoardStore {
     if (q.answer_key !== null) lines.push(`Withdrawn option: ${q.answer_key}`);
     if (q.answer_words !== null) lines.push(`Withdrawn words: ${q.answer_words}`);
     return { ref: q.ref, seq, told: this.notify(tx, p, q, lines.join("\n")) };
+  }
+
+  /** Puts a feature back in the release Casper moved it out of, unless it has moved since. */
+  private undoSetRelease(tx: Tx, p: ProjectRow, e: UndoneEvent): BoardWritten {
+    const row = this.sql.exec<ItemRow>("SELECT * FROM items WHERE pk = ?", e.pk).one();
+    const seq = this.moveBack(tx, p, row, e, "since");
+    return { ref: this.refOf(row.pk), seq };
+  }
+
+  /**
+   * Reopens a release Casper closed and puts each feature the close moved back in it, at its old
+   * place. The close's moves are the close events just before its release event, in its transaction:
+   * same time, same actor.
+   */
+  private undoClose(tx: Tx, p: ProjectRow, e: UndoneEvent): BoardWritten {
+    const r = this.sql.exec<ReleaseRow>("SELECT * FROM releases WHERE pk = ?", e.pk).one();
+    if (r.status !== "closed" || r.closed_at !== e.at) throw new BoardError("conflict", `${r.ref} isn't closed by event ${e.seq} any more`);
+    const moves: UndoneEvent[] = [];
+    for (const m of this.sql.exec<UndoneEvent>(
+      "SELECT seq, at, op, tbl, pk, ref, actor_kind, actor FROM events WHERE project = ? AND seq < ? ORDER BY seq DESC LIMIT 201",
+      p.pk,
+      e.seq,
+    )) {
+      if (m.op !== "close_release" || m.tbl !== "items" || m.at !== e.at || m.actor !== e.actor) break;
+      moves.push(m);
+    }
+    const rows = moves.map((m) => ({ m, row: this.sql.exec<ItemRow>("SELECT * FROM items WHERE pk = ?", m.pk).one() }));
+    // Reopened first, so its features may go back into it; a refused move rolls the whole undo back.
+    const status = this.changesOf(e.seq).get("status")?.old ?? "open";
+    this.sql.exec("UPDATE releases SET status = ?, closed_at = NULL, closed_by = NULL WHERE pk = ?", status, r.pk);
+    for (const { m, row } of rows.reverse()) this.moveBack(tx, p, row, m, "since the close");
+    const changes: Change[] = [["status", "closed", status], ["closed_at", r.closed_at, null], ["closed_by", r.closed_by, null]];
+    return { ref: r.ref, seq: tx.event("undo", "releases", r.pk, r.ref, changes, undefined, e.seq) };
+  }
+
+  /** Refuses to move a feature back when it is no longer where event `e` put it, or is now in a closed release. Its release's change. */
+  private movedSince(row: ItemRow, e: UndoneEvent, when: string): { old: string | null; new: string | null } {
+    const ref = this.refOf(row.pk);
+    const moved = this.changesOf(e.seq).get("release")!;
+    const now = row.release === null ? null : this.sql.exec<ReleaseRow>("SELECT * FROM releases WHERE pk = ?", row.release).one();
+    if ((now?.ref ?? null) !== moved.new) throw new BoardError("conflict", `${ref} has moved ${when}: it is in ${now?.ref ?? "no release"}`);
+    if (now?.status === "closed") throw new BoardError("conflict", `${ref} is in ${now.ref}, which is closed now`);
+    return moved;
+  }
+
+  /** Moves a feature back to where it was before event `e`, at its old place, as an undo event. */
+  private moveBack(tx: Tx, p: ProjectRow, row: ItemRow, e: UndoneEvent, when: string): number {
+    const moved = this.movedSince(row, e, when);
+    const back = moved.old === null ? null : this.release(p, moved.old);
+    if (back?.status === "closed") throw new BoardError("conflict", `${this.refOf(row.pk)} came from ${back.ref}, which is closed now`);
+    const was = this.changesOf(e.seq).get("ord");
+    const ord = was ? (was.old === null ? null : Number(was.old)) : row.ord;
+    this.setItem(row.pk, { release: back?.pk ?? null, ord }, tx.at);
+    const ref = this.refOf(row.pk);
+    return tx.event("undo", "items", row.pk, ref, [["release", moved.new, moved.old], ["ord", row.ord, ord]], undefined, e.seq);
+  }
+
+  /** An event's changes, by field, as stored. */
+  private changesOf(seq: number): Map<string, { old: string | null; new: string | null }> {
+    const rows = this.sql.exec<{ field: string; old: string | null; new: string | null }>("SELECT field, old, new FROM event_changes WHERE event = ?", seq).toArray();
+    return new Map(rows.map((c) => [c.field, { old: c.old, new: c.new }]));
   }
 
   /**

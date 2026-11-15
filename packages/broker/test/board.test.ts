@@ -317,6 +317,130 @@ describe("who may write what (ADR 0001 §5)", () => {
   });
 });
 
+describe("Casper's gates: closing a release, and undo (ADR 0001 §5)", () => {
+  /** Helix's R1 holding f1 (not Done), a Done feature, an archived one, and R2 holding one feature already. */
+  async function releases() {
+    const ids = await helix();
+    const r2 = (await ok(owner, { op: "create_release", project: "helix", title: "Release 2" })).ref!;
+    const feature = async (title: string, release: string | null) => (await ok(owner, { op: "create", project: "helix", kind: "feature", type: "increment", title, release })).ref!;
+    const done = await feature("Shipped", ids.r1);
+    await ok(owner, { op: "update", project: "helix", ref: done, set: { status: "Done" } });
+    const dropped = await feature("Dropped", ids.r1);
+    await ok(owner, { op: "archive", project: "helix", ref: dropped, reason: "not wanted" });
+    const f3 = await feature("Waits", ids.r1);
+    const there = await feature("Already there", r2);
+    return { ...ids, r2, done, dropped, f3, there };
+  }
+  const release = async (ref: string) => (await ok(owner, { op: "get", project: "helix", ref })).release!;
+  const features = async (release: string | null) => ((await ok(owner, { op: "list", project: "helix", of: "features", release })).items ?? []).map((i) => i.ref);
+
+  it("refuses a close that leaves a feature not Done in it, naming each", async () => {
+    const { r1, r2, f1, f3 } = await releases();
+    expect(await refused(owner, { op: "close_release", project: "helix", ref: r1 })).toEqual({
+      ok: false,
+      code: "invalid",
+      message: `Closing ${r1} would leave ${f1}, ${f3} not Done in it: say where each goes, another release or none`,
+    });
+    expect(await refused(owner, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: r2 }] })).toMatchObject({ code: "invalid", message: expect.stringContaining(f3) });
+    expect((await release(r1)).status).toBe("planned");
+  });
+
+  it("closes a release, moving each open feature last in its destination; Done and archived ones stay", async () => {
+    const { r1, r2, f1, f3, done, dropped, there } = await releases();
+    const closed = await ok(owner, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f3, to: r2 }, { feature: f1, to: null }] });
+    expect(closed.ref).toBe(r1);
+    expect(await release(r1)).toMatchObject({ status: "closed", closed_at: expect.any(String), closed_by: "owner@example.com" });
+    expect(await features(r2)).toEqual([there, f3]);
+    expect(await features(null)).toContain(f1);
+    expect(await item(done)).toMatchObject({ release: r1 });
+    expect(await item(dropped)).toMatchObject({ release: r1 });
+    const moved = (await item(f3)).history.at(-1)!;
+    expect(moved).toMatchObject({ op: "close_release", actor: { kind: "owner", who: "owner@example.com" }, changes: expect.arrayContaining([{ field: "release", old: r1, new: r2 }]) });
+    // A closed release takes no features, and isn't closed twice.
+    expect(await refused(owner, { op: "set_release", project: "helix", ref: f1, release: r1 })).toMatchObject({ code: "conflict" });
+    expect(await refused(owner, { op: "close_release", project: "helix", ref: r1 })).toMatchObject({ code: "conflict" });
+  });
+
+  it("refuses a close by anyone but Casper, and a move that isn't one", async () => {
+    const { r1, r2, f1, f2, f3, done } = await releases();
+    await helixRules();
+    const moves = [{ feature: f1, to: r2 }, { feature: f3, to: r2 }];
+    expect(await refused(agent("Picard"), { op: "close_release", project: "helix", ref: r1, moves })).toMatchObject({ code: "forbidden" });
+    const bad = async (extra: { feature: string; to: string | null }) => refused(owner, { op: "close_release", project: "helix", ref: r1, moves: [...moves, extra] });
+    expect(await bad({ feature: f2, to: r2 })).toMatchObject({ code: "invalid", message: `${f2} is not in ${r1}` });
+    expect(await bad({ feature: done, to: r2 })).toMatchObject({ code: "invalid", message: `${done} is Done: it stays in ${r1}` });
+    expect(await bad({ feature: f1, to: null })).toMatchObject({ code: "invalid", message: `${f1} is moved twice` });
+    expect(await refused(owner, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: r1 }, moves[1]!] })).toMatchObject({ code: "invalid" });
+    const r3 = (await ok(owner, { op: "create_release", project: "helix", title: "Release 3" })).ref!;
+    await ok(owner, { op: "close_release", project: "helix", ref: r3 });
+    expect(await refused(owner, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: r3 }, moves[1]!] })).toMatchObject({ code: "conflict" });
+    expect((await release(r1)).status).toBe("planned");
+  });
+
+  it("undoes a close: the release reopens and its features go back to their places", async () => {
+    const { r1, r2, f1, f3, done, there } = await releases();
+    const before = await features(r1);
+    const { seq } = await ok(owner, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: r2 }, { feature: f3, to: null }] });
+    const moveSeq = (await item(f1)).history.at(-1)!.seq;
+    expect(await refused(owner, { op: "undo", project: "helix", seq: moveSeq })).toMatchObject({ code: "invalid", message: expect.stringMatching(/undo the close/) });
+    expect(await refused(agent("Picard"), { op: "undo", project: "helix", seq })).toMatchObject({ code: "forbidden" });
+
+    expect(await ok(owner, { op: "undo", project: "helix", seq })).toMatchObject({ ref: r1, told: [] });
+    expect(await release(r1)).toMatchObject({ status: "planned", closed_at: null, closed_by: null });
+    expect(await features(r1)).toEqual(before);
+    expect(await features(r2)).toEqual([there]);
+    expect(await item(done)).toMatchObject({ release: r1 });
+    // Each feature's undo names its own move; the release's names the close.
+    expect((await item(f3)).history.at(-1)).toMatchObject({ op: "undo", undo_of: seq - 1, changes: expect.arrayContaining([{ field: "release", old: null, new: r1 }]) });
+    const got = await ok(owner, { op: "get", project: "helix", ref: r1, history: true });
+    expect(got.history!.map((e) => e.op)).toEqual(["create_release", "close_release", "undo"]);
+    expect(got.history!.at(-1)).toMatchObject({ undo_of: seq, changes: expect.arrayContaining([{ field: "status", old: "closed", new: "planned" }]) });
+    expect(await refused(owner, { op: "undo", project: "helix", seq })).toMatchObject({ code: "conflict", message: expect.stringMatching(/undone already/) });
+  });
+
+  it("refuses to undo a close after two minutes, or once a feature has moved or its destination closed", async () => {
+    const { r1, r2, f1, f3 } = await releases();
+    const close = () => ok(owner, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: r2 }, { feature: f3, to: r2 }] });
+    const late = await close();
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 121_000 });
+    try {
+      expect(await refused(owner, { op: "undo", project: "helix", seq: late.seq })).toMatchObject({ code: "conflict", message: expect.stringMatching(/two minutes/) });
+    } finally {
+      vi.useRealTimers();
+    }
+    await ok(owner, { op: "set_release", project: "helix", ref: f1, release: null });
+    expect(await refused(owner, { op: "undo", project: "helix", seq: late.seq })).toMatchObject({ code: "conflict" });
+  });
+
+  it("refuses to undo a close whose destination has closed since", async () => {
+    const { r1, r2, f1, f3, there } = await releases();
+    const { seq } = await ok(owner, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: r2 }, { feature: f3, to: r2 }] });
+    const r3 = (await ok(owner, { op: "create_release", project: "helix", title: "Release 3" })).ref!;
+    await ok(owner, { op: "close_release", project: "helix", ref: r2, moves: [f1, f3, there].map((feature) => ({ feature, to: r3 })) });
+    // The features are in R3 now, not where R1's close put them.
+    expect(await refused(owner, { op: "undo", project: "helix", seq })).toMatchObject({ code: "conflict", message: expect.stringMatching(/has moved/) });
+    expect((await release(r1)).status).toBe("closed");
+  });
+
+  it("undoes a feature's move between releases, unless it has moved since or its old release is closed", async () => {
+    const { r1, r2, f1, f3 } = await releases();
+    const before = await features(r1);
+    const { seq } = await ok(owner, { op: "set_release", project: "helix", ref: f1, release: r2 });
+    await ok(owner, { op: "undo", project: "helix", seq });
+    expect(await features(r1)).toEqual(before);
+    expect((await item(f1)).history.at(-1)).toMatchObject({ op: "undo", undo_of: seq });
+    expect(await refused(owner, { op: "undo", project: "helix", seq })).toMatchObject({ code: "conflict" });
+
+    const twice = await ok(owner, { op: "set_release", project: "helix", ref: f1, release: r2 });
+    await ok(owner, { op: "set_release", project: "helix", ref: f1, release: null });
+    expect(await refused(owner, { op: "undo", project: "helix", seq: twice.seq })).toMatchObject({ code: "conflict", message: expect.stringMatching(/has moved/) });
+
+    const out = await ok(owner, { op: "set_release", project: "helix", ref: f3, release: r2 });
+    await ok(owner, { op: "close_release", project: "helix", ref: r1 });
+    expect(await refused(owner, { op: "undo", project: "helix", seq: out.seq })).toMatchObject({ code: "conflict", message: expect.stringMatching(/closed now/) });
+  });
+});
+
 describe("projects (criterion 7)", () => {
   it("shows an agent only the projects it may read; a * row reads them all", async () => {
     await helix();
