@@ -722,6 +722,8 @@ export class BoardStore {
         return this.sessionJoin(tx, op);
       case "run_start":
         return this.runStart(tx, op);
+      case "run_remote":
+        return this.runRemote(tx, op);
       case "run_end":
         return this.runEnd(tx, op);
       case "push":
@@ -1711,6 +1713,18 @@ export class BoardStore {
       ...tasks.map((t): Change => ["task", null, this.refOf(t.pk)]),
     ];
     return { ref: op.id, seq: tx.event("run_start", "runs", pk, op.id, changes), unknown_tasks: unknown };
+  }
+
+  /** A run's Remote Control link, set once (§9): no run, or a link already, and nothing changes. */
+  private runRemote(tx: Tx, op: Op<"run_remote">): BoardWritten {
+    const p = tx.project(this.project(op.project));
+    const ctx = supervisorOp(tx.caller, op);
+    if (op.id !== ctx.worker) throw new BoardError("forbidden", `run_remote ${op.id} is for worker ${ctx.worker}, whose run it is`);
+    const set = this.sql
+      .exec<{ pk: number }>("UPDATE runs SET remote_url = ? WHERE project = ? AND id = ? AND remote_url IS NULL RETURNING pk", op.remote_url, p.pk, op.id)
+      .toArray()[0];
+    if (!set) return { ref: op.id, seq: 0 };
+    return { ref: op.id, seq: tx.event("run_remote", "runs", set.pk, op.id, [["remote_url", null, op.remote_url]]) };
   }
 
   /** A run's end with its tokens and context per call; a second end for an ended run changes nothing. */

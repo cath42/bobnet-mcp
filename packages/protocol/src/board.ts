@@ -353,6 +353,16 @@ export const BoardOp = z.discriminatedUnion("op", [
     tasks: z.array(ItemRef).max(50).default([]),
     remote_url: z.string().url().max(500).nullable().optional(),
   }),
+  /**
+   * A run's Remote Control link (§9), once the worker has it, which is after its run_start: set once,
+   * on a run that exists; a replay, or a run with a link already, changes nothing.
+   */
+  z.object({
+    op: z.literal("run_remote"),
+    ...project,
+    id: runId,
+    remote_url: z.string().url().startsWith("https://").max(500),
+  }),
   z.object({
     op: z.literal("run_end"),
     ...project,
@@ -408,7 +418,7 @@ export type BoardOpName = BoardOp["op"];
 export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview";
 export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview"] satisfies BoardReadName[];
 /** The supervisor's own operations, which only its connection makes (§8). */
-export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_end", "push", "slot_run", "ci_run"];
+export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_remote", "run_end", "push", "slot_run", "ci_run"];
 
 // ---------- Records ----------
 
@@ -706,6 +716,7 @@ export interface BoardResults {
   undo: BoardWritten & { told: string[] };
   session_join: BoardWritten & { created: boolean };
   run_start: BoardWritten & { unknown_tasks: string[] };
+  run_remote: BoardWritten;
   run_end: BoardWritten;
   push: BoardWritten;
   /** `tied`: the worker whose push the run ran on, once known. */

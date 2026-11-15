@@ -961,6 +961,8 @@ export class Supervisor {
             onRemoteControl: (rc) => {
               this.store.audit("supervisor", "url" in rc ? "remote-control" : "remote-control:failed", w.id, rc);
               if ("url" in rc) this.remoteEvent(w, { event: "remote_control", url: rc.url });
+              // The board learns the link after run_start, through the same outbox, so it lands on the run's row.
+              if ("url" in rc) this.boardReport(this.worker(w.id), { op: "run_remote", project: w.project, id: w.id, remote_url: rc.url });
               if ("error" in rc) this.notify(`${role.name} (${w.id}) runs without Remote Control: ${rc.error}.`, w.project);
               this.report();
             },

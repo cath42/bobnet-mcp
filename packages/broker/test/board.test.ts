@@ -650,6 +650,29 @@ describe("the supervisor's operations (ADR 0001 §4, §9, §10)", () => {
     expect(await refused(sup("Nobody", null), { ...end, id: "w_nobody" })).toMatchObject({ code: "invalid" });
   });
 
+  it("sets a run's Remote Control link once, after its start; never makes a run, and a replay changes nothing (BOB-4)", async () => {
+    const { f1 } = await helix();
+    const session = { feature: f1, kind: "build" as const, label: "1" };
+    const bill = sup("Bill", session);
+    await ok(bill, { op: "session_join", project: "helix", session });
+    const remote = { op: "run_remote" as const, project: "helix", id: "w_bill", remote_url: "https://claude.ai/code/s_1" };
+    // Before its start there's no run to set: nothing is made.
+    await ok(bill, remote);
+    await runInDurableObject(board(), (_, state) => {
+      expect(state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM runs").one().n).toBe(0);
+    });
+    await ok(bill, { op: "run_start", project: "helix", id: "w_bill", started_at: at(0), session });
+    const set = await ok(bill, remote);
+    expect(set.seq).toBeGreaterThan(0);
+    // A replay, or another link for a run that has one, records nothing.
+    expect(await ok(bill, remote)).toMatchObject({ seq: set.seq });
+    expect(await ok(bill, { ...remote, remote_url: "https://claude.ai/code/s_2" })).toMatchObject({ seq: set.seq });
+    const got = await ok(owner, { op: "get", project: "helix", session, history: true });
+    expect(got.session!.runs[0]).toMatchObject({ id: "w_bill", remote_url: "https://claude.ai/code/s_1" });
+    expect(await refused(bill, { ...remote, id: "w_other" })).toMatchObject({ code: "forbidden" });
+    expect(await refused(owner, remote)).toMatchObject({ code: "forbidden" });
+  });
+
   it("takes the run's worker, agent, role and session from the verified ctx, never from the op", async () => {
     const { f1 } = await helix();
     const session = { feature: f1, kind: "build" as const, label: "1" };

@@ -31,6 +31,15 @@ describe("BoardOp", () => {
     expect(BoardOp.safeParse(join).success).toBe(false);
   });
 
+  it("takes a run's Remote Control link only as https", () => {
+    const remote = { op: "run_remote", project: "helix", id: "w_1" };
+    expect(BoardOp.parse({ ...remote, remote_url: "https://claude.ai/code/s_1" })).toMatchObject({ op: "run_remote", id: "w_1", remote_url: "https://claude.ai/code/s_1" });
+    for (const bad of ["http://claude.ai/code/s_1", "javascript:alert(1)", "not a url", `https://claude.ai/${"x".repeat(500)}`, null]) {
+      expect(BoardOp.safeParse({ ...remote, remote_url: bad }).success).toBe(false);
+    }
+    expect(BoardOp.safeParse(remote).success).toBe(false);
+  });
+
   it("takes a grant for every project only as *", () => {
     const grant = { op: "grant", agent: "Mario", role: "lead", read: true, items: "none", fields: [] };
     expect(BoardOp.parse({ ...grant, project: "*" })).toMatchObject({ project: "*", laptop: "*", admin: false });

@@ -44,9 +44,9 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function setup(config = testConfig(dir, BOBNET)) {
+async function setup(config = testConfig(dir, BOBNET), opts: { remoteControl?: boolean } = {}) {
   const broker = new FakeBroker();
-  const { queryFn, sessions } = fakeQuery();
+  const { queryFn, sessions } = fakeQuery(opts);
   const captureDir = join(dir, "captures");
   const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null, captureDir });
   await sup.start();
@@ -106,18 +106,33 @@ describe("a run's reports", () => {
   it("ends with its own tokens and context per call, after its start", async () => {
     const { sup, broker, sessions } = await setup();
     const w = await sup.spawnJoined(spawn);
-    await until(() => sessions.length === 1);
+    await until(() => ops(broker, "run_remote").length === 1);
     sessions[0]!.say("one", { input_tokens: 1000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
     sessions[0]!.say("two", { input_tokens: 2000, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
     sessions[0]!.totals = { inputTokens: 3000, outputTokens: 30, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 1 };
     sessions[0]!.finish();
     await until(() => ops(broker, "run_end").length === 1);
-    expect(ops(broker).map((o) => o.op.op)).toEqual(["session_join", "run_start", "run_end"]);
+    expect(ops(broker).map((o) => o.op.op)).toEqual(["session_join", "run_start", "run_remote", "run_end"]);
     const end = ops(broker, "run_end")[0]!.op as Extract<BoardOpInput, { op: "run_end" }>;
     expect(end).toMatchObject({ id: w.id, calls: 2, tokens: { input: 3000, output: 30, cache_read: 0, cache_write: 0 } });
     expect(end.ctx).toHaveLength(2);
     expect(end).not.toHaveProperty("cost_usd");
     expect(store.outbox()).toEqual([]);
+  });
+
+  it("gives its run the Remote Control link once the worker has it, after its start; nothing when it has none", async () => {
+    const { sup, broker } = await setup();
+    const w = await sup.spawnJoined(spawn);
+    await until(() => ops(broker, "run_remote").length === 1);
+    expect(ops(broker).map((o) => o.op.op)).toEqual(["session_join", "run_start", "run_remote"]);
+    expect(ops(broker, "run_remote")[0]).toMatchObject({ as: "Luigi", ctx: { worker: w.id }, op: { op: "run_remote", project: "bobnet", id: w.id, remote_url: "https://claude.ai/code/session_test" } });
+    expect(ops(broker, "run_start")[0]!.op).not.toHaveProperty("remote_url");
+
+    const without = await setup(testConfig(dir, BOBNET), { remoteControl: false });
+    const v = await without.sup.spawnJoined(spawn);
+    await until(() => store.auditLog().some((a) => a.action === "remote-control:failed" && a.worker_id === v.id));
+    await tick(20);
+    expect(ops(without.broker, "run_remote")).toEqual([]);
   });
 
   /** The board away for everything but the join a spawn waits for; what it took, in order. */
@@ -135,22 +150,22 @@ describe("a run's reports", () => {
     const { sup, broker, sessions } = await setup();
     const board = away(broker);
     const w = await sup.spawnJoined(spawn);
-    await until(() => sessions.length === 1);
-    sessions[0]!.finish();
     await until(() => store.outbox("board_op").length === 2);
+    sessions[0]!.finish();
+    await until(() => store.outbox("board_op").length === 3);
     board.away = false;
     sup.onConnected();
     await until(() => store.outbox().length === 0);
-    expect(board.taken).toEqual(["session_join", `run_start ${w.id}`, `run_end ${w.id}`]);
+    expect(board.taken).toEqual(["session_join", `run_start ${w.id}`, `run_remote ${w.id}`, `run_end ${w.id}`]);
   });
 
   it("drops a report the board refuses, so it holds up none behind it", async () => {
     const { sup, broker, sessions } = await setup();
     const board = away(broker);
     await sup.spawnJoined(spawn);
-    await until(() => sessions.length === 1);
-    sessions[0]!.finish();
     await until(() => store.outbox("board_op").length === 2);
+    sessions[0]!.finish();
+    await until(() => store.outbox("board_op").length === 3);
     board.away = false;
     broker.board = (op) => {
       if (op.op === "run_start") throw new BrokerError("invalid", "No session BOB-2 build 1 in bobnet");
