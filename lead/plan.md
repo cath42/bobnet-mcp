@@ -38,7 +38,11 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   Peach told to accept BOB-5.
 - 02:58:13Z: transient broker socket drop (1006), reconnected 7 s later; not a deploy or restart.
 - Luigi (w_7735afa0): done, a720d5f (0c: dotted ids, Toad's notes 1-2, import findings 3-6 and 9).
-  Finding 5 built as blocking; Peach (w_48c8180e) confirms. Finding 7 waits on Picard.
+  Finding 5: Peach confirmed BLOCKS (19fdde9); Helix's R1 is Picard's to fix or confirm. Finding 7 waits on Picard.
+- Peach (w_48c8180e): 0b accepted as follow-up, NOT BOB-5: BOB-5 stays Ready (#1-#3 lists/groups/
+  Needed-before, #4's answer UI with Undo + one key per answer, #5 allow/deny, #6 counts, phone shots).
+- Luigi (w_2bb286e8): BOB-2 rest: (a) close_release + undo, (b) step 4 view data, (c) CI runs.
+  The broker deploy is pinned to the 0c commit Toad signs off; BOB-2 lands don't ride it.
 - Toad (w_17300a34): reviewing a720d5f, plus whether 0b+0c are deploy-ready and Casper's post-deploy checks.
 - rc.30: tagged bd96a94, installed, poe told (m_25706d01). Supervisor only (e221738, b31489a).
 - Toad (w_1b639410): done, 6c52056: all four signed off. Later notes: Luigi (1) --post fetch
