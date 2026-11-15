@@ -67,6 +67,11 @@ export async function authenticate(req: Request, env: Env): Promise<Identity | n
     }
     if (laptop) return { kind: "laptop", laptop };
     const source = ciTokens(env)[commonName];
+    // Run-slot runs are source 'slot' (§10): a CI by that source would write into their namespace.
+    if (source?.toLowerCase() === "slot") {
+      console.error("a CI token maps to the run slots' reserved source", { commonName });
+      return null;
+    }
     return source ? { kind: "ci", source } : null;
   }
 

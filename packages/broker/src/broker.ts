@@ -261,7 +261,7 @@ export class Broker extends DurableObject<Env> {
         "INSERT INTO laptop_supervisors (laptop, name, projects) VALUES (?, ?, ?) ON CONFLICT (laptop) DO UPDATE SET name = excluded.name, projects = excluded.projects",
         laptop,
         frame.name,
-        JSON.stringify(frame.projects ?? []),
+        frame.projects ? JSON.stringify(frame.projects) : null,
       );
       this.sql.exec("UPDATE laptop_reports SET reporter = ? WHERE laptop = ?", frame.name, laptop);
       if (pinned !== frame.name) this.audit(conn, "supervisor", { laptop, name: frame.name, was: pinned ?? null });

@@ -7,17 +7,19 @@ its project only.
 
 ## The token
 
-A CI system gets its own Cloudflare Access service token, never a laptop's. Casper adds it to the
-broker's secrets as a JSON map of the token's client ID to the source name its runs are recorded
-under:
+A CI system gets its own Cloudflare Access service token, never a laptop's. Casper adds the token
+to the broker's Access application, as for a laptop (README, set up step 1), or Access refuses its
+requests before the Worker sees them. Then he adds it to the broker's secrets as a JSON map of the
+token's client ID to the source name its runs are recorded under:
 
 ```sh
 wrangler secret put CI_TOKENS_GITHUB   # {"<client-id>.access": "github-actions"}
 ```
 
 Every `CI_TOKENS` and `CI_TOKENS_<NAME>` secret is merged, like `LAPTOP_TOKENS`. The source comes
-from the token. A body that names another source is refused. A CI token may post runs and nothing
-else: no socket, no board reads, no export.
+from the token. A body that names another source is refused. `slot` is the run slots' own source,
+so a token mapped to it is refused. A CI token may post runs and nothing else: no socket, no board
+reads, no export.
 
 ## The call
 
@@ -25,7 +27,7 @@ else: no socket, no board reads, no export.
 
 | Field | |
 |---|---|
-| `external_id` | The run's id in its CI, unique per source. Include the attempt for a re-run: `123-2`. Required. |
+| `external_id` | The run's id in its CI, unique per source: one per job that reports, so two jobs never share one. Include the attempt for a re-run: `123-2`. Required. |
 | `name` | Workflow and job, as the dashboard shows it. Required. |
 | `status` | `queued`, `running`, `passed`, `failed` or `cancelled`. Required. |
 | `project` | The BobNet project key. Leave it out when `repo` is one project's repo. |
@@ -49,7 +51,10 @@ curl -sf https://<broker>/v1/runs \
 
 ## GitHub Actions
 
-Put a step first and one last in the job. The last one runs on failure and cancel too:
+Put a step first and one last in each job that reports. The last one runs on failure and cancel too.
+The `external_id` names the job, since a workflow run's id is every job's: with one id, the first job
+to end makes the run final and a later job's failure is dropped. In a matrix, add
+`-${{ strategy.job-index }}` to it as well.
 
 ```yaml
 - name: Report to BobNet
@@ -57,7 +62,7 @@ Put a step first and one last in the job. The last one runs on failure and cance
     curl -sf "$BOBNET_URL/v1/runs" \
       -H "CF-Access-Client-Id: ${{ secrets.BOBNET_CI_ID }}" -H "CF-Access-Client-Secret: ${{ secrets.BOBNET_CI_SECRET }}" \
       -H "content-type: application/json" \
-      -d '{"external_id":"${{ github.run_id }}-${{ github.run_attempt }}","name":"${{ github.workflow }} / ${{ github.job }}",
+      -d '{"external_id":"${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}","name":"${{ github.workflow }} / ${{ github.job }}",
            "repo":"${{ github.repository }}","branch":"${{ github.ref_name }}","sha":"${{ github.sha }}",
            "url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
            "status":"running","started_at":"'"$(date -u +%FT%TZ)"'"}' || true
@@ -71,11 +76,13 @@ Put a step first and one last in the job. The last one runs on failure and cance
     curl -sf "$BOBNET_URL/v1/runs" \
       -H "CF-Access-Client-Id: ${{ secrets.BOBNET_CI_ID }}" -H "CF-Access-Client-Secret: ${{ secrets.BOBNET_CI_SECRET }}" \
       -H "content-type: application/json" \
-      -d '{"external_id":"${{ github.run_id }}-${{ github.run_attempt }}","name":"${{ github.workflow }} / ${{ github.job }}",
+      -d '{"external_id":"${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}","name":"${{ github.workflow }} / ${{ github.job }}",
            "repo":"${{ github.repository }}","sha":"${{ github.sha }}","status":"'"$s"'","ended_at":"'"$(date -u +%FT%TZ)"'"}' || true
 ```
 
 `|| true` keeps a BobNet outage from failing the build.
 
 A project on GitHub Actions doesn't need this at all once its supervisor reports its runs from
-`gh run list` (the gh adapter, ADR 0001 §10). That needs no secret in GitHub.
+`gh run list` (the gh adapter, ADR 0001 §10). That needs no secret in GitHub. Don't do both on one
+repo: the adapter records a run per workflow run and the token one per job, so each run would count
+twice.

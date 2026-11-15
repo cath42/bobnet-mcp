@@ -1,4 +1,6 @@
 import type { BoardCtx, GrantField, ServerFrame } from "@bobnet/protocol";
+import { runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { agent, Client, errorCode, laptopToken, ORIGIN, ownerToken } from "./helpers.ts";
 
@@ -165,10 +167,19 @@ describe("the board's messages (ADR 0001 §7)", () => {
     const sup = await agent(1, "supervisor");
     // An older supervisor registers no projects: it reports no CI runs.
     await sup.request({ t: "register", name: "supervisor", supervisor: true });
+    const projects = () =>
+      runInDurableObject(env.BROKER.getByName("network"), (_, state) => state.storage.sql.exec("SELECT projects FROM laptop_supervisors WHERE laptop = 'mbp-1'").toArray());
+    expect(await projects()).toEqual([{ projects: null }]);
     await expect(sup.request({ t: "board_op", as: "supervisor", op: run })).rejects.toMatchObject({ code: "forbidden", message: expect.stringMatching(/didn't register helix/) });
     // Registered again with helix: the list is replaced, and the run is the gh adapter's, with no worker.
     await sup.request({ t: "register", name: "supervisor", supervisor: true, projects: ["helix"] });
     await expect(sup.request({ t: "board_op", as: "supervisor", op: run })).resolves.toMatchObject({ ref: "github-actions 55-1", tied: null });
+    expect(await projects()).toEqual([{ projects: '["helix"]' }]);
+    // The history names the supervisor that reported it.
+    const events = await runInDurableObject(env.BOARD.getByName("board"), (_, state) =>
+      state.storage.sql.exec("SELECT actor_kind, actor FROM events WHERE tbl = 'ci_runs'").toArray(),
+    );
+    expect(events).toEqual([{ actor_kind: "ci", actor: "github-actions via supervisor@mbp-1" }]);
     await expect(sup.request({ t: "board_op", as: "supervisor", op: { ...run, project: undefined } })).rejects.toMatchObject({ code: "invalid" });
     // A peer on another connection is not the supervisor, whatever it registered.
     const riker = await agent(1, "Riker");

@@ -28,6 +28,8 @@ export default defineConfig({
           // CI systems' tokens, by source (ADR 0001 §10).
           CI_TOKENS: JSON.stringify({ "ci-1.access": "github-actions" }),
           CI_TOKENS_BK: JSON.stringify({ "ci-2.access": "buildkite" }),
+          // A CI token mapped to the run slots' reserved source, which no CI may take.
+          CI_TOKENS_RESERVED: JSON.stringify({ "ci-3.access": "Slot" }),
           TEST_SIGNING_JWK: JSON.stringify(privateJwk),
         },
         outboundService(req) {

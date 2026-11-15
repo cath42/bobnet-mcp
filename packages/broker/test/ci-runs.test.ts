@@ -8,7 +8,7 @@ import { accessToken, laptopToken, ORIGIN, ownerToken } from "./helpers.ts";
 
 const owner: BoardCaller = { kind: "owner", email: "owner@example.com" };
 const board = () => env.BOARD.getByName("board");
-const ciToken = (n: 1 | 2) => accessToken({ common_name: `ci-${n}.access`, sub: "" });
+const ciToken = (n: 1 | 2 | 3) => accessToken({ common_name: `ci-${n}.access`, sub: "" });
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
 async function ok(caller: BoardCaller, op: BoardOpInput): Promise<unknown> {
@@ -52,6 +52,8 @@ describe("POST /v1/runs (ADR 0001 §10)", () => {
     expect((await exports.default.fetch(`${ORIGIN}/v1/runs`, { method: "POST" })).status).toBe(401);
     expect((await post({ ...run, status: "running" }, await laptopToken(1))).status).toBe(403);
     expect((await post({ ...run, status: "running" }, await ownerToken())).status).toBe(403);
+    // Run-slot runs are source 'slot': no CI token takes it, whatever its case.
+    expect((await post({ ...run, status: "running" }, await ciToken(3))).status).toBe(401);
     expect((await post(null, undefined, "GET")).status).toBe(405);
     const ci = { "cf-access-jwt-assertion": await ciToken(1) };
     expect((await exports.default.fetch(`${ORIGIN}/v1/ws`, { headers: { ...ci, upgrade: "websocket" } })).status).toBe(403);

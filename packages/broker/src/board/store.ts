@@ -94,6 +94,8 @@ interface ItemRow {
 export interface CiCaller {
   kind: "ci";
   source: string;
+  /** The supervisor whose gh adapter reported it, as `<name>@<laptop>`; absent from POST /v1/runs. */
+  via?: string;
 }
 type Caller = BoardCaller | CiCaller;
 
@@ -613,7 +615,7 @@ export class BoardStore {
     caller: BoardCaller,
     op: Exclude<BoardOp, Op<BoardReadName>>,
   ): { result: Written; changed: { project: string; seq: number; refs: string[] } | null; messages: BoardMessage[] } {
-    if (op.op === "ci_run") return this.ciRun(GH_SOURCE, ghRun(caller, op));
+    if (op.op === "ci_run") return this.ciRun(GH_SOURCE, ghRun(caller, op), whoOf(caller));
     const tx = new Tx(this.sql, caller);
     const result = this.apply(tx, op);
     if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null, messages: [] };
@@ -621,8 +623,8 @@ export class BoardStore {
   }
 
   /** A CI system's report of one run (§10), from POST /v1/runs: the source is its token's. */
-  ciRun(source: string, op: Op<"ci_run">): { result: BoardResults["ci_run"]; changed: { project: string; seq: number; refs: string[] } | null; messages: BoardMessage[] } {
-    const tx = new Tx<Caller>(this.sql, { kind: "ci", source });
+  ciRun(source: string, op: Op<"ci_run">, via?: string): { result: BoardResults["ci_run"]; changed: { project: string; seq: number; refs: string[] } | null; messages: BoardMessage[] } {
+    const tx = new Tx<Caller>(this.sql, via === undefined ? { kind: "ci", source } : { kind: "ci", source, via });
     const result = this.reportCi(tx, source, op);
     if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null, messages: [] };
     return { result, changed: { project: tx.projectKey!, seq: tx.seqs.at(-1)!, refs: [...tx.refs] }, messages: [] };
@@ -2104,7 +2106,7 @@ export class BoardStore {
 /** One write's caller, time and events. */
 /** A caller as the history names them: the owner's email, or an agent's address. */
 function whoOf(caller: Caller): string {
-  return caller.kind === "owner" ? caller.email : caller.kind === "ci" ? caller.source : `${caller.name}@${caller.laptop}`;
+  return caller.kind === "owner" ? caller.email : caller.kind === "ci" ? (caller.via ? `${caller.source} via ${caller.via}` : caller.source) : `${caller.name}@${caller.laptop}`;
 }
 
 class Tx<C extends Caller = BoardCaller> {
