@@ -83,6 +83,13 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - Luigi c404749: BOB-3 evidence (3-of-138 test; shots bob3acc-*: two projects, Helix's sample on a phone,
   Done unticked). cdedac5: BOB-4 service gap (runs' ctx + RC, ci_runs, item history, get with_tasks).
   Peach re-checks BOB-3 with BOB-4's acceptance (one spawn). Toad reviews cdedac5 with BOB-4's UI.
+- Casper (~14:05Z) sees the old web app: same URL, assets are no-store; told him to reload. Then: "a
+  crapton of old permission requests ... no longer valid". Cause: orphaned requests never expire
+  (mbp-1 has 3, Helix's Bender) + broker keeps every laptop_reports row (BOB-17). Captured bug BOB-26
+  (production). Offered to close mbp-1's 3 on his "close them"; asked which laptop most rows name.
+- Luigi w_a53c1f42 done: BOB-4 at 5474b52 (+ cdedac5 service, c404749 BOB-3 evidence). Broker deploy
+  only. Toad w_f6528678 reviews. Luigi w_53a2f2f6 on BOB-26 (no session: a backlog item can't have one);
+  its supervisor part needs rc.34.
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
