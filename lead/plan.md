@@ -50,7 +50,7 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   consults recorded in ADR 0001 §5, §6, §8, §10. Low findings 1-4 -> Luigi w_4411f00c (ride a later deploy).
 - Broker DEPLOYED (2nd) on Casper's go, 04:08:40Z, from fa05243's tree: Version ID
   d5f2d7db-7936-4a34-bd4f-13739701ce52 (broker migration 8). Check 1 PASS (no drops/report errors to
-  04:14:30Z). Export re-check with Casper. rc.32 to poe (supersedes rc.31; mbp-1 still on rc.29).
+  04:14:30Z). Check 2 PASS (Casper: export still version 1). rc.32 to poe (supersedes rc.31; mbp-1 still on rc.29).
 - rc.32: tagged 2173995 (BOB-2 rest + 1518102), installed at ~/.local/share/bobnet/v2.0.0-rc.32,
   NOT announced. Needs broker migration 8 deployed first. Luigi's fa05243 (findings 1-4, broker + docs
   only, Mario read it OK; Toad signed it off, ef09481) makes the deploy tree fa05243, not the tag. Asked Casper for the second deploy from
