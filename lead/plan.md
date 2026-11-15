@@ -73,8 +73,9 @@ broker deploy: one deploy (Casper's call) + rc.31 carry both, then BOB-14 posts.
 
 ## Waiting on Casper
 - The next broker deploy: Board migration 2 once 0b lands.
-- Board admin: should anyone besides the owner get `admin`? Peach's grants give none (asked 2026-11-15).
 
 ## Decided by Casper
+- 2026-11-15: no one besides the owner gets `admin` on a board. product/bobnet-grants.json already
+  gives none; no change.
 - 2026-11-15: imported task ids keep their dotted form. Next: Toad amends ADR 0001 §2 and ItemRef
   (after w_1b639410's review), then Luigi changes store and import, before BOB-9. Peach records it.
