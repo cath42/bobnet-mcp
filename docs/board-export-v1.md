@@ -191,6 +191,9 @@ project's `lead/questions.md`. The mapping rules:
 - A milestone is a release, numbered from its title (`R2 Edit and audit`). An archived release is
   `closed`, the first one not archived is `open`, and the rest are `planned`.
 - A feature In Progress is open, with a build session `imported`.
+- An item's final summary and its references, which have no field, are appended to its notes:
+  `Final summary:` and its text, then `References:` with one path or URL per line. Assignee and
+  priority are dropped (counted in the report).
 - Open questions and actions come from `lead/questions.md`'s tables. Answered questions come from its
   running paragraph (`Q-258 (Casper, 2026-11-13, …)`), with the answer verbatim. The next ids come
   from `The next ID is **Q-267**`.

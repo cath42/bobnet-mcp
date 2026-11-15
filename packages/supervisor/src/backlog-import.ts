@@ -365,7 +365,7 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
     };
     if (kind === "feature" && status === "Done" && f.ac.some(([c]) => !c)) count("Done feature, criteria not ticked");
     if (f.assignee.length) count("assignee not carried (no field)");
-    if (f.references.length) count("references not carried (no field)");
+    if (f.references.length) count("references appended to notes");
     if (f.priority) count("priority not carried (no field)");
     if (f.summary) count("final summary appended to notes");
     let ord = f.ordinal;
@@ -403,7 +403,7 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
       status,
       title: f.title || id,
       description: f.desc,
-      notes: f.summary ? `${f.notes ? `${f.notes}\n\n` : ""}Final summary:\n${f.summary}` : f.notes,
+      notes: notesOf(f),
       plan: f.plan,
       parent,
       release: kind === "task" ? null : rel,
@@ -497,6 +497,13 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
 }
 
 type ItemExport = ExportItem;
+
+/** An item's notes, then what Backlog.md kept beside them that has no field: its final summary, and its references one per line. */
+function notesOf(f: BacklogFile): string | null {
+  const refs = [...new Set(f.references.map((r) => r.trim()).filter(Boolean))];
+  const parts = [f.notes, f.summary && `Final summary:\n${f.summary}`, refs.length > 0 && `References:\n${refs.map((r) => `- ${r}`).join("\n")}`].filter(Boolean);
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
 
 /** The cells of a Markdown table row. */
 const cells = (line: string) =>

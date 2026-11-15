@@ -145,6 +145,27 @@ describe("the Backlog.md import", () => {
     ]);
   });
 
+  it("appends an item's references to its notes as a References list, after its final summary (BOB-14 #6)", () => {
+    const section = (name: string, text: string) => `<!-- SECTION:${name}:BEGIN -->\n${text}\n<!-- SECTION:${name}:END -->\n`;
+    const { doc, report } = backlogToExport(
+      helix,
+      backlog([
+        ["tasks", task("LAND-1", { references: ["product/requirements/migration.md", "https://example.com/adr", "product/requirements/migration.md"] }, section("NOTES", "Kept as written.") + section("FINAL_SUMMARY", "Shipped."))],
+        ["tasks", task("LAND-2", { references: ["architecture/decisions/0001-board-service.md"] })],
+        ["tasks", task("LAND-3", {}, section("NOTES", "Only notes."))],
+        ["tasks", task("LAND-4")],
+      ]),
+      now,
+    );
+    expect(doc.projects[0]!.items.map((i) => i.notes)).toEqual([
+      "Kept as written.\n\nFinal summary:\nShipped.\n\nReferences:\n- product/requirements/migration.md\n- https://example.com/adr",
+      "References:\n- architecture/decisions/0001-board-service.md",
+      "Only notes.",
+      null,
+    ]);
+    expect(report.counts["references appended to notes"]).toBe(2);
+  });
+
   it("opens a feature In Progress with an imported session", () => {
     const { doc } = backlogToExport(helix, backlog([["tasks", task("LAND-49", { type: "increment", status: "In Progress" })]]), now);
     const p = doc.projects[0]!;
