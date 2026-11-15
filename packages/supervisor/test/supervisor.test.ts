@@ -828,6 +828,23 @@ describe("BobNet messages", () => {
     expect(sessions[1]!.inputs[0]).not.toContain("m_taken");
   });
 
+  it("marks a message folded into a running turn taken, from the turn's result (rc.28: m_0e7fbbf0)", async () => {
+    const { sup, sessions } = await setup();
+    const w = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    sessions[0]!.take(0);
+    // It arrives mid-turn: the CLI folds it in, says so only in the result, and the worker ends there.
+    sup.onPush({ t: "deliver", to: "Bill@mbp-1", wake: true, msg: msg({ id: "m_folded", body: "mid-turn" }) });
+    await until(() => sessions[0]!.inputs.length === 2);
+    sessions[0]!.foldAndEnd(0, [1]);
+    sessions[0]!.end();
+    await until(() => sup.status(w.id).state === "done");
+    expect(store.waiting("helix", "bill")).toEqual([]);
+    sup.spawn({ project: "helix", role: "bill", task: "t2" });
+    await until(() => sessions.length === 2 && sessions[1]!.inputs.length === 1);
+    expect(sessions[1]!.inputs[0]).not.toContain("m_folded");
+  });
+
   it("drops quiet broadcasts for workers but acks them", async () => {
     const { sup, broker, sessions } = await setup();
     sup.spawn({ project: "helix", role: "bill", task: "t" });

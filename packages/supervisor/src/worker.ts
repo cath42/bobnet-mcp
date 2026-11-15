@@ -273,14 +273,23 @@ export class WorkerRun {
     return uuid;
   }
 
-  /** The CLI stamps a turn's reply with the uuid of each input it takes (user_message_uuid), and echoes a replayed input with its own. */
+  /**
+   * The inputs a turn has taken, by uuid: its replies and its result list them in user_message_uuids
+   * (user_message_uuid alone from older CLIs), and a replayed input is echoed with its own. Input folded
+   * into a running turn shows only there: the turn's replies keep its first input's uuid, or none, and
+   * the fold is first listed by a later reply or the turn's result (rc.28, m_0e7fbbf0).
+   */
   private taken(msg: SDKMessage): void {
     if (this.untaken.size === 0) return;
-    const uuid = msg.type === "assistant" ? msg.user_message_uuid : msg.type === "user" && "isReplay" in msg && msg.isReplay ? msg.uuid : undefined;
-    const refs = uuid ? this.untaken.get(uuid) : undefined;
-    if (!refs) return;
-    this.untaken.delete(uuid!);
-    this.opts.onInputTaken?.(refs);
+    let uuids: Array<string | undefined> = [];
+    if (msg.type === "assistant" || msg.type === "result") uuids = msg.user_message_uuids ?? [msg.user_message_uuid];
+    else if (msg.type === "user" && "isReplay" in msg && msg.isReplay) uuids = [msg.uuid];
+    for (const uuid of uuids) {
+      const refs = uuid ? this.untaken.get(uuid) : undefined;
+      if (!refs) continue;
+      this.untaken.delete(uuid!);
+      this.opts.onInputTaken?.(refs);
+    }
   }
 
   /**

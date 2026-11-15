@@ -57,6 +57,17 @@ export class FakeSession implements QueryHandle {
     this.emit({ type: "assistant", user_message_uuid: this.uuids[i], message: { content: [{ type: "text", text: "on it" }], usage: { input_tokens: 1, output_tokens: 1 } } } as unknown as SDKMessage);
   }
 
+  /**
+   * The running turn, started by input `turn`, folds inputs `folded` in between tool rounds, and ends:
+   * as the CLI (rc.28), its later replies keep the turn's own uuid off, and only its result lists every
+   * input it took, in user_message_uuids. The folded text is never echoed.
+   */
+  foldAndEnd(turn: number, folded: number[], result = "turn done"): void {
+    this.emit({ type: "assistant", message: { content: [{ type: "text", text: "after the fold" }], usage: { input_tokens: 1, output_tokens: 1 } } } as unknown as SDKMessage);
+    const uuids = [turn, ...folded].map((i) => this.uuids[i]);
+    this.emit({ type: "result", subtype: "success", result, user_message_uuid: uuids[0], user_message_uuids: uuids, modelUsage: { "claude-sonnet-5-5": this.totals }, total_cost_usd: this.totals.costUSD } as unknown as SDKMessage);
+  }
+
   /** Asks permission the way the CLI would, through canUseTool. */
   ask(tool: string, input: Record<string, unknown>): Promise<PermissionResult | null> {
     return this.options.canUseTool!(tool, input, { signal: new AbortController().signal } as never);
