@@ -64,6 +64,10 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   ~/.local/share/bobnet/v2.0.0-rc.33. Broker DEPLOYED (6th) 05:45:56Z from d584f4c: Version ID
   6671ac8d-de76-40e8-8f6d-2dc0fcde87dc. Sent to poe (m_522451f6), no hurry, at a close; check 3 is
   mine (worker tool description), then Peach ticks BOB-10 AC 5.
+- Luigi w_441c4622 done: BOB-3 at 284842d (Overview tab, roadmap links + "Not in a release" counts,
+  service Feature head card; additive OverviewRow.no_release; overview open/next_ready fixes).
+  Broker deploy needed, no release. History (BOB-14 AC 5) not in the spec. Toad w_bd150a53 reviews;
+  Daisy w_d38c1154 rules gaps 1-5 and specs history + "found in" preset for BOB-4.
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
