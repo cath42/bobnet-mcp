@@ -16,6 +16,10 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   errors since). Check 3: Mario's board tools answer (R1, R2; BOB-7 in full). Peach's read: w_f84edce0.
 - 04:40Z spawned Peach w_f84edce0 (BOB-14 cut-over + accept BOB-2) and Luigi w_9ff16006 (BOB-7).
   board_list `progress` shows 0/0 for features with criteria: Luigi to fix if a bug.
+- Peach w_f84edce0 done, 461a875: check 3 PASS (her read answered). BOB-14 cut over (product/backlog
+  removed, product/BOARD.md); AC 1, 3, 4, 6 checked; AC 2, 5, 7 open (7 at the nightly backup).
+  BOB-2 accepted bar AC 5 (feature progress = own ac + tasks'; Luigi in BOB-7), AC 10 (Helix-sized
+  board test: Luigi after BOB-7), AC 11 (= BOB-14 AC 7).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
   BOB-7, BOB-8, BOB-10, BOB-3, BOB-4, BOB-5. Toad reviews each; broker deploy after each review.
 
