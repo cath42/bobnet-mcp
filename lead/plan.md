@@ -121,7 +121,10 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   only, no protocol/store change). Broker DEPLOYED (10th) 16:21:39Z from v2 bbabca7: Version ID
   bfdf77fc-9726-47d6-a188-702b92a3b203. ALL release-1 views are now deployed (BOB-3, 4, 5, 7, 8, 10).
   Daisy w_a39671d2 rules gaps 1-3 (permission Undo, note on Allow, Now tab); Peach w_6caf6b1d: BOB-5 Done (AC 1-6, DoD). BOB-10 AC 3
-  evidence in; AC 5, DoD 2, 4 wait on rc.34. Live look wanted: Waits on you + Needs you on a phone. Then: deploy (BOB-4 + BOB-26 dashboard, or with BOB-5), rc.34.
+  evidence in; AC 5, DoD 2, 4 wait on rc.34. Live look wanted: Waits on you + Needs you on a phone.
+- Daisy w_a39671d2 (1ac53a2): BOB-5 accepted with 7 small changes; no Undo for a permission, note only
+  with Deny, Now leaves the tabs (CI line under Working now). Luigi w_a54cca4d builds them; deploy from
+  his hash. Her two Toad points (decided-permission record, Allow note delivery) captured as BOB-29. Then: deploy (BOB-4 + BOB-26 dashboard, or with BOB-5), rc.34.
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
