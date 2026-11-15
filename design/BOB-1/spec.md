@@ -164,6 +164,31 @@ Not built in BOB-7, and where it goes:
   back. The title is the first sentence; the full text is kept as Casper's words.
 - Phone: bottom sheet, 16 px text (no zoom on focus), full-width buttons.
 
+### BOB-8 as built: decided 2026-11-14 (Luigi's gaps 2-4, shots `bob8-*`)
+Accepted as built: the Triage table, totals, filters, order, Show all, the note, the empty state, the
+release select under Edit your gates, the capture dialog and bottom sheet. The Project choice in the dialog
+shows only when more than one project's board is in the service; with one, the note names where it goes.
+That is right. Changes:
+- **Parent hint (gap 2): show it.** When a backlog item has a parent hint, its item cell gets one muted line
+  under Casper's words (or under the title when there are none): "Parent hint: BOB-7", the ref a link to
+  `#feature/BOB-7`. No column, nothing when there is no hint. Same line on the phone card. Only the PO sets
+  it; the dashboard never offers to change it.
+- **"Waits on you" before that tab exists (gap 3).** Name a place only if Casper can open it. Until the
+  Waits on you tab ships (BOB-5):
+  - the toast for a bug that blocks use reads "Captured as BOB-26 in BobNet's triage list, marked blocks
+    use." (no "and on Waits on you");
+  - the dialog's note for Bug + Blocks use reads "A bug that blocks use goes first in the triage list, marked
+    blocks use."
+  When BOB-5 ships the tab, both go back to the wording above (", and on Waits on you"; "also goes on Waits
+  on you until it is slotted or closed").
+- **Board down (gap 4): a toast is right.** `#states` is a prototype page that shows states side by side;
+  the dashboard has no such route. Built as: the capture is kept on the device and the toast reads
+  "Captured. It waits on this device and goes to BobNet's triage list when the board is back." Accepted.
+  The red "board unavailable" banner is not BOB-8's.
+- **Release in the gate toast.** "BOB-11 is in R2 Start a session from the UI." runs the release into the
+  sentence. Quote the release's title: "BOB-11 is in “R2 Start a session from the UI”. Recorded as
+  yours." The roadmap's move toast ("Moved BOB-7 to “…”") the same.
+
 ### States (`#states`)
 Board unavailable (red banner: since when, showing what it last said, captures wait on the device), loading,
 nothing waits on you, a project with no releases, waiting on a run (CI as usual, running long, a local run
