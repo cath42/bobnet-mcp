@@ -129,6 +129,33 @@ Not built in BOB-7, and where it goes:
   question, the recommendation and what comes after.
 - Beside the chain (desktop, sticky) or under it (tablet, phone): **In no session yet** (tasks no session has
   touched) and **All tasks as the board has them now** (open on desktop, folded below 1100 px).
+- **History** (BOB-14 AC 5; decided 2026-11-15, built with BOB-4). The last section of the main column,
+  after the chain (on a phone and tablet, after the task lists). Folded: one button, "History · 23
+  changes since 15 Nov". Unfolded:
+  - A switch: **This feature** (default) · **With its tasks (N)**. With tasks, each line leads with the
+    task's id (a link that scrolls to its row in All tasks).
+  - One line per board event, **newest first**: time ("15 Nov 04:42", the full time as a tooltip) · who
+    ("Peach, PO"; "Casper" for the owner's own; "CI"; "the board" for its own) · what. When the event
+    carries a session, the session follows the who as a link to its card: "Luigi, engineer · build A".
+  - **What**, in words from the event's changes: "status Ready → In Progress"; "release R1 → R2"; "criterion
+    5 checked" with its evidence muted on the next line, cut to two lines (tap for all); "criterion 3
+    unchecked"; "title changed" / "description changed" / "notes changed" with **Show** opening old and
+    new one above the other (old struck through, muted); "created"; "archived" with the reason. Several
+    changes in one event: one line each, under one time and who.
+  - The event's **reason**, when there is one, muted and quoted under it. A take-back reads "Casper took
+    back his change of 15 Nov 04:40" and the line it took back is muted.
+  - **The oldest line**, for anything that came over in an import: "Came over from Backlog.md in the
+    import, 15 Nov 2026. Its history before that is in git." (muted, with the commit when the import event
+    names one). This is AC 5's evidence: the service's history starts at the move.
+  - 50 lines, then **Show older (N)**. Empty can't happen (the creation is an event).
+  - Phone: each line stacks: time and who on one line, what under it; Show and the switch full width.
+  - Read only. Nothing here undoes or edits; Casper's own Undo is still the toast's, at the time.
+- **Capture from the Feature view** (Luigi's BOB-10 gap 1; decided 2026-11-15, built with BOB-4). **+ Capture**
+  opened on `#feature/<id>` presets **found in** to that feature as well as its project. In the dialog it
+  is a muted line under the field: "Found in BOB-4 · A feature's sessions, outcomes and tasks", with a
+  **×** (a 44 px target) that clears it. It is set for any capture, bug or not, and sent as `found_in`.
+  The toast adds nothing. Only the Feature view presets it; every other screen leaves it empty and shows
+  no line. Switching the project in the dialog clears it.
 
 ### Waits on you (`#waits`) (waiting-on-casper 1-3, bugs 3, C8)
 - Filter by project (with counts). Two groups: **Holds work up** (red edge) and **When you have time**,
@@ -188,6 +215,63 @@ That is right. Changes:
 - **Release in the gate toast.** "BOB-11 is in R2 Start a session from the UI." runs the release into the
   sentence. Quote the release's title: "BOB-11 is in “R2 Start a session from the UI”. Recorded as
   yours." The roadmap's move toast ("Moved BOB-7 to “…”") the same.
+
+### BOB-3 as built: decided 2026-11-15 (Luigi's gaps 1-5, shots `bob3-*`)
+Accepted as built: the Overview (Needs you, Working now, Projects, all three widths), the roadmap's links
+and counts lines, "Not in a release" with its counts line, and the `#feature/<id>` head card. Two changes,
+and the rulings below.
+- **Tab order.** Built: Overview · Now · Feature · Roadmap · Triage · Usage · Sessions. Make it
+  **Overview · Roadmap · Feature · Triage · Now · Usage · Sessions** (the spec's order, then the old
+  tabs). When BOB-5 ships, **Waits on you** goes second, after Overview.
+- **Project row on a tablet.** In the two-cells-per-line grid the Release cell's "4 of 10 features done"
+  touches the NEXT label under it. Give the grid a row gap of 12 px (as between the cells on a phone),
+  so each cell's label starts clear of the cell above. Desktop and phone are right.
+
+**1. An item's history (BOB-14 AC 5): on the Feature view, built with BOB-4.** See *History* under the
+Feature view above.
+
+**2. Stop, Reset, the quiet flag, once Now retires.** Now stays, as it is, until BOB-4 and BOB-5 have
+shipped and what it carries has a home. Its parts go here:
+- **An agent's line opens.** Every agent line (Working now on the Overview; On it now and a running
+  session's agent lines on the Feature view) is a button. Tapping it opens one detail row under it, one
+  at a time, again to close: model · laptop · worked (e.g. "1 h 12 min") · context now and calls, then
+  links **Open in Claude ↗** (when it has a Remote Control URL) and **Context per call** (the Feature view:
+  opens its session card's panel on that agent; the Overview: goes to `#feature/<id>` and opens it), then
+  **Stop** (danger) and **Reset**, with today's confirmations word for word. Phone: the buttons are full
+  width, 44 px. Built with BOB-4, on all three places at once.
+- **Quiet flag:** a working agent with no activity for 15 min shows amber "quiet 23 min" in its state slot
+  (where "waiting on you" goes), with today's tooltip. Never on a waiting agent.
+- **Permissions that are the lead's, not Casper's:** not in Needs you. The agent's state reads "waiting on
+  Mario" (the lead's name; muted, not amber), and its detail row has **Allow** / **Deny**, so Casper can
+  still step in.
+- **Queued workers:** a muted line under Working now's list: "2 queued: Luigi, Toad".
+- **CI banner:** replaced by the run line (Working now's third line, the Feature view's run line).
+- Now leaves the tabs once all of the above is built (BOB-4) and Waits on you exists (BOB-5). Usage and
+  Sessions stay; they are not in this spec's scope.
+
+**3. A Backlog.md project's row on the Overview: accepted as built.** Its name (to its roadmap) and
+laptop, then one muted line: "Its board is still on Backlog.md, not in the service yet: its roadmap shows
+where it stands." No cells, no zeros. Its agents still show under Working now. The row becomes a normal
+one when the project moves (BOB-9); nothing else to build.
+
+**4. More than one open feature: accepted as built.** Open now shows one, then "and N more open" (muted, a
+link to the project's roadmap). Which one: the first with an agent on it, else the one open longest
+(earliest `open_since`). The project's row never grows a list.
+
+**5. What a "holds up" names.** A session is named as `<kind> <label>` ("build A", "review 1",
+"build cutover"), never repeating the kind when the label already starts with it ("Fixes" stays "Fixes";
+"build A" with kind build stays "build A"). In a Needs you or Waits on you line:
+- a session of the line's own feature, with an agent in it: "holds up Luigi (build A)";
+- with nobody in it: "holds up build A";
+- a session of another feature: "holds up BOB-9 build B";
+- an item: its id, "holds up BOB-9";
+- a permission: the agent and its session, "holds up Toad (review 1)", or "holds up Toad" with no session.
+- Several: joined with commas, a feature and its own session counted once (the session), at most two named
+  then "+N more": "holds up Luigi (build A), BOB-9 +2 more". Built today it reads "holds up BOB-3 build A"
+  and "holds up Toad"; change it to the above.
+
+**Capture from a feature screen (Luigi's BOB-10 gap 1): it presets "found in".** Built with BOB-4. See
+*Capture from the Feature view* under the Feature view above.
 
 ### States (`#states`)
 Board unavailable (red banner: since when, showing what it last said, captures wait on the device), loading,
