@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BoardExportV1 } from "@bobnet/protocol";
@@ -56,25 +56,31 @@ function repo(files: Record<string, string>): { dir: string; sha: string } {
 }
 
 describe("the Backlog.md import", () => {
-  it("keeps undotted ids, renumbers dotted ones numerically past every id, and maps every link to the new refs", () => {
+  it("keeps every id under the prefix, dotted or not, renumbers only other prefixes and stray drafts past every id, and maps every link", () => {
     const { doc, report } = backlogToExport(
       helix,
       backlog([
         ...milestones,
         ["tasks", task("LAND-49", { type: "increment", milestone: "m-3", ordinal: 1000 }, desc("The feature") + ac("- [x] #1 Done one", "- [ ] #2 Not yet"))],
-        ["tasks", task("LAND-49.19", { type: "task", parent_task_id: "LAND-49", dependencies: ["LAND-49.2"] })],
+        ["tasks", task("LAND-49.19", { type: "task", parent_task_id: "LAND-49", dependencies: ["LAND-49.2", "OLD-3"] })],
         ["tasks", task("LAND-49.2", { type: "task", parent_task_id: "LAND-49", dependencies: ["LAND-99"] })],
         ["tasks", task("LAND-50", { type: "increment", milestone: "m-1" })],
+        ["tasks", task("OLD-3", { type: "task" })],
+        ["tasks", task("DRAFT-2", { type: "task" })],
+        ["drafts", task("DRAFT-1", { status: "Draft" })],
       ]),
       now,
     );
     expect(report.renumbered).toEqual([
-      ["LAND-49.2", "LAND-51"],
-      ["LAND-49.19", "LAND-52"],
+      ["DRAFT-2", "LAND-51"],
+      ["OLD-3", "LAND-52"],
     ]);
     const p = BoardExportV1.parse(doc).projects[0]!;
     const item = (ref: string) => p.items.find((i) => i.ref === ref)!;
-    expect(item("LAND-52")).toMatchObject({ kind: "task", parent: "LAND-49", deps: ["LAND-51"], aliases: ["LAND-49.19"], release: null });
+    // Numerically by segment, so a feature's tasks keep their order: .2 before .19.
+    expect(p.items.map((i) => i.ref)).toEqual(["DRAFT-1", "LAND-49", "LAND-49.2", "LAND-49.19", "LAND-50", "LAND-51", "LAND-52"]);
+    expect(item("LAND-49.19")).toMatchObject({ kind: "task", parent: "LAND-49", deps: ["LAND-49.2", "LAND-52"], aliases: [], release: null });
+    expect(item("LAND-52")).toMatchObject({ kind: "backlog", aliases: ["OLD-3"] });
     expect(item("LAND-49")).toMatchObject({
       kind: "feature",
       release: "R2",
@@ -92,11 +98,11 @@ describe("the Backlog.md import", () => {
       { ref: "R1", status: "closed", ord: 2 },
       { ref: "R2", status: "planned", ord: 3 },
     ]);
-    expect(report.problems).toEqual(["LAND-49.2 (LAND-51): dependency LAND-99 isn't on the board; dropped"]);
+    expect(report.problems).toEqual(["LAND-49.2: dependency LAND-99 isn't on the board; dropped"]);
     // The same commit gives the same document.
-    expect(backlogToExport(helix, backlog([...milestones, ["tasks", task("LAND-49.19")], ["tasks", task("LAND-49.2")]]), now).report.renumbered).toEqual([
-      ["LAND-49.2", "LAND-50"],
-      ["LAND-49.19", "LAND-51"],
+    expect(backlogToExport(helix, backlog([...milestones, ["tasks", task("OLD-9")], ["tasks", task("OLD-10")], ["tasks", task("LAND-4.2")]]), now).report.renumbered).toEqual([
+      ["OLD-9", "LAND-5"],
+      ["OLD-10", "LAND-6"],
     ]);
   });
 
@@ -109,14 +115,21 @@ describe("the Backlog.md import", () => {
         ["archive/tasks", task("LAND-17.9", { type: "task" }, desc("Was LAND-20.2."))],
         ["drafts", task("DRAFT-1", { status: "Draft", parent_task_id: "LAND-40" }, desc("Was LAND-18.1 (the Inbox becomes drafts)."))],
         ["tasks", task("LAND-41", { type: "task" }, desc("Was LAND-40."))],
+        ["tasks", task("LAND-42", { type: "task" }, desc("Split off (was LAND-43.15), and its only wait was LAND-2.20.\nWas LAND-30 too."))],
       ]),
       now,
     );
     const p = doc.projects[0]!;
-    expect(p.items.find((i) => i.aliases.includes("LAND-40.1"))!.aliases).toEqual(["LAND-17.9", "LAND-20.2", "LAND-40.1"]);
+    expect(p.items.find((i) => i.ref === "LAND-40.1")!.aliases).toEqual(["LAND-17.9", "LAND-20.2"]);
+    expect(p.items.find((i) => i.ref === "LAND-42")!.aliases).toEqual(["LAND-30"]);
     expect(p.items.find((i) => i.ref === "DRAFT-1")).toMatchObject({ kind: "backlog", status: "Draft", parent_hint: "LAND-40", aliases: ["LAND-18.1"] });
     expect(p.items.some((i) => i.title === "LAND-17.9 title")).toBe(false);
     expect(report.problems).toEqual(["LAND-41 says it was LAND-40, but LAND-40 is still on the board (tasks); both kept, not linked"]);
+    // Mid-line mentions aren't taken, and each is listed for the PO (import review, finding 6).
+    expect(report.mentions).toEqual([
+      'LAND-42: "was LAND-43.15" in "Split off (was LAND-43.15), and its only wait was LAND-2.20."',
+      'LAND-42: "was LAND-2.20" in "Split off (was LAND-43.15), and its only wait was LAND-2.20."',
+    ]);
   });
 
   it("makes a top-level item that holds tasks a feature, puts a task under a task under its feature, and reports what differs", () => {
@@ -134,14 +147,52 @@ describe("the Backlog.md import", () => {
     );
     const p = doc.projects[0]!;
     expect(p.items.find((i) => i.ref === "LAND-17")).toMatchObject({ kind: "feature", type: "increment", release: "R0" });
-    expect(p.items.filter((i) => i.parent === "LAND-17").map((i) => i.aliases[0])).toEqual(["LAND-17.1", "LAND-17.1.1"]);
+    // A task under a task keeps its id under its feature: the label doesn't promise a parent (ADR 0001 §2).
+    expect(p.items.filter((i) => i.parent === "LAND-17").map((i) => [i.ref, i.aliases])).toEqual([
+      ["LAND-17.1", []],
+      ["LAND-17.1.1", []],
+    ]);
     expect(p.items.find((i) => i.ref === "LAND-60")).toMatchObject({ kind: "backlog", type: "bug", status: "Draft" });
     expect(report.notes).toContain("LAND-17: type chore, but it holds tasks; imported as a feature (type increment)");
     expect(report.problems).toEqual([
       "product/backlog/tasks/f7.md: its front matter isn't valid YAML with an id; not imported",
+      "LAND-17.1: milestone m-3 differs from its feature LAND-17's m-1; the task follows its feature",
       'LAND-60: status "Blocked" isn\'t one of Draft, Ready, In Progress, In Review, Done; imported as Draft',
-      // LAND-61's file didn't read, and its number is still never given again.
-      "LAND-17.1 (LAND-62): milestone m-3 differs from its feature LAND-17's m-1; the task follows its feature",
+    ]);
+    // LAND-61's file didn't read, and its number is still never given again.
+    expect(doc.projects[0]!.next.item).toBe(62);
+  });
+
+  it("ranks ordinals within each scope, says what it can't keep about a release, and blocks the post on both", () => {
+    const { doc, report } = backlogToExport(
+      helix,
+      backlog([
+        ...milestones,
+        ["tasks", task("LAND-39", { type: "increment", milestone: "m-3", ordinal: 60000.5 })],
+        ["tasks", task("LAND-40", { type: "increment", milestone: "m-3", ordinal: 60001 })],
+        ["tasks", task("LAND-39.1", { parent_task_id: "LAND-39", ordinal: 204204 })],
+        ["tasks", task("LAND-39.2", { parent_task_id: "LAND-39", ordinal: 204204.1 })],
+        ["tasks", task("LAND-39.3", { parent_task_id: "LAND-39", ordinal: 204204.1 })],
+        ["tasks", task("LAND-39.4", { parent_task_id: "LAND-39" })],
+        ["tasks", task("LAND-44", { type: "increment", status: "Done", milestone: "m-2" })],
+        ["tasks", task("LAND-44.1", { parent_task_id: "LAND-44", status: "Done" })],
+        ["tasks", task("LAND-44.2", { parent_task_id: "LAND-44", status: "Draft" })],
+        ["archive/tasks", task("LAND-44.3", { parent_task_id: "LAND-44", status: "Draft" })],
+        ["tasks", task("LAND-45", { type: "increment" })],
+        ["tasks", task("LAND-45.1", { parent_task_id: "LAND-45", milestone: "m-3" })],
+      ]),
+      now,
+    );
+    const ord = (ref: string) => doc.projects[0]!.items.find((i) => i.ref === ref)!.ord;
+    // 60000.5 would round onto LAND-40's 60001, and 204204.1 onto 204204 (import review, finding 3).
+    expect([ord("LAND-39"), ord("LAND-40")]).toEqual([1000, 2000]);
+    expect(["LAND-39.1", "LAND-39.2", "LAND-39.3", "LAND-39.4"].map(ord)).toEqual([1000, 2000, 2000, null]);
+    expect(report.notes).toContain("ordinals: 5 ranked within their feature's tasks, their release's features or the backlog, and spaced by 1000; ties kept");
+    expect(report.problems).toEqual([
+      // Finding 4: a task's milestone isn't dropped silently.
+      "LAND-45.1: milestone m-3, but its feature LAND-45 has none; the task follows its feature, in no release",
+      // Finding 5: close_release refuses this on the board, and nothing reopens a release. Archived work isn't open.
+      'R1 "R1 Partner demo" comes in closed (archived) holding work not Done: LAND-44.2 (Draft); settle the release or the items before the post',
     ]);
   });
 
@@ -204,6 +255,34 @@ describe("the Backlog.md import", () => {
     expect(q.questions[3]).toMatchObject({ kind: "action", text: "Try claude.ai on Marvin's cut", context: "Where: Your own Claude\n\nFor: LAND-31.3" });
   });
 
+  it("writes the document the broker's import takes: its test imports this one (import review, finding 9)", () => {
+    const bobnet = { key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: "DRAFT", lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: ["bobnet"] };
+    const { doc, report } = backlogToExport(
+      bobnet,
+      backlog(
+        [
+          ["milestones", "---\nid: m-1\ntitle: \"R1 Board\"\n---\n"],
+          ["tasks", task("BOB-1", { type: "chore", milestone: "m-1", ordinal: 2000 })],
+          ["tasks", task("BOB-1.1", { parent_task_id: "BOB-1", status: "Done", ordinal: 1000 }, ac("- [x] #1 Done"))],
+          ["tasks", task("BOB-1.2", { parent_task_id: "BOB-1", dependencies: ["BOB-1.1"], references: ["docs/board-export-v1.md"] })],
+          ["tasks", task("BOB-1.1.1", { parent_task_id: "BOB-1.1" })],
+          ["tasks", task("BOB-2", { type: "increment", milestone: "m-1", ordinal: 1000 })],
+          ["tasks", task("BOB-2.1", { parent_task_id: "BOB-2", dependencies: ["BOB-1.3"] }, desc("Was BOB-1.3."))],
+          ["archive/tasks", task("BOB-1.3", { parent_task_id: "BOB-1" })],
+          ["tasks", task("OLD-4", { type: "bug" })],
+          ["drafts", task("DRAFT-1", { status: "Draft", parent_task_id: "BOB-2" })],
+        ],
+        "The next ID is **Q-3**. Q-1 (Casper, 2026-11-13, dotted).\n\n| Q-2 | Peach | Which order? | | | No |\n\nThe next ID is **A-2**.\n| A-1 | Add the grant | Dashboard | BOB-14 |\n",
+      ),
+      now,
+    );
+    expect(report.problems).toEqual([]);
+    const text = `${JSON.stringify(doc, null, 2)}\n`;
+    const fixture = new URL("../../broker/test/fixtures/backlog-import.json", import.meta.url);
+    if (process.env.UPDATE_FIXTURES) writeFileSync(fixture, text);
+    expect(readFileSync(fixture, "utf8"), "the broker's fixture is stale: UPDATE_FIXTURES=1 pnpm test, then run the broker's").toBe(text);
+  });
+
   it("reads the backlog through git at the named commit, never the worktree", async () => {
     const { dir, sha } = repo({
       "product/backlog/tasks/land-1 - §-odd name.md": task("LAND-1", { type: "increment" }),
@@ -262,7 +341,7 @@ describe("the Backlog.md import", () => {
   });
 
   describe("the command's --post", () => {
-    const run = async (answer: ImportPosted, extra: string[] = []) => {
+    const run = async (answer: ImportPosted | Error, extra: string[] = []) => {
       const { dir } = repo({ "product/backlog/tasks/bob-1.md": task("BOB-1", { type: "increment" }) });
       const errors: string[] = [];
       const err = vi.spyOn(console, "error").mockImplementation((...a) => void errors.push(a.join(" ")));
@@ -272,7 +351,11 @@ describe("the Backlog.md import", () => {
       try {
         const code = await importBacklogCommand(
           ["--repo", dir, "--ref", "HEAD", "--project", "bobnet", "--name", "BobNet", "--prefix", "BOB", "--post", ...extra],
-          () => async (doc) => (posted.push(doc), answer),
+          () => async (doc) => {
+            posted.push(doc);
+            if (answer instanceof Error) throw answer;
+            return answer;
+          },
         );
         return { code, errors, posted };
       } finally {
@@ -296,6 +379,12 @@ describe("the Backlog.md import", () => {
       expect(unreadable.errors).toEqual(["Not imported: the broker answered 502, no reply it could read"]);
       // A 2xx whose reply isn't ok isn't taken either.
       expect((await run({ status: 200, reply: { ok: false, code: "invalid", message: "x" } })).code).toBe(1);
+    });
+
+    it("says a post with no answer may have been taken, and how to tell (fold review, note 1)", async () => {
+      const timedOut = await run(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+      expect(timedOut.code).toBe(1);
+      expect(timedOut.errors).toEqual(['No answer from the broker (The operation was aborted due to timeout): it may have taken the import; post again, and a 409 "exists" means it did']);
     });
 
     it("takes --lead and --po only as name@laptop (BOB-5 review, finding 1)", async () => {

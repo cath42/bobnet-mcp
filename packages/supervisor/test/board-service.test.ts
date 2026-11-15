@@ -83,7 +83,15 @@ describe("a spawn into a session", () => {
     const { sup } = await setup();
     const { tasks: _, ...untasked } = spawn;
     await expect(sup.spawnJoined(untasked)).rejects.toThrow("bobnet has a board: say which items");
-    await expect(sup.spawnJoined({ ...spawn, tasks: ["BOB-2.1"] })).rejects.toThrow("not item ids on bobnet's board: BOB-2.1");
+    await expect(sup.spawnJoined({ ...spawn, tasks: ["BOB-1234567"] })).rejects.toThrow("not item ids on bobnet's board: BOB-1234567");
+    await expect(sup.spawnJoined({ ...spawn, session: { feature: "BOB-2.", kind: "build" } })).rejects.toThrow("isn't a feature id");
+  });
+
+  it("takes an imported dotted ref as a task, and as a session's feature once promoted (ADR 0001 §2)", async () => {
+    const { sup, broker } = await setup();
+    const w = await sup.spawnJoined({ ...spawn, tasks: ["bob-1.1"], session: { feature: "BOB-1.1", kind: "build" } });
+    const session = { feature: "BOB-1.1", kind: "build", label: "1" };
+    expect(ops(broker)[0]).toEqual({ as: "Luigi", ctx: { worker: w.id, role: "luigi", project: "bobnet", session, tasks: ["BOB-1.1"] }, op: { op: "session_join", project: "bobnet", session } });
   });
 
   it("leaves a project on Backlog.md alone", async () => {

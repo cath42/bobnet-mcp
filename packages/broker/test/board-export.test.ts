@@ -2,6 +2,7 @@ import { BoardExportV1, type BoardCaller, type BoardCtx, type BoardOpInput, type
 import { reset } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import backlogImport from "./fixtures/backlog-import.json";
 import { laptopToken, ORIGIN, ownerToken } from "./helpers.ts";
 
 // Export and import (ADR 0001 §11): the board as one document, and that document back into new projects.
@@ -198,6 +199,36 @@ describe("import (ADR 0001 §11)", () => {
     // An old id still finds its item, dotted or not; the reply names its ref.
     expect((await ok(owner, { op: "get", project: "bobnet", ref: "LAND-40" })).item).toMatchObject({ ref: "BOB-3" });
     expect((await ok(owner, { op: "get", project: "bobnet", ref: "BOB-7.2" })).item).toMatchObject({ ref: "BOB-3" });
+  });
+
+  it("keeps an imported dotted ref as the item's own: found, written and exported by it, and new items flat past it (ADR 0001 §2)", async () => {
+    const doc = document({}, [
+      { ref: "BOB-1", kind: "feature", type: "increment" },
+      { ref: "BOB-1.1", kind: "task", parent: "BOB-1" },
+      { ref: "BOB-1.2", kind: "task", parent: "BOB-1", deps: ["BOB-1.1"] },
+      { ref: "BOB-1.10", kind: "task", parent: "BOB-1" },
+    ]);
+    expect(await imported(doc)).toMatchObject({ ok: true, projects: [{ key: "bobnet", items: 4, next_item: 2 }] });
+    expect((await ok(owner, { op: "get", project: "bobnet", ref: "BOB-1.1" })).item).toMatchObject({ ref: "BOB-1.1", parent: "BOB-1" });
+    expect((await ok(owner, { op: "update", project: "bobnet", ref: "BOB-1.10", set: { status: "Ready" } })).ref).toBe("BOB-1.10");
+    expect((await ok(owner, { op: "get", project: "bobnet", ref: "BOB-1.2" })).item).toMatchObject({ deps: ["BOB-1.1"] });
+    expect((await ok(owner, { op: "create", project: "bobnet", kind: "task", type: "task", title: "Next", parent: "BOB-1" })).ref).toBe("BOB-2");
+    // A round trip keeps it, and a feature's tasks keep their order: export orders by pk.
+    const out = await exported();
+    expect(out.projects[0]!.items.map((i) => i.ref)).toEqual(["BOB-1", "BOB-1.1", "BOB-1.2", "BOB-1.10", "BOB-2"]);
+    await reset();
+    expect(await imported(out)).toMatchObject({ ok: true, projects: [{ key: "bobnet", items: 5, next_item: 3 }] });
+    expect(comparable(await exported())).toEqual(comparable(out));
+  });
+
+  it("takes what the Backlog.md import writes (import review, finding 9; the supervisor's test pins the fixture)", async () => {
+    expect(await imported(backlogImport)).toMatchObject({ ok: true, projects: [{ key: "bobnet", items: 8, next_item: 4 }] });
+    // A dotted primary, a task under a task under its feature, a re-creation's old id, and a renumbered one.
+    expect((await ok(owner, { op: "get", project: "bobnet", ref: "BOB-1.1.1" })).item).toMatchObject({ ref: "BOB-1.1.1", kind: "task", parent: "BOB-1" });
+    expect((await ok(owner, { op: "get", project: "bobnet", ref: "BOB-1.3" })).item).toMatchObject({ ref: "BOB-2.1", parent: "BOB-2" });
+    expect((await ok(owner, { op: "get", project: "bobnet", ref: "OLD-4" })).item).toMatchObject({ ref: "BOB-3", type: "bug" });
+    expect((await ok(owner, { op: "get", project: "bobnet", ref: "BOB-1" })).item).toMatchObject({ kind: "feature", release: "R1" });
+    expect((await ok(owner, { op: "create", project: "bobnet", kind: "backlog", type: "task", title: "Next" })).ref).toBe("BOB-4");
   });
 
   it("refuses Q and A as prefixes, an id twice, a link outside the document, and what isn't an export", async () => {

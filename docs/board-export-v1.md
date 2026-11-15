@@ -69,8 +69,9 @@ The board's `pk`s don't leave it. Records point at each other by the ids people 
 
 Every column of `items`, plus what hangs off it:
 
-- `aliases`: every other id it has had, sorted. Each still finds it. Backlog.md's dotted ids
-  (`LAND-1.3`) are kept here.
+- `ref`: its id, flat (`LAND-49`) or, when imported, dotted (`LAND-49.14`). New items are flat.
+- `aliases`: every other id it has had, sorted. Each still finds it: a renumbered id, or an old one
+  a re-creation took (`Was LAND-17.9`).
 - `parent`, `parent_hint`, `found_in`: item refs; `release`: a release ref; `captured_session`: a
   session.
 - `labels` (sorted), `deps` (item refs, sorted) and `criteria` (by section, then `n`, each with its
@@ -176,20 +177,31 @@ Casper adds it as the owner.
 
 It is a dry run: it posts nothing unless `--post` is given, and even then not while anything in its
 report is unmapped. It exits 0 only when the broker took the import; otherwise it prints the broker's
-status, `code` and `message`, and exits 1. It reads tasks, completed items, drafts and milestones, archived ones too, and the
+status, `code` and `message`, and exits 1. With no answer at all (the network, or its 60 s
+timeout) it exits 1 and says the import may have been taken: post again, and a `409` "exists"
+means it was. It reads tasks, completed items, drafts and milestones, archived ones too, and the
 project's `lead/questions.md`. The mapping rules:
 
-- An id under the prefix keeps its number. A dotted id (`LAND-49.19`) gets the next number past
-  every id there is, in numeric order by segment, and keeps the old id as an alias. Drafts keep
-  `DRAFT-n`. Every link is mapped to the new refs, and free text stays as written.
+- An id under the prefix keeps its form, dotted or not: `LAND-49.19` stays `LAND-49.19`, and items
+  come in numeric order by segment, so a feature's tasks keep theirs. Drafts in `drafts/` keep
+  `DRAFT-n`. Only an id under another prefix, or a draft id outside `drafts/`, gets the next number
+  past every id there is, and keeps the old id as an alias. A dotted id doesn't promise its parent: a
+  task under a task, put under its feature, keeps its id. Every link is mapped to the new refs, and
+  free text stays as written.
 - `Was LAND-n.m` at the start of a line in a description or notes makes the old id an alias of the
   item. When the old item is archived, it is absorbed. When it is still on the board, both are kept
-  and the report says so.
+  and the report says so. A `was <id>` anywhere else (mid-line, or lower case) isn't taken; the
+  report lists each, with the item that says it, for the PO to settle.
 - An increment is a feature, and so is a top-level item that holds tasks. A task under a task goes
   under its feature. A draft, or an item with no feature over it, is a backlog item. A draft's
   parent becomes its `parent_hint`.
 - A milestone is a release, numbered from its title (`R2 Edit and audit`). An archived release is
-  `closed`, the first one not archived is `open`, and the rest are `planned`.
+  `closed`, the first one not archived is `open`, and the rest are `planned`. A closed release that
+  holds work not Done (archived work aside) is reported as unmapped, because the board's
+  `close_release` refuses it and nothing reopens a release. A task's milestone that differs from its
+  feature's, or that its feature lacks, is reported too: the task follows its feature.
+- Ordinals are ranked within a feature's tasks, a release's features and the backlog, and spaced by
+  1000, so a tie in Backlog.md stays a tie and a fraction never lands on a neighbour.
 - A feature In Progress is open, with a build session `imported`.
 - An item's final summary and its references, which have no field, are appended to its notes:
   `Final summary:` and its text, then `References:` with one path or URL per line. Assignee and
@@ -199,5 +211,5 @@ project's `lead/questions.md`. The mapping rules:
   from `The next ID is **Q-267**`.
 - A prefix `Q` or `A` is refused.
 
-The report lists the rules it seeds, counts, what couldn't map, every renumbered id (old → new), and what was done by
-rule, so the project's PO can check them before the cut-over.
+The report lists the rules it seeds, counts, what couldn't map, every renumbered id (old → new), the `was` mentions it
+didn't take, and what was done by rule, so the project's PO can check them before the cut-over.

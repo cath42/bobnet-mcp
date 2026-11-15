@@ -2,7 +2,8 @@
 // compared case-insensitively; the laptop part is always stamped by the
 // broker from the connection's credentials, never taken from a client.
 
-const SEGMENT = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/;
+/** A name or a laptop id: the one pattern every address and grant row is built from. */
+export const SEGMENT = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/;
 
 export function isValidSegment(s: string): boolean {
   return SEGMENT.test(s);

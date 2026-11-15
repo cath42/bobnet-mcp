@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SEGMENT } from "./address.ts";
 
 // The board service (ADR 0001): every operation once, as `BoardOp`, with the
 // records and results it returns. The socket carries it in a `board_op` frame;
@@ -40,20 +41,21 @@ export type GrantField = z.infer<typeof GrantField>;
 
 export const ProjectKey = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
 const prefix = z.string().regex(/^[A-Z][A-Z0-9]{0,9}$/);
-/** An item's id, `LAND-49`. */
-export const ItemRef = z.string().regex(/^[A-Z][A-Z0-9]{0,9}-\d{1,6}$/);
-/** Any id an item has had: its ref, or an old one such as Backlog.md's `LAND-1.3`. Only `get` takes one; a reply names the ref. */
+/** A ref the caller means as the item's own, `LAND-49`, or dotted when imported, `LAND-49.14` (§2, §8). */
+export const ItemRef = z.string().regex(/^[A-Z][A-Z0-9]{0,9}-\d{1,6}(\.\d{1,4})*$/);
+/** Any id an item has had: its ref, or an old one it was renumbered from. Same pattern as `ItemRef`; only `get` takes one, and a reply names the ref. */
 export const ItemAlias = z.string().regex(/^[A-Z][A-Z0-9]{0,9}-\d{1,6}(\.\d{1,4})*$/);
 /** A question's id, `Q-258`, or an action's, `A-17`: no project has prefix Q or A. */
 export const QuestionRef = z.string().regex(/^[QA]-\d{1,6}$/);
 /** A release's id within its project, `R1`. */
 export const ReleaseRef = z.string().regex(/^R\d{1,4}$/);
-const name = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,31}$/);
-const laptop = z.string().regex(/^(\*|[A-Za-z][A-Za-z0-9_-]{0,31})$/);
+const segment = SEGMENT.source.slice(1, -1);
+const name = z.string().regex(SEGMENT);
+const laptop = z.string().regex(new RegExp(`^(\\*|${segment})$`));
 /** Where a project's answers go (§7): an agent's `name@laptop`, never a bare name or the board's own laptop. */
 export const PeerAddress = z
   .string()
-  .regex(/^[A-Za-z][A-Za-z0-9_-]{0,31}@[A-Za-z][A-Za-z0-9_-]{0,31}$/, "is not name@laptop")
+  .regex(new RegExp(`^${segment}@${segment}$`), "is not name@laptop")
   .refine((a) => a.slice(a.indexOf("@") + 1).toLowerCase() !== BOARD_SENDER.laptop, "is the board's own laptop");
 const title = z.string().trim().min(1).max(300);
 const text = z.string().max(16 * 1024);

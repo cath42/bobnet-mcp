@@ -20,9 +20,10 @@ import type { ImportPosted } from "./board-backup.ts";
 
 // The Backlog.md import (ADR 0001 §11, BOB-9): a project's Backlog.md at a named commit, and its
 // lead/questions.md, as one board export for POST /v1/board/import. The one place Markdown is read,
-// once per project. Ids under the project's prefix keep their number; a dotted id (LAND-49.19) gets
-// the next number past every id there is, numerically by segment, and keeps the old id as an alias.
-// A "Was LAND-n.m" re-creation takes the old id as an alias, absorbing the old item when it was
+// once per project. Ids under the project's prefix keep their form, dotted or not (LAND-49.19 stays
+// LAND-49.19), and so does a draft's in drafts/; an id under another prefix, or a draft id outside
+// drafts/, gets the next number past every id there is and keeps the old id as an alias. New items
+// on the board are flat (ADR 0001 §2). A "Was LAND-n.m" re-creation takes the old id as an alias, absorbing the old item when it was
 // archived. What doesn't map is reported for the PO to settle before the cut-over.
 
 const GIT_TIMEOUT_MS = 60_000;
@@ -57,8 +58,10 @@ export interface ImportReport {
   /** The rules it brings, one line each. */
   grants: string[];
   counts: Record<string, number>;
-  /** Old id → new ref, for every id that changed number. */
+  /** Old id → new ref, for every id that changed: one under another prefix, or a draft's outside drafts/. */
   renumbered: Array<[string, string]>;
+  /** A "was <id>" the rule didn't take, with the item that says it: the PO settles each (BOB-9 #6). */
+  mentions: string[];
   /** What couldn't map as it is: the PO settles each before the cut-over. A clean board has none. */
   problems: string[];
   /** What the import did by rule, for the PO to check. */
@@ -108,6 +111,10 @@ function byNumber(a: string, b: string): number {
 }
 const ID = /^[A-Z][A-Z0-9]{0,9}-\d{1,6}(\.\d{1,4})*$/;
 const WAS = /^Was ([A-Z][A-Z0-9]*-\d+(?:\.\d+)*)\b/gm;
+/** Any "was <id>", for the ones WAS doesn't take: mid-line or lower case. */
+const WAS_ANYWHERE = /\b[Ww]as ([A-Z][A-Z0-9]*-\d+(?:\.\d+)*)\b/g;
+/** Ordinals are ranked within their scope and spaced by this, as the board spaces them. */
+const ORD_STEP = 1000;
 
 interface Read {
   file: BacklogFile;
@@ -195,8 +202,16 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
   // ---------- "Was X" re-creations ----------
   const mergedInto = new Map<string, string>();
   const absorbed: Array<[string, string]> = [];
+  const mentions: string[] = [];
   for (const [id, r] of [...items].sort(([a], [b]) => byNumber(a, b))) {
-    for (const m of `${r.file.desc ?? ""}\n${r.file.notes ?? ""}`.matchAll(WAS)) {
+    const said = `${r.file.desc ?? ""}\n${r.file.notes ?? ""}`;
+    // Not widened: a mention mid-line may not be a re-creation ("its only wait was LAND-2.20").
+    for (const m of said.matchAll(WAS_ANYWHERE)) {
+      if (m[0].startsWith("Was ") && (m.index === 0 || said[m.index! - 1] === "\n")) continue;
+      const line = said.slice(said.lastIndexOf("\n", m.index!) + 1, said.indexOf("\n", m.index!) === -1 ? undefined : said.indexOf("\n", m.index!)).trim();
+      mentions.push(`${id}: "${m[0]}" in "${line.length > 120 ? `${line.slice(0, 117)}...` : line}"`);
+    }
+    for (const m of said.matchAll(WAS)) {
       const old = m[1]!;
       if (old === id) continue;
       const was = items.get(old);
@@ -246,7 +261,7 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
   const allIds = [...items.keys(), ...alias.keys(), ...reserved];
   let next = Math.max(0, ...allIds.filter((i) => prefixOf(i) === project.prefix).map((i) => numbers(i)[0]!)) + 1;
   const refOf = new Map<string, string>();
-  const keeps = (id: string) => !id.includes(".") && (prefixOf(id) === project.prefix || (prefixOf(id) === project.draft_prefix && items.get(id)!.draft));
+  const keeps = (id: string) => prefixOf(id) === project.prefix || (prefixOf(id) === project.draft_prefix && items.get(id)!.draft);
   const renumbered: Array<[string, string]> = [];
   for (const id of [...items.keys()].sort(byNumber)) {
     if (keeps(id)) refOf.set(id, id);
@@ -336,6 +351,8 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
         const fm = items.get(feature)!.file.milestone;
         if (f.milestone && fm && f.milestone.toLowerCase() !== fm.toLowerCase()) {
           problems.push(`${who}: milestone ${f.milestone} differs from its feature ${refOf.get(feature)}'s ${fm}; the task follows its feature`);
+        } else if (f.milestone && !fm) {
+          problems.push(`${who}: milestone ${f.milestone}, but its feature ${refOf.get(feature)} has none; the task follows its feature, in no release`);
         }
         rel = null;
       } else {
@@ -368,11 +385,6 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
     if (f.references.length) count("references appended to notes");
     if (f.priority) count("priority not carried (no field)");
     if (f.summary) count("final summary appended to notes");
-    let ord = f.ordinal;
-    if (ord !== null && !Number.isInteger(ord)) {
-      ord = Math.round(ord);
-      count("ordinal rounded");
-    }
     const openSince = kind === "feature" && status === "In Progress" && !archived ? updated : null;
     if (openSince) {
       sessions.push({
@@ -407,7 +419,7 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
       plan: f.plan,
       parent,
       release: kind === "task" ? null : rel,
-      ord,
+      ord: f.ordinal,
       open_since: openSince,
       archived_at: archived ? updated : null,
       archive_reason: archived ? "archived in Backlog.md" : null,
@@ -426,8 +438,26 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
       updated_at: updated,
     });
   }
+  // Ordinals ranked within each scope and spaced, so a tie in Backlog.md stays a tie and nothing new
+  // ties: Helix's 204204.1 and 60000.5 would round onto their neighbours (import review, finding 3).
+  const scopes = new Map<string, ExportItem[]>();
+  for (const i of out) {
+    if (i.ord === null) continue;
+    const scope = i.kind === "task" ? `task ${i.parent}` : i.kind === "feature" ? `feature ${i.release}` : "backlog";
+    scopes.set(scope, [...(scopes.get(scope) ?? []), i]);
+  }
+  for (const list of scopes.values()) {
+    const ranks = [...new Set(list.map((i) => i.ord!))].sort((a, b) => a - b);
+    for (const i of list) i.ord = (ranks.indexOf(i.ord!) + 1) * ORD_STEP;
+  }
+  const ranked = [...scopes.values()].reduce((n, l) => n + l.length, 0);
+  if (ranked > 0) notes.push(`ordinals: ${ranked} ranked within their feature's tasks, their release's features or the backlog, and spaced by ${ORD_STEP}; ties kept`);
   for (const r of releases) {
     if (r.status !== "closed") continue;
+    // The board's close_release refuses this, and no operation reopens a release (import review, finding 5).
+    const featureRelease = (i: ExportItem) => (i.parent ? out.find((f) => f.ref === i.parent)?.release : i.release);
+    const open = out.filter((i) => featureRelease(i) === r.ref && i.status !== "Done" && i.archived_at === null).map((i) => `${i.ref} (${i.status})`);
+    if (open.length > 0) problems.push(`${r.ref} "${r.title}" comes in closed (archived) holding work not Done: ${open.join(", ")}; settle the release or the items before the post`);
     const last = out.filter((i) => i.release === r.ref || (i.parent && out.find((f) => f.ref === i.parent)?.release === r.ref)).map((i) => i.updated_at).sort().pop();
     r.closed_at = last ?? at;
     r.closed_by = "Backlog.md";
@@ -493,7 +523,7 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
   };
   const checked = BoardExportV1.safeParse(doc);
   if (!checked.success) for (const i of checked.error.issues.slice(0, 20)) problems.push(`the document: ${i.path.join(".")}: ${i.message}`);
-  return { doc, report: { source, grants: ruleLines, counts, renumbered, problems, notes } };
+  return { doc, report: { source, grants: ruleLines, counts, renumbered, mentions, problems, notes } };
 }
 
 type ItemExport = ExportItem;
@@ -596,8 +626,10 @@ export function formatReport(r: ImportReport): string {
   lines.push(...(r.grants.length ? r.grants.map((g) => `- ${g}`) : ["None: after the import only the owner can write it."]));
   lines.push("", `## What couldn't map (${r.problems.length})`, "");
   lines.push(...(r.problems.length ? r.problems.map((p) => `- ${p}`) : ["None."]));
-  lines.push("", `## Renumbered (${r.renumbered.length}): old id → new ref, the old id kept as an alias`, "");
+  lines.push("", `## Renumbered (${r.renumbered.length}): an id under another prefix or a draft's outside drafts/, old id → new ref, the old id kept as an alias`, "");
   lines.push(...(r.renumbered.length ? r.renumbered.map(([a, b]) => `- ${a} → ${b}`) : ["None."]));
+  lines.push("", `## "Was" mentions not taken (${r.mentions.length}): only "Was <id>" at a line's start links; the PO settles each`, "");
+  lines.push(...(r.mentions.length ? r.mentions.map((m) => `- ${m}`) : ["None."]));
   lines.push("", `## Done by rule (${r.notes.length})`, "");
   lines.push(...(r.notes.length ? r.notes.map((n) => `- ${n}`) : ["None."]));
   return `${lines.join("\n")}\n`;
@@ -688,7 +720,15 @@ export async function importBacklogCommand(argv: string[], post?: () => (doc: Bo
       console.error(`Not posted: ${report.problems.length} things couldn't map; settle them first`);
       return 1;
     }
-    const { status, reply } = await post()(doc);
+    let answer: ImportPosted;
+    try {
+      answer = await post()(doc);
+    } catch (e) {
+      // A timeout may come after the broker committed. The import is write-once per project key, so posting again is the check.
+      console.error(`No answer from the broker (${(e as Error).message}): it may have taken the import; post again, and a 409 "exists" means it did`);
+      return 1;
+    }
+    const { status, reply } = answer;
     if (status < 200 || status >= 300 || !reply?.ok) {
       const why = reply && !reply.ok ? `${reply.code}: ${reply.message}` : "no reply it could read";
       console.error(`Not imported: the broker answered ${status}, ${why}`);

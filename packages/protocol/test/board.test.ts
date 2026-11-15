@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BoardOp, ClientFrame } from "../src/index.ts";
+import { BoardOp, ClientFrame, ItemRef, PeerAddress } from "../src/index.ts";
 
 describe("BoardOp", () => {
   it("parses an item's create with its criteria, defaulting each to an acceptance criterion", () => {
@@ -11,6 +11,19 @@ describe("BoardOp", () => {
     expect(BoardOp.safeParse({ op: "update", project: "helix", ref: "LAND-1", set: { status: "Blocked" } }).success).toBe(false);
     expect(BoardOp.safeParse({ op: "create", project: "helix", kind: "bug", type: "bug", title: "x" }).success).toBe(false);
     expect(BoardOp.safeParse({ op: "get", project: "helix", ref: "land-1" }).success).toBe(false);
+  });
+
+  it("takes a flat or a dotted ref as an item's, and nothing that isn't an id", () => {
+    for (const ok of ["LAND-49", "LAND-49.14", "LAND-49.3.1"]) expect(ItemRef.safeParse(ok).success).toBe(true);
+    for (const bad of ["LAND-49.", "land-49", "LAND-", "LAND-49..1"]) expect(ItemRef.safeParse(bad).success).toBe(false);
+    expect(BoardOp.parse({ op: "update", project: "helix", ref: "LAND-49.14", set: { status: "Done" } })).toMatchObject({ ref: "LAND-49.14" });
+  });
+
+  it("takes a lead as name@laptop, built from the address segment", () => {
+    expect(PeerAddress.safeParse("Mario@mbp-1").success).toBe(true);
+    for (const bad of ["Mario", "Mario@", "@mbp-1", "Mario@*", "Mario@mbp-1@x", "Mario@Board", "1Mario@mbp-1"]) {
+      expect(PeerAddress.safeParse(bad).success).toBe(false);
+    }
   });
 
   it("has no session kind other: other work is a run with no session", () => {

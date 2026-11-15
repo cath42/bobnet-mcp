@@ -395,7 +395,9 @@ export class Supervisor {
     }
     const d = opts.session;
     if (d) {
-      if (!FEATURE_ID.test(d.feature)) throw new SupervisorError(`session.feature ${JSON.stringify(d.feature)} isn't a feature id (e.g. LAND-43)`);
+      // On the board a promoted task is a feature, and its imported ref may be dotted (ADR 0001 §2).
+      const feature = project.board === "service" ? ItemRef.safeParse(d.feature.toUpperCase()).success : FEATURE_ID.test(d.feature);
+      if (!feature) throw new SupervisorError(`session.feature ${JSON.stringify(d.feature)} isn't a feature id (e.g. LAND-43)`);
       if (!SESSION_KINDS.includes(d.kind)) throw new SupervisorError(`session.kind is one of ${SESSION_KINDS.join(", ")}`);
       if (d.label !== undefined && !SESSION_LABEL.test(d.label)) throw new SupervisorError(`session.label ${JSON.stringify(d.label)}: up to 20 letters, digits, . _ or -`);
     }
