@@ -899,8 +899,8 @@ describe("triage and capture (BOB-8)", () => {
     const blocks = dlg.querySelector("#cap-blocks") as HTMLInputElement;
     blocks.checked = true;
     blocks.dispatchEvent(new Event("change"));
-    expect(dlg.textContent).toContain("A bug that blocks use goes first in the triage list, marked blocks use.");
-    expect(dlg.textContent).not.toContain("Waits on you");
+    // With the Waits on you tab, the wording BOB-8 held back comes back (spec, BOB-8 as built, gap 3).
+    expect(dlg.textContent).toContain("A bug that blocks use also goes on Waits on you until it is slotted or closed.");
     expect((dlg.querySelector("textarea") as HTMLTextAreaElement).value).toContain("The roadmap jumps");
     dlg.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
     const cap = pending("capture").at(-1);
@@ -910,7 +910,7 @@ describe("triage and capture (BOB-8)", () => {
     });
     reply(cap!, { ref: "BOB-131", seq: 210, duplicate: false, dropped: [] });
     await settle();
-    expect($("toast").textContent).toBe("Captured as BOB-131 in BobNet's triage list, marked blocks use.");
+    expect($("toast").textContent).toBe("Captured as BOB-131 in BobNet's triage list, and on Waits on you.");
     await lists([backlogItem(31, { ref: "BOB-131", title: "The roadmap jumps on a phone.", type: "bug", blocks_use: true, created_at: new Date().toISOString(), casper_words: cap!.op["casper_words"] }), ...items]);
     // Bugs first, then oldest: the new bug comes after the two older ones.
     const fresh = rows()[2]!;
@@ -1133,7 +1133,10 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     const lines = [...$("needs").querySelectorAll("li")];
     expect(lines.map((l) => l.querySelector(".badge")!.textContent)).toEqual(["permission", "question", "question", "bug · blocks use"]);
     expect(lines[0]!.textContent).toContain("records-agent wants Bash");
-    expect([...lines[0]!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Allow", "Deny"]);
+    // Each answerable line has its one button; the form opens in place (notes 40).
+    expect([...lines[0]!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Allow or deny"]);
+    expect([...lines[1]!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Answer"]);
+    expect(lines[3]!.querySelector("button")).toBeNull();
     expect(lines[1]!.querySelector(".l-t")!.textContent).toBe("Which roadmap order wins?");
     // Holds-up wording (spec, BOB-3 gap 5): its own feature's session by who is in it, another's with its feature,
     // BOB-3 counted once with its session, two named then "+N more"; a session with nobody in it by kind and label.
@@ -1141,9 +1144,10 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     expect(lines[1]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up Luigi (build A), BOB-9 build B +1 more");
     expect(lines[2]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up Fixes, review 2");
     expect(lines[3]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · blocks use");
-    expect(view().querySelector(".ov-needs .more")!.textContent).toBe("4 hold work up · 1 more when you have time");
-    // No link to a Waits tab that isn't there yet.
-    expect(view().querySelector('.ov-needs a[href="#waits"]')).toBeNull();
+    expect(view().querySelector(".ov-needs .more")!.textContent).toBe("4 hold work up · 1 more when you have time →");
+    expect(view().querySelector(".ov-needs .more")!.getAttribute("href")).toBe("#waits");
+    // The count shows on the tab too (waiting-on-casper 3).
+    expect($("waits-count").textContent).toBe("5");
   });
 
   it("lists who is working on what from their declared sessions, and others as Other work", () => {
@@ -1188,6 +1192,8 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     await settle();
     expect(view().querySelector(".ov-needs .card")!.textContent).toBe("Nothing is held up by you.");
     expect($("needs-count").textContent).toBe("");
+    // Nothing waits: the count leaves the tab.
+    expect($("waits-count").textContent).toBe("");
     expect(view().querySelector(".ov-now .empty-card")!.textContent).toBe("No agent is working.");
     const cells = [...view().querySelectorAll('.prow[data-project="bobnet"] .pc')].map((c) => c.textContent);
     expect(cells[2]).toBe("Open nowno feature open");
@@ -1200,8 +1206,224 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     snap.pending = [{ id: "r_8", worker_id: "w_1", name: "records-agent", kind: "question", tool: "AskUserQuestion", tier: "human", created_at: iso(1), preview: "Which one?" }] as never;
     FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
     await settle();
-    const line = $("needs").querySelector("li")!;
-    expect(line.querySelector(".acts")!.textContent).toBe("Answer it through the orchestrator, or Deny");
+    const line = () => $("needs").querySelector("li")!;
+    (line().querySelector(".answer-btn") as HTMLButtonElement).click();
+    // A question by the tool: answered through the orchestrator, or denied here; no Allow.
+    expect(line().querySelector(".who-gets")!.textContent).toBe("Answer it through the orchestrator, or deny it here; records-agent gets your note.");
+    expect([...line().querySelectorAll("form.answer button")].map((b) => b.textContent)).toEqual(["Cancel", "Deny"]);
+    (line().querySelector(".answer-btn") as HTMLButtonElement).click();
+  });
+
+  describe("Waits on you (BOB-5)", () => {
+    const helix = { key: "helix", name: "Helix", prefix: "LAND", draft_prefix: "DRAFT", lead: "Bob@mbp-1", po: "Peach@mbp-1", repos: [] };
+    const fixes = { feature: "LAND-49", kind: "build", label: "Fixes" };
+    // As in the prototype (notes 22, 35): A-15 and Q-259 wait for a later milestone; Q-258 holds LAND-49's fixes up.
+    const q258 = wait("Q-258", "question", "Ship rehearsal 1 with the known gap?", true, { project: "helix", feature: "LAND-49", since: iso(60 * 30),
+      recommended: { key: "b", text: "Ship it, note the gap" }, waiting_sessions: [fixes], asked_by: "Bob@mbp-1" });
+    const a15 = wait("A-15", "action", "Book the demo room", false, { project: "helix", feature: null, since: iso(60 * 24 * 3), needed_before: { text: "the demo" }, asked_by: "Peach@mbp-1" });
+    const q259 = wait("Q-259", "question", "Which tract for rehearsal 2?", false, { project: "helix", feature: "LAND-49", since: iso(60 * 5), needed_before: { text: "rehearsal 2 (49.13)" }, asked_by: "Bob@mbp-1" });
+    const gate = wait("BOB-12", "review_gate", "Casper's look at the roadmap", true, { feature: "BOB-12", since: iso(60 * 24 * 2), asked_by: null, holds: { items: ["BOB-12"], sessions: [] } });
+    const bug = wait("BOB-31", "bug", "Login fails on a phone", true, { feature: null, since: iso(60 * 4) });
+    const perm = { id: "r_9", worker_id: "w_1", name: "records-agent", kind: "approval", tool: "Bash", tier: "human", created_at: iso(90), preview: "git push origin HEAD" };
+    const answerWith = async (ws: unknown[], answered: unknown[] = []) => {
+      for (const f of pending("overview", true)) reply(f, { projects: [row] });
+      for (const f of pending("waits", true)) reply(f, { waits: ws, answered });
+      await settle();
+    };
+    const item = (ref: string) => view().querySelector(`.waits li[data-ref="${ref}"]`)!;
+    const refs = (id: string) => [...$(id).querySelectorAll(".waits > li")].map((li) => li.getAttribute("data-ref"));
+    const frameOf = (rid: string) => FakeSocket.last.sent.find((f) => f["rid"] === rid)!;
+
+    beforeAll(async () => {
+      // Two projects' boards in the service, so the list is across projects and has a project filter.
+      FakeSocket.last.frame({ t: "board_changed", project: "helix", seq: 1, refs: [] });
+      for (const f of pending("projects", true)) reply(f, { projects: [project, helix] });
+      const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+      snap.workers = [worker({ state: "waiting-approval" })] as never;
+      snap.pending = [perm] as never;
+      FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+      await go("#waits");
+      await answerWith([a15, gate, q258, bug, q259]);
+    });
+
+    it("is the second tab, with its count, and lists everything across projects in two groups, each oldest first (#1, #2, #6)", () => {
+      expect([...document.querySelectorAll("#tabs a")].map((a) => a.getAttribute("href")).slice(0, 2)).toEqual(["#overview", "#waits"]);
+      expect(document.querySelector('#tabs a[aria-current]')!.getAttribute("href")).toBe("#waits");
+      expect($("waits-count").textContent).toBe("6");
+      expect(refs("waits-holding")).toEqual(["BOB-12", "Q-258", "BOB-31", "r_9"]);
+      expect(refs("waits-rest")).toEqual(["A-15", "Q-259"]);
+      expect([...$("waits-holding").querySelectorAll(".badge")].map((b) => b.textContent)).toEqual(["review gate", "question", "bug · blocks use", "permission"]);
+      // The permission is records-agent's, a Helix agent's.
+      expect(view().querySelector(".bar-row")!.textContent).toBe("All projects 6BobNet 2Helix 46 items, oldest first");
+    });
+
+    it("gives each item its project, feature, age, question, recommendation, who asked, what it holds up or what it is needed before, and a link (#1, #2)", () => {
+      const q = item("Q-258");
+      expect(q.querySelector(".top")!.textContent).toBe("questionQ-258Helix · LAND-491 day");
+      expect(q.querySelector(".top a")!.getAttribute("href")).toBe("#feature/helix/LAND-49");
+      expect(q.querySelector(".q")!.textContent).toBe("Ship rehearsal 1 with the known gap?");
+      // The session closed on it shows on the question, not as an item of its own (notes 23).
+      expect(q.querySelector(".meta")!.textContent).toBe("Recommended: Ship it, note the gapHolds up FixesfromBobFixes closed on it (need: casper)Open LAND-49Answer".replace("fromBob", "from Bob"));
+      expect(q.querySelector(".holds")!.textContent).toBe("Holds up Fixes");
+      // Needed before, muted, and no Holds up, on what waits for a later milestone (notes 35).
+      expect(item("A-15").querySelector(".before")!.textContent).toBe("Needed before the demo");
+      expect(item("Q-259").querySelector(".before")!.textContent).toBe("Needed before rehearsal 2 (49.13)");
+      expect(item("A-15").querySelector(".holds")).toBeNull();
+      expect(item("Q-259").querySelector(".holds")).toBeNull();
+      expect(item("A-15").querySelector(".top .age")!.textContent).toBe("3 days");
+      // A review gate and a bug stay links (notes 43); the permission holds up its agent.
+      expect(item("BOB-12").querySelector("button")).toBeNull();
+      expect(item("BOB-12").querySelector('a[href="#feature/bobnet/BOB-12"]')!.textContent).toBe("Open BOB-12");
+      expect(item("BOB-31").querySelector('a[href="#triage/bobnet"]')!.textContent).toBe("Open in triage");
+      expect(item("BOB-31").querySelector(".holds")!.textContent).toBe("Blocks use");
+      expect(item("r_9").querySelector(".q")!.textContent).toBe("records-agent wants Bash");
+      expect(item("r_9").querySelector(".holds")!.textContent).toBe("Holds up records-agent (build 3)");
+    });
+
+    it("filters by project, with counts", async () => {
+      ([...view().querySelectorAll(".bar-row .seg button")].find((b) => b.textContent!.startsWith("Helix")) as HTMLButtonElement).click();
+      expect(refs("waits-holding")).toEqual(["Q-258", "r_9"]);
+      expect(refs("waits-rest")).toEqual(["A-15", "Q-259"]);
+      ([...view().querySelectorAll(".bar-row .seg button")].find((b) => b.textContent!.startsWith("All")) as HTMLButtonElement).click();
+      expect(refs("waits-holding")).toHaveLength(4);
+    });
+
+    it("answers a question from here: options recommended first, his words verbatim, one write under one key, Undo (#4)", async () => {
+      (item("Q-258").querySelector(".answer-btn") as HTMLButtonElement).click();
+      const [get] = pending("get");
+      expect(get!.op).toEqual({ op: "get", project: "helix", ref: "Q-258" });
+      reply(get!, { question: { ref: "Q-258", kind: "question", text: q258.text, options: [{ key: "a", text: "Hold it for the fix", recommended: false }, { key: "b", text: "Ship it, note the gap", recommended: true }] } });
+      await settle();
+      const form = () => item("Q-258").querySelector("form.answer")!;
+      expect([...form().querySelectorAll(".opt-row")].map((o) => o.textContent)).toEqual(["Ship it, note the gaprecommended", "Hold it for the fix"]);
+      expect([...form().querySelectorAll("input[type=radio]")].some((r) => (r as HTMLInputElement).checked)).toBe(false);
+      expect(form().querySelector(".who-gets")!.textContent).toBe("Recorded on Q-258 as yours, word for word; Bob, Helix's lead gets a message.");
+      const send = () => form().querySelector('button[type="submit"]') as HTMLButtonElement;
+      expect(send().disabled).toBe(true);
+      const words = "  Ship it. Say so in the notes, “gap” and all.  ";
+      const box = form().querySelector("textarea") as HTMLTextAreaElement;
+      box.value = words;
+      box.dispatchEvent(new Event("input"));
+      expect(send().disabled).toBe(false);
+      const radio = form().querySelector('input[value="b"]') as HTMLInputElement;
+      radio.checked = true;
+      radio.dispatchEvent(new Event("change"));
+      send().click();
+      send().click();
+      const ops = pending("answer_question");
+      expect(ops).toHaveLength(1);
+      expect(ops[0]!.op).toEqual({ op: "answer_question", project: "helix", ref: "Q-258", key: "b", words: words.trim() });
+      expect(typeof frameOf(ops[0]!.rid)["key"]).toBe("string");
+      reply(ops[0]!, { ref: "Q-258", seq: 77, told: ["Bob@mbp-1"] });
+      await settle();
+      expect($("toast").textContent).toBe("Answered Q-258. Recorded as your words; sent to Bob.Undo");
+      // It leaves its group at once, and the counts drop.
+      expect(refs("waits-holding")).toEqual(["BOB-12", "BOB-31", "r_9"]);
+      expect($("waits-count").textContent).toBe("5");
+      await answerWith([a15, gate, bug, q259], [{ project: "helix", ref: "Q-258", kind: "question", text: q258.text, key: "b", words: words.trim(), at: iso(0) }]);
+      const done = $("waits-answered").querySelector("li")!;
+      expect(done.querySelector(".said")!.textContent).toBe(`You picked Ship it, note the gap“${words.trim()}”`);
+      expect(done.querySelector(".meta")!.textContent).toBe("Bob, Helix's lead got a messagefrom the dashboard");
+      // Undo, within two minutes: the board takes back his own event.
+      ($("toast").querySelector("button") as HTMLButtonElement).click();
+      const [undo] = pending("undo");
+      expect(undo!.op).toEqual({ op: "undo", project: "helix", seq: 77 });
+      reply(undo!, { ref: "Q-258", seq: 78, told: ["Bob@mbp-1"] });
+      await settle();
+      expect($("toast").textContent).toBe("Undone: Q-258 waits on you again; sent to Bob.");
+      await answerWith([a15, gate, q258, bug, q259]);
+      expect(refs("waits-holding")).toContain("Q-258");
+      expect($("waits-answered")).toBeNull();
+    });
+
+    it("says why when the board refuses an answer, and keeps the form", async () => {
+      (item("Q-259").querySelector(".answer-btn") as HTMLButtonElement).click();
+      reply(pending("get")[0]!, { question: { ref: "Q-259", options: [] } });
+      await settle();
+      const form = item("Q-259").querySelector("form.answer")!;
+      expect(form.querySelector(".words span")!.textContent).toBe("Your answer");
+      const box = form.querySelector("textarea") as HTMLTextAreaElement;
+      box.value = "The north tract";
+      box.dispatchEvent(new Event("input"));
+      (form.querySelector('button[type="submit"]') as HTMLButtonElement).click();
+      const [op] = pending("answer_question");
+      expect(op!.op).toEqual({ op: "answer_question", project: "helix", ref: "Q-259", words: "The north tract" });
+      FakeSocket.last.frame({ t: "error", rid: op!.rid, code: "conflict", message: "Q-259 is answered already: an answer is written once" });
+      await settle();
+      expect($("toast").textContent).toBe("Q-259 is answered already: an answer is written once");
+      expect((item("Q-259").querySelector("textarea") as HTMLTextAreaElement).value).toBe("The north tract");
+      (item("Q-259").querySelector("form.answer button[type=button]") as HTMLButtonElement).click();
+      expect(item("Q-259").querySelector("form.answer")).toBeNull();
+    });
+
+    it("marks an action done with a note, one form open at a time", async () => {
+      (item("A-15").querySelector(".answer-btn") as HTMLButtonElement).click();
+      (item("Q-259").querySelector(".answer-btn") as HTMLButtonElement).click();
+      expect(view().querySelectorAll("form.answer")).toHaveLength(1);
+      (item("A-15").querySelector(".answer-btn") as HTMLButtonElement).click();
+      const form = item("A-15").querySelector("form.answer")!;
+      const box = form.querySelector("textarea") as HTMLTextAreaElement;
+      box.value = "Room 2, Thursday";
+      box.dispatchEvent(new Event("input"));
+      (form.querySelector('button[type="submit"]') as HTMLButtonElement).click();
+      const [op] = pending("mark_done");
+      expect(op!.op).toEqual({ op: "mark_done", project: "helix", ref: "A-15", note: "Room 2, Thursday" });
+      reply(op!, { ref: "A-15", seq: 80, told: ["Bob@mbp-1", "Peach@mbp-1"] });
+      await settle();
+      expect($("toast").textContent).toBe("Marked A-15 done. Recorded as your words; sent to Bob and Peach.Undo");
+      await answerWith([gate, q258, bug, q259], [{ project: "helix", ref: "A-15", kind: "action", text: a15.text, key: null, words: "Room 2, Thursday", at: iso(0) }]);
+      expect($("waits-answered").querySelector(".badge")!.textContent).toBe("done");
+      expect($("waits-answered").querySelector("blockquote")!.textContent).toBe("“Room 2, Thursday”");
+    });
+
+    it("allows or denies a permission with a note to the agent, confirming Allow as today (#5)", async () => {
+      (item("r_9").querySelector(".answer-btn") as HTMLButtonElement).click();
+      const form = () => item("r_9").querySelector("form.answer")!;
+      expect(form().querySelector(".preview")!.textContent).toBe("git push origin HEAD");
+      expect(form().querySelector(".who-gets")!.textContent).toBe("records-agent gets your decision and note.");
+      expect([...form().querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Cancel", "Deny", "Allow"]);
+      const box = form().querySelector("textarea") as HTMLTextAreaElement;
+      box.value = "go ahead, it's idle";
+      box.dispatchEvent(new Event("input"));
+      const asked: string[] = [];
+      globalThis.confirm = (q?: string) => (asked.push(String(q)), false);
+      ([...form().querySelectorAll("button")].find((b) => b.textContent === "Allow") as HTMLButtonElement).click();
+      expect(asked).toEqual(["Allow records-agent to run Bash?\n\ngit push origin HEAD"]);
+      expect(FakeSocket.last.sent.at(-1)!["t"]).not.toBe("action");
+      globalThis.confirm = () => true;
+      ([...form().querySelectorAll("button")].find((b) => b.textContent === "Allow") as HTMLButtonElement).click();
+      expect(FakeSocket.last.sent.at(-1)).toMatchObject({ t: "action", laptop: "mbp-1", action: { kind: "answer", request: "r_9", decision: "allow", message: "go ahead, it's idle" } });
+      expect(item("r_9").querySelector("form.answer")).toBeNull();
+      // Deny needs no confirmation.
+      (item("r_9").querySelector(".answer-btn") as HTMLButtonElement).click();
+      ([...form().querySelectorAll("button")].find((b) => b.textContent === "Deny") as HTMLButtonElement).click();
+      expect(FakeSocket.last.sent.at(-1)).toMatchObject({ t: "action", action: { kind: "answer", request: "r_9", decision: "deny" } });
+    });
+
+    it("answers from the Overview's Needs you in place, with the same form (notes 40)", async () => {
+      await go("#overview");
+      await answerWith([q258]);
+      const line = () => [...$("needs").querySelectorAll("li")].find((li) => li.textContent!.includes("Ship rehearsal"))!;
+      (line().querySelector(".answer-btn") as HTMLButtonElement).click();
+      expect(line().querySelector("form.answer .opt-row")!.textContent).toBe("Ship it, note the gaprecommended");
+      (line().querySelector("form.answer button[type=button]") as HTMLButtonElement).click();
+    });
+
+    it("drops an item once its source says it is answered, keeping nothing of its own (#3)", async () => {
+      await go("#waits");
+      FakeSocket.last.frame({ t: "board_changed", project: "helix", seq: 99, refs: ["Q-258"] });
+      await answerWith([]);
+      const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+      snap.pending = [];
+      FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+      await settle();
+      expect($("waits-holding").textContent).toBe("Holds work up Nothing is held up by you.");
+      expect($("waits-count").textContent).toBe("");
+      // Back to one project in the service, as the tests after these expect.
+      FakeSocket.last.frame({ t: "board_changed", project: "nowhere", seq: 100, refs: [] });
+      for (const f of pending("projects", true)) reply(f, { projects: [project] });
+      await answerWith([]);
+    });
   });
 
   it("opens the triage list on a release from the roadmap's counts line (BOB-3 #6)", async () => {

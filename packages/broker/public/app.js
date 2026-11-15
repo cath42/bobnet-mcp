@@ -26,6 +26,9 @@ const state = {
   hist: new Map(),
   /** Triage's filter (all, bugs, none or a release) and whether past 25 rows show. */
   triage: { filter: "all", all: false },
+  /** Waits on you: the project picked, and the one answer form open with what Casper has put in it so far (notes 40). */
+  waitsProject: "all",
+  answering: null,
   last: 10,
 };
 /** Updates kept in the page: the broker's snapshot plus what arrives live. */
@@ -74,14 +77,18 @@ function toast(text, ok = true, undo = null) {
   toastTimer = setTimeout(() => (el.hidden = true), 8000);
 }
 
-/** Sends a dashboard action to a laptop's supervisor; the button stays disabled until it's settled. */
+/** Sends a dashboard action to a laptop's supervisor; the button stays disabled until it's settled. True once sent. */
 function act(laptop, action, button, confirmText) {
-  if (confirmText && !confirm(confirmText)) return;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return toast("Not connected; try again in a moment.", false);
+  if (confirmText && !confirm(confirmText)) return false;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    toast("Not connected; try again in a moment.", false);
+    return false;
+  }
   const id = String(++rid);
   sentActions.set(id, button);
   if (button) button.disabled = true;
   ws.send(JSON.stringify({ t: "action", rid: id, laptop, action }));
+  return true;
 }
 
 function button(label, cls, onClick) {
@@ -926,7 +933,8 @@ async function loadProjects() {
   }
   for (const key of svc.roadmaps.keys()) loadRoadmap(key);
   for (const key of backlogs.keys()) loadBacklog(key);
-  if (ov.rows || viewName() === "overview") loadOverview();
+  // What waits on Casper counts on the tab, on every view (waiting-on-casper 3).
+  if (svc.projects.length || ov.rows) loadOverview();
   scheduleRender();
 }
 
@@ -1151,20 +1159,23 @@ function closeRelease(key, data, r) {
 // ---------- Overview: what needs Casper, who is working on what, where each project stands (spec: Overview; notes 31-34) ----------
 
 /** The service's overview rows and what waits on Casper: read on the Overview, refetched on board_changed. */
-const ov = { rows: null, waits: null, error: null, loading: false, again: false };
+const ov = { rows: null, waits: null, answered: [], error: null, loading: false, again: false };
+/** Casper's day starts at his midnight, which only the dashboard knows: "Answered from here today" counts from it. */
+const midnight = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.toISOString(); };
 
 async function loadOverview() {
   if (ov.loading) return void (ov.again = true);
   ov.loading = true;
   try {
-    const [o, w] = await Promise.all([boardOp({ op: "overview" }), boardOp({ op: "waits" })]);
-    Object.assign(ov, { rows: o.projects, waits: w.waits, error: null });
+    const [o, w] = await Promise.all([boardOp({ op: "overview" }), boardOp({ op: "waits", since: midnight() })]);
+    Object.assign(ov, { rows: o.projects, waits: w.waits, answered: w.answered ?? [], error: null });
   } catch (err) {
     Object.assign(ov, { rows: ov.rows ?? [], waits: ov.waits ?? [], error: err.message });
   } finally {
     ov.loading = false;
   }
-  if (viewName() === "overview") scheduleRender();
+  // The tab's count shows on every view.
+  scheduleRender();
   if (ov.again) {
     ov.again = false;
     await loadOverview();
@@ -1233,8 +1244,7 @@ function heldNames(w) {
 
 function viewOverview() {
   if (svc.projects && !ov.rows && !ov.loading) loadOverview();
-  // A permission holds up its agent; only those that are Casper's, not the orchestrator's, need him.
-  const perms = pendingAll().filter((p) => p.tier === "human");
+  const perms = humanPerms();
   const waits = ov.waits ?? [];
   const blocking = waits.filter((w) => w.blocking);
   const holding = perms.length + blocking.length;
@@ -1245,13 +1255,12 @@ function viewOverview() {
   return [
     ov.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, ov.error)) : null,
     h("div", { class: "ov" },
-      h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count", id: "needs-count" }, perms.length + waits.length || "")),
+      h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count", id: "needs-count" }, waitCount() || "")),
         h("div", { class: "card" },
           !ov.waits && !perms.length ? h("p", { class: "muted", style: "margin:0" }, "Reading the board…")
             : holding ? h("ul", { class: "lines", id: "needs" }, perms.map(permissionLine), blocking.map(waitLine))
             : h("p", { class: "muted", style: "margin:0" }, "Nothing is held up by you."),
-          // The Waits on you tab isn't here yet, so this names it without a link (spec, BOB-8 gap 3).
-          rest ? h("p", { class: "more" }, `${holding} ${holding === 1 ? "holds" : "hold"} work up · ${rest} more when you have time`) : null,
+          holding || rest ? h("a", { class: "more", href: "#waits" }, rest ? `${holding} ${holding === 1 ? "holds" : "hold"} work up · ${rest} more when you have time →` : "Waits on you →") : null,
           staleLines())),
       h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length || "")),
         now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map(nowLine)), queuedLine()) : h("div", { class: "empty-card" }, "No agent is working.", queuedLine())),
@@ -1276,20 +1285,253 @@ const queuedLine = () => { const q = workers().filter((w) => w.state === "queued
 
 function waitLine(w) {
   const [st, label] = WAIT_KIND[w.kind];
-  return h("li", { class: "hold" }, badge(st, label),
+  const id = waitId(w), verb = ANSWER_VERB[w.kind];
+  return h("li", { class: `hold${verb ? " can" : ""}` }, badge(st, label),
     h("span", { class: "l-t", title: w.text }, w.text),
-    h("span", { class: "l-m" }, `${projectName(w.project)}${w.feature ? ` · ${w.feature}` : ""} · ${w.kind === "bug" ? "blocks use" : `holds up ${heldNames(w)}`}`));
+    verb ? h("span", { class: "acts" }, answerToggle(id, verb)) : null,
+    h("span", { class: "l-m" }, `${projectName(w.project)}${w.feature ? ` · ${w.feature}` : ""} · ${w.kind === "bug" ? "blocks use" : `holds up ${heldNames(w)}`}`),
+    state.answering?.id === id ? answerForm(w) : null);
 }
 
 function permissionLine(p) {
   const w = workers().find((x) => x.id === p.worker_id);
   const ss = w && sessionOf(w);
+  const id = permId(p);
   return h("li", { class: "hold can" }, badge("permission"),
-    h("span", { class: "l-t", title: p.preview }, p.kind === "question" ? `${p.name} asks: ${p.preview}` : `${p.name} wants ${p.tool}`),
-    h("span", { class: "acts" },
-      p.kind === "question" ? h("span", { class: "muted hint" }, "Answer it through the orchestrator, or ") : button("Allow", "primary", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "allow" }, b, `Allow ${p.name} to run ${p.tool}?\n\n${p.preview}`)),
-      button("Deny", "danger", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "deny" }, b))),
-    h("span", { class: "l-m" }, `${w ? projectName(w.project) : p.laptop}${ss ? ` · ${ss.feature}` : ""} · holds up ${p.name}${ss ? ` (${declaredStep(w)})` : ""}`));
+    h("span", { class: "l-t", title: p.preview }, permText(p)),
+    h("span", { class: "acts" }, answerToggle(id, ANSWER_VERB.permission)),
+    h("span", { class: "l-m" }, `${w ? projectName(w.project) : p.laptop}${ss ? ` · ${ss.feature}` : ""} · holds up ${p.name}${ss ? ` (${declaredStep(w)})` : ""}`),
+    state.answering?.id === id ? permissionForm(p) : null);
+}
+
+// ---------- Waits on you: what waits on Casper, across projects, and his answers from here (spec: Waits on you; notes 22-24, 35, 40-43) ----------
+
+/** Casper's own permission requests, not the orchestrator's: a stale laptop's are never offered (BOB-26). */
+const humanPerms = () => pendingAll().filter((p) => p.tier === "human");
+/** What the tab and Needs you count: the board's waits and his permissions. */
+const waitCount = () => humanPerms().length + (ov.waits?.length ?? 0);
+const waitId = (w) => `${w.project}/${w.ref}`;
+const permId = (p) => `perm/${p.laptop}/${p.id}`;
+const permText = (p) => (p.kind === "question" ? `${p.name} asks: ${p.preview}` : `${p.name} wants ${p.tool}`);
+const ANSWER_VERB = { question: "Answer", action: "Mark done", permission: "Allow or deny" };
+/** Under a day, how long; then days. */
+const waitAge = (iso) => (Date.now() - Date.parse(iso) < DAY ? since(iso) : age(iso));
+/** Who asked: an agent by name; the owner's sign-in is an email (a domain with a dot), and that is Casper himself. */
+const askedBy = (a) => (/@[^@]*\./.test(a) ? "you" : shortName(a));
+/** "Mario, BobNet's lead" */
+const leadOf = (key) => `${leadName(key)}, ${projectName(key)}'s lead`;
+/** Who got a message, from the board's `told`: "sent to" (Daisy), never "heard by". */
+const sentTo = (told) => (told?.length ? `; sent to ${told.map(shortName).join(" and ")}` : "");
+
+/** A question's record, with its options, read when its form opens: "<project>/<ref>" → record, or { error }. */
+const questions = new Map();
+async function loadQuestion(key, ref) {
+  const id = `${key}/${ref}`;
+  if (questions.has(id)) return;
+  questions.set(id, null);
+  try {
+    questions.set(id, (await boardOp({ op: "get", project: key, ref })).question ?? { error: `${ref} isn't on the board` });
+  } catch (err) {
+    questions.set(id, { error: err.message });
+  }
+  // The options come in under the box he may be typing in: draw them now, and give him the box back.
+  const typing = document.activeElement?.closest?.("form.answer") ? document.activeElement : null;
+  if (!typing) return scheduleRender();
+  const at = typing.selectionStart;
+  render();
+  const box = $("view").querySelector("form.answer textarea");
+  box?.focus();
+  if (box && at !== undefined) box.setSelectionRange(at, at);
+}
+
+/** The button that opens an item's answer form; one form is open at a time (notes 40). */
+function answerToggle(id, verb) {
+  const open = state.answering?.id === id;
+  return h("button", { type: "button", class: "answer-btn", "aria-expanded": String(open), onclick: (e) => {
+    e.stopPropagation();
+    state.answering = open ? null : { id, pick: null, words: "" };
+    render();
+    if (!open) $("view").querySelector("form.answer")?.querySelector("input, textarea")?.focus();
+  } }, open ? "Close" : verb);
+}
+
+/** The form under a question or an action (notes 41, 42): his words go to the board verbatim; the lead gets a message. */
+function answerForm(w) {
+  const a = state.answering, qid = waitId(w);
+  const q = w.kind === "question" ? questions.get(qid) : null;
+  if (w.kind === "question" && !questions.has(qid)) loadQuestion(w.project, w.ref);
+  const close = () => { state.answering = null; render(); };
+  const form = h("form", { class: "answer", onsubmit: (e) => { e.preventDefault(); send(); } });
+  const options = q?.options ? [...q.options].sort((x, y) => y.recommended - x.recommended) : [];
+  const ready = () => !!(a.pick || a.words.trim());
+  const check = () => { const b = form.querySelector('button[type="submit"]'); if (b && w.kind === "question") b.disabled = !ready(); };
+  const words = (label, placeholder) => h("label", { class: "words" }, h("span", null, label),
+    h("textarea", { rows: 2, placeholder, oninput: (e) => { a.words = e.target.value; check(); } }, a.words));
+  const foot = (...btns) => h("div", { class: "foot" }, h("span", { class: "who-gets" }, `Recorded on ${w.ref} as yours, word for word; ${leadOf(w.project)} gets a message.`),
+    h("button", { type: "button", onclick: close }, "Cancel"), ...btns);
+  async function send() {
+    if (w.kind === "question" && !ready()) return;
+    for (const b of form.querySelectorAll("button")) b.disabled = true;
+    const said = a.words.trim() || undefined;
+    const op = w.kind === "question" ? { op: "answer_question", project: w.project, ref: w.ref, ...(a.pick ? { key: a.pick } : {}), ...(said ? { words: said } : {}) }
+      : { op: "mark_done", project: w.project, ref: w.ref, ...(said ? { note: said } : {}) };
+    try {
+      // One write, one key: a resend after a drop goes under the same key, and the board takes it once (ADR 0001 §12).
+      const res = await boardOp(op, true);
+      state.answering = null;
+      // It leaves its group at once, and the counts drop; the board's next read says the same.
+      ov.waits = (ov.waits ?? []).filter((x) => waitId(x) !== qid);
+      render();
+      toast(`${w.kind === "question" ? `Answered ${w.ref}` : `Marked ${w.ref} done`}. Recorded as your words${sentTo(res.told)}.`, true,
+        res.seq ? () => undoAnswer(w, res.seq) : null);
+    } catch (err) {
+      for (const b of form.querySelectorAll("button")) b.disabled = false;
+      check();
+      toast(err.message, false);
+    }
+    await loadOverview();
+  }
+  if (w.kind === "action") {
+    form.append(words("Note (optional)", "Anything they should know"), foot(h("button", { type: "submit", class: "primary" }, "Mark done")));
+    return form;
+  }
+  form.append(
+    !q ? h("p", { class: "muted", style: "margin:0" }, "Reading its options…")
+      : q.error ? h("p", { class: "muted", style: "margin:0" }, q.error)
+      : options.length ? h("fieldset", null, h("legend", null, "Pick one"),
+          options.map((o) => h("label", { class: "opt-row" },
+            h("input", { type: "radio", name: `o-${qid}`, value: o.key, checked: a.pick === o.key || null, onchange: () => { a.pick = o.key; check(); } }),
+            h("span", null, o.text, o.recommended ? h("span", { class: "rec-tag" }, "recommended") : null))))
+      : null,
+    words(options.length ? "Your words (optional with an option; enough on their own)" : "Your answer", "Write what you want them to read."),
+    foot(h("button", { type: "submit", class: "primary", disabled: !ready() || null }, "Send answer")));
+  return form;
+}
+
+/** His answer or done mark, taken back within two minutes (§7): the question opens again, and the lead hears. */
+async function undoAnswer(w, seq) {
+  try {
+    const res = await boardOp({ op: "undo", project: w.project, seq }, true);
+    toast(`Undone: ${w.ref} waits on you again${sentTo(res.told)}.`);
+  } catch (err) {
+    toast(err.message, false);
+  }
+  await loadOverview();
+}
+
+/** A permission's form (notes 42): a note to the agent, then Deny or Allow, with today's confirmation for Allow. */
+function permissionForm(p) {
+  const a = state.answering;
+  const close = () => { state.answering = null; render(); };
+  const decide = (decision, b) => {
+    const message = a.words.trim();
+    const sent = act(p.laptop, { kind: "answer", request: p.id, decision, ...(message ? { message } : {}) }, b,
+      decision === "allow" ? `Allow ${p.name} to run ${p.tool}?\n\n${p.preview}` : null);
+    if (sent) close();
+  };
+  return h("form", { class: "answer", onsubmit: (e) => e.preventDefault() },
+    p.preview ? h("code", { class: "preview" }, p.preview) : null,
+    h("label", { class: "words" }, h("span", null, `Note to ${p.name} (optional)`),
+      h("textarea", { rows: 2, placeholder: "e.g. go ahead, it's idle", oninput: (e) => (a.words = e.target.value) }, a.words)),
+    h("div", { class: "foot" },
+      h("span", { class: "who-gets" }, p.kind === "question" ? `Answer it through the orchestrator, or deny it here; ${p.name} gets your note.` : `${p.name} gets your decision and note.`),
+      h("button", { type: "button", onclick: close }, "Cancel"),
+      button("Deny", "danger", (b) => decide("deny", b)),
+      p.kind === "question" ? null : button("Allow", "primary", (b) => decide("allow", b))));
+}
+
+/** "Needed before …": an item, a release or a few words (notes 35). */
+function neededBefore(w) {
+  const nb = w.needed_before;
+  if (!nb) return null;
+  const what = "item" in nb ? h("a", { href: featureHref(w.project, nb.item) }, nb.item)
+    : "release" in nb ? h("a", { href: `#roadmap/${w.project}` }, svc.roadmaps.get(w.project)?.releases.find((r) => r.ref === nb.release)?.title ?? nb.release)
+    : nb.text;
+  return h("span", { class: "before" }, "Needed before ", what);
+}
+
+/** Where an item is answered or looked at: a question or action on its feature, a review on its item, a bug in triage. */
+function waitLink(w) {
+  if (w.kind === "bug") return h("a", { href: `#triage/${w.project}` }, "Open in triage");
+  if (w.kind === "review_gate") return h("a", { href: featureHref(w.project, w.feature ?? w.ref) }, `Open ${w.ref}`);
+  return w.feature ? h("a", { href: featureHref(w.project, w.feature) }, `Open ${w.feature}`) : null;
+}
+
+function waitItem(w) {
+  const [st, label] = WAIT_KIND[w.kind];
+  const id = waitId(w), verb = ANSWER_VERB[w.kind], open = state.answering?.id === id;
+  const closed = w.waiting_sessions.map((ss) => `${ss.feature === w.feature ? stepName(ss) : `${ss.feature} ${stepName(ss)}`}`);
+  return h("li", { dataset: { blocking: String(w.blocking), kind: w.kind, ref: w.ref } },
+    h("div", { class: "top" }, badge(st, label), h("span", { class: "id" }, w.ref),
+      h("span", { class: "muted" }, projectName(w.project), w.feature && w.feature !== w.ref ? [" · ", h("a", { href: featureHref(w.project, w.feature) }, w.feature)] : null),
+      h("span", { class: "age" }, waitAge(w.since))),
+    h("div", { class: "q" }, w.text),
+    h("div", { class: "meta" },
+      w.recommended ? h("span", null, "Recommended: ", w.recommended.text) : null,
+      w.blocking ? h("span", { class: "holds" }, w.kind === "bug" ? "Blocks use" : `Holds up ${heldNames(w)}`) : null,
+      w.blocking ? null : neededBefore(w),
+      w.asked_by ? h("span", null, `from ${askedBy(w.asked_by)}`) : null,
+      closed.length ? h("span", null, `${upTo2(closed)} closed on it (need: casper)`) : null,
+      waitLink(w),
+      verb && !open ? answerToggle(id, verb) : null),
+    open ? answerForm(w) : null);
+}
+
+function permItem(p) {
+  const w = workers().find((x) => x.id === p.worker_id);
+  const ss = w && sessionOf(w);
+  const id = permId(p), open = state.answering?.id === id;
+  return h("li", { dataset: { blocking: "true", kind: "permission", ref: p.id } },
+    h("div", { class: "top" }, badge("permission"),
+      h("span", { class: "muted" }, w ? projectName(w.project) : p.laptop, ss ? [" · ", h("a", { href: featureHref(w.project, ss.feature) }, ss.feature)] : null),
+      h("span", { class: "age" }, waitAge(p.created_at))),
+    h("div", { class: "q" }, permText(p)),
+    h("div", { class: "meta" },
+      h("span", { class: "holds" }, `Holds up ${p.name}${ss ? ` (${ss.label})` : ""}`),
+      h("span", null, `on ${p.laptop}`),
+      open ? null : answerToggle(id, ANSWER_VERB.permission)),
+    open ? permissionForm(p) : null);
+}
+
+/** One answer or done mark he sent from here today (notes 43): the question muted, the option he picked, his words exactly. */
+function answeredItem(x) {
+  const q = questions.get(`${x.project}/${x.ref}`);
+  if (x.key && !questions.has(`${x.project}/${x.ref}`)) loadQuestion(x.project, x.ref);
+  const option = x.key ? (q?.options?.find((o) => o.key === x.key)?.text ?? x.key) : null;
+  return h("li", { class: "answered", dataset: { ref: x.ref } },
+    h("div", { class: "top" }, badge("done", x.kind === "action" ? "done" : "answered"), h("span", { class: "id" }, x.ref),
+      h("span", { class: "muted" }, projectName(x.project)), h("span", { class: "age" }, `today ${clock(x.at)}`)),
+    h("div", { class: "q" }, x.text),
+    h("div", { class: "said" }, option ? h("div", null, h("span", { class: "muted" }, "You picked "), option) : null,
+      x.words ? h("blockquote", null, `“${x.words}”`) : null),
+    h("div", { class: "meta" }, h("span", null, `${leadOf(x.project)} got a message`), h("span", null, "from the dashboard")));
+}
+
+function viewWaits() {
+  if (svc.projects && !ov.waits && !ov.loading) loadOverview();
+  const keys = (svc.projects ?? []).map((p) => p.key);
+  const perms = humanPerms().map((p) => ({ p, project: workers().find((x) => x.id === p.worker_id)?.project ?? null, since: p.created_at }));
+  const all = [...perms, ...(ov.waits ?? []).map((w) => ({ w, project: w.project, since: w.since }))];
+  const pick = state.waitsProject !== "all" && keys.includes(state.waitsProject) ? state.waitsProject : "all";
+  const shown = all.filter((x) => pick === "all" || x.project === pick).sort((a, b) => a.since.localeCompare(b.since));
+  const blocking = shown.filter((x) => x.p || x.w.blocking), rest = shown.filter((x) => x.w && !x.w.blocking);
+  const answered = (ov.answered ?? []).filter((x) => pick === "all" || x.project === pick);
+  const item = (x) => (x.p ? permItem(x.p) : waitItem(x.w));
+  const seg = (v, label) => h("button", { type: "button", "aria-pressed": String(pick === v), onclick: () => { state.waitsProject = v; render(); } }, label);
+  return [
+    ov.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, ov.error)) : null,
+    h("div", { class: "bar-row" },
+      keys.length > 1 ? h("span", { class: "seg filters" }, seg("all", `All projects ${all.length}`), keys.map((k) => seg(k, `${projectName(k)} ${all.filter((x) => x.project === k).length}`))) : null,
+      h("span", { class: "muted" }, `${plural(shown.length, "item")}, oldest first`)),
+    ...(!ov.waits && !perms.length ? [h("div", { class: "empty-card" }, "Reading the board…")] : [
+      h("section", { id: "waits-holding" }, h("h2", null, "Holds work up ", h("span", { class: "count" }, blocking.length || "")),
+        blocking.length ? h("ul", { class: "list waits" }, blocking.map(item)) : h("div", { class: "empty-card" }, "Nothing is held up by you.")),
+      h("section", { id: "waits-rest" }, h("h2", null, "When you have time ", h("span", { class: "count" }, rest.length || "")),
+        rest.length ? h("ul", { class: "list waits" }, rest.map(item)) : h("div", { class: "empty-card" }, "Nothing else waits on you."))]),
+    answered.length ? h("section", { id: "waits-answered" }, h("h2", null, "Answered from here today ", h("span", { class: "count" }, answered.length)),
+      h("ul", { class: "list waits" }, answered.map(answeredItem))) : null,
+    h("p", { class: "note" }, "Answer a question, mark an action done or allow a permission right here; you can still answer in the project's conversation. Your answer is kept on the item word for word and the project's lead gets a message; the item leaves the list. A session that closed with need: casper shows on the question it waits for. A review and a bug open where they are looked at."),
+  ];
 }
 
 /** An agent working now: who, its state, tokens, then project › feature › session › tasks; it opens its detail row (spec, BOB-3 gap 2). */
@@ -1515,7 +1757,7 @@ function openCapture(back = null) {
     bug ? h("div", { class: "opt" }, h("span", null, "Where"), h("span", { class: "seg" }, ["staging", "production"].map((w) => h("button", { type: "button", "aria-pressed": String(where === w), onclick: () => keep(() => { where = w; draw(); }) }, w))),
       h("label", { class: "check" }, h("input", { type: "checkbox", id: "cap-blocks", checked: blocks || null, onchange: (e) => keep(() => { blocks = e.target.checked; draw(); }) }), "Blocks use")) : null,
     back ? h("p", { class: "note refused" }, `Not captured: ${back.message}`) : null,
-    h("p", { class: "note" }, bug && blocks ? "A bug that blocks use goes first in the triage list, marked blocks use." : `It goes to ${nameOf(key)}'s triage list, with your words as you typed them. Release and feature are set at triage.`),
+    h("p", { class: "note" }, bug && blocks ? "A bug that blocks use also goes on Waits on you until it is slotted or closed." : `It goes to ${nameOf(key)}'s triage list, with your words as you typed them. Release and feature are set at triage.`),
     h("div", { class: "foot" }, button("Cancel", "", () => dlg.close()), h("button", { type: "submit", class: "primary" }, "Capture"))));
   const submit = () => {
     const text = $("cap-text").value.trim();
@@ -1536,8 +1778,8 @@ function openCapture(back = null) {
 
 /** Never asks back: with the board away, it waits on this device and goes when the board is back. */
 async function capture(key, name, op) {
-  // Not "and on Waits on you" until BOB-5 ships that tab (spec: BOB-8 as built).
-  const also = op.blocks_use ? ", marked blocks use" : "";
+  // A bug that blocks use also waits on Casper (spec: Capture; BOB-8 as built, gap 3).
+  const also = op.blocks_use ? ", and on Waits on you" : "";
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     setQueued([...queued(), op]);
     return toast(`Captured. It waits on this device and goes to ${name}'s triage list when the board is back.`);
@@ -1868,13 +2110,15 @@ function viewSessions() {
 
 // ---------- Views ----------
 
-const VIEWS = { overview: viewOverview, now: viewNow, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions };
+const VIEWS = { overview: viewOverview, waits: viewWaits, now: viewNow, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions };
 const viewName = () => (VIEWS[location.hash.slice(1).split("/")[0]] ? location.hash.slice(1).split("/")[0] : "overview");
 
 function render() {
   const v = viewName();
   for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${v}`);
   $("now-count").textContent = running().length ? String(running().length) : "";
+  // Nothing waits: the count leaves the tab.
+  $("waits-count").textContent = waitCount() || "";
   const keys = [...new Set([...projects().map((e) => e.board.project), ...(svc.projects ?? []).map((p) => p.key)])];
   const shown = v === "roadmap" ? (roadmapRoute()?.key ?? current()?.project) : v === "triage" ? triageRoute()?.key : current()?.project;
   const pick = $("project");
@@ -1891,7 +2135,8 @@ let renderTimer = null;
 function scheduleRender() {
   clearTimeout(renderTimer);
   renderTimer = setTimeout(() => {
-    if (holdRender || document.activeElement?.tagName === "SELECT") return scheduleRender();
+    // Not while he writes an answer: a live frame would take the box from under his typing.
+    if (holdRender || document.activeElement?.tagName === "SELECT" || document.activeElement?.closest?.("form.answer")) return scheduleRender();
     render();
   }, 250);
 }

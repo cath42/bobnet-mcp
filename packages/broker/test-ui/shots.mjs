@@ -1,4 +1,4 @@
-// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3) at phone, tablet and desktop
+// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5) at phone, tablet and desktop
 // widths, against a fake broker in the page holding a copy of BobNet's board (2026-11-14; its backlog
 // 2026-11-15). The page is public/ as served.
 //   node test-ui/shots.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob7-*.png, bob8-*.png, bob10-*.png, bob3-*.png)
@@ -153,6 +153,24 @@ function fakeBroker() {
     { project: "bobnet", kind: "action", ref: "A-1", feature: null, text: "Add the CI token to the broker's secrets", recommended: null,
       holds: { items: [], sessions: [] }, waiting_sessions: [], needed_before: { release: "R2" }, asked_by: "Mario@mbp-1", since: iso(600), blocking: false },
   ];
+  // BOB-5's shots: Helix's waits from Daisy's sample (records.js, from Helix's lead/questions.md), as the board's records.
+  // The bug and the permission are example (no record of either exists), as the prototype marks them.
+  const options = new Map();
+  if (window.BOB5) {
+    const day = (d) => `${d}T09:00:00.000Z`;
+    const asker = (from) => `${from.split(/[ ,]/)[0].replace(/^Casper$/, "owner@example.com")}${from.startsWith("Casper") ? "" : "@mbp-1"}`;
+    waits.push(...window.SAMPLES.records.waits.filter((w) => w.kind !== "permission").map((w) => {
+      if (w.options) options.set(w.id, w.options.map((o) => ({ key: o.k, text: o.text, recommended: !!o.rec })));
+      const rec = w.options?.find((o) => o.rec);
+      const fixes = w.id === "Q-258" ? [{ feature: "LAND-49", kind: "build", label: "Fixes" }] : [];
+      return {
+        project: w.project, kind: w.kind === "review" ? "review_gate" : w.kind, ref: w.kind === "bug" ? "DRAFT-110" : w.id.replace("#6", ""), feature: w.feature, text: w.text,
+        recommended: rec ? { key: rec.k, text: rec.text } : null, holds: { items: w.blocking && !fixes.length ? [w.feature] : [], sessions: [] }, waiting_sessions: fixes,
+        needed_before: w.before ? { text: w.before } : null, asked_by: w.kind === "review" ? null : asker(w.from), since: day(w.since), blocking: w.blocking,
+      };
+    }));
+  }
+  const answered = [];
   const overviewRow = (p = project) => {
     const bd = boardOf(p.key);
     const open = bd.releases.findIndex((r) => r.status === "open");
@@ -169,8 +187,9 @@ function fakeBroker() {
     switch (op.op) {
       case "projects": return { projects };
       case "overview": return { projects: projects.filter((p) => !op.project || p.key === op.project).map(overviewRow) };
-      case "waits": return { waits, answered: [] };
+      case "waits": return { waits, answered };
       case "get":
+        if (/^[QA]-/.test(op.ref ?? "")) return { question: { ref: op.ref, options: options.get(op.ref) ?? [] } };
         if (!bob4) return { item: { ...boardOf(op.project).features.find((x) => x.ref === op.ref), sessions: [] }, history: [] };
         if (op.session) return { session: bob4.sessions.find((x) => x.kind === op.session.kind && x.label === op.session.label) };
         return { item: { ...bob4.fx, sessions: bob4.sessions.map(({ feature, kind, label, started_at, ended_at }) => ({ feature, kind, label, started_at, ended_at })) }, history: bob4.history };
@@ -193,6 +212,12 @@ function fakeBroker() {
         for (const m of op.moves) { const x = board.features.find((y) => y.ref === m.feature); x.release = m.to; x.ord = last(m.to); }
         board.releases.find((r) => r.ref === op.ref).status = "closed";
         return { ref: op.ref, seq: ++seq };
+      case "answer_question": case "mark_done": {
+        const i = waits.findIndex((w) => w.project === op.project && w.ref === op.ref);
+        const [w] = waits.splice(i, 1);
+        answered.unshift({ project: w.project, ref: w.ref, kind: w.kind, text: w.text, key: op.key ?? null, words: op.words ?? op.note ?? null, at: new Date().toISOString() });
+        return { ref: op.ref, seq: ++seq, told: [projects.find((p) => p.key === op.project).lead] };
+      }
       default: return { ref: null, seq: ++seq, told: [] };
     }
   };
@@ -212,7 +237,13 @@ function fakeBroker() {
       { ...worker, id: "w_m", name: "Mario", role: "lead", session: null, task: "lead", tokens: 5_600_000 },
       { ...worker, id: "w_pe", name: "Peach", role: "po", session: null, task: "accept", state: "queued", tokens: 0 });
   }
-  const pending = window.BOB4 ? [{ id: "r_2", worker_id: "w_da", name: "Daisy", kind: "approval", tool: "Bash", tier: "lead", created_at: iso(2), preview: "git push origin HEAD" }] : window.BOB3 ? [{ id: "r_1", worker_id: "w_9453f36a", name: "Toad", kind: "approval", tool: "Bash", tier: "human", created_at: iso(2), preview: "git log --oneline v2..origin/v2" }] : [];
+  if (window.BOB5) {
+    others.splice(0, others.length,
+      { ...worker, id: "w_ho", name: "Howard", project: "helix", role: "builder", session: "LAND-49 build Fixes", task: "LAND-49", task_refs: ["LAND-49.14"], state: "waiting-approval", tokens: 1_400_000 },
+      { ...worker, id: "w_ma", name: "Marvin", project: "helix", role: "qa", session: "LAND-49 build Fixes", task: "LAND-49", task_refs: ["LAND-49.19"], tokens: 2_200_000 },
+      { ...worker, id: "w_m", name: "Mario", role: "lead", session: null, task: "lead", tokens: 5_600_000 });
+  }
+  const pending = window.BOB5 ? [{ id: "r_5", worker_id: "w_ho", name: "Howard", kind: "approval", tool: "Bash", tier: "human", created_at: iso(14), preview: "kill 33987" }] : window.BOB4 ? [{ id: "r_2", worker_id: "w_da", name: "Daisy", kind: "approval", tool: "Bash", tier: "lead", created_at: iso(2), preview: "git push origin HEAD" }] : window.BOB3 ? [{ id: "r_1", worker_id: "w_9453f36a", name: "Toad", kind: "approval", tool: "Bash", tier: "human", created_at: iso(2), preview: "git log --oneline v2..origin/v2" }] : [];
   const dashboard = { peers: [], laptops: [{ laptop: "mbp-1", at: iso(0), snapshot: { supervisor: { started_at: iso(600), concurrency: 3, active: 1, queued: 0 }, workers: others, pending, usage: [] } }], boards: [], updates: [], traffic: [] };
 
   class FakeSocket extends EventTarget {
@@ -268,6 +299,19 @@ const all = [
   ["bob4-capture-found-in", "feature/bobnet/BOB-4", [(p) => p.click("#capture-open")], false],
   ["bob4-overview-agent", "overview", [(p) => p.locator("#working .a-line", { hasText: "Luigi" }).locator(".a-btn").click()], false],
   ["bob4-overview-lead-permission", "overview", [(p) => p.locator("#working .a-line", { hasText: "Daisy" }).locator(".a-btn").click()], false],
+  // BOB-5: Waits on you across projects (#1, #2), answering a question with Undo (#4), an action, a permission (#5), the counts (#6).
+  ["bob5-waits", "waits", [], true],
+  ["bob5-answer-question", "waits", [(p) => p.locator('li[data-ref="Q-258"]').getByRole("button", { name: "Answer" }).click(),
+    (p) => p.locator('li[data-ref="Q-258"] .opt-row').first().click(), (p) => p.fill('li[data-ref="Q-258"] textarea', "Adding the second company now; rerun C11 in ten minutes."),
+    (p) => p.locator('li[data-ref="Q-258"]').scrollIntoViewIfNeeded()], false],
+  ["bob5-answered", "waits", [(p) => p.locator('li[data-ref="Q-258"]').getByRole("button", { name: "Answer" }).click(),
+    (p) => p.locator('li[data-ref="Q-258"] .opt-row').first().click(), (p) => p.fill('li[data-ref="Q-258"] textarea', "Adding the second company now; rerun C11 in ten minutes."),
+    (p) => p.getByRole("button", { name: "Send answer" }).click(), (p) => p.locator("#waits-answered").scrollIntoViewIfNeeded()], false, "#waits-answered"],
+  ["bob5-answer-action", "waits", [(p) => p.locator('li[data-ref="A-17"]').getByRole("button", { name: "Mark done" }).click(), (p) => p.locator('li[data-ref="A-17"]').scrollIntoViewIfNeeded()], false],
+  ["bob5-answer-permission", "waits", [(p) => p.locator('li[data-ref="r_5"]').getByRole("button", { name: "Allow or deny" }).click(), (p) => p.locator('li[data-ref="r_5"]').scrollIntoViewIfNeeded()], false],
+  ["bob5-overview", "overview", [], true],
+  ["bob5-overview-answer", "overview", [(p) => p.locator("#needs li", { hasText: "two companies" }).getByRole("button", { name: "Answer" }).click()], false],
+  ["bob5-capture-blocks-use", "triage/bobnet", capture, false],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 
@@ -279,13 +323,17 @@ try {
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2 });
       if (name.startsWith("bob3")) await page.addInitScript(() => (window.BOB3 = true));
       if (name.startsWith("bob4")) await page.addInitScript(() => (window.BOB4 = true));
-      if (name.startsWith("bob3acc")) {
+      if (name.startsWith("bob5")) {
+        await page.addInitScript(() => (window.BOB5 = true));
+        await page.addInitScript({ path: join(here, "../../../design/BOB-1/sample/records.js") });
+      }
+      if (name.startsWith("bob3acc") || name.startsWith("bob5")) {
         await page.addInitScript(() => (window.TWO = true));
         await page.addInitScript({ path: join(here, "../../../design/BOB-1/sample/helix.js") });
       }
       await page.addInitScript(fakeBroker);
       await page.goto(`${base}#${hash}`);
-      await page.waitForSelector(hash.startsWith("triage") ? ".totals" : hash.startsWith("overview") ? ".prow" : hash.startsWith("feature") ? "#feature-head" : "section.release");
+      await page.waitForSelector(hash.startsWith("triage") ? ".totals" : hash.startsWith("waits") ? '#waits-holding li[data-kind="question"]' : hash.startsWith("overview") ? ".prow" : hash.startsWith("feature") ? "#feature-head" : "section.release");
       for (const step of steps) {
         await step(page);
         await page.waitForTimeout(400);
