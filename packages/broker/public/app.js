@@ -910,8 +910,15 @@ async function flushCaptures() {
       setQueued(queued().filter((x) => x.capture_id !== op.capture_id));
       // One refusal at a time in the dialog; once Casper has sent it again or let it go, the rest go.
       if (sent) toast(`Sent ${plural(sent, "capture")} that waited on this device.`);
-      $("capture").addEventListener("close", () => flushCaptures(), { once: true });
-      return openCapture({ op, message: err.message });
+      const dlg = $("capture");
+      const show = () => {
+        dlg.addEventListener("close", () => flushCaptures(), { once: true });
+        openCapture({ op, message: err.message });
+      };
+      // Not over a capture Casper is typing (Toad, BOB-10 review 6): it opens once he has closed that one.
+      if (dlg.open) dlg.addEventListener("close", show, { once: true });
+      else show();
+      return;
     }
     setQueued(queued().filter((x) => x.capture_id !== op.capture_id));
     if (backlogs.has(op.project)) loadBacklog(op.project);

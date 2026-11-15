@@ -264,6 +264,7 @@ describe("the board tools in the channel client", () => {
     expect(said("board_capture")).toMatch(/A review's blocker or major is not a bug: it is a task of the feature under review/);
     expect(said("board_write")).toMatch(/A bug is Done once its fix has landed/);
     expect(said("close_session")).toMatch(/tasks of the feature under review, never bugs/);
+    expect(said("close_session")).toMatch(/bug moved to Done needs its criteria checked first/);
   });
 
   it("sends operations as the session's own name, with no ctx, and defaults the project to its only one", async () => {

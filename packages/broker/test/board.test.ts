@@ -1131,6 +1131,13 @@ describe("bugs (BOB-10, bugs.md)", () => {
     expect((await item(t2)).history.at(-1)!.changes).toContainEqual({ field: "ac #1", old: null, new: "It no longer happens" });
     await ok(owner, { op: "update", project: "helix", ref: t1, set: { type: "bug" } });
     expect((await item(t1)).criteria.map((c) => c.text)).toEqual(["Drawn", "Shown"]);
+    // A Done item doesn't become a bug, open criterion and all (Toad, BOB-10 review 2); a new capture is the bug.
+    const done = (await ok(owner, { op: "create", project: "helix", kind: "backlog", type: "chore", title: "Tidied" })).ref!;
+    await ok(owner, { op: "update", project: "helix", ref: done, set: { status: "Done" } });
+    expect(await refused(owner, { op: "update", project: "helix", ref: done, set: { type: "bug" } })).toMatchObject({ code: "conflict", message: expect.stringContaining("found_in") });
+    const chore = (await ok(owner, { op: "create", project: "helix", kind: "backlog", type: "chore", title: "Tidy" })).ref!;
+    expect(await refused(owner, { op: "update", project: "helix", ref: chore, set: { type: "bug", status: "Done" } })).toMatchObject({ code: "conflict" });
+    expect((await item(done)).type).toBe("chore");
   });
 
   it("closes a bug only once every criterion is checked with evidence; without a fix, by archiving it with a reason (bugs.md 4)", async () => {

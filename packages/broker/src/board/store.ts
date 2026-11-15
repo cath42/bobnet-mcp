@@ -906,6 +906,8 @@ export class BoardStore {
     if (set.type !== undefined && set.type !== row.type) {
       if (row.kind === "feature") throw new BoardError("invalid", "A feature is type increment");
       if (set.type === "increment") throw new BoardError("invalid", `Only a feature is type increment; promote ${ref} to make it one`);
+      // A Done item would get an open criterion while Done (Toad, BOB-10 review 2): a bug found in it is a new one.
+      if (set.type === "bug" && (set.status ?? row.status) === "Done") throw new BoardError("conflict", `${ref} is Done: capture the bug as a new item, with found_in naming what it was found in`);
       field("type", set.type);
     }
     const type = set.type ?? row.type;
@@ -2051,12 +2053,13 @@ export class BoardStore {
     return p;
   }
 
-  /** An item of this project by any id it has had. A ref from another project is refused as such. */
   /** An item's acceptance criteria: how many, and how many still open. */
   private acOf(item: number): { total: number; open: number } {
     const c = this.sql.exec<{ total: number; open: number | null }>("SELECT count(*) AS total, sum(state = 'open') AS open FROM criteria WHERE item = ? AND section = 'ac'", item).one();
     return { total: c.total, open: c.open ?? 0 };
   }
+
+  /** An item of this project by any id it has had. A ref from another project is refused as such. */
 
   private item(p: ProjectRow, ref: string): ItemRow {
     const row = this.sql.exec<ItemRow>("SELECT i.* FROM item_refs r JOIN items i ON i.pk = r.item WHERE r.project = ? AND r.ref = ?", p.pk, ref).toArray()[0];

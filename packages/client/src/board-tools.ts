@@ -151,7 +151,7 @@ export const BOARD_TOOLS: BoardTool[] = [
     name: "close_session",
     description:
       "Close a session at its boundary (the lead or session PO). Applies moves as status writes, records findings (blockers and majors: tasks of the feature under review, never bugs), " +
-      "stores the handoff file's text, and closes the feature's open state with its last session. need casper names waits_on (question refs). Tasks moved and tokens come from the board.",
+      "stores the handoff file's text, and closes the feature's open state with its last session. A bug moved to Done needs its criteria checked first (board_write criteria check, then close_session), or the whole close is refused. need casper names waits_on (question refs). Tasks moved and tokens come from the board.",
     shape: {
       project: projectArg,
       session: SessionRef,

@@ -901,6 +901,29 @@ describe("triage and capture (BOB-8)", () => {
     await lists();
   });
 
+  // Toad, BOB-10 review 6.
+  it("holds a refused queued capture until Casper closes the capture he is typing", async () => {
+    $("capture-open").click();
+    const dlg = $("capture");
+    (dlg.querySelector("textarea") as HTMLTextAreaElement).value = "Mine, half typed";
+    const op = { op: "capture", project: "bobnet", capture_id: "00000000-0000-4000-8000-000000000009", title: "Queued 9.", casper_words: "Queued 9. Words.", type: "task" };
+    localStorage.setItem("bobnet.captures", JSON.stringify([op]));
+    FakeSocket.last.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
+    reply(pending("projects")[0]!, { projects: [{ key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] }] });
+    await settle();
+    refuse(pending("capture")[0]!, "forbidden", "not yours");
+    await settle();
+    expect((dlg.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Mine, half typed");
+    dlg.close();
+    await settle();
+    expect(dlg.open).toBe(true);
+    expect((dlg.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Queued 9. Words.");
+    expect(localStorage.getItem("bobnet.captures")).toBeNull();
+    dlg.close();
+    await settle();
+    await lists();
+  });
+
   // Toad, BOB-8 review 3.
   it("shows an item's closed release under Edit, selected and not to be picked", async () => {
     await go("#triage/bobnet/edit");
