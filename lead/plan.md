@@ -153,6 +153,9 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - poe@ubu1 m_a16d12f8: ubu1 on rc.34 (17:57:51Z), clients rc.34, no report errors. Both supervisors on rc.34.
   rc.35 then goes to both laptops after the broker deploy.
 - Casper (~18:0xZ): deploy only in a window between Helix sessions, agreed with poe. Asked poe for one.
+- poe m_28135c84: window = the LAND-52 review close (Bob w_7222a480; hours). WAIT for poe's "deploy"; then deploy
+  47d5483, tell poe live; poe restarts mbp-1 onto rc.35 (cuts Mario, respawns), checks (1)+(2); Mario (3) on the
+  next helix spawn (remote_url on its board run). ubu1 rc.35 is poe@ubu1's.
 ## Release-1 close: what's left
 - rc.34 live (poe) -> outbox drains -> BOB-10 AC 5 (worker's close_session description), BOB-4 AC 5-7
   live data; close the open sessions (after the drain).
