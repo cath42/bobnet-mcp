@@ -31,13 +31,25 @@ describe("BoardOp", () => {
     expect(BoardOp.safeParse(join).success).toBe(false);
   });
 
-  it("takes a run's Remote Control link only as https", () => {
+  const badLinks = ["http://claude.ai/code/s_1", "javascript:alert(1)", "javascript://claude.ai/%0aalert(1)", "data:text/html,x", "https://evil.example/code/s_1", "https://claude.ai.evil.example/x", "not a url", `https://claude.ai/${"x".repeat(500)}`];
+
+  it("takes a run's Remote Control link only as a claude.ai https link", () => {
     const remote = { op: "run_remote", project: "helix", id: "w_1" };
     expect(BoardOp.parse({ ...remote, remote_url: "https://claude.ai/code/s_1" })).toMatchObject({ op: "run_remote", id: "w_1", remote_url: "https://claude.ai/code/s_1" });
-    for (const bad of ["http://claude.ai/code/s_1", "javascript:alert(1)", "not a url", `https://claude.ai/${"x".repeat(500)}`, null]) {
+    for (const bad of [...badLinks, null]) {
       expect(BoardOp.safeParse({ ...remote, remote_url: bad }).success).toBe(false);
     }
     expect(BoardOp.safeParse(remote).success).toBe(false);
+  });
+
+  it("takes run_start's optional link only as a claude.ai https link", () => {
+    const start = { op: "run_start", project: "helix", id: "w_1", started_at: "2026-11-15T10:00:00Z", session: null };
+    expect(BoardOp.parse(start)).toMatchObject({ op: "run_start", id: "w_1" });
+    expect(BoardOp.parse({ ...start, remote_url: null })).toMatchObject({ remote_url: null });
+    expect(BoardOp.parse({ ...start, remote_url: "https://claude.ai/code/s_1" })).toMatchObject({ remote_url: "https://claude.ai/code/s_1" });
+    for (const bad of badLinks) {
+      expect(BoardOp.safeParse({ ...start, remote_url: bad }).success).toBe(false);
+    }
   });
 
   it("takes a grant for every project only as *", () => {

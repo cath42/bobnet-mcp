@@ -64,6 +64,8 @@ const at = z.string().datetime({ offset: true });
 const count = z.number().int().nonnegative();
 /** A run's id: the supervisor's worker id. */
 const runId = z.string().regex(/^[A-Za-z0-9_./-]{1,60}$/);
+/** A run's Remote Control link: a claude.ai page, as the snapshot's (frames.ts), since the dashboard renders it as an href. */
+const remoteUrl = z.string().url().startsWith("https://claude.ai/").max(500);
 const sha = z.string().regex(/^[0-9a-f]{7,40}$/);
 
 /** A session by what a spawn declares: the feature, the kind and a label ("3"). */
@@ -351,7 +353,7 @@ export const BoardOp = z.discriminatedUnion("op", [
     resumed: z.boolean().default(false),
     session: SessionRef.nullable(),
     tasks: z.array(ItemRef).max(50).default([]),
-    remote_url: z.string().url().max(500).nullable().optional(),
+    remote_url: remoteUrl.nullable().optional(),
   }),
   /**
    * A run's Remote Control link (§9), once the worker has it, which is after its run_start: set once,
@@ -361,7 +363,7 @@ export const BoardOp = z.discriminatedUnion("op", [
     op: z.literal("run_remote"),
     ...project,
     id: runId,
-    remote_url: z.string().url().startsWith("https://").max(500),
+    remote_url: remoteUrl,
   }),
   z.object({
     op: z.literal("run_end"),
