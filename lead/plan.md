@@ -156,6 +156,8 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - poe m_28135c84: window = the LAND-52 review close (Bob w_7222a480; hours). WAIT for poe's "deploy"; then deploy
   47d5483, tell poe live; poe restarts mbp-1 onto rc.35 (cuts Mario, respawns), checks (1)+(2); Mario (3) on the
   next helix spawn (remote_url on its board run). ubu1 rc.35 is poe@ubu1's.
+- Broker DEPLOYED (12th) 20:47:15Z on poe's "deploy" (m_9f263241), from v2 47d5483 (rc.35 tree, + lead/ only):
+  Version ID 44945736-030f-4472-bc81-f10c2dd1a396. Carries run_remote. Told poe live after the 5-min adopt window.
 ## Release-1 close: what's left
 - rc.34 live (poe) -> outbox drains -> BOB-10 AC 5 (worker's close_session description), BOB-4 AC 5-7
   live data; close the open sessions (after the drain).
