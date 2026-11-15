@@ -31,7 +31,9 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - Luigi 1cf25fb: the five follow-ups. Broker DEPLOYED (3rd) 04:59:38Z from v2 7f0b2b6 (= 1cf25fb +
   lead/): Version ID 27ea6fd5-432d-49e5-a02a-dfb813b50f83. Checks 05:05Z PASS: no report errors
   since; board_list progress counts own ac (BOB-7 0/6), so the new code serves.
-- Peach w_01bfd4e5: accept BOB-7 (+ BOB-2 AC 5, BOB-14 AC 5).
+- Peach w_01bfd4e5 (8ad6c9c): BOB-7 Done (AC 1-6, DoD). BOB-2 AC 5 checked (open: 10, 11).
+  BOB-14 AC 5 open: no item-history view yet. For the release-1 close: Casper's live look at the
+  gates and the close dialog is still wanted (not a blocker; goes in the close summary).
 - Luigi w_6a83777e: BOB-8 (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
   BOB-7, BOB-8, BOB-10, BOB-3, BOB-4, BOB-5. Toad reviews each; broker deploy after each review.
