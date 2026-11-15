@@ -47,7 +47,9 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   second broker deploy (+ CI_TOKENS secret, Casper's) and rc.32 after it.
   Daisy, for the gates: the release ↑/↓ Undo is an inverse order_releases, not `undo`.
 - Toad (w_b9c1997a): reviewing those four, recording consult rulings in ADR 0001, deploy order + checks.
-- Peach (w_a066c9e6): who opens a release (planned -> open), and may a planned release be closed.
+- Peach (w_a066c9e6): done, 6de7894 (board-writes.md 6, 7): a release opens automatically when its
+  first session starts (system write); closing a planned release is allowed (Casper's close gate).
+- Luigi (w_1e72629b): session start opens a planned release; refuses a start under a closed release.
 - Toad (w_17300a34): signed off a720d5f (architecture/reviews/2026-11-14-dotted-ids-review.md, 167c07a).
   Deploy-ready: e12cdc8 -> a720d5f broker/protocol src is only 0b + 0c (Board migration 2, op key,
   told, widened ItemRef); no Broker migrations, no new DO class.
