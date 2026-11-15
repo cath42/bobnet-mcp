@@ -3,6 +3,18 @@
 Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41cbc1dc, live
 02:33:23Z); mbp-1's supervisor on rc.29 since 02:42:28Z (pid 48318); ubu1 on rc.29.
 
+## Release 1: drive to finished and deployed (Casper's standing go, 2026-11-14 22:25)
+No approvals for deploys or releases; ask Casper only real product calls or failures needing his hands.
+- 04:31:57Z mbp-1 supervisor on rc.32 (pid 71790). Checks PASS on mbp-1: every supervisor peer
+  2.0.0-rc.32; no "could not report", no "board report can't be made; dropped" since. ubu1: poe@ubu1.
+- 04:5xZ BOB-14 import POSTED at v2 6f9a14f: ok, bobnet 26 items, next_item 26; 0 unmapped, 0
+  renumbered, 6 rules. product/backlog is frozen from here: nothing is written to both.
+- `board: service` for bobnet staged: ~/.local/state/bobnet/handoffs/bobnet/bob14-board-service.md, sent to poe.
+- After that restart: Peach does BOB-14's cut-over (AC 1 count/sample, 3 remove product/backlog +
+  pointers, 4 MCP only + a builder refusal, 5, 6; 7 at the nightly backup). Peach accepts BOB-2.
+- Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
+  BOB-7, BOB-8, BOB-10, BOB-3, BOB-4, BOB-5. Toad reviews each; broker deploy after each review.
+
 ## Fully deployed: YES (sent to poe, m_9aa3f32c)
 - After poe's re-registration restart (02:42Z): every supervisor peer on both laptops carries
   client @bobnet/supervisor 2.0.0-rc.29; no "could not report" since 02:42:28Z; the pin is written
