@@ -50,7 +50,14 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - Luigi w_3c382245: BOB-10 at 214304a (bug criterion "It no longer happens", Done refused until
   checked). Broker deploy + a RELEASE (client MCP tool descriptions): batch the release with the
   next one; no restart needed for release 1's views otherwise. Toad w_9453f36a reviews.
-  Gap 1 (dashboard capture "found in" preset from a feature screen): Daisy, with BOB-4. (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
+  Gap 1 (dashboard capture "found in" preset from a feature screen): Daisy, with BOB-4.
+- Toad w_9453f36a (f095e38): BOB-10 deploy-ready, ADR 0001 §2 amended (bug close). Finding 1 (close_session
+  description) MUST be in before the client release; 2, 5, 6 any time: all sent to Luigi (one commit).
+- Broker DEPLOYED (5th) 05:37:22Z from v2 3501eb6 (= f095e38 + lead/; packages same as 214304a):
+  Version ID 498a41c1-a98d-4731-9c35-b483380ff1c2. Checks ~05:43Z.
+- Peach w_0d736f9e: accept BOB-8, BOB-10, BOB-2 AC 10.
+- Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
+  fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
   BOB-7, BOB-8, BOB-10, BOB-3, BOB-4, BOB-5. Toad reviews each; broker deploy after each review.
 
