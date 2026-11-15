@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BoardExportV1 } from "@bobnet/protocol";
 import { describe, expect, it, vi } from "vitest";
-import { type BacklogFiles, backlogToExport, importBacklogCommand, readBacklogAt, readQuestions } from "../src/backlog-import.ts";
+import {
+  type BacklogFiles,
+  backlogToExport,
+  EVERY_PROJECT_WARNING,
+  type ImportGrant,
+  importBacklogCommand,
+  readBacklogAt,
+  readGrants,
+  readQuestions,
+} from "../src/backlog-import.ts";
 import type { ImportPosted } from "../src/board-backup.ts";
 
 // The Backlog.md import (ADR 0001 §11, BOB-9): a backlog at a commit as one board export.
@@ -185,6 +194,52 @@ describe("the Backlog.md import", () => {
     expect(read.files.map((f) => [f.folder, f.path])).toEqual([["tasks", "product/backlog/tasks/land-1 - §-odd name.md"]]);
   });
 
+  describe("seeding the project's rules (BOB-14 #7)", () => {
+    const rule = (project: string, agent: string, laptop: string, extra: Partial<ImportGrant> = {}): ImportGrant => ({
+      project,
+      agent,
+      laptop,
+      role: "PO",
+      read: true,
+      items: "all",
+      fields: ["status", "content"],
+      sessions: false,
+      questions: true,
+      admin: false,
+      ...extra,
+    });
+    const peach = rule("helix", "Peach", "*");
+    const mario = rule("*", "Mario", "mbp-1", { role: "backup", items: "none", fields: [], questions: false });
+
+    it("puts the project's rows in the project and a '*' row in the document, and lists them in the report", () => {
+      const { doc, report } = backlogToExport(helix, backlog([]), now, [mario, rule("helix", "Bill", "mbp-2", { role: "builder", items: "open_feature" }), peach]);
+      const { project: _p, ...marioRow } = mario;
+      expect(BoardExportV1.parse(doc).grants).toEqual([marioRow]);
+      expect(doc.projects[0]!.grants.map((g) => g.agent)).toEqual(["Bill", "Peach"]);
+      expect(report.grants).toEqual([
+        "Bill@mbp-2 on helix, builder: items open_feature; fields status, content; read, questions",
+        "Peach@* on helix, PO: items all; fields status, content; read, questions",
+        "Mario@mbp-1 on every project ('*'), backup: items none; fields none; read",
+      ]);
+      expect(backlogToExport(helix, backlog([]), now).doc.grants).toEqual([]);
+    });
+
+    it("refuses a rule for another project, or two rules for one agent", () => {
+      expect(() => backlogToExport(helix, backlog([]), now, [rule("bobnet", "Peach", "*")])).toThrow("The rule for Peach@* is for project bobnet, not helix");
+      expect(() => backlogToExport(helix, backlog([]), now, [peach, { ...peach, agent: "peach" }])).toThrow("Two rules for peach@* on helix");
+      expect(() => backlogToExport(helix, backlog([]), now, [mario, rule("helix", "Mario", "mbp-1")])).not.toThrow();
+    });
+
+    it("reads a --grants file with the protocol's schema, saying what's wrong", () => {
+      expect(readGrants(JSON.stringify([peach, mario]))).toEqual([peach, mario]);
+      expect(() => readGrants("[")).toThrow(/isn't JSON/);
+      expect(() => readGrants(JSON.stringify([{ ...peach, items: "some" }]))).toThrow(/^0\.items: /);
+      expect(() => readGrants(JSON.stringify([{ ...peach, project: "Helix" }]))).toThrow(/^0\.project: /);
+      expect(() => readGrants(JSON.stringify([{ ...peach, extra: 1 }]))).toThrow(/extra/);
+      expect(() => readGrants(JSON.stringify({ rules: [] }))).toThrow(/the file: /);
+    });
+  });
+
   describe("the command's --post", () => {
     const run = async (answer: ImportPosted, extra: string[] = []) => {
       const { dir } = repo({ "product/backlog/tasks/bob-1.md": task("BOB-1", { type: "increment" }) });
@@ -220,6 +275,37 @@ describe("the Backlog.md import", () => {
       expect(unreadable.errors).toEqual(["Not imported: the broker answered 502, no reply it could read"]);
       // A 2xx whose reply isn't ok isn't taken either.
       expect((await run({ status: 200, reply: { ok: false, code: "invalid", message: "x" } })).code).toBe(1);
+    });
+
+    it("takes --lead and --po only as name@laptop (BOB-5 review, finding 1)", async () => {
+      const taken = { status: 200, reply: { ok: true as const, projects: [] } };
+      const bare = await run(taken, ["--lead", "Mario"]);
+      expect(bare).toMatchObject({ code: 2, errors: ["--lead Mario is not name@laptop"], posted: [] });
+      expect((await run(taken, ["--po", "Peach@board"])).errors).toEqual(["--po Peach@board is not name@laptop"]);
+      const good = await run(taken, ["--lead", "Mario@mbp-1", "--po", "Peach@mbp-1"]);
+      expect(good.code).toBe(0);
+      expect(good.posted[0]!.projects[0]).toMatchObject({ lead: "Mario@mbp-1", po: "Peach@mbp-1" });
+    });
+
+    it("seeds the rules in --grants, and says before posting that a '*' row needs an empty board", async () => {
+      const file = join(mkdtempSync(join(tmpdir(), "grants-")), "grants.json");
+      const peach = { project: "bobnet", agent: "Peach", laptop: "mbp-1", role: "PO", read: true, items: "all", fields: ["status"], sessions: false, questions: true, admin: false };
+      writeFileSync(file, JSON.stringify([peach]));
+      const own = await run({ status: 200, reply: { ok: true, projects: [] } }, ["--grants", file]);
+      expect(own).toMatchObject({ code: 0, errors: [] });
+      expect(own.posted[0]!.projects[0]!.grants).toMatchObject([{ agent: "Peach", laptop: "mbp-1" }]);
+
+      writeFileSync(file, JSON.stringify([peach, { ...peach, project: "*", agent: "Mario", role: "backup", items: "none", fields: [], questions: false }]));
+      const every = await run({ status: 403, reply: { ok: false, code: "forbidden", message: "not an empty board" } }, ["--grants", file]);
+      expect(every.code).toBe(1);
+      expect(every.errors).toEqual([EVERY_PROJECT_WARNING, "Not imported: the broker answered 403, forbidden: not an empty board"]);
+      expect(every.posted[0]!.grants).toMatchObject([{ agent: "Mario", laptop: "mbp-1", read: true }]);
+
+      writeFileSync(file, "[{}]");
+      const broken = await run({ status: 200, reply: { ok: true, projects: [] } }, ["--grants", file]);
+      expect(broken.code).toBe(2);
+      expect(broken.errors[0]).toMatch(/^--grants .*grants\.json: 0\.agent: /);
+      expect(broken.posted).toEqual([]);
     });
   });
 });

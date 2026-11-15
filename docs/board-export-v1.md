@@ -151,11 +151,32 @@ named commit, read through git and never from a worktree:
 ```sh
 node packages/supervisor/src/bin.ts import-backlog --repo ~/Code/helix --ref <commit> \
   --project helix --name Helix --prefix LAND --draft-prefix DRAFT --questions lead/questions.md \
+  --lead Picard@mbp-1 --po Picard@mbp-1 --grants helix-grants.json \
   --out helix-board.json --report helix-import.md
 ```
 
+`--lead` and `--po` are where answers go (ADR 0001 §7), as `name@laptop`; without them they stay
+null and Casper's answers tell no one. `--grants` is a JSON array of the rules to seed (ADR 0001 §5),
+the PO's rows: each is a `grants` row of this document plus `project`, the project's key or `"*"`:
+
+```json
+[
+  { "project": "bobnet", "agent": "Peach", "laptop": "mbp-1", "role": "PO", "read": true, "items": "all",
+    "fields": ["status", "order", "content", "criteria", "triage", "create"], "sessions": false, "questions": true, "admin": false },
+  { "project": "*", "agent": "Mario", "laptop": "mbp-1", "role": "backup", "read": true, "items": "none",
+    "fields": [], "sessions": false, "questions": false, "admin": false }
+]
+```
+
+A row for the project goes in the project's `grants`, a `"*"` row in the document's. Without any,
+only the owner can write the project after the import. The broker takes a `"*"` row from a laptop
+only into an empty board (no projects, rules or events); on a board in use it answers `403` and
+imports nothing, and the command says so before posting. Then post without the `"*"` row, and
+Casper adds it as the owner.
+
 It is a dry run: it posts nothing unless `--post` is given, and even then not while anything in its
-report is unmapped. It reads tasks, completed items, drafts and milestones, archived ones too, and the
+report is unmapped. It exits 0 only when the broker took the import; otherwise it prints the broker's
+status, `code` and `message`, and exits 1. It reads tasks, completed items, drafts and milestones, archived ones too, and the
 project's `lead/questions.md`. The mapping rules:
 
 - An id under the prefix keeps its number. A dotted id (`LAND-49.19`) gets the next number past
@@ -175,5 +196,5 @@ project's `lead/questions.md`. The mapping rules:
   from `The next ID is **Q-267**`.
 - A prefix `Q` or `A` is refused.
 
-The report lists counts, what couldn't map, every renumbered id (old → new), and what was done by
+The report lists the rules it seeds, counts, what couldn't map, every renumbered id (old → new), and what was done by
 rule, so the project's PO can check them before the cut-over.

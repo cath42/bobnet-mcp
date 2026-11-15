@@ -50,6 +50,11 @@ export const QuestionRef = z.string().regex(/^[QA]-\d{1,6}$/);
 export const ReleaseRef = z.string().regex(/^R\d{1,4}$/);
 const name = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,31}$/);
 const laptop = z.string().regex(/^(\*|[A-Za-z][A-Za-z0-9_-]{0,31})$/);
+/** Where a project's answers go (§7): an agent's `name@laptop`, never a bare name or the board's own laptop. */
+export const PeerAddress = z
+  .string()
+  .regex(/^[A-Za-z][A-Za-z0-9_-]{0,31}@[A-Za-z][A-Za-z0-9_-]{0,31}$/, "is not name@laptop")
+  .refine((a) => a.slice(a.indexOf("@") + 1).toLowerCase() !== BOARD_SENDER.laptop, "is the board's own laptop");
 const title = z.string().trim().min(1).max(300);
 const text = z.string().max(16 * 1024);
 const reason = z.string().trim().min(1).max(500);
@@ -160,8 +165,8 @@ export const BoardOp = z.discriminatedUnion("op", [
     name: title,
     prefix,
     draft_prefix: prefix.nullable().optional(),
-    lead: z.string().max(65).nullable().optional(),
-    po: z.string().max(65).nullable().optional(),
+    lead: PeerAddress.nullable().optional(),
+    po: PeerAddress.nullable().optional(),
     repos: z.array(z.string().min(1).max(200)).max(10).optional(),
   }),
   z.object({
@@ -545,9 +550,10 @@ export interface BoardResults {
   close_session: BoardWritten & { tasks_moved: SessionRecord["tasks_moved"]; tokens: TokenTotals };
   ask: BoardWritten;
   record_answer: BoardWritten;
-  answer_question: BoardWritten;
-  mark_done: BoardWritten;
-  undo: BoardWritten;
+  /** `told`: whom the board's message went to (§7); empty when nobody heard it. */
+  answer_question: BoardWritten & { told: string[] };
+  mark_done: BoardWritten & { told: string[] };
+  undo: BoardWritten & { told: string[] };
   session_join: BoardWritten & { created: boolean };
   run_start: BoardWritten & { unknown_tasks: string[] };
   run_end: BoardWritten;

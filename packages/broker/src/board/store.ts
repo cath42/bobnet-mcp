@@ -1144,7 +1144,7 @@ export class BoardStore {
   }
 
   /** Casper's answer from the dashboard (§7): write-once, the owner's alone, and the lead hears it. */
-  private answerQuestion(tx: Tx, op: Op<"answer_question">): BoardWritten {
+  private answerQuestion(tx: Tx, op: Op<"answer_question">): BoardWritten & { told: string[] } {
     ownerOnly(tx.caller, "Answering a question");
     const p = tx.project(this.project(op.project));
     const q = this.question(p, op.ref);
@@ -1156,12 +1156,11 @@ export class BoardStore {
     const lines = [`Casper answered ${q.ref} (${p.key}): ${q.text}`];
     if (option) lines.push(`Option ${option.key}: ${option.text}`);
     if (op.words !== undefined) lines.push(`His words: ${op.words}`);
-    this.notify(tx, p, q, lines.join("\n"));
-    return { ref: q.ref, seq };
+    return { ref: q.ref, seq, told: this.notify(tx, p, q, lines.join("\n")) };
   }
 
   /** Casper marks an action done from the dashboard (§7), with an optional note: write-once, the owner's alone. */
-  private markDone(tx: Tx, op: Op<"mark_done">): BoardWritten {
+  private markDone(tx: Tx, op: Op<"mark_done">): BoardWritten & { told: string[] } {
     ownerOnly(tx.caller, "Marking an action done");
     const p = tx.project(this.project(op.project));
     const q = this.question(p, op.ref);
@@ -1170,8 +1169,7 @@ export class BoardStore {
     const seq = this.answer(tx, q, "done", null, op.note ?? null, "mark_done");
     const lines = [`Casper marked ${q.ref} done (${p.key}): ${q.text}`];
     if (op.note !== undefined) lines.push(`His note: ${op.note}`);
-    this.notify(tx, p, q, lines.join("\n"));
-    return { ref: q.ref, seq };
+    return { ref: q.ref, seq, told: this.notify(tx, p, q, lines.join("\n")) };
   }
 
   /** Writes an answer from the dashboard and its event. */
@@ -1194,7 +1192,7 @@ export class BoardStore {
    * dashboard answer or done mark, within two minutes (§7): the question reopens, the history keeps
    * what he withdrew, and the lead hears it.
    */
-  private undo(tx: Tx, op: Op<"undo">): BoardWritten {
+  private undo(tx: Tx, op: Op<"undo">): BoardWritten & { told: string[] } {
     ownerOnly(tx.caller, "Undo");
     const p = tx.project(this.project(op.project));
     const e = this.sql
@@ -1231,12 +1229,11 @@ export class BoardStore {
     const lines = [`Casper withdrew ${what} ${q.ref} (${p.key}); it is open again: ${q.text}`];
     if (q.answer_key !== null) lines.push(`Withdrawn option: ${q.answer_key}`);
     if (q.answer_words !== null) lines.push(`Withdrawn words: ${q.answer_words}`);
-    this.notify(tx, p, q, lines.join("\n"));
-    return { ref: q.ref, seq };
+    return { ref: q.ref, seq, told: this.notify(tx, p, q, lines.join("\n")) };
   }
 
-  /** The board's message about a question (§7): to the project's lead, and to whoever asked if that is someone else. */
-  private notify(tx: Tx, p: ProjectRow, q: QuestionRow, body: string): void {
+  /** The board's message about a question (§7): to the project's lead, and to whoever asked if that is someone else. Whom it went to. */
+  private notify(tx: Tx, p: ProjectRow, q: QuestionRow, body: string): string[] {
     const to = new Map<string, string>();
     for (const raw of [p.lead, q.asked_by]) {
       // asked_by is an email when the owner asked: not an address, and he knows.
@@ -1244,6 +1241,7 @@ export class BoardStore {
       if (addr && !to.has(addressKey(addr))) to.set(addressKey(addr), raw!);
     }
     if (to.size > 0) tx.messages.push({ to: [...to.values()], body });
+    return [...to.values()];
   }
 
   private option(q: QuestionRow, key: string): { key: string; text: string } {

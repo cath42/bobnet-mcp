@@ -206,6 +206,9 @@ describe("import (ADR 0001 §11)", () => {
     expect(await imported(document({}, [{ ref: "BOB-1", kind: "task", parent: "BOB-9" }]))).toMatchObject({ ok: false, code: "invalid", message: expect.stringContaining("BOB-9") });
     expect(await imported(document({}, [{ ref: "LAND-1" }]))).toMatchObject({ ok: false, code: "invalid" });
     expect(await imported({ format: "bobnet-board", version: 2 })).toMatchObject({ ok: false, code: "invalid" });
+    // A lead or PO an answer can't reach (BOB-5 review, finding 1).
+    expect(await imported(document({ lead: "Mario" }))).toMatchObject({ ok: false, code: "invalid", message: expect.stringContaining("lead Mario is not name@laptop") });
+    expect(await imported(document({ po: "Peach@board" }))).toMatchObject({ ok: false, code: "invalid", message: expect.stringContaining("po Peach@board") });
     expect((await ok(owner, { op: "projects" })).projects).toEqual([]);
   });
 

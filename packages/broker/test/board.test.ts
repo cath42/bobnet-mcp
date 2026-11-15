@@ -659,6 +659,25 @@ describe("questions (ADR 0001 §7)", () => {
     expect(await refused(owner, { op: "undo", project: "helix", seq: 9999 })).toMatchObject({ code: "invalid" });
   });
 
+  it("says whom an answer told, and that nobody heard when the project has no lead", async () => {
+    await asked();
+    expect(await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a" })).toMatchObject({ told: ["Picard@mbp-1"] });
+    const done = await ok(owner, { op: "mark_done", project: "helix", ref: "A-1" });
+    expect(done.told).toEqual(["Picard@mbp-1"]);
+    expect((await ok(owner, { op: "undo", project: "helix", seq: done.seq })).told).toEqual(["Picard@mbp-1"]);
+    await ok(owner, { op: "create_project", key: "solo", name: "Solo", prefix: "SOLO" });
+    await ok(owner, { op: "ask", project: "solo", text: "Alone?" });
+    expect((await ok(owner, { op: "answer_question", project: "solo", ref: "Q-1", words: "Yes" })).told).toEqual([]);
+  });
+
+  it("takes a project's lead and PO only as name@laptop, so an answer can reach them", async () => {
+    for (const lead of ["Mario", "Mario@", "@mbp-1", "Mario@board", "Mario@BOARD", "Mario@*", "Mario@mbp 1"]) {
+      expect(await refused(owner, { op: "create_project", key: "quiz", name: "Quiz", prefix: "QUIZ", lead })).toMatchObject({ code: "invalid" });
+      expect(await refused(owner, { op: "create_project", key: "quiz", name: "Quiz", prefix: "QUIZ", po: lead })).toMatchObject({ code: "invalid" });
+    }
+    await ok(owner, { op: "create_project", key: "quiz", name: "Quiz", prefix: "QUIZ", lead: "Mario@mbp-1", po: null });
+  });
+
   it("refuses a project prefix, or draft prefix, that reads as a question's", async () => {
     expect(await refused(owner, { op: "create_project", key: "quiz", name: "Quiz", prefix: "Q" })).toMatchObject({ code: "invalid" });
     expect(await refused(owner, { op: "create_project", key: "quiz", name: "Quiz", prefix: "QUIZ", draft_prefix: "A" })).toMatchObject({ code: "invalid" });

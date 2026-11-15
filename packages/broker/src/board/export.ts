@@ -9,6 +9,7 @@ import {
   type ExportProject,
   type ExportTable,
   type Identity,
+  PeerAddress,
   recordKey,
   type SessionRef,
   sessionKey,
@@ -370,6 +371,11 @@ function importProject(sql: SqlStorage, p: ExportProject, doc: BoardExport, at: 
   const bad = (what: string): never => {
     throw new BoardError("invalid", `${p.key}: ${what}`);
   };
+
+  // Answers go to the lead (§7): an address that can't be reached would tell no one, silently.
+  for (const [k, a] of [["lead", p.lead], ["po", p.po]] as const) {
+    if (a !== null && !PeerAddress.safeParse(a).success) bad(`its ${k} ${a} is not name@laptop`);
+  }
 
   // Every id once, primary or alias; each primary under the project's prefixes.
   const refs = new Map<string, ExportItem>();

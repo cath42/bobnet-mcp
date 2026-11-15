@@ -1,16 +1,20 @@
 import { execFile } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import {
   BOARD_EXPORT_FORMAT,
   BoardExportV1,
+  type ExportGrant,
   type ExportItem,
   type ExportProject,
   type ExportQuestion,
   type ExportSession,
   ItemStatus,
   ItemType,
+  PeerAddress,
+  ProjectKey,
 } from "@bobnet/protocol";
+import { z } from "zod";
 import { type BacklogFile, catFiles, readBacklogFile } from "./board.ts";
 import type { ImportPosted } from "./board-backup.ts";
 
@@ -44,8 +48,14 @@ export interface BacklogFiles {
   questions: string | null;
 }
 
+/** A rule the import seeds (ADR 0001 §5, §11): the export's grant row, and the project it is for, or '*' for every project. */
+export const ImportGrant = BoardExportV1.shape.grants.element.extend({ project: z.union([ProjectKey, z.literal("*")]) }).strict();
+export type ImportGrant = z.infer<typeof ImportGrant>;
+
 export interface ImportReport {
   source: string;
+  /** The rules it brings, one line each. */
+  grants: string[];
   counts: Record<string, number>;
   /** Old id → new ref, for every id that changed number. */
   renumbered: Array<[string, string]>;
@@ -109,7 +119,7 @@ interface Read {
 }
 
 /** The board export a backlog makes, and what the import made of it. */
-export function backlogToExport(project: BacklogProject, input: BacklogFiles, now = new Date()): { doc: BoardExportV1; report: ImportReport } {
+export function backlogToExport(project: BacklogProject, input: BacklogFiles, now = new Date(), grants: ImportGrant[] = []): { doc: BoardExportV1; report: ImportReport } {
   const at = now.toISOString();
   const source = `Backlog.md at ${input.repo} ${input.sha}`;
   const problems: string[] = [];
@@ -430,6 +440,25 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
   count("question (answered)", q.questions.filter((x) => x.kind === "question" && x.state === "answered").length);
   count("action (open)", q.questions.filter((x) => x.kind === "action").length);
 
+  // ---------- Rules ----------
+  const rules = { own: [] as ExportGrant[], every: [] as ExportGrant[] };
+  const seen = new Set<string>();
+  for (const { project: key, ...g } of grants) {
+    const who = `${g.agent}@${g.laptop}`;
+    if (key !== "*" && key !== project.key) throw new Error(`The rule for ${who} is for project ${key}, not ${project.key}`);
+    const k = `${key} ${who.toLowerCase()}`;
+    if (seen.has(k)) throw new Error(`Two rules for ${who} on ${key === "*" ? "every project" : key}`);
+    seen.add(k);
+    (key === "*" ? rules.every : rules.own).push(g);
+  }
+  const byWho = (a: ExportGrant, b: ExportGrant) => a.agent.toLowerCase().localeCompare(b.agent.toLowerCase()) || a.laptop.toLowerCase().localeCompare(b.laptop.toLowerCase());
+  rules.own.sort(byWho);
+  rules.every.sort(byWho);
+  const ruleLines = [...rules.own.map((g) => [project.key, g] as const), ...rules.every.map((g) => ["every project ('*')", g] as const)].map(([on, g]) => {
+    const flags = [g.read && "read", g.sessions && "sessions", g.questions && "questions", g.admin && "admin"].filter(Boolean).join(", ");
+    return `${g.agent}@${g.laptop} on ${on}, ${g.role}: items ${g.items}; fields ${g.fields.length ? g.fields.join(", ") : "none"}${flags ? `; ${flags}` : ""}`;
+  });
+
   const created = out.map((i) => i.created_at).sort()[0] ?? at;
   const doc: BoardExportV1 = {
     format: BOARD_EXPORT_FORMAT,
@@ -437,7 +466,7 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
     exported_at: at,
     source,
     last_event_seq: 0,
-    grants: [],
+    grants: rules.every,
     events: [],
     projects: [
       {
@@ -457,14 +486,14 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
         runs: [],
         pushes: [],
         ci_runs: [],
-        grants: [],
+        grants: rules.own,
         events: [],
       },
     ],
   };
   const checked = BoardExportV1.safeParse(doc);
   if (!checked.success) for (const i of checked.error.issues.slice(0, 20)) problems.push(`the document: ${i.path.join(".")}: ${i.message}`);
-  return { doc, report: { source, counts, renumbered, problems, notes } };
+  return { doc, report: { source, grants: ruleLines, counts, renumbered, problems, notes } };
 }
 
 type ItemExport = ExportItem;
@@ -556,6 +585,8 @@ export function readQuestions(text: string, at: string): { questions: ExportQues
 export function formatReport(r: ImportReport): string {
   const lines = [`# Backlog.md import: ${r.source}`, "", "## Counts", ""];
   for (const [k, n] of Object.entries(r.counts).filter(([, n]) => n > 0).sort()) lines.push(`- ${k}: ${n}`);
+  lines.push("", `## Rules (${r.grants.length})`, "");
+  lines.push(...(r.grants.length ? r.grants.map((g) => `- ${g}`) : ["None: after the import only the owner can write it."]));
   lines.push("", `## What couldn't map (${r.problems.length})`, "");
   lines.push(...(r.problems.length ? r.problems.map((p) => `- ${p}`) : ["None."]));
   lines.push("", `## Renumbered (${r.renumbered.length}): old id → new ref, the old id kept as an alias`, "");
@@ -567,8 +598,27 @@ export function formatReport(r: ImportReport): string {
 
 const USAGE = `bobnet-supervisor import-backlog --repo <path> --ref <commit> --project <key> --name <name> --prefix <PREFIX>
   [--dir product/backlog] [--draft-prefix DRAFT] [--questions lead/questions.md] [--lead name@laptop] [--po name@laptop]
-  [--out board.json] [--report report.md] [--post]
-Reads the backlog at the commit and writes the board export and the report. Nothing is posted without --post.`;
+  [--grants grants.json] [--out board.json] [--report report.md] [--post]
+Reads the backlog at the commit and writes the board export and the report. Nothing is posted without --post.
+--grants is a JSON array of the rules to seed: each an export grant row with "project", the project's key or "*".`;
+
+/** The rules in a --grants file, or why they can't be read. */
+export function readGrants(text: string): ImportGrant[] {
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`isn't JSON: ${(e as Error).message}`);
+  }
+  const parsed = z.array(ImportGrant).safeParse(json);
+  if (!parsed.success) throw new Error(parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".") || "the file"}: ${i.message}`).join("; "));
+  return parsed.data;
+}
+
+/** Said before a post that brings a rule for every project: the broker takes one from a laptop only into an empty board. */
+export const EVERY_PROJECT_WARNING =
+  "This brings a rule for every project ('*'). From a laptop the broker takes that only into an empty board (no projects, rules or events): " +
+  "on a board in use it answers 403 and imports nothing. Then post without the '*' row, and Casper adds it as the owner.";
 
 /** The command: a dry run unless --post, which sends the document to the broker in config.json. */
 export async function importBacklogCommand(argv: string[], post?: () => (doc: BoardExportV1) => Promise<ImportPosted>): Promise<number> {
@@ -585,6 +635,7 @@ export async function importBacklogCommand(argv: string[], post?: () => (doc: Bo
       questions: { type: "string" },
       lead: { type: "string" },
       po: { type: "string" },
+      grants: { type: "string" },
       out: { type: "string" },
       report: { type: "string" },
       post: { type: "boolean", default: false },
@@ -594,14 +645,34 @@ export async function importBacklogCommand(argv: string[], post?: () => (doc: Bo
     console.error(USAGE);
     return 2;
   }
+  // Answers go to the lead (ADR 0001 §7): an address that can't be reached would tell no one.
+  for (const [k, a] of [["lead", v.lead], ["po", v.po]] as const) {
+    if (a !== undefined && !PeerAddress.safeParse(a).success) {
+      console.error(`--${k} ${a} is not name@laptop`);
+      return 2;
+    }
+  }
+  let grants: ImportGrant[] = [];
+  if (v.grants) {
+    try {
+      grants = readGrants(readFileSync(v.grants, "utf8"));
+    } catch (e) {
+      console.error(`--grants ${v.grants}: ${(e as Error).message}`);
+      return 2;
+    }
+  }
   const files = await readBacklogAt(v.repo, v.ref, v.dir!, v.questions ?? null);
   if (v.questions && files.questions === null) console.error(`No ${v.questions} at ${files.sha}`);
   const { doc, report } = backlogToExport(
     { key: v.project, name: v.name, prefix: v.prefix, draft_prefix: v["draft-prefix"] ?? null, lead: v.lead ?? null, po: v.po ?? null, repos: [files.repo] },
     files,
+    new Date(),
+    grants,
   );
   const text = formatReport(report);
   if (v.out) writeFileSync(v.out, `${JSON.stringify(doc, null, 2)}\n`);
+  // Said on the dry run too, so whoever posts knows before the 403.
+  if (doc.grants.length > 0) console.error(EVERY_PROJECT_WARNING);
   if (v.report) writeFileSync(v.report, text);
   else process.stdout.write(text);
   if (v.post) {
