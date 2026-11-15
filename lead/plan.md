@@ -146,6 +146,10 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - Toad w_80368342: run_remote signed off, c19f613 (review + ADR 0001 §9). Broker first, then rc.35.
   Minor (pre-existing): run_start remote_url accepts javascript: (dashboard href); nits: claude.ai/ prefix,
   this.worker() may throw in onRemoteControl. Luigi w_78b10e9e fixes all three before the deploy.
+- Luigi w_78b10e9e: c443927 (minor + 2 nits; remote_url claude.ai-only on both ops). Sessions closed.
+- rc.35 CUT: 47d5483, tag v2.0.0-rc.35 pushed, installed ~/.local/share/bobnet/v2.0.0-rc.35. Carries run_remote.
+  HOLD: broker deploy (Casper's go) from 47d5483 FIRST, then tell poe rc.35 (checks: peers rc.35, a new
+  worker's board run has remote_url, outbox stays 0). Then Peach re-checks BOB-4 AC 7.
 ## Release-1 close: what's left
 - rc.34 live (poe) -> outbox drains -> BOB-10 AC 5 (worker's close_session description), BOB-4 AC 5-7
   live data; close the open sessions (after the drain).
