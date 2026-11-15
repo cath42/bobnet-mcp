@@ -150,6 +150,8 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - rc.35 CUT: 47d5483, tag v2.0.0-rc.35 pushed, installed ~/.local/share/bobnet/v2.0.0-rc.35. Carries run_remote.
   HOLD: broker deploy (Casper's go) from 47d5483 FIRST, then tell poe rc.35 (checks: peers rc.35, a new
   worker's board run has remote_url, outbox stays 0). Then Peach re-checks BOB-4 AC 7.
+- poe@ubu1 m_a16d12f8: ubu1 on rc.34 (17:57:51Z), clients rc.34, no report errors. Both supervisors on rc.34.
+  rc.35 then goes to both laptops after the broker deploy.
 ## Release-1 close: what's left
 - rc.34 live (poe) -> outbox drains -> BOB-10 AC 5 (worker's close_session description), BOB-4 AC 5-7
   live data; close the open sessions (after the drain).
