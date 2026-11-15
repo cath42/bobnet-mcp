@@ -68,6 +68,12 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   service Feature head card; additive OverviewRow.no_release; overview open/next_ready fixes).
   Broker deploy needed, no release. History (BOB-14 AC 5) not in the spec. Toad w_bd150a53 reviews;
   Daisy w_d38c1154 rules gaps 1-5 and specs history + "found in" preset for BOB-4.
+- Daisy (44bf8f4): gaps ruled, 3 changes; history, found-in preset, agent detail row specced for BOB-4.
+  Toad (5d615ff): BOB-3 signed off, rc.33-safe; 1, 3, 5 into the follow-up; 2 (#feature/<project>/<id>)
+  with BOB-4, before BOB-9; 4 left.
+- Luigi 3855419: BOB-3 follow-ups. Broker DEPLOYED (7th) 06:27:28Z from v2 8d34eef (= 3855419 + lead/):
+  Version ID f17550b3-5f07-47f3-9870-70ef3bc62bbe. Checks ~06:33Z. Peach w_19fd3bfe accepts BOB-3.
+- Luigi w_335afdd9: BOB-4 (+ history = BOB-14 AC 5, found-in preset, #feature/<project>/<id>).
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
