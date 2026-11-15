@@ -120,7 +120,7 @@ export const TOOLS = [
   },
   { name: "tail_worker", description: "The worker's last n events, one line each.", inputSchema: obj({ id: { type: "string" }, n: { type: "number" } }, ["id"]) },
   { name: "worker_summary", description: "A short digest of what a worker has done: tools used, files changed, last message, result.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
-  { name: "pending_requests", description: "Open approvals and questions across all workers (including ones orphaned by a restart), one line each. request_detail gives one in full.", inputSchema: obj({}) },
+  { name: "pending_requests", description: "Open approvals and questions across all workers (including ones orphaned by a restart, until they can no longer resume or are a day old), one line each. request_detail gives one in full.", inputSchema: obj({}) },
   { name: "request_detail", description: "One request in full, its whole input included. Only when the one-line preview isn't enough to decide.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
   {
     name: "answer_request",

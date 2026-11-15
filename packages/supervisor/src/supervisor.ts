@@ -104,6 +104,8 @@ const READ_DEFAULT_LINES = 2000;
 const FILE_WRITE_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 /** How often hold files are re-read, to notice a hold set or released. */
 const HOLD_CHECK_MS = 5_000;
+/** An orphaned request this old is expired: the restart's notice went out long ago, and the work has moved on (BOB-26). */
+const ORPHAN_TTL_MS = 24 * 3_600_000;
 /** The most tasks a board ctx carries (the protocol's BoardCtx). */
 const MAX_TASKS = 50;
 /** A queued board report the board refuses is dropped, not retried: a retry gets the same answer and blocks the rows behind it. */
@@ -263,6 +265,7 @@ export class Supervisor {
     for (const r of orphanedRequests) {
       this.store.markOrphaned(r.id);
     }
+    this.expireOrphans();
 
     const me = (await this.registerWithRetry({
       name: this.config.name,
@@ -286,7 +289,7 @@ export class Supervisor {
 
     for (const p of this.config.projects.values()) {
       const lost = orphaned.filter((w) => w.project === p.key);
-      const open = orphanedRequests.filter((r) => this.store.worker(r.worker_id)?.project === p.key);
+      const open = orphanedRequests.filter((r) => this.store.request(r.id)?.state === "orphaned" && this.store.worker(r.worker_id)?.project === p.key);
       if (lost.length === 0 && open.length === 0) continue;
       this.notify(
         `Supervisor restarted. ${p.key} workers that were running and are now failed: ${lost.map((w) => `${this.roleOf(w).name} (${w.id})`).join(", ") || "none"}. ` +
@@ -300,6 +303,7 @@ export class Supervisor {
     this.startedAt = new Date().toISOString();
     this.stallTimer = setInterval(() => {
       this.checkStalls();
+      if (this.expireOrphans()) this.writeStatus();
       this.flushOutbox();
     }, STALL_CHECK_MS);
     this.flushCaptures();
@@ -566,6 +570,28 @@ export class Supervisor {
     });
     if (answer.decision === "allow") this.preapproved.set(resumed.id, [{ tool: request.tool, input: request.input }]);
     return { request, resumed };
+  }
+
+  /**
+   * Expires the orphaned requests nothing can act on any more (BOB-26): their worker has no
+   * session to resume, its role is gone from the config, a later worker resumed its session, or
+   * the request is older than ORPHAN_TTL_MS. Each is recorded in the audit; returns how many.
+   */
+  expireOrphans(at = Date.now()): number {
+    let n = 0;
+    for (const r of this.store.requests(["orphaned"])) {
+      const w = this.store.worker(r.worker_id);
+      const why = !w?.session_id ? "no session to resume"
+        : !this.config.projects.get(w.project)?.roles.has(w.role) ? "role no longer configured"
+        : this.store.resumedAfter(w) ? "session resumed by a later worker"
+        : at - Date.parse(r.created_at) > ORPHAN_TTL_MS ? `older than ${ORPHAN_TTL_MS / 3_600_000} h`
+        : null;
+      if (!why) continue;
+      if (!this.store.settleRequest(r.id, { state: "expired", decision: "deny", message: `expired: ${why}`, answers: null, decided_by: "supervisor" })) continue;
+      this.store.audit("supervisor", "orphan:expired", r.worker_id, { request: r.id, why });
+      n++;
+    }
+    return n;
   }
 
   /**

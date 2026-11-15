@@ -244,7 +244,7 @@ function showRun(w) {
 
 function viewNow() {
   const run = running();
-  const pending = [...state.laptops.values()].flatMap((l) => l.snapshot.pending.map((p) => ({ ...p, laptop: l.laptop })));
+  const pending = pendingAll();
   const queued = workers().filter((w) => w.state === "queued");
   const ci = projects().flatMap((e) => (e.board.ci ?? []).filter((r) => r.status !== "completed").map((r) => ({ ...r, project: e.board.project })));
   const out = [];
@@ -1169,7 +1169,10 @@ function sessionOf(w) {
 }
 /** The agents on a feature now, from their declared sessions; nothing is guessed from a brief (roadmap-view 5). */
 const onFeature = (key, ref) => running().filter((w) => w.project === key && sessionOf(w)?.feature === ref);
-const pendingAll = () => [...state.laptops.values()].flatMap((l) => l.snapshot.pending.map((p) => ({ ...p, laptop: l.laptop })));
+/** A laptop whose supervisor hasn't reported for three heartbeats (60 s each): it is down or cut off, so its last report is history. */
+const staleReport = (l) => Date.now() - Date.parse(l.at) > 3 * 60_000;
+/** Requests a live supervisor can still act on: a stale laptop's last list is never offered (BOB-26). */
+const pendingAll = () => [...state.laptops.values()].filter((l) => !staleReport(l)).flatMap((l) => l.snapshot.pending.map((p) => ({ ...p, laptop: l.laptop })));
 const projectName = (key) => svc.projects?.find((p) => p.key === key)?.name ?? key;
 /** The laptops a project runs on: its supervisor's board, and its agents'. */
 const laptopsOf = (key) => [...new Set([...projects().filter((e) => e.board.project === key).map((e) => e.laptop), ...workers().filter((w) => w.project === key).map((w) => w.laptop)])];
@@ -1811,10 +1814,11 @@ function viewSessions() {
       ? state.traffic.map((t) => h("li", null, h("time", { datetime: t.at, title: t.at }, clock(t.at)), h("span", null, t.from, t.type === "broadcast" ? ` broadcast to ${t.to.length}` : ` → ${t.to.join(", ")}`, t.urgent ? " (urgent)" : "")))
       : h("li", { class: "empty" }, "No messages in the last 24 hours.")), h("p", { class: "note" }, "Who messaged whom, never what was said.")),
     h("section", null, h("h2", null, "Laptops"), h("div", { class: "cards", id: "laptops" }, [...state.laptops.values()].map((l) => {
-      const sup = l.snapshot.supervisor, stale = Date.now() - Date.parse(l.at) > 3 * 60_000;
+      const sup = l.snapshot.supervisor, stale = staleReport(l);
       return h("div", { class: "card" },
         h("div", { class: "top" }, h("span", { class: "name" }, l.laptop), h("span", { class: "badge", dataset: { state: stale ? "stopped" : "running" } }, stale ? "no recent report" : "supervisor up")),
-        h("div", { class: "meta" }, h("span", null, `${sup.active} of ${sup.concurrency} slots busy`), h("span", null, `${sup.queued} queued`), h("span", null, "up ", ago(sup.started_at)), h("span", null, "reported ", ago(l.at), " ago")));
+        h("div", { class: "meta" }, h("span", null, `${sup.active} of ${sup.concurrency} slots busy`), h("span", null, `${sup.queued} queued`), h("span", null, "up ", ago(sup.started_at)), h("span", null, "reported ", ago(l.at), " ago"),
+          stale && l.snapshot.pending.length ? h("span", null, `${l.snapshot.pending.length} ${l.snapshot.pending.length === 1 ? "request" : "requests"} from its last report not offered`) : null));
     }))),
     h("section", null, h("h2", null, "Agents ", h("span", { class: "count", id: "agents-count" }, `${peers.filter((p) => p.online).length} online of ${peers.length}`)),
       h("div", { class: "table-wrap" }, h("table", { id: "agents" },

@@ -754,6 +754,49 @@ describe("dismissing", () => {
   });
 });
 
+describe("expiring orphans (BOB-26)", () => {
+  /** A request orphaned by a restart: the second supervisor's. */
+  async function orphan() {
+    const first = await setup();
+    const w = first.sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => first.sessions.length === 1);
+    await until(() => store.worker(w.id)!.session_id !== null);
+    void first.sessions[0]!.ask("WebFetch", { url: "https://x" });
+    await until(() => first.sup.pending().length === 1);
+    return { w, id: first.sup.pending()[0]!.id };
+  }
+  const expired = (id: string) => store.auditLog().find((a) => a.action === "orphan:expired" && JSON.parse(a.detail).request === id);
+
+  it("keeps a resumable orphan, and expires it past a day, in the audit and off the snapshot", async () => {
+    const { id } = await orphan();
+    const second = await setup();
+    expect(second.sup.snapshot().pending.map((p) => p.id)).toEqual([id]);
+    expect(second.sup.expireOrphans(Date.now() + 23 * 3_600_000)).toBe(0);
+    expect(second.sup.expireOrphans(Date.now() + 25 * 3_600_000)).toBe(1);
+    expect(store.request(id)).toMatchObject({ state: "expired", decided_by: "supervisor", message: "expired: older than 24 h" });
+    expect(JSON.parse(expired(id)!.detail).why).toBe("older than 24 h");
+    expect(second.sup.snapshot().pending).toEqual([]);
+    expect(() => second.sup.answer(id, { decision: "allow" }, "orchestrator")).toThrow(/already expired/);
+  });
+
+  it("expires an orphan with no session to resume at the restart, and leaves it out of the notice", async () => {
+    const { w, id } = await orphan();
+    store.updateWorker(w.id, { session_id: null });
+    const second = await setup();
+    expect(store.request(id)!.state).toBe("expired");
+    expect(JSON.parse(expired(id)!.detail).why).toBe("no session to resume");
+    expect(second.sup.pending()).toEqual([]);
+    expect(second.broker.toOrchestrator().join("\n")).toContain("Requests still answerable (answering resumes the worker): none");
+  });
+
+  it("expires an orphan whose session a later worker resumed", async () => {
+    const { w, id } = await orphan();
+    store.createWorker({ project: "helix", role: "bill", task: "carry on", handoff: null, priority: 0, resume_session: store.worker(w.id)!.session_id });
+    await setup();
+    expect(JSON.parse(expired(id)!.detail).why).toBe("session resumed by a later worker");
+  });
+});
+
 describe("BobNet messages", () => {
   it("hands a directed message to the role's running worker and acks it", async () => {
     const { sup, broker, sessions } = await setup();

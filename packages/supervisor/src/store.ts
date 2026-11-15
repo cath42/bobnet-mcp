@@ -255,6 +255,11 @@ export class Store {
     this.run("UPDATE requests SET state = 'orphaned' WHERE id = ? AND state = 'open'", id);
   }
 
+  /** Whether a worker after this one resumed its Claude session: an orphan on it would fork the work. */
+  resumedAfter(w: Pick<WorkerRow, "id" | "session_id" | "created_at">): boolean {
+    return !!this.one("SELECT 1 AS x FROM workers WHERE resume_session = ? AND id != ? AND created_at >= ?", w.session_id, w.id, w.created_at);
+  }
+
   // ---------- Inbox ----------
 
   /** Stores a directed message for a role, before it is acked; false if already stored (a redelivery). */

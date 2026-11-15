@@ -299,6 +299,28 @@ describe("Sessions", () => {
     expect($("ended").querySelector("b")).toBeNull();
   });
 
+  it("marks a laptop that stopped reporting and never offers its last requests (BOB-26)", async () => {
+    const ws = FakeSocket.last;
+    const old = { id: "r_old", worker_id: "w_gone", name: "Luigi", kind: "approval", tool: "Bash", tier: "human", created_at: iso(600), preview: "rm -rf dist" };
+    ws.frame({ t: "report", laptop: "mbp-2", at: iso(10), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [old], usage: [] } });
+    await settle();
+    const card = [...$("laptops").children].find((c) => c.textContent!.includes("mbp-2"))!;
+    expect(card.textContent).toContain("no recent report");
+    expect(card.textContent).toContain("1 request from its last report not offered");
+    await go("#now");
+    expect(view().textContent).not.toContain("r_old");
+    await go("#overview");
+    expect(view().textContent).not.toContain("rm -rf dist");
+    // Reporting again makes it live: its requests are offered.
+    ws.frame({ t: "report", laptop: "mbp-2", at: iso(0), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [old], usage: [] } });
+    await settle();
+    await go("#now");
+    expect($("needs-list").textContent).toContain("r_old");
+    ws.frame({ t: "report", laptop: "mbp-2", at: iso(10), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [], usage: [] } });
+    await settle();
+    await go("#sessions");
+  });
+
   it("filters the feed by task", async () => {
     const ws = FakeSocket.last;
     ws.frame({ t: "update", item: { seq: 2, from: "Bob@mbp-1", laptop: "mbp-1", text: "LAND-41.16 · landed", at: iso(0) } });
