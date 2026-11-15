@@ -27,9 +27,14 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   (poe) and ubu1's (poe@ubu1). poe's own sessions too. Then (a) shows versions and (b) pins.
 
 ## Running
-- Toad (w_1b639410): review 4b10900, 641c730, b31489a, e221738. rc.30 (e221738, b31489a) waits on it.
-- Peach (w_61f02f37): done, 3d9dfea (product/bobnet-grants.json). Finding: Mario lacks `sessions`
-  (ADR 0001: close_session is the lead's or session PO's); Peach w_454eff2a fixes it and records dotted ids.
+- rc.30: tagged bd96a94, installed, poe told (m_25706d01). Supervisor only (e221738, b31489a).
+- Toad (w_1b639410): done, 6c52056: all four signed off. Later notes: Luigi (1) --post fetch
+  throw/timeout says "it may have taken the import; post again, a 409 means it did", before
+  BOB-9's post; (2) PeerAddress from address.ts's SEGMENT with the next board.ts change.
+  Daisy: `told` is who it was sent to, so the toast says "sent to", not "heard by".
+- Toad (w_d0f0ee00): dotted ids, ADR 0001 §2 + ItemRef, and Luigi's list.
+- Peach (w_61f02f37, w_454eff2a): done, 3d9dfea + 1555dbd (product/bobnet-grants.json; Mario and
+  Peach hold `sessions`; dotted ids in product/requirements/migration.md).
 - Luigi (w_07934845): item 0b (R1 op keys + Board migration 2, finding 2, R2; finding 3 if small).
 - Toad (w_39a3303d): done, d64d65b (architecture/reviews/2026-11-14-backlog-import-review.md).
 - Peach (w_bf298cca): done, 9e6c4d1 (product/requirements/migration.md "Import answers").
