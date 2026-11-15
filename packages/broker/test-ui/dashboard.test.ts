@@ -114,6 +114,8 @@ beforeAll(async () => {
 });
 
 describe("Now", () => {
+  beforeAll(() => go("#now"));
+
   it("connects to its own host and shows live once rendered", () => {
     expect(FakeSocket.last.url).toMatch(/\/v1\/ws$/);
     expect($("conn").dataset["state"]).toBe("live");
@@ -445,9 +447,11 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     feat("BOB-6", "R3", "Done"),
     feat("BOB-20", null, "Draft", { ord: null }),
   ];
-  /** Answers every list the page is waiting on with the board above. */
-  const lists = async (rs = releases, fs = features) => {
+  const noRelease = { items: 3, bugs: 1, oldest: iso(60 * 24 * 5) };
+  /** Answers every list the page is waiting on with the board above, and the project's overview row for its counts in no release. */
+  const lists = async (rs = releases, fs = features, none: unknown = noRelease) => {
     for (const f of pending("list")) reply(f, f.op["of"] === "releases" ? { releases: rs, total: rs.length, cursor: null } : { items: fs, total: fs.length, cursor: null });
+    for (const f of pending("overview").filter((x) => x.op["project"])) reply(f, { projects: [{ no_release: none }] });
     await settle();
   };
   const toastEl = () => $("toast");
@@ -484,6 +488,42 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     expect(view().querySelector("select.move")).toBeNull();
     expect(view().querySelector(".gate")).toBeNull();
     expect(view().querySelector(".gates-btn")!.textContent).toBe("Edit your gates");
+  });
+
+  it("links each feature, counts backlog items per release and in no release, each opening the triage list on it (BOB-3 #6)", async () => {
+    const sections = [...view().querySelectorAll("section.release")];
+    expect(sections[0]!.querySelector("tr.is-open a.id")!.getAttribute("href")).toBe("#feature/BOB-7");
+    expect(sections[0]!.querySelector(".counts-line")!.textContent).toBe("2 backlog items1 open bugoldest 3 days");
+    const none = sections[3]!;
+    expect(none.querySelector(".counts-line")!.textContent).toBe("3 backlog items1 open bugoldest 5 days");
+    expect(none.querySelector(".counts-line a")!.getAttribute("href")).toBe("#triage/bobnet");
+  });
+
+  it("leaves the no-release counts line out when the board doesn't count it, and shows the section for items alone", async () => {
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 70, refs: [] });
+    await lists(releases, features, null);
+    expect(view().querySelector("#rel-none .counts-line")).toBeNull();
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 71, refs: [] });
+    await lists(releases, features.filter((f) => f.release !== null));
+    expect(view().querySelector("#rel-none")!.textContent).toContain("No features out of a release.");
+    expect(view().querySelector("#rel-none .counts-line")!.textContent).toContain("3 backlog items");
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 72, refs: [] });
+    await lists();
+  });
+
+  it("opens a feature in the service on its head card: release and number, state, criteria, tasks, who is on it", async () => {
+    await go("#feature/BOB-7");
+    const head = $("feature-head");
+    expect(head.classList.contains("is-open")).toBe(true);
+    expect(head.textContent).toContain("BobNet · R1 Central backlog view · number 6");
+    expect(head.querySelector("h2")!.textContent).toBe("Who may write what");
+    expect(head.textContent).toContain("3 of 10 criteria");
+    expect(head.textContent).toContain("nobody on it now");
+    await go("#feature/BOB-1");
+    expect($("feature-head").textContent).toContain("2 of 2 criteria");
+    await go("#feature/BOB-99");
+    expect(view().textContent).toBe("No feature BOB-99 in BobNet.");
+    await go("#roadmap/bobnet");
   });
 
   it("turns the gates on behind Edit your gates, naming the PO for anything else", async () => {
@@ -943,5 +983,140 @@ describe("triage and capture (BOB-8)", () => {
     await lists([]);
     expect(view().querySelector(".empty-card")!.textContent).toBe("Nothing to triage in BobNet. Capture something with + Capture; it lands here.");
     expect(view().querySelector(".totals")).toBeNull();
+  });
+});
+
+describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
+  let mark = 0;
+  beforeAll(() => {
+    mark = FakeSocket.last.sent.length;
+  });
+  const answered = new Set<unknown>();
+  const pending = (name?: string, all = false) =>
+    FakeSocket.last.sent
+      .slice(all ? 0 : mark)
+      .filter((f) => f["t"] === "board_op" && !answered.has(f["rid"]) && (!name || (f["op"] as { op: string }).op === name)) as Array<{ rid: string; op: Record<string, unknown> }>;
+  const reply = (f: { rid: string }, result: unknown) => {
+    answered.add(f.rid);
+    FakeSocket.last.frame({ t: "ok", rid: f.rid, result });
+  };
+  const project = { key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] };
+  const summary = (ref: string, title: string, checked: number, total: number, over: Record<string, unknown> = {}) => ({
+    ref, kind: "feature", type: "increment", status: "Ready", title, parent: null, release: "R1", ord: 1000, labels: [], progress: { checked, total },
+    tasks: { done: 0, total: 0 }, open_since: null, archived_at: null, created_at: iso(9000), ...over,
+  });
+  const row = {
+    project,
+    release: { ref: "R1", title: "R1 Central backlog view", goal: null, status: "open", ord: 1, spec_url: null, closed_at: null, closed_by: null, features: { done: 2, total: 10 } },
+    release_number: 1,
+    open: [summary("BOB-3", "The roadmap across projects", 0, 8, { open_since: iso(30) }), summary("BOB-8", "Capture", 0, 7, { open_since: iso(90) })],
+    next_ready: summary("BOB-9", "Move Helix's board", 0, 8),
+    waits_on_you: "Q-4",
+    backlog: { items: 13, bugs: 2, oldest: iso(60 * 24 * 4) },
+    no_release: { items: 13, bugs: 2, oldest: iso(60 * 24 * 4) },
+  };
+  const wait = (ref: string, kind: string, text: string, blocking: boolean, over: Record<string, unknown> = {}) => ({
+    project: "bobnet", kind, ref, feature: "BOB-3", text, recommended: null, holds: { items: [], sessions: [] }, waiting_sessions: [], needed_before: null,
+    asked_by: "Mario@mbp-1", since: iso(60), blocking, ...over,
+  });
+  const waits = [
+    wait("Q-4", "question", "Which roadmap order wins?", true, { holds: { items: ["BOB-3.1"], sessions: [] }, waiting_sessions: [{ feature: "BOB-3", kind: "build", label: "A" }] }),
+    wait("A-2", "action", "Add the token", false, { feature: null }),
+    wait("BOB-31", "bug", "Login fails on a phone", true),
+  ];
+  const answerOverview = async () => {
+    for (const f of pending("overview", true)) reply(f, f.op["project"] ? { projects: [{ ...row, project: { ...project, key: String(f.op["project"]) } }] } : { projects: [row] });
+    for (const f of pending("waits", true)) reply(f, { waits, answered: [] });
+    await settle();
+  };
+
+  it("reads the overview and the waits, and lists what holds work up, then how much more waits", async () => {
+    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+    snap.workers = [
+      worker({ state: "waiting-approval" }),
+      worker({ id: "w_2", name: "Luigi", project: "bobnet", role: "engineer", session: "BOB-3 build A", task_ref: null, task_refs: [], tokens: tokens(2_400_000) }),
+      worker({ id: "w_3", name: "Mario", project: "bobnet", role: "lead", session: null, task_ref: null, task_refs: [] }),
+    ] as never;
+    snap.pending = [{ id: "r_7", worker_id: "w_1", name: "records-agent", kind: "approval", tool: "Bash", tier: "human", created_at: iso(1), preview: "git push" }] as never;
+    FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    await go("#overview");
+    expect(pending("overview", true).some((f) => !f.op["project"])).toBe(true);
+    await answerOverview();
+    expect(document.querySelector('#tabs a[aria-current]')!.getAttribute("href")).toBe("#overview");
+    // The waits and the permission: four, the action not holding work up.
+    expect($("needs-count").textContent).toBe("4");
+    const lines = [...$("needs").querySelectorAll("li")];
+    expect(lines.map((l) => l.querySelector(".badge")!.textContent)).toEqual(["permission", "question", "bug · blocks use"]);
+    expect(lines[0]!.textContent).toContain("records-agent wants Bash");
+    expect([...lines[0]!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Allow", "Deny"]);
+    expect(lines[1]!.querySelector(".l-t")!.textContent).toBe("Which roadmap order wins?");
+    expect(lines[1]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up BOB-3.1, BOB-3 build A");
+    expect(lines[2]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · blocks use");
+    expect(view().querySelector(".ov-needs .more")!.textContent).toBe("3 hold work up · 1 more when you have time");
+    // No link to a Waits tab that isn't there yet.
+    expect(view().querySelector('.ov-needs a[href="#waits"]')).toBeNull();
+  });
+
+  it("lists who is working on what from their declared sessions, and others as Other work", () => {
+    const lines = [...$("working").querySelectorAll("li")];
+    expect(lines.map((l) => l.querySelector(".l-who b")!.textContent)).toEqual(["records-agent", "Luigi", "Mario"]);
+    expect(lines[0]!.querySelector(".dot")!.classList.contains("warn")).toBe(true);
+    expect(lines[0]!.querySelector(".l-m")!.textContent).toBe("waiting on you · 1.5M tokens");
+    expect(lines[0]!.querySelector(".l-path")!.textContent).toBe("helix › LAND-41build 3 › LAND-41.18land: tracts take updates");
+    expect(lines[0]!.querySelector(".l-path a.id")!.getAttribute("href")).toBe("#feature/LAND-41");
+    expect(lines[1]!.querySelector(".l-path")!.textContent).toBe("BobNet › BOB-3build A");
+    expect(lines[1]!.querySelector(".l-m")!.textContent).toBe("2.4M tokens");
+    expect(lines[2]!.querySelector(".l-path")!.textContent).toBe("BobNet › Other work (no session)");
+  });
+
+  it("gives each project a row: release, open now and who is on it, next, backlog; a Backlog.md one its name", () => {
+    const rows = [...$("plist").querySelectorAll(".prow")];
+    expect(rows.map((r) => r.getAttribute("data-project"))).toEqual(["bobnet", "helix"]);
+    const cells = [...rows[0]!.querySelectorAll(".pc")].map((c) => c.textContent);
+    expect(cells).toEqual([
+      "BobNetmbp-1 · lead Mario · PO Peach",
+      "Release1 R1 Central backlog view2 of 10 features done",
+      "Open nowBOB-3The roadmap across projects0 of 8 criteria · Luigi on itand 1 more open",
+      "NextWaits on you: Q-4Then Ready: BOB-9Move Helix's board",
+      "Backlog13 items2 bugs · oldest 4 days",
+    ]);
+    expect(rows[0]!.querySelector(".pname a")!.getAttribute("href")).toBe("#roadmap/bobnet");
+    expect(rows[0]!.querySelector('a[href="#feature/BOB-3"]')).not.toBeNull();
+    expect(rows[0]!.querySelector('a[href="#triage/bobnet"]')).not.toBeNull();
+    expect(rows[1]!.textContent).toContain("Its board is still on Backlog.md");
+    expect(view().textContent).not.toMatch(/\$\d/);
+  });
+
+  it("refetches on board_changed, and says when nothing is held up or working", async () => {
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 400, refs: ["Q-4"] });
+    expect(pending("waits").length).toBe(1);
+    for (const f of pending("overview", true)) reply(f, { projects: [{ ...row, waits_on_you: null, open: [] }] });
+    for (const f of pending("waits", true)) reply(f, { waits: [], answered: [] });
+    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+    snap.workers = [];
+    snap.pending = [];
+    FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    await settle();
+    expect(view().querySelector(".ov-needs .card")!.textContent).toBe("Nothing is held up by you.");
+    expect($("needs-count").textContent).toBe("");
+    expect(view().querySelector(".ov-now .empty-card")!.textContent).toBe("No agent is working.");
+    const cells = [...view().querySelectorAll('.prow[data-project="bobnet"] .pc')].map((c) => c.textContent);
+    expect(cells[2]).toBe("Open nowno feature open");
+    expect(cells[3]).toBe("NextReady: BOB-9Move Helix's board");
+  });
+
+  it("opens the triage list on a release from the roadmap's counts line (BOB-3 #6)", async () => {
+    await go("#roadmap/bobnet");
+    await answerOverview();
+    const link = view().querySelector("#rel-none .counts-line a") as HTMLAnchorElement;
+    link.click();
+    await settle();
+    await answerOverview();
+    expect(location.hash).toBe("#triage/bobnet");
+    const item = { ref: "BOB-40", kind: "backlog", type: "chore", status: "Draft", title: "Tidy", parent: null, release: null, ord: null, labels: [], progress: { checked: 0, total: 0 }, tasks: null,
+      open_since: null, archived_at: null, created_at: iso(60), captured_by: "Peach@mbp-1", casper_words: null, bug_where: null, blocks_use: false, parent_hint: null };
+    for (const f of pending("list", true)) reply(f, f.op["of"] === "releases" ? { releases: [], total: 0, cursor: null } : f.op["of"] === "backlog" ? { items: [item], total: 1, cursor: null } : { items: [], total: 0, cursor: null });
+    await settle();
+    expect(view().querySelector('.filters [aria-pressed="true"]')!.textContent).toMatch(/^No release/);
   });
 });

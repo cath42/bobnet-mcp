@@ -487,13 +487,15 @@ export interface OverviewRow {
   /** The first open release, by order, and its number in that order (1, 2, 3). */
   release: ReleaseRecord | null;
   release_number: number | null;
-  /** Its open features (`open_since` set). */
+  /** Its open features: `open_since` set and not Done (notes 15). */
   open: ItemSummary[];
-  /** The next Ready feature: by release order, then the board's order. */
+  /** The next Ready feature that isn't open: by release order, then the board's order. */
   next_ready: ItemSummary | null;
   /** The oldest wait that holds work up, if any. */
   waits_on_you: string | null;
   backlog: BacklogCounts;
+  /** Backlog items in no release (the roadmap's "Not in a release" counts line). */
+  no_release: BacklogCounts;
 }
 
 export interface ItemSummary {

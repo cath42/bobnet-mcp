@@ -540,12 +540,12 @@ export class BoardStore {
         const number = releases.findIndex((r) => r.status === "open");
         const release = releases[number];
         const open = this.sql
-          .exec<SummaryRow>(`${SUMMARY} WHERE i.project = ? AND i.kind = 'feature' AND i.open_since IS NOT NULL AND i.archived_at IS NULL ${ORDERED}`, p.pk)
+          .exec<SummaryRow>(`${SUMMARY} WHERE i.project = ? AND i.kind = 'feature' AND i.open_since IS NOT NULL AND i.status != 'Done' AND i.archived_at IS NULL ${ORDERED}`, p.pk)
           .toArray();
         const ready = this.sql
           .exec<SummaryRow>(
             `${SUMMARY} LEFT JOIN releases rel ON rel.pk = i.release
-             WHERE i.project = ? AND i.kind = 'feature' AND i.status = 'Ready' AND i.archived_at IS NULL AND (rel.status IS NULL OR rel.status != 'closed')
+             WHERE i.project = ? AND i.kind = 'feature' AND i.status = 'Ready' AND i.open_since IS NULL AND i.archived_at IS NULL AND (rel.status IS NULL OR rel.status != 'closed')
              ORDER BY rel.pk IS NULL, rel.ord IS NULL, rel.ord, rel.pk, i.ord IS NULL, i.ord, i.pk LIMIT 1`,
             p.pk,
           )
@@ -558,6 +558,7 @@ export class BoardStore {
           next_ready: ready ? summary(ready) : null,
           waits_on_you: this.waitsOf(p).find((w) => w.blocking)?.ref ?? null,
           backlog: this.backlogCounts("project = ?", p.pk),
+          no_release: this.backlogCounts("project = ? AND release IS NULL", p.pk),
         };
       }),
     };

@@ -1,7 +1,7 @@
-// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10) at phone, tablet and desktop
+// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3) at phone, tablet and desktop
 // widths, against a fake broker in the page holding a copy of BobNet's board (2026-11-14; its backlog
 // 2026-11-15). The page is public/ as served.
-//   node test-ui/shots.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob7-*.png, bob8-*.png, bob10-*.png)
+//   node test-ui/shots.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob7-*.png, bob8-*.png, bob10-*.png, bob3-*.png)
 // Chromium: pnpm --filter @bobnet/broker exec playwright-core install chromium (once per machine).
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -54,6 +54,14 @@ function fakeBroker() {
     ],
   };
   board.features.forEach((x, i) => (x.ord = (i + 1) * 1000));
+  // BOB-3's shots: the board as on 2026-11-15, BOB-3 open, three done before it to fold.
+  if (window.BOB3) {
+    for (const ref of ["BOB-2", "BOB-7", "BOB-14"]) Object.assign(board.features.find((x) => x.ref === ref), { status: "Done", open_since: null });
+    board.features.find((x) => x.ref === "BOB-2").progress = { checked: 10, total: 12 };
+    board.features.find((x) => x.ref === "BOB-7").progress = { checked: 6, total: 6 };
+    board.features.find((x) => x.ref === "BOB-14").progress = { checked: 4, total: 7 };
+    Object.assign(board.features.find((x) => x.ref === "BOB-3"), { open_since: iso(20) });
+  }
   // BobNet's backlog as imported (BOB-14), all chores in no release; their ages are made up, a few hours to a few days.
   const b = (ref, title, hoursAgo, over = {}) => ({
     ref, kind: "backlog", type: "chore", status: "Ready", title, parent: null, release: null, ord: null, labels: [], progress: { checked: 0, total: 0 }, tasks: null,
@@ -72,13 +80,36 @@ function fakeBroker() {
   const releaseRecord = (r, i) => {
     const fs = board.features.filter((x) => x.release === r.ref);
     return { goal: null, ord: i + 1, spec_url: null, closed_at: r.status === "closed" ? new Date().toISOString() : null, closed_by: null, ...r,
-      features: { done: fs.filter((x) => x.status === "Done").length, total: fs.length }, backlog: { items: 0, bugs: 0, oldest: null } };
+      features: { done: fs.filter((x) => x.status === "Done").length, total: fs.length }, backlog: counts((d) => d.release === r.ref) };
+  };
+  const counts = (pick) => {
+    const its = board.backlog.filter(pick);
+    return { items: its.length, bugs: its.filter((d) => d.type === "bug").length, oldest: its.map((d) => d.created_at).sort()[0] ?? null };
+  };
+  const project = { key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] };
+  // Example waits for the overview's shots: no record of them exists to sample (as Daisy's prototype marks them).
+  const waits = [
+    { project: "bobnet", kind: "question", ref: "Q-3", feature: "BOB-9", text: "Import Helix's board at its current main, or at the last release tag?", recommended: null,
+      holds: { items: ["BOB-9"], sessions: [] }, waiting_sessions: [], needed_before: null, asked_by: "Peach@mbp-1", since: iso(180), blocking: true },
+    { project: "bobnet", kind: "action", ref: "A-1", feature: null, text: "Add the CI token to the broker's secrets", recommended: null,
+      holds: { items: [], sessions: [] }, waiting_sessions: [], needed_before: { release: "R2" }, asked_by: "Mario@mbp-1", since: iso(600), blocking: false },
+  ];
+  const overviewRow = () => {
+    const open = board.releases.findIndex((r) => r.status === "open");
+    const live = board.features.filter((x) => x.open_since && x.status !== "Done");
+    return {
+      project, release: open < 0 ? null : releaseRecord(board.releases[open], open), release_number: open < 0 ? null : open + 1,
+      open: live, next_ready: board.features.find((x) => x.status === "Ready" && !x.open_since) ?? null,
+      waits_on_you: waits.find((w) => w.blocking)?.ref ?? null, backlog: counts(() => true), no_release: counts((d) => d.release === null),
+    };
   };
   const last = (release) => Math.max(0, ...board.features.filter((x) => x.release === release).map((x) => x.ord)) + 1000;
   let seq = 100;
   const answer = (op) => {
     switch (op.op) {
-      case "projects": return { projects: [{ key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] }] };
+      case "projects": return { projects: [project] };
+      case "overview": return { projects: [overviewRow()] };
+      case "waits": return { waits, answered: [] };
       case "list": {
         if (op.of === "releases") return { releases: board.releases.map(releaseRecord), total: board.releases.length, cursor: null };
         const items = op.of === "backlog" ? board.backlog : board.features;
@@ -101,7 +132,13 @@ function fakeBroker() {
   };
   const worker = { id: "w_9ff16006", name: "Luigi", project: "bobnet", role: "engineer", state: "running", task: "BOB-7", model: "opus", effort: "high", checkpoint: null,
     started_at: iso(40), ended_at: null, last_event_at: iso(0), tokens: 2_000_000, session: "BOB-7 build A", task_ref: null, calls: 80, context: 90000, ctx: [] };
-  const dashboard = { peers: [], laptops: [{ laptop: "mbp-1", at: iso(0), snapshot: { supervisor: { started_at: iso(600), concurrency: 3, active: 1, queued: 0 }, workers: [worker], pending: [], usage: [] } }], boards: [], updates: [], traffic: [] };
+  const others = window.BOB3 ? [
+    { ...worker, id: "w_441c4622", session: "BOB-3 build A", task: "BOB-3", tokens: 3_100_000, started_at: iso(20) },
+    { ...worker, id: "w_9453f36a", name: "Toad", role: "architect", session: "BOB-10 review 1", task: "BOB-10", tokens: 900_000, state: "waiting-approval" },
+    { ...worker, id: "w_m", name: "Mario", role: "lead", session: null, task: "lead", tokens: 5_600_000 },
+  ] : [worker];
+  const pending = window.BOB3 ? [{ id: "r_1", worker_id: "w_9453f36a", name: "Toad", kind: "approval", tool: "Bash", tier: "human", created_at: iso(2), preview: "git log --oneline v2..origin/v2" }] : [];
+  const dashboard = { peers: [], laptops: [{ laptop: "mbp-1", at: iso(0), snapshot: { supervisor: { started_at: iso(600), concurrency: 3, active: 1, queued: 0 }, workers: others, pending, usage: [] } }], boards: [], updates: [], traffic: [] };
 
   class FakeSocket extends EventTarget {
     static OPEN = 1;
@@ -139,6 +176,11 @@ const all = [
   // BOB-10: a bug captured in one field (#1), then first in the triage list, marked (#2).
   ["bob10-capture-bug", "triage/bobnet", capture, false],
   ["bob10-triage-bugs", "triage/bobnet", [...capture, (p) => p.getByRole("button", { name: "Capture", exact: true }).click(), (p) => p.getByRole("button", { name: /^Bugs / }).click()], true, "table.triage .now"],
+  // BOB-3: the overview (#7), the roadmap with its counts lines and links (#1-6), unfolded, a feature's head card.
+  ["bob3-overview", "overview", [], true],
+  ["bob3-roadmap", "roadmap/bobnet", [], true],
+  ["bob3-roadmap-unfolded", "roadmap/bobnet", [(p) => p.getByRole("button", { name: /done \(/ }).click()], true],
+  ["bob3-feature", "feature/BOB-3", [], false],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 
@@ -148,9 +190,10 @@ try {
   for (const [name, hash, steps, full, until] of shots) {
     for (const [w, [width, height]] of Object.entries(widths)) {
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2 });
+      if (name.startsWith("bob3")) await page.addInitScript(() => (window.BOB3 = true));
       await page.addInitScript(fakeBroker);
       await page.goto(`${base}#${hash}`);
-      await page.waitForSelector(hash.startsWith("triage") ? ".totals" : "section.release");
+      await page.waitForSelector(hash.startsWith("triage") ? ".totals" : hash.startsWith("overview") ? ".prow" : hash.startsWith("feature") ? "#feature-head" : "section.release");
       for (const step of steps) {
         await step(page);
         await page.waitForTimeout(400);

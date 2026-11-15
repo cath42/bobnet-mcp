@@ -1258,6 +1258,8 @@ describe("the views' reads: waits, overview, the roadmap's counts (ADR 0001 §7,
     const ready = (await ok(owner, { op: "create", project: "helix", kind: "feature", type: "increment", title: "Later", release: r1 })).ref!;
     await ok(owner, { op: "update", project: "helix", ref: ready, set: { status: "Ready" } });
     await ok(owner, { op: "update", project: "helix", ref: f2, set: { status: "Ready" } });
+    // An open feature keeps its Ready status; it is open now, not next.
+    await ok(owner, { op: "update", project: "helix", ref: f1, set: { status: "Ready" } });
     await join(f1);
     await ok(agent("Picard"), { op: "ask", project: "helix", text: "Later?" });
     await ok(agent("Picard"), { op: "ask", project: "helix", text: "Now?", holds: [f1] });
@@ -1275,7 +1277,12 @@ describe("the views' reads: waits, overview, the roadmap's counts (ADR 0001 §7,
       next_ready: { ref: ready },
       waits_on_you: "Q-2",
       backlog: { items: 2, bugs: 1 },
+      // The roadmap's "Not in a release" counts line: the chore, not the bug in R1.
+      no_release: { items: 1, bugs: 0, oldest: expect.any(String) },
     });
+    // A Done feature whose session is still open isn't open now (notes 15).
+    await ok(owner, { op: "update", project: "helix", ref: f1, set: { status: "Done" } });
+    expect((await ok(owner, { op: "overview", project: "helix" })).projects[0]!.open).toEqual([]);
     // A Done feature with criteria not ticked reads from its progress; no flag of its own.
     expect((await ok(owner, { op: "list", project: "helix", of: "releases" })).releases!.map((r) => r.backlog)).toEqual([
       { items: 0, bugs: 0, oldest: null },

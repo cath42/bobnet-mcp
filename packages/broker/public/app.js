@@ -340,6 +340,11 @@ function boardList(cols, lanes) {
 const empty = (b) => h("section", null, h("div", { class: "banner idle" }, h("span", null, b ? "This project has no backlog configured." : "No board yet."), h("span", { class: "muted" }, b ? "Set backlog: { dir } for it in supervisor.yaml." : "A supervisor sends its projects' boards within a minute of starting.")));
 
 function viewFeature() {
+  // `#feature/<id>`: a feature in the service shows its head card; one on a Backlog.md board opens as before.
+  const id = location.hash.slice(1).split("/")[1];
+  const sp = id && svc.projects?.find((x) => id.startsWith(`${x.prefix}-`));
+  if (sp) return viewServiceFeature(sp, id);
+  if (id) state.inc = id;
   const b = current();
   if (!b?.backlog) return [empty(b)];
   const m = backlogModel(b);
@@ -385,6 +390,30 @@ function viewFeature() {
     onFeature.length ? h("div", { class: "card" }, h("div", { class: "muted", style: "margin-bottom:6px" }, "On the feature as a whole"), onFeature.map((w) => agentTag(w, true, m))) : null,
     board(cols, lanes),
     h("p", { class: "note" }, "Click a task to open it. Tasks with an agent on them stay open, and the agent links to its context per call. A task's build:<n> label puts it in a build; without one, the build whose workers had it as their task."),
+  ];
+}
+
+/** A feature in the service: its head card (spec: Feature, head card). Its sessions, outcomes and tasks are the steps view's (BOB-4). */
+function viewServiceFeature(p, ref) {
+  const data = svc.roadmaps.get(p.key);
+  if (!data && !svc.loading.has(p.key)) loadRoadmap(p.key);
+  if (!data) return [h("div", { class: "empty-card" }, "Reading the board…")];
+  const f = data.features.find((x) => x.ref === ref);
+  if (!f) return [h("div", { class: "empty-card" }, `No feature ${ref} in ${p.name}.`)];
+  const r = data.releases.find((x) => x.ref === f.release);
+  const n = data.features.filter((x) => x.release === f.release).indexOf(f) + 1;
+  const st = featureState(f), on = onFeature(p.key, f.ref);
+  const { checked, total } = f.progress;
+  return [
+    h("div", { class: `card feature-head${st === "open" ? " is-open" : ""}`, id: "feature-head" },
+      h("div", { class: "fh-top" }, h("span", { class: "id" }, f.ref), h("span", { class: "muted" }, `${p.name} · ${r ? `${r.title} · number ${n}` : "not in a release"}`), badge(st)),
+      h("h2", null, f.title),
+      h("div", { class: "fh-m" },
+        total ? h("div", { class: "crit" }, meterOf(checked, total, st === "done" ? "idle" : "ok"), h("span", { class: "m" }, `${checked} of ${total} criteria`)) : h("span", { class: "muted" }, "no criteria yet"),
+        f.status === "Done" && total && checked < total ? h("span", { class: "sub-note" }, "Done, criteria not ticked") : null,
+        h("span", null, f.tasks?.total ? `${f.tasks.done} of ${f.tasks.total} tasks done` : h("span", { class: "muted" }, "no tasks")),
+        on.length ? h("span", { class: "now" }, `● ${on.map((w) => w.name).join(", ")} on it now`) : st === "open" ? h("span", { class: "muted" }, "nobody on it now") : null)),
+    h("p", { class: "note" }, "Its sessions, their outcomes and its tasks come here with the steps view. ", h("a", { href: `#roadmap/${p.key}` }, `${p.name}'s roadmap`)),
   ];
 }
 
@@ -483,6 +512,7 @@ async function loadProjects() {
   }
   for (const key of svc.roadmaps.keys()) loadRoadmap(key);
   for (const key of backlogs.keys()) loadBacklog(key);
+  if (ov.rows || viewName() === "overview") loadOverview();
   scheduleRender();
 }
 
@@ -491,14 +521,15 @@ async function loadRoadmap(key) {
   if (svc.loading.has(key)) return void svc.again.add(key);
   svc.loading.add(key);
   try {
-    const [releases, features] = await Promise.all([listAll({ op: "list", project: key, of: "releases" }, "releases"), listAll({ op: "list", project: key, of: "features" }, "items")]);
-    svc.roadmaps.set(key, { releases, features, error: null });
+    const [releases, features, o] = await Promise.all([listAll({ op: "list", project: key, of: "releases" }, "releases"), listAll({ op: "list", project: key, of: "features" }, "items"), boardOp({ op: "overview", project: key })]);
+    // Backlog items in no release: a broker before BOB-3 doesn't count them, and the line is left out (spec: Roadmap).
+    svc.roadmaps.set(key, { releases, features, none: o.projects[0]?.no_release ?? null, error: null });
   } catch (err) {
     svc.roadmaps.set(key, { ...(svc.roadmaps.get(key) ?? { releases: [], features: [] }), error: err.message });
   } finally {
     svc.loading.delete(key);
   }
-  if (viewName() === "roadmap") scheduleRender();
+  if (viewName() === "roadmap" || viewName() === "feature") scheduleRender();
   if (svc.again.delete(key)) await loadRoadmap(key);
 }
 
@@ -556,7 +587,7 @@ function viewBoardRoadmap(key, edit) {
   if (!rels.length) out.push(h("div", { class: "empty-card" }, `${p.name} has no releases yet. Its PO makes the first one.`));
   rels.forEach((r, i) => out.push(releaseSection(key, data, r, i, edit)));
   const none = data.features.filter((f) => f.release === null);
-  if (none.length) out.push(releaseSection(key, data, null, null, edit));
+  if (none.length || data.none?.items) out.push(releaseSection(key, data, null, null, edit));
   out.push(h("p", { class: "note" }, `Order inside a release is ${poOf(p)}'s; the order of releases is yours. A number in italics: the board has no order for it, so it follows the ordered ones by id. Criteria: acceptance criteria ticked, the feature's own and its tasks'.`));
   return out;
 }
@@ -578,7 +609,7 @@ function releaseSection(key, data, r, i, edit) {
   fs.forEach((f, j) => { if (!(folded && f.status === "Done")) rows.push(featureRow(key, data, r, f, j + 1, edit)); });
   const relState = !r ? null : closed ? "closed" : fs.length && done.length === fs.length ? "all done" : r.status === "open" ? "open" : null;
   const rels = data.releases;
-  const b = r?.backlog;
+  const b = r ? r.backlog : data.none;
   return h("section", { class: "release", id: r ? `rel-${r.ref}` : "rel-none" },
     h("div", { class: "rel-h" },
       r ? h("span", { class: "n" }, i + 1) : null,
@@ -589,7 +620,7 @@ function releaseSection(key, data, r, i, edit) {
         h("button", { type: "button", disabled: i === 0 || null, "aria-label": `Move ${r.title} earlier`, onclick: () => moveRelease(key, rels, i, -1) }, "↑ Earlier"),
         h("button", { type: "button", disabled: i === rels.length - 1 || null, "aria-label": `Move ${r.title} later`, onclick: () => moveRelease(key, rels, i, 1) }, "↓ Later"),
         closed ? null : button("Close release", "danger", () => closeRelease(key, data, r))) : null),
-    b ? h("div", { class: "counts-line" }, h("span", null, plural(b.items, "backlog item")), h("span", null, plural(b.bugs, "open bug")), b.oldest ? h("span", null, `oldest ${duration(Date.now() - Date.parse(b.oldest)).split(" ")[0]}`) : null) : null,
+    b ? countsLine(key, b, r?.ref ?? "none") : null,
     shut
       ? fs.length
         ? h("div", { class: "table-wrap" }, h("table", { class: "stack" }, h("tbody", null, h("tr", { class: "fold" }, h("td", { colspan: cols, class: "full" },
@@ -599,8 +630,14 @@ function releaseSection(key, data, r, i, edit) {
         ? h("div", { class: "table-wrap" }, h("table", { class: "stack" },
             h("thead", null, h("tr", null, h("th", null, "# Feature"), h("th", null, "State"), h("th", null, "Criteria"), h("th", null, "Tasks"), edit ? h("th", null, "Release") : null)),
             h("tbody", null, rows)))
-        : h("div", { class: "empty-card" }, "No features in this release yet."));
+        : h("div", { class: "empty-card" }, r ? "No features in this release yet." : "No features out of a release."));
 }
+
+/** A release's backlog items, open bugs and oldest; the count opens the triage list on that release (roadmap-view 7). */
+const countsLine = (key, c, filter) => h("div", { class: "counts-line" },
+  h("a", { href: `#triage/${key}`, onclick: () => (state.triage = { filter, all: false }) }, plural(c.items, "backlog item")),
+  h("span", null, plural(c.bugs, "open bug")),
+  c.oldest ? h("span", null, `oldest ${age(c.oldest)}`) : null);
 
 /** A release's count line: a closed one never reads "0 of 0" (Daisy, spec at 249115d). */
 function releaseCount(r) {
@@ -611,7 +648,7 @@ function releaseCount(r) {
 
 function featureRow(key, data, r, f, n, edit) {
   const st = featureState(f);
-  const on = running().filter((w) => w.project === key && (w.session ?? "").split(" ")[0] === f.ref);
+  const on = onFeature(key, f.ref);
   const unticked = f.status === "Done" && f.progress.total && f.progress.checked < f.progress.total;
   const { checked, total } = f.progress;
   // A closed release drops out of the move selects (notes 21), except as where a feature in it is now.
@@ -619,7 +656,7 @@ function featureRow(key, data, r, f, n, edit) {
   return h("tr", { class: `${st === "done" ? "done" : ""}${st === "open" ? " is-open" : ""}` },
     h("td", { class: "wide keep", "data-label": "" },
       h("span", { class: `ord${f.ord === null ? " unset" : ""}`, title: f.ord === null ? "No order on the board: after the ordered ones, by id" : `Order ${n}` }, r ? n : "·"),
-      h("span", { class: "id" }, f.ref), h("span", { class: "title" }, f.title),
+      h("a", { class: "id", href: `#feature/${f.ref}` }, f.ref), h("span", { class: "title" }, f.title),
       on.length ? h("div", { class: "now" }, `● ${on.map((w) => w.name).join(", ")} on it now`) : st === "open" ? h("div", { class: "now idle" }, "open · nobody on it now") : null),
     h("td", { "data-label": "State" }, badge(st), unticked ? h("div", { class: "sub-note" }, "Done, criteria not ticked") : null),
     h("td", { "data-label": "Criteria" }, total ? h("div", { class: "crit" }, meterOf(checked, total, st === "done" ? "idle" : "ok"), h("span", { class: "m" }, `${checked} of ${total}`)) : h("span", { class: "muted" }, "none yet")),
@@ -695,6 +732,147 @@ function closeRelease(key, data, r) {
     h("div", { class: "foot" }, button("Cancel", "", () => dlg.close()), h("button", { type: "submit", class: "danger" }, `Close ${r.ref}`))));
   if (typeof dlg.showModal === "function") dlg.showModal();
   else dlg.setAttribute("open", "");
+}
+
+// ---------- Overview: what needs Casper, who is working on what, where each project stands (spec: Overview; notes 31-34) ----------
+
+/** The service's overview rows and what waits on Casper: read on the Overview, refetched on board_changed. */
+const ov = { rows: null, waits: null, error: null, loading: false, again: false };
+
+async function loadOverview() {
+  if (ov.loading) return void (ov.again = true);
+  ov.loading = true;
+  try {
+    const [o, w] = await Promise.all([boardOp({ op: "overview" }), boardOp({ op: "waits" })]);
+    Object.assign(ov, { rows: o.projects, waits: w.waits, error: null });
+  } catch (err) {
+    Object.assign(ov, { rows: ov.rows ?? [], waits: ov.waits ?? [], error: err.message });
+  } finally {
+    ov.loading = false;
+  }
+  if (viewName() === "overview") scheduleRender();
+  if (ov.again) {
+    ov.again = false;
+    await loadOverview();
+  }
+}
+
+/** A worker's session as its spawn declared it ("BOB-3 build A"): the feature, then the rest as its label. */
+function sessionOf(w) {
+  if (!w.session) return null;
+  const [feature, ...rest] = w.session.split(" ");
+  return { feature, label: rest.join(" ") };
+}
+/** The agents on a feature now, from their declared sessions; nothing is guessed from a brief (roadmap-view 5). */
+const onFeature = (key, ref) => running().filter((w) => w.project === key && sessionOf(w)?.feature === ref);
+const pendingAll = () => [...state.laptops.values()].flatMap((l) => l.snapshot.pending.map((p) => ({ ...p, laptop: l.laptop })));
+const projectName = (key) => svc.projects?.find((p) => p.key === key)?.name ?? key;
+/** The laptops a project runs on: its supervisor's board, and its agents'. */
+const laptopsOf = (key) => [...new Set([...projects().filter((e) => e.board.project === key).map((e) => e.laptop), ...workers().filter((w) => w.project === key).map((w) => w.laptop)])];
+
+/** A worker's state when it isn't working: what it waits on, and whose it is. */
+function waitingText(w) {
+  if (w.state === "running") return null;
+  const p = pendingAll().find((x) => x.worker_id === w.id);
+  return p ? (p.tier === "human" ? "waiting on you" : "waiting on the orchestrator") : w.state === "waiting-answer" ? "waiting on an answer" : "waiting on a permission";
+}
+
+const WAIT_KIND = { question: ["question", "question"], action: ["action", "action"], review_gate: ["review", "review gate"], bug: ["bug", "bug · blocks use"] };
+const sessionName = (ss) => `${ss.feature} ${ss.kind} ${ss.label}`;
+
+function viewOverview() {
+  if (svc.projects && !ov.rows && !ov.loading) loadOverview();
+  // A permission holds up its agent; only those that are Casper's, not the orchestrator's, need him.
+  const perms = pendingAll().filter((p) => p.tier === "human");
+  const waits = ov.waits ?? [];
+  const blocking = waits.filter((w) => w.blocking);
+  const holding = perms.length + blocking.length;
+  const rest = waits.length - blocking.length;
+  const now = running();
+  const svcKeys = new Set((ov.rows ?? []).map((o) => o.project.key));
+  const legacy = projects().map((e) => e.board.project).filter((k) => !svcKeys.has(k));
+  return [
+    ov.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, ov.error)) : null,
+    h("div", { class: "ov" },
+      h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count", id: "needs-count" }, perms.length + waits.length || "")),
+        h("div", { class: "card" },
+          !ov.waits && !perms.length ? h("p", { class: "muted", style: "margin:0" }, "Reading the board…")
+            : holding ? h("ul", { class: "lines", id: "needs" }, perms.map(permissionLine), blocking.map(waitLine))
+            : h("p", { class: "muted", style: "margin:0" }, "Nothing is held up by you."),
+          // The Waits on you tab isn't here yet, so this names it without a link (spec, BOB-8 gap 3).
+          rest ? h("p", { class: "more" }, `${holding} ${holding === 1 ? "holds" : "hold"} work up · ${rest} more when you have time`) : null)),
+      h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length || "")),
+        now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map(nowLine))) : h("div", { class: "empty-card" }, "No agent is working.")),
+      h("section", { class: "ov-proj" }, h("h2", null, "Projects"),
+        h("div", { class: "plist", id: "plist" },
+          !ov.rows && !legacy.length ? h("div", { class: "empty-card" }, svc.projects ? "Reading the board…" : "No project's board yet.") : null,
+          (ov.rows ?? []).map(projectRow), legacy.map(legacyRow)))),
+  ];
+}
+
+function waitLine(w) {
+  const [st, label] = WAIT_KIND[w.kind];
+  const held = [...new Set([...w.holds.items, ...[...w.holds.sessions, ...w.waiting_sessions].map(sessionName)])];
+  return h("li", { class: "hold" }, badge(st, label),
+    h("span", { class: "l-t", title: w.text }, w.text),
+    h("span", { class: "l-m" }, `${projectName(w.project)}${w.feature ? ` · ${w.feature}` : ""} · ${w.kind === "bug" ? "blocks use" : `holds up ${held.join(", ")}`}`));
+}
+
+function permissionLine(p) {
+  const w = workers().find((x) => x.id === p.worker_id);
+  const ss = w && sessionOf(w);
+  return h("li", { class: "hold can" }, badge("permission"),
+    h("span", { class: "l-t", title: p.preview }, p.kind === "question" ? `${p.name} asks: ${p.preview}` : `${p.name} wants ${p.tool}`),
+    h("span", { class: "acts" },
+      p.kind === "question" ? null : button("Allow", "primary", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "allow" }, b, `Allow ${p.name} to run ${p.tool}?\n\n${p.preview}`)),
+      button("Deny", "danger", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "deny" }, b))),
+    h("span", { class: "l-m" }, `${w ? projectName(w.project) : p.laptop}${ss ? ` · ${ss.feature}` : ""} · holds up ${p.name}`));
+}
+
+function nowLine(w) {
+  const ss = sessionOf(w);
+  const waiting = waitingText(w);
+  const items = projects().find((e) => e.board.project === w.project)?.board.backlog?.items ?? [];
+  const tasks = refsOf(w).filter((id) => id !== ss?.feature);
+  return h("li", { dataset: { state: w.state } },
+    h("span", { class: "l-who" }, h("i", { class: `dot ${waiting ? "warn" : "on"}`, "aria-hidden": "true" }), h("b", null, w.name), h("span", { class: "muted" }, ` ${w.role}`)),
+    h("span", { class: "l-path" }, h("span", { class: "muted" }, projectName(w.project), " › "),
+      ss ? [h("a", { class: "id", href: `#feature/${ss.feature}` }, ss.feature), h("span", { class: "muted" }, `${ss.label}${tasks.length ? " › " : ""}`),
+          tasks.map((id) => h("a", { href: `#feature/${ss.feature}`, class: "l-task" }, h("span", { class: "id" }, id), items.find((x) => x.id === id)?.title ?? ""))]
+        : h("span", { class: "muted", style: "font-style:italic" }, "Other work (no session)")),
+    h("span", { class: "l-m" }, waiting ? h("span", { style: "color:var(--warn)" }, `${waiting} · `) : null, `${fmtTokens(workerTokens(w))} tokens`));
+}
+
+const cell = (label, ...kids) => h("div", { class: "pc" }, h("span", { class: "lab" }, label), ...kids);
+
+/** One project's row: five cells, the project, Release, Open now, Next and Backlog (notes 34). */
+function projectRow(o) {
+  const p = o.project, r = o.release, open = o.open[0], next = o.next_ready, b = o.backlog;
+  const on = open ? onFeature(p.key, open.ref) : [];
+  const toTriage = () => (state.triage = { filter: "all", all: false });
+  return h("div", { class: "card prow", dataset: { project: p.key } },
+    h("div", { class: "pc pname" }, h("a", { href: `#roadmap/${p.key}` }, p.name),
+      h("span", { class: "muted" }, [...laptopsOf(p.key), p.lead ? `lead ${shortName(p.lead)}` : null, p.po ? `PO ${shortName(p.po)}` : null].filter(Boolean).join(" · "))),
+    cell("Release", r
+      ? [h("span", { class: "v" }, h("b", null, String(o.release_number)), " ", r.title), meterOf(r.features.done, r.features.total), h("span", { class: "muted" }, `${r.features.done} of ${plural(r.features.total, "feature")} done`)]
+      : h("span", { class: "muted" }, "no open release")),
+    cell("Open now", open
+      ? [h("a", { href: `#feature/${open.ref}`, class: "v clamp" }, h("span", { class: "id" }, open.ref), open.title),
+         h("span", { class: "muted" }, `${open.progress.checked} of ${open.progress.total} criteria · `, on.length ? h("span", { style: "color:var(--ok)" }, `${on.map((w) => w.name).join(", ")} on it`) : "nobody on it"),
+         o.open.length > 1 ? h("a", { href: `#roadmap/${p.key}`, class: "muted" }, `and ${o.open.length - 1} more open`) : null]
+      : h("span", { class: "muted" }, "no feature open")),
+    cell("Next", o.waits_on_you ? h("span", { class: "v", style: "color:var(--warn)" }, `Waits on you: ${o.waits_on_you}`) : null,
+      next ? h("span", { class: "muted clamp" }, o.waits_on_you ? "Then Ready: " : "Ready: ", h("a", { class: "id", href: `#feature/${next.ref}` }, next.ref), next.title) : h("span", { class: "muted" }, "none Ready yet")),
+    cell("Backlog", b.items
+      ? [h("a", { href: `#triage/${p.key}`, class: "v", onclick: toTriage }, plural(b.items, "item")), h("span", { class: "muted" }, `${plural(b.bugs, "bug")} · oldest ${age(b.oldest)}`)]
+      : h("span", { class: "muted" }, "nothing to triage")));
+}
+
+/** A project whose board is still its supervisor's Backlog.md one: its name and laptop; its roadmap shows the rest. */
+function legacyRow(key) {
+  return h("div", { class: "card prow", dataset: { project: key } },
+    h("div", { class: "pc pname" }, h("a", { href: "#roadmap", onclick: () => (state.project = key) }, key), h("span", { class: "muted" }, laptopsOf(key).join(" · "))),
+    h("div", { class: "pc legacy" }, h("span", { class: "muted" }, "Its board is still on Backlog.md, not in the service yet: its roadmap shows where it stands.")));
 }
 
 // ---------- Triage: a project's backlog items, bugs first (capture 4, 5; spec: Triage) ----------
@@ -1202,8 +1380,8 @@ function viewSessions() {
 
 // ---------- Views ----------
 
-const VIEWS = { now: viewNow, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions };
-const viewName = () => (VIEWS[location.hash.slice(1).split("/")[0]] ? location.hash.slice(1).split("/")[0] : "now");
+const VIEWS = { overview: viewOverview, now: viewNow, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions };
+const viewName = () => (VIEWS[location.hash.slice(1).split("/")[0]] ? location.hash.slice(1).split("/")[0] : "overview");
 
 function render() {
   const v = viewName();
@@ -1216,7 +1394,7 @@ function render() {
   pick.replaceChildren(...keys.map((k) => h("option", { value: k, selected: k === shown || null }, k)));
   // Capture always has a project (Casper, 2026-11-13): only once the service has one.
   $("capture-open").hidden = !svc.projects?.length;
-  $("view").classList.toggle("wide", v === "feature" || v === "roadmap");
+  $("view").classList.toggle("wide", v === "overview" || v === "feature" || v === "roadmap");
   $("view").replaceChildren(...VIEWS[v]().filter(Boolean));
 }
 
@@ -1346,6 +1524,7 @@ function connect() {
           if (svc.roadmaps.has(f.project)) loadRoadmap(f.project);
           if (backlogs.has(f.project)) loadBacklog(f.project);
         }
+        if (ov.rows) loadOverview();
         break;
       case "update":
         state.updates = [f.item, ...state.updates].slice(0, UPDATES_MAX);
