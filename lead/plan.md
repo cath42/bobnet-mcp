@@ -37,7 +37,9 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   "needs the broker with Board migration 2". writeOnce is atomic (inside the write's transactionSync).
   Peach told to accept BOB-5.
 - 02:58:13Z: transient broker socket drop (1006), reconnected 7 s later; not a deploy or restart.
-- Luigi (w_7735afa0): item 0c, dotted ids.
+- Luigi (w_7735afa0): done, a720d5f (0c: dotted ids, Toad's notes 1-2, import findings 3-6 and 9).
+  Finding 5 built as blocking; Peach (w_ spawned 03:06Z) confirms. Finding 7 waits on Picard.
+- Toad (w_17300a34): reviewing a720d5f, plus whether 0b+0c are deploy-ready and Casper's post-deploy checks.
 - rc.30: tagged bd96a94, installed, poe told (m_25706d01). Supervisor only (e221738, b31489a).
 - Toad (w_1b639410): done, 6c52056: all four signed off. Later notes: Luigi (1) --post fetch
   throw/timeout says "it may have taken the import; post again, a 409 means it did", before
