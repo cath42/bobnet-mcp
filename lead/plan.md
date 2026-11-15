@@ -32,7 +32,8 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   throw/timeout says "it may have taken the import; post again, a 409 means it did", before
   BOB-9's post; (2) PeerAddress from address.ts's SEGMENT with the next board.ts change.
   Daisy: `told` is who it was sent to, so the toast says "sent to", not "heard by".
-- Toad (w_d0f0ee00): dotted ids, ADR 0001 §2 + ItemRef, and Luigi's list.
+- Toad (w_d0f0ee00): done, 73a6794 (ADR 0001 amended: §2, §8, §11; Luigi's list in "Dotted ids:
+  what Luigi changes"). Protocol widening left to Luigi: it ships in one commit with the import.
 - Peach (w_61f02f37, w_454eff2a): done, 3d9dfea + 1555dbd (product/bobnet-grants.json; Mario and
   Peach hold `sessions`; dotted ids in product/requirements/migration.md).
 - Luigi (w_07934845): item 0b (R1 op keys + Board migration 2, finding 2, R2; finding 3 if small).
@@ -43,6 +44,12 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
 - Luigi (w_8ca50011): item 0 below.
 
 ## Next, in order
+Order decided 2026-11-15 (Mario): BOB-14 does NOT post until dotted ids are live, so BOB-1.1 stays
+dotted (Casper's choice; a posted project can't be imported again). 0b and dotted ids both need a
+broker deploy: one deploy (Casper's call) + rc.31 carry both, then BOB-14 posts.
+0c. Luigi, right after 0b: dotted ids, one commit, per ADR 0001 "Dotted ids: what Luigi changes"
+   (1-4), with Toad's later notes (--post timeout wording; PeerAddress from SEGMENT). Findings 3-6
+   and 9 of the import review before BOB-9. Toad reviews 0b and 0c.
 0. Luigi, after §7, before BOB-14: Toad's import review findings 1 (--post exits 0 on a refused
    import) and 2 (a --grants file, BOB-14 #7; Mario@mbp-1's '*' read row gets in from a laptop only
    into an empty board, else Casper adds it as owner). Findings 3-9 before BOB-9 or later.
