@@ -28,7 +28,8 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
 
 ## Running
 - Toad (w_1b639410): review 4b10900, 641c730, b31489a, e221738. rc.30 (e221738, b31489a) waits on it.
-- Peach (w_61f02f37): BobNet's --grants file for the BOB-14 pilot.
+- Peach (w_61f02f37): done, 3d9dfea (product/bobnet-grants.json). Finding: Mario lacks `sessions`
+  (ADR 0001: close_session is the lead's or session PO's); Peach w_454eff2a fixes it and records dotted ids.
 - Luigi (w_07934845): item 0b (R1 op keys + Board migration 2, finding 2, R2; finding 3 if small).
 - Toad (w_39a3303d): done, d64d65b (architecture/reviews/2026-11-14-backlog-import-review.md).
 - Peach (w_bf298cca): done, 9e6c4d1 (product/requirements/migration.md "Import answers").
@@ -55,7 +56,8 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
 
 ## Waiting on Casper
 - The next broker deploy: Board migration 2 once 0b lands.
-- Task ids on import: flat renumbering with the old id as an alias, or dotted ids kept. Mario
-  leans dotted; Toad recommends dotted for imported ids, LAND-n for new ones, ItemRef widened
-  additively (the review's "If Casper picks dotted ids" section). If dotted: Toad amends ADR 0001 §2 and ItemRef, Luigi changes store and import
-  before BOB-9.
+- Board admin: should anyone besides the owner get `admin`? Peach's grants give none (asked 2026-11-15).
+
+## Decided by Casper
+- 2026-11-15: imported task ids keep their dotted form. Next: Toad amends ADR 0001 §2 and ItemRef
+  (after w_1b639410's review), then Luigi changes store and import, before BOB-9. Peach records it.
