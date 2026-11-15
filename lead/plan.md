@@ -43,7 +43,17 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   Needed-before, #4's answer UI with Undo + one key per answer, #5 allow/deny, #6 counts, phone shots).
 - Luigi (w_2bb286e8): BOB-2 rest: (a) close_release + undo, (b) step 4 view data, (c) CI runs.
   The broker deploy is pinned to the 0c commit Toad signs off; BOB-2 lands don't ride it.
-- Toad (w_17300a34): reviewing a720d5f, plus whether 0b+0c are deploy-ready and Casper's post-deploy checks.
+- Toad (w_17300a34): signed off a720d5f (architecture/reviews/2026-11-14-dotted-ids-review.md, 167c07a).
+  Deploy-ready: e12cdc8 -> a720d5f broker/protocol src is only 0b + 0c (Board migration 2, op key,
+  told, widened ItemRef); no Broker migrations, no new DO class.
+- rc.31: tagged 15ea0a3 (= a720d5f + docs + versions), installed at ~/.local/share/bobnet/v2.0.0-rc.31.
+  NOT announced to poe until the broker deploy is done. Waiting on Casper's go for the deploy, from
+  the v2.0.0-rc.31 tag.
+  After the deploy: (1) every supervisor peer on both laptops reconnects, no "could not report"
+  (re-check after a couple of minutes); (2) GET /v1/board/export as the owner answers 200, version 1
+  (runs migration 2); (3) wrangler version id into this plan. Then poe: rc.31 on both supervisors.
+  BOB-14 then: Peach's --grants (product/bobnet-grants.json), no --questions (lead/questions.md
+  doesn't exist), dry run at the commit posted, then --post.
 - rc.30: tagged bd96a94, installed, poe told (m_25706d01). Supervisor only (e221738, b31489a).
 - Toad (w_1b639410): done, 6c52056: all four signed off. Later notes: Luigi (1) --post fetch
   throw/timeout says "it may have taken the import; post again, a 409 means it did", before
