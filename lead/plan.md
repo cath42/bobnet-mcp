@@ -9,7 +9,7 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   on each supervisor register by the new code (inferred, the DO table isn't readable from here).
 - poe's channel clients show client null: they run the rc.19 client (BOB-16 shipped in rc.29).
   Expected, not a blocker. Moving poe's MCP entry to rc.29's client is Casper's config, via poe.
-- Waiting for the hold to lift (poe or Casper), then "Next, in order" and rc.30.
+- Hold lifted by poe (m_0917c4c4, ~02:45Z). Post-deploy work spawned (see Running).
 
 ## After the rc.29 restart: checks (sent to poe)
 - (a) versions: FAIL. Every peer has `client: null`: all registered with the old broker code.
@@ -27,6 +27,9 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   (poe) and ubu1's (poe@ubu1). poe's own sessions too. Then (a) shows versions and (b) pins.
 
 ## Running
+- Toad (w_1b639410): review 4b10900, 641c730, b31489a, e221738. rc.30 (e221738, b31489a) waits on it.
+- Peach (w_61f02f37): BobNet's --grants file for the BOB-14 pilot.
+- Luigi (w_07934845): item 0b (R1 op keys + Board migration 2, finding 2, R2; finding 3 if small).
 - Toad (w_39a3303d): done, d64d65b (architecture/reviews/2026-11-14-backlog-import-review.md).
 - Peach (w_bf298cca): done, 9e6c4d1 (product/requirements/migration.md "Import answers").
 - Luigi (w_92cfd796): done, f34a0f2 (§7 service side) and 6724d0e (#12 test); no migrations.
