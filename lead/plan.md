@@ -124,7 +124,16 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   evidence in; AC 5, DoD 2, 4 wait on rc.34. Live look wanted: Waits on you + Needs you on a phone.
 - Daisy w_a39671d2 (1ac53a2): BOB-5 accepted with 7 small changes; no Undo for a permission, note only
   with Deny, Now leaves the tabs (CI line under Working now). Luigi w_a54cca4d builds them; deploy from
-  his hash. Her two Toad points (decided-permission record, Allow note delivery) captured as BOB-29. Then: deploy (BOB-4 + BOB-26 dashboard, or with BOB-5), rc.34.
+  his hash. Her two Toad points (decided-permission record, Allow note delivery) captured as BOB-29.
+- Luigi 04bf33f: Daisy's BOB-5 1-7 (Now tab gone, CI line under Working now). Broker DEPLOYED (11th)
+  16:37:50Z from v2 f83f88a: Version ID aa8d5972-9088-4e1c-b194-8347a33b9356. Daisy w_de986ce0 checks shots.
+- 16:38Z: mbp-1 still on rc.32; outbox 374 board_op rows and growing. Waiting on poe's rc.34 restart.
+## Release-1 close: what's left
+- rc.34 live (poe) -> outbox drains -> BOB-10 AC 5 (worker's close_session description), BOB-4 AC 5-7
+  live data; close the open sessions (after the drain).
+- Q-1 (Casper): BOB-3 AC 8. Casper's live look: gates, Triage, Feature, Waits on you, Overview (phone + desktop).
+- BOB-14 AC 2, 7 and BOB-2 AC 11: the nightly backup (board.json) on mbp-1.
+- BOB-9 (Helix's move) is in R1 but at Picard's date: NOT part of Casper's release-1 brief (views + service). Then: deploy (BOB-4 + BOB-26 dashboard, or with BOB-5), rc.34.
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
