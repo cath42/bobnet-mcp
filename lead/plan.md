@@ -20,6 +20,11 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   removed, product/BOARD.md); AC 1, 3, 4, 6 checked; AC 2, 5, 7 open (7 at the nightly backup).
   BOB-2 accepted bar AC 5 (feature progress = own ac + tasks'; Luigi in BOB-7), AC 10 (Helix-sized
   board test: Luigi after BOB-7), AC 11 (= BOB-14 AC 7).
+- Luigi w_9ff16006 done, BOB-7 at 01cddfd (5c3086c progress fix + tests, gates UI on the Roadmap
+  tab; shots packages/broker/test-ui/shots/bob7-*). Broker deploy needed, no release, no migration.
+  Mario read the store diff: OK. Toad w_080605d6 reviews; Daisy w_1f97dcec rules on gaps 1, 2.
+  Deploy after Toad's sign-off; then Peach accepts BOB-7.
+- Luigi w_6a83777e: BOB-8 (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
   BOB-7, BOB-8, BOB-10, BOB-3, BOB-4, BOB-5. Toad reviews each; broker deploy after each review.
 
