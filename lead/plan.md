@@ -93,6 +93,9 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - Luigi w_53a2f2f6 done: BOB-26 at 6d4ef04 (expireOrphans: no session / role gone / resumed later /
   >24h, audited, deny without resume; dashboard doesn't offer a stale laptop's requests). Mario read
   the supervisor diff: OK. Added to Toad w_f6528678's review. Needs rc.34 + broker deploy.
+- Toad (37cba11): BOB-4 MAJOR before deploy: run ctx on every board_get (~10-20k tokens per MCP call);
+  fix get {ctx?: boolean}. BOB-26 signed off; minor 6 (stale rule uses browser clock). Both sent to
+  Luigi as one commit ahead of BOB-5; deploy from its hash. Minors 2-4 after BOB-5.
 - Luigi w_b7d5a605: BOB-5 (last view). Then: deploy (BOB-4 + BOB-26 dashboard, or with BOB-5), rc.34.
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
