@@ -4,7 +4,7 @@ title: Move Helix's board off Backlog.md into the service
 status: Ready
 assignee: []
 created_date: '2026-11-14 04:24'
-updated_date: '2026-11-14 15:05'
+updated_date: '2026-11-15 00:31'
 labels: []
 milestone: m-0
 dependencies:
@@ -47,3 +47,9 @@ Capability 9, product/requirements/migration.md: a one-off import of Helix's who
 <!-- SECTION:PLAN:BEGIN -->
 Needs BOB-2, BOB-7 and BOB-8 in the broker, BOB-14 (BobNet's own board moves first as the pilot, Casper 2026-11-14), and Picard's date. Picard's answers (2026-11-14) are in migration.md. Release 1.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Import answers 2026-11-14 (migration.md): references go to notes, assignee and priority dropped pending Picard; the open feature is the one In Progress at cut-over (an imported session), none invented. Picard asked about R1 closed, containers, which feature is open, land-23.7 invalid YAML.
+<!-- SECTION:NOTES:END -->

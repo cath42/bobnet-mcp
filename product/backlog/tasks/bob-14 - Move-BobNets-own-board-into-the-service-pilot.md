@@ -4,7 +4,7 @@ title: Move BobNet's own board into the service (pilot)
 status: Ready
 assignee: []
 created_date: '2026-11-14 16:33'
-updated_date: '2026-11-14 16:33'
+updated_date: '2026-11-15 00:31'
 labels: []
 milestone: m-0
 dependencies:
@@ -30,6 +30,8 @@ Casper, 2026-11-14 (\"2. Yes\"): BobNet's own board moves first, as the pilot, t
 - [ ] #3 One cut-over, agreed by Peach and Mario; nothing is written to both. After it, product/backlog and backlog.config.yml are removed from the repo with a pointer to the service, and CLAUDE.md files and role instructions point to the MCP tools the same day. Evidence: the cut-over commits
 - [ ] #4 Peach reads and writes BobNet's board through the MCP tools only, and a builder's status write is refused with its reason. Evidence: a session's tool calls and the refusal
 - [ ] #5 Items' history before the move stays in git; the service's starts at the move. Evidence: dashboard check
+- [ ] #6 The import appends an item's references to its notes as a References list; BobNet's 25 come over, assignee and priority are dropped by design. Evidence: test and count check (migration.md, Import answers)
+- [ ] #7 The import seeds a '*' read grant for Mario@mbp-1, so the nightly backup on mbp-1 exports the whole board. Evidence: the backup's board.json holds BobNet's items
 <!-- AC:END -->
 
 ## Definition of Done
