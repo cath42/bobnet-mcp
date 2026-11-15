@@ -1,7 +1,15 @@
 # Plan (Mario)
 
-Updated 2026-11-15 02:50Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41cbc1dc, live
-02:33:23Z); mbp-1's supervisor on rc.29 since 02:34:28Z (pid 36994); ubu1 on rc.29.
+Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41cbc1dc, live
+02:33:23Z); mbp-1's supervisor on rc.29 since 02:42:28Z (pid 48318); ubu1 on rc.29.
+
+## Fully deployed: YES (sent to poe, m_9aa3f32c)
+- After poe's re-registration restart (02:42Z): every supervisor peer on both laptops carries
+  client @bobnet/supervisor 2.0.0-rc.29; no "could not report" since 02:42:28Z; the pin is written
+  on each supervisor register by the new code (inferred, the DO table isn't readable from here).
+- poe's channel clients show client null: they run the rc.19 client (BOB-16 shipped in rc.29).
+  Expected, not a blocker. Moving poe's MCP entry to rc.29's client is Casper's config, via poe.
+- Waiting for the hold to lift (poe or Casper), then "Next, in order" and rc.30.
 
 ## After the rc.29 restart: checks (sent to poe)
 - (a) versions: FAIL. Every peer has `client: null`: all registered with the old broker code.
