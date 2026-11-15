@@ -618,6 +618,27 @@ describe("questions (ADR 0001 §7)", () => {
     expect(await sent(agent("Picard"), { op: "record_answer", project: "helix", ref: "Q-4", words: "No" })).toEqual([]);
   });
 
+  it("sends an answer from conversation to whoever waits on it, never to the recorder", async () => {
+    await asked();
+    await ok(owner, { op: "grant", project: "helix", agent: "Riker", role: "session PO", read: true, items: "open_feature", fields: [], questions: true });
+    await ok(agent("Riker"), { op: "ask", project: "helix", text: "Ship it?", options: [{ key: "y", text: "Yes" }] });
+
+    // The lead records Casper's answer to Riker's question: Riker hears, the lead doesn't.
+    const reply = await call(agent("Picard"), { op: "record_answer", project: "helix", ref: "Q-2", key: "y", words: "Ship it Friday" });
+    if (!reply.ok) throw new Error(reply.message);
+    expect(reply.result).toMatchObject({ told: ["Riker@mbp-1"] });
+    const [note, ...more] = reply.messages;
+    expect(more).toEqual([]);
+    expect(note!.to).toEqual(["Riker@mbp-1"]);
+    expect(note!.body).toContain("Casper answered Q-2 (helix), in conversation, recorded by Picard@mbp-1: Ship it?");
+    expect(note!.body).toContain("Option y: Yes");
+    expect(note!.body).toContain("His words: Ship it Friday");
+    // Riker records the lead's question: the lead hears.
+    const [toLead] = await sent(agent("Riker"), { op: "record_answer", project: "helix", ref: "Q-1", words: "Bars" });
+    expect(toLead!.to).toEqual(["Picard@mbp-1"]);
+    expect(toLead!.body).toContain("recorded by Riker@mbp-1");
+  });
+
   it("undoes the owner's answer within two minutes: the question reopens, the history keeps it, the lead hears", async () => {
     await asked();
     const { seq } = await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a", words: "Bars" });
@@ -688,6 +709,64 @@ describe("questions (ADR 0001 §7)", () => {
     const session = await join(f1).then(() => ({ feature: f1, kind: "build" as const, label: "1" }));
     await ok(owner, { op: "ask", project: "helix", text: "Go?", holds_sessions: [session, session] });
     expect((await ok(owner, { op: "get", project: "helix", ref: "Q-1" })).question!.holds_sessions).toEqual([session]);
+  });
+});
+
+describe("operation keys (ADR 0001 §12)", () => {
+  const keyed = async (caller: BoardCaller, op: BoardOpInput, key: string) => (await board().apply(caller, op, key)) as unknown as BoardReply;
+  const backlog = async () => (await ok(owner, { op: "list", project: "helix", of: "backlog" })).total;
+
+  it("writes a keyed write once, and answers its repeat with the first reply", async () => {
+    await helix();
+    const create = { op: "create", project: "helix", kind: "backlog", type: "bug", title: "Slow chart" } as const;
+    const first = await keyed(owner, create, "k-1");
+    expect(first).toMatchObject({ ok: true, result: { ref: expect.any(String) } });
+    expect(await keyed(owner, create, "k-1")).toEqual(first);
+    expect(await backlog()).toBe(1);
+    // Without a key, a write is made as often as it is sent.
+    await ok(owner, create);
+    expect(await backlog()).toBe(2);
+  });
+
+  it("replays an answer's messages, so a reply lost after the commit still tells the lead", async () => {
+    await helix();
+    await helixRules();
+    await ok(agent("Picard"), { op: "ask", project: "helix", text: "Which chart?", options: [{ key: "a", text: "Bars" }] });
+    const answer = { op: "answer_question", project: "helix", ref: "Q-1", key: "a" } as const;
+    const first = await keyed(owner, answer, "k-2");
+    expect(first).toMatchObject({ ok: true, messages: [{ to: ["Picard@mbp-1"] }] });
+    expect(await keyed(owner, answer, "k-2")).toEqual(first);
+    // A new key is a new answer, which is written once.
+    expect(await keyed(owner, answer, "k-3")).toMatchObject({ ok: false, code: "conflict" });
+  });
+
+  it("refuses a key used by another actor or for another op", async () => {
+    await helix();
+    await helixRules();
+    await keyed(owner, { op: "create", project: "helix", kind: "backlog", type: "bug", title: "One" }, "k-4");
+    expect(await keyed(agent("Picard"), { op: "create", project: "helix", kind: "backlog", type: "bug", title: "One" }, "k-4")).toMatchObject({ ok: false, code: "invalid" });
+    expect(await keyed(owner, { op: "create_release", project: "helix", title: "R2" }, "k-4")).toMatchObject({ ok: false, code: "invalid" });
+    expect(await backlog()).toBe(1);
+  });
+
+  it("keeps no key for a refused write, and forgets keys after a day", async () => {
+    await helix();
+    const bad = { op: "create", project: "helix", kind: "task", type: "task", title: "Orphan", parent: "LAND-99" } as const;
+    expect(await keyed(owner, bad, "k-5")).toMatchObject({ ok: false, code: "invalid" });
+    expect(await keyed(owner, bad, "k-5")).toMatchObject({ ok: false, code: "invalid" });
+    await runInDurableObject(board(), (_, state) => {
+      expect(state.storage.sql.exec("SELECT count(*) AS n FROM op_keys WHERE key = 'k-5'").one().n).toBe(0);
+    });
+
+    const create = { op: "create", project: "helix", kind: "backlog", type: "bug", title: "Again" } as const;
+    await keyed(owner, create, "k-6");
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 25 * 60 * 60 * 1000 });
+    try {
+      await keyed(owner, create, "k-6");
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await backlog()).toBe(2);
   });
 });
 

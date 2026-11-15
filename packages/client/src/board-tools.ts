@@ -46,7 +46,7 @@ function checked(op: Record<string, unknown>): BoardOpInput {
 
 /** What a frame leaves a close's handoff text: the frame less the rest of the op, with room for the frame's own fields and a ctx. */
 export function handoffBudget(op: Record<string, unknown>): number {
-  const rest = Buffer.byteLength(JSON.stringify({ t: "board_op", rid: "0000000000", as: "x".repeat(32), op: { ...op, handoff: { path: (op["handoff"] as { path: string }).path, text: "" } } }));
+  const rest = Buffer.byteLength(JSON.stringify({ t: "board_op", rid: "0000000000", as: "x".repeat(32), key: "x".repeat(40), op: { ...op, handoff: { path: (op["handoff"] as { path: string }).path, text: "" } } }));
   return LIMITS.frameBytes - rest - 2 * 1024;
 }
 

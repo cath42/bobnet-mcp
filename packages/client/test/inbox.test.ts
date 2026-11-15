@@ -57,6 +57,14 @@ describe("Inbox", () => {
     expect(event!.content).toContain("Cross-team");
   });
 
+  it("says a message is the board's, with no reply and no cross-team note", () => {
+    const { event } = inbox().receive({ t: "deliver", to: "Mario@mbp-1", wake: true, msg: msg({ from: "BobNet@board", laptop: "board", team: null }) });
+    expect(event!.meta).not.toHaveProperty("cross_team");
+    expect(event!.content).not.toContain("Cross-team");
+    expect(event!.content).toContain("From the BobNet board");
+    expect(event!.content).toContain("it takes no reply");
+  });
+
   it("drops redeliveries but still acks them", () => {
     const i = inbox();
     const f = { t: "deliver" as const, to: "Mario@mbp-1", wake: true, msg: msg() };

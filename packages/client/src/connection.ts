@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  BOARD_READS,
   type BoardCtx,
   type BoardOpInput,
   type BoardResults,
@@ -23,6 +24,10 @@ const BACKOFF_MAX_MS = 30_000;
 const REREGISTER_EVERY_MS = 5_000;
 /** How long a board operation waits for the broker before it fails (ADR 0001 §12). */
 export const BOARD_WAIT_MS = 60_000;
+/** Failures after which a board operation is sent again, a write with its key (§12). */
+const RESENT: readonly BrokerError["code"][] = ["disconnected", "timeout", "unavailable"];
+/** The pause before resending when the broker is up but the board isn't. */
+const RESEND_AFTER_MS = 2_000;
 
 export type RequestFrame = ClientFrame extends infer F ? (F extends { rid: string } ? Omit<F, "rid"> : never) : never;
 export type PushFrame = Extract<ServerFrame, { t: "deliver" | "presence" | "action" }>;
@@ -128,15 +133,34 @@ export class BrokerConnection {
 
   /**
    * One board operation as a peer this connection hosts. It waits up to `waitMs` for the broker,
-   * then fails saying since when the board has been unavailable, for the agent to retry.
+   * then fails saying since when the board has been unavailable, for the agent to retry. A write
+   * gets a key, so a drop, a timeout or an unavailable board is resent within the wait (ADR 0001
+   * §12): the board answers a repeat with the first reply, so the agent sees the result or
+   * "unavailable", never "may have committed".
    */
   async boardOp<K extends keyof BoardResults>(as: string, op: BoardOpInput & { op: K }, ctx?: BoardCtx, waitMs = BOARD_WAIT_MS): Promise<BoardResults[K]> {
-    try {
-      await this.whenReady(waitMs);
-    } catch {
-      throw new BrokerError("unavailable", `the board is unavailable since ${(this.downSince ?? new Date()).toISOString()}; wait and retry`);
+    const until = Date.now() + waitMs;
+    const key = BOARD_READS.includes(op.op) ? undefined : randomUUID();
+    const frame = { t: "board_op", as, ...(ctx ? { ctx } : {}), ...(key ? { key } : {}), op } as RequestFrame;
+    let since: Date | null = null;
+    const unavailable = () => new BrokerError("unavailable", `the board is unavailable since ${(this.downSince ?? since ?? new Date()).toISOString()}; wait and retry`);
+    for (;;) {
+      try {
+        await this.whenReady(Math.max(0, until - Date.now()));
+      } catch {
+        throw unavailable();
+      }
+      try {
+        return await this.sendRequest<BoardResults[K]>(frame);
+      } catch (err) {
+        if (!(err instanceof BrokerError) || !RESENT.includes(err.code)) throw err;
+        since ??= new Date();
+        // Still connected: the broker or the board said no for now, so pause before the resend.
+        const left = until - Date.now();
+        if (this.ready && left > RESEND_AFTER_MS) await new Promise((r) => setTimeout(r, RESEND_AFTER_MS).unref());
+        else if (this.ready || left <= 0) throw unavailable();
+      }
     }
-    return this.sendRequest<BoardResults[K]>({ t: "board_op", as, ...(ctx ? { ctx } : {}), op } as RequestFrame);
   }
 
   get connected(): boolean {

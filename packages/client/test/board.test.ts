@@ -29,7 +29,7 @@ const until = async (cond: () => boolean, ms = 3000) => {
 const queued = (d: string) => readdirSync(d).filter((n) => n.endsWith(".json"));
 
 /** A broker that answers registers, and board_op with what `board` says. */
-function fakeBroker(board: (op: Record<string, unknown>) => { ok: unknown } | { code: string; message: string } = () => ({ ok: {} }), port = 0) {
+function fakeBroker(board: (op: Record<string, unknown>) => { ok: unknown } | { code: string; message: string } | { drop: true } = () => ({ ok: {} }), port = 0) {
   const wss = new WebSocketServer({ port });
   const ops: Array<Record<string, unknown>> = [];
   const sockets = new Set<import("ws").WebSocket>();
@@ -44,7 +44,8 @@ function fakeBroker(board: (op: Record<string, unknown>) => { ok: unknown } | { 
       if (f["t"] === "board_op") {
         ops.push(f);
         const r = board(f["op"] as Record<string, unknown>);
-        if ("ok" in r) send({ t: "ok", rid, result: r.ok } as ServerFrame);
+        if ("drop" in r) ws.terminate();
+        else if ("ok" in r) send({ t: "ok", rid, result: r.ok } as ServerFrame);
         else send({ t: "error", rid, code: r.code, message: r.message } as ServerFrame);
       }
     });
@@ -131,6 +132,55 @@ describe("a board operation while the broker is away", () => {
       message: expect.stringMatching(/^the board is unavailable since \d{4}-\d\d-\d\dT.*; wait and retry$/),
     });
     expect(Date.now() - t0).toBeGreaterThanOrEqual(190);
+  });
+});
+
+describe("a write the connection resends with its key (ADR 0001 §12)", () => {
+  async function connected(board: Parameters<typeof fakeBroker>[0]) {
+    const broker = fakeBroker(board);
+    cleanup.push(broker.close);
+    const conn = new BrokerConnection({ url: broker.url, credentials: { clientId: "x", clientSecret: "y" }, log: quiet, onPush() {}, WebSocketImpl: WsImpl });
+    conn.start();
+    cleanup.push(() => conn.stop());
+    await conn.register({ name: "Luigi" });
+    return { broker, conn };
+  }
+  const create = { op: "create", project: "helix", kind: "backlog", type: "bug", title: "Slow" } as const;
+
+  it("resends a write dropped in flight, under the same key, and answers its result", async () => {
+    let sends = 0;
+    const { broker, conn } = await connected((op) => (op["op"] === "create" && ++sends === 1 ? { drop: true } : { ok: { ref: "LAND-4", seq: 1 } }));
+    await expect(conn.boardOp("Luigi", create)).resolves.toEqual({ ref: "LAND-4", seq: 1 });
+    const writes = broker.ops.filter((o) => (o["op"] as { op: string }).op === "create");
+    expect(writes).toHaveLength(2);
+    expect(writes[0]!["key"]).toEqual(expect.any(String));
+    expect(writes[1]!["key"]).toBe(writes[0]!["key"]);
+    // Each write gets its own key; a read gets none.
+    await conn.boardOp("Luigi", create);
+    expect(broker.ops.at(-1)!["key"]).not.toBe(writes[0]!["key"]);
+    await conn.boardOp("Luigi", { op: "projects" });
+    expect(broker.ops.at(-1)).not.toHaveProperty("key");
+  }, 10_000);
+
+  it("resends while the board is unavailable, then fails as unavailable once the wait is spent", async () => {
+    let up = false;
+    const { broker, conn } = await connected(() => (up ? { ok: { ref: "LAND-5", seq: 2 } } : { code: "unavailable", message: "The board can't be reached; retry" }));
+    setTimeout(() => (up = true), 1000).unref();
+    await expect(conn.boardOp("Luigi", create, undefined, 5000)).resolves.toEqual({ ref: "LAND-5", seq: 2 });
+    expect(new Set(broker.ops.map((o) => o["key"])).size).toBe(1);
+    expect(broker.ops).toHaveLength(2);
+
+    up = false;
+    await expect(conn.boardOp("Luigi", create, undefined, 3000)).rejects.toMatchObject({
+      code: "unavailable",
+      message: expect.stringMatching(/^the board is unavailable since \d{4}-.*; wait and retry$/),
+    });
+  }, 15_000);
+
+  it("doesn't resend a refusal", async () => {
+    const { broker, conn } = await connected(() => ({ code: "conflict", message: "Q-1 is answered already" }));
+    await expect(conn.boardOp("Luigi", create)).rejects.toMatchObject({ code: "conflict" });
+    expect(broker.ops).toHaveLength(1);
   });
 });
 

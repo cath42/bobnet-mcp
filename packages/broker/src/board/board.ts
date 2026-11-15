@@ -23,14 +23,19 @@ export class Board extends DurableObject<Env> {
     this.store = new BoardStore(sql);
   }
 
-  /** One operation. A write and its events commit together, or not at all. */
-  async apply(caller: BoardCaller, input: unknown): Promise<BoardReply> {
+  /**
+   * One operation. A write and its events commit together, or not at all. A write with a `key` is made
+   * once per key: its repeat answers the first reply (§12).
+   */
+  async apply(caller: BoardCaller, input: unknown, key?: string): Promise<BoardReply> {
     const parsed = BoardOp.safeParse(input);
     if (!parsed.success) return { ok: false, code: "invalid", message: parsed.error.issues[0]?.message ?? "Invalid operation" };
     const op = parsed.data;
     try {
       if (isRead(op)) return { ok: true, result: this.store.read(caller, op), changed: null, messages: [] };
-      const { result, changed, messages } = this.ctx.storage.transactionSync(() => this.store.write(caller, op));
+      const { result, changed, messages } = this.ctx.storage.transactionSync(() =>
+        key === undefined ? this.store.write(caller, op) : this.store.writeOnce(caller, op, key),
+      );
       return { ok: true, result, changed, messages };
     } catch (err) {
       if (err instanceof BoardError) return { ok: false, code: err.code, message: err.message };

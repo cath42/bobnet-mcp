@@ -373,9 +373,17 @@ export const AckFrame = z.object({
 
 /**
  * A board operation (ADR 0001 §8). A laptop makes it `as` a peer it hosts, and a supervisor adds
- * `ctx` for the worker it speaks for; the owner's socket names no peer.
+ * `ctx` for the worker it speaks for; the owner's socket names no peer. A write's `key`, made once
+ * per write, lets it be resent: the board answers a repeat with the first reply (§12).
  */
-export const BoardOpFrame = z.object({ t: z.literal("board_op"), rid, as: segment.optional(), ctx: BoardCtx.optional(), op: BoardOp });
+export const BoardOpFrame = z.object({
+  t: z.literal("board_op"),
+  rid,
+  as: segment.optional(),
+  ctx: BoardCtx.optional(),
+  key: z.string().min(1).max(40).optional(),
+  op: BoardOp,
+});
 
 export const ClientFrame = z.discriminatedUnion("t", [
   RegisterFrame,

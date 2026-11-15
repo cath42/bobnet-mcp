@@ -369,4 +369,16 @@ export const BOARD_MIGRATIONS: readonly string[] = [
   CREATE TRIGGER event_changes_no_update BEFORE UPDATE ON event_changes BEGIN SELECT RAISE (ABORT, 'events are never changed'); END;
   CREATE TRIGGER event_changes_no_delete BEFORE DELETE ON event_changes BEGIN SELECT RAISE (ABORT, 'events are never deleted'); END;
   `,
+  // 2: a write's operation key (§12), so a resent write gets its first reply and writes nothing.
+  // `reply` is a cached wire reply, not board data: returned as it is, never exported or queried.
+  `
+  CREATE TABLE op_keys (
+    key   TEXT PRIMARY KEY,
+    actor TEXT NOT NULL,                     -- who made the write, as its events name them
+    op    TEXT NOT NULL,
+    at    TEXT NOT NULL,
+    reply TEXT NOT NULL
+  );
+  CREATE INDEX op_keys_at ON op_keys (at);
+  `,
 ];

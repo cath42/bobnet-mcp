@@ -366,7 +366,7 @@ export class Broker extends DurableObject<Env> {
     let reply: BoardReply;
     try {
       // RPC's types can't carry an `unknown` result; the reply is the protocol's.
-      reply = (await this.env.BOARD.getByName(BOARD).apply(caller, frame.op)) as unknown as BoardReply;
+      reply = (await this.env.BOARD.getByName(BOARD).apply(caller, frame.op, frame.key)) as unknown as BoardReply;
     } catch (err) {
       reply = { ok: false, code: "unavailable", message: `The board can't be reached (${err instanceof Error ? err.message : String(err)}); retry` };
     }

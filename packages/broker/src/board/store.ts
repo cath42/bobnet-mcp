@@ -34,6 +34,8 @@ const PAGE = 100;
 const ORD_STEP = 1000;
 /** How long Casper may take back his dashboard answer (§7: the toast's Undo). */
 const UNDO_MS = 2 * 60 * 1000;
+/** How long a write's operation key is kept (§12). */
+const OP_KEY_MS = 24 * 60 * 60 * 1000;
 
 type Op<K extends BoardOp["op"]> = Extract<BoardOp, { op: K }>;
 /** What a write answers: its record and event, and what the operation adds. */
@@ -406,6 +408,25 @@ export class BoardStore {
     const result = this.apply(tx, op);
     if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null, messages: [] };
     return { result, changed: { project: tx.projectKey ?? "*", seq: tx.seqs.at(-1)!, refs: [...tx.refs] }, messages: tx.messages };
+  }
+
+  /**
+   * A write with an operation key (§12): once per key. A repeat by the same actor and op answers the
+   * first reply, messages included, and writes nothing; keys last a day. A refused write rolls back,
+   * key and all, so its retry is refused again.
+   */
+  writeOnce(caller: BoardCaller, op: Exclude<BoardOp, Op<"projects" | "list" | "get" | "grants">>, key: string): ReturnType<BoardStore["write"]> {
+    const at = new Date();
+    this.sql.exec("DELETE FROM op_keys WHERE at < ?", new Date(at.getTime() - OP_KEY_MS).toISOString());
+    const actor = whoOf(caller);
+    const had = this.sql.exec<{ actor: string; op: string; reply: string }>("SELECT actor, op, reply FROM op_keys WHERE key = ?", key).toArray()[0];
+    if (had) {
+      if (had.actor !== actor || had.op !== op.op) throw new BoardError("invalid", `Operation key ${key} is another write's`);
+      return JSON.parse(had.reply) as ReturnType<BoardStore["write"]>;
+    }
+    const reply = this.write(caller, op);
+    this.sql.exec("INSERT INTO op_keys (key, actor, op, at, reply) VALUES (?, ?, ?, ?, ?)", key, actor, op.op, at.toISOString(), JSON.stringify(reply));
+    return reply;
   }
 
   private apply(tx: Tx, op: Exclude<BoardOp, Op<"projects" | "list" | "get" | "grants">>): Written {
@@ -1121,7 +1142,7 @@ export class BoardStore {
   }
 
   /** Casper's answer given in conversation, recorded by the lead or PO (§7): write-once, his words verbatim. */
-  private recordAnswer(tx: Tx, op: Op<"record_answer">): BoardWritten {
+  private recordAnswer(tx: Tx, op: Op<"record_answer">): BoardWritten & { told: string[] } {
     const p = tx.project(this.project(op.project));
     this.rules.requireFlag(tx.caller, p, "questions");
     const q = this.question(p, op.ref);
@@ -1140,7 +1161,15 @@ export class BoardStore {
       q.pk,
     );
     const changes: Change[] = [["state", "open", state], ["answer_key", null, op.key], ["answer_words", null, op.words], ["answered_via", null, "conversation"]];
-    return { ref: q.ref, seq: tx.event("record_answer", "questions", q.pk, q.ref, changes) };
+    const seq = tx.event("record_answer", "questions", q.pk, q.ref, changes);
+    // Whoever waits on it hears, so nobody has to remember to forward it; the recorder knows.
+    const lines = [`Casper answered ${q.ref} (${p.key}), in conversation, recorded by ${tx.who}: ${q.text}`];
+    if (op.key !== undefined) {
+      const option = this.option(q, op.key);
+      lines.push(`Option ${option.key}: ${option.text}`);
+    }
+    lines.push(`His words: ${op.words}`);
+    return { ref: q.ref, seq, told: this.notify(tx, p, q, lines.join("\n"), tx.caller) };
   }
 
   /** Casper's answer from the dashboard (§7): write-once, the owner's alone, and the lead hears it. */
@@ -1232,13 +1261,17 @@ export class BoardStore {
     return { ref: q.ref, seq, told: this.notify(tx, p, q, lines.join("\n")) };
   }
 
-  /** The board's message about a question (§7): to the project's lead, and to whoever asked if that is someone else. Whom it went to. */
-  private notify(tx: Tx, p: ProjectRow, q: QuestionRow, body: string): string[] {
+  /**
+   * The board's message about a question (§7): to the project's lead, and to whoever asked if that is
+   * someone else, never to `except`, who made the write. Whom it went to.
+   */
+  private notify(tx: Tx, p: ProjectRow, q: QuestionRow, body: string, except?: BoardCaller): string[] {
     const to = new Map<string, string>();
+    const skip = except?.kind === "agent" ? addressKey({ name: except.name, laptop: except.laptop }) : null;
     for (const raw of [p.lead, q.asked_by]) {
       // asked_by is an email when the owner asked: not an address, and he knows.
       const addr = raw?.includes("@") ? parseRecipient(raw, "") : null;
-      if (addr && !to.has(addressKey(addr))) to.set(addressKey(addr), raw!);
+      if (addr && addressKey(addr) !== skip && !to.has(addressKey(addr))) to.set(addressKey(addr), raw!);
     }
     if (to.size > 0) tx.messages.push({ to: [...to.values()], body });
     return [...to.values()];
@@ -1645,6 +1678,11 @@ export class BoardStore {
 }
 
 /** One write's caller, time and events. */
+/** A caller as the history names them: the owner's email, or an agent's address. */
+function whoOf(caller: BoardCaller): string {
+  return caller.kind === "owner" ? caller.email : `${caller.name}@${caller.laptop}`;
+}
+
 class Tx {
   readonly at = new Date().toISOString();
   readonly seqs: number[] = [];
@@ -1663,7 +1701,7 @@ class Tx {
 
   /** Who, as the history names them. */
   get who(): string {
-    return this.caller.kind === "owner" ? this.caller.email : `${this.caller.name}@${this.caller.laptop}`;
+    return whoOf(this.caller);
   }
 
   inSession(pk: number): void {

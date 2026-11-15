@@ -765,6 +765,17 @@ describe("BobNet messages", () => {
     expect(broker.acks).toContainEqual({ as: "Bill", ids: ["m_x1"] });
   });
 
+  it("hands a message from the board over as the board's, with no reply asked", async () => {
+    const { sup, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    sup.onPush({ t: "deliver", to: "Bill@mbp-1", wake: true, msg: msg({ id: "m_b1", from: "BobNet@board", laptop: "board", team: null, body: "Casper answered Q-1" }) });
+    await until(() => sessions[0]!.inputs.length === 2);
+    expect(sessions[0]!.inputs[1]).toMatch(/^\[BobNet\] Message from the board, BobNet@board \(message_id m_b1\)/);
+    expect(sessions[0]!.inputs[1]).toContain("it takes no reply");
+    expect(sessions[0]!.inputs[1]).not.toContain("Reply with send_message");
+  });
+
   it("keeps a message for an idle role, says so once in an update (no wake), and gives it to the next worker", async () => {
     const { sup, broker, sessions } = await setup();
     sup.onPush({ t: "deliver", to: "Bill@mbp-1", wake: true, msg: msg() });

@@ -549,8 +549,8 @@ export interface BoardResults {
   capture: BoardWritten & { duplicate: boolean; dropped: string[] };
   close_session: BoardWritten & { tasks_moved: SessionRecord["tasks_moved"]; tokens: TokenTotals };
   ask: BoardWritten;
-  record_answer: BoardWritten;
   /** `told`: whom the board's message went to (§7); empty when nobody heard it. */
+  record_answer: BoardWritten & { told: string[] };
   answer_question: BoardWritten & { told: string[] };
   mark_done: BoardWritten & { told: string[] };
   undo: BoardWritten & { told: string[] };
@@ -566,6 +566,11 @@ export type BoardErrorCode = z.infer<typeof BoardErrorCode>;
 
 /** The reserved sender of the board's messages (§7): no laptop may take its laptop id. */
 export const BOARD_SENDER = { name: "BobNet", laptop: "board" } as const;
+
+/** Whether a message is the board's (§7): from its reserved laptop, which nobody else may hold, and which takes no reply. */
+export function fromBoard(msg: { laptop: string }): boolean {
+  return msg.laptop.toLowerCase() === BOARD_SENDER.laptop;
+}
 
 /** A message the board's write sends, from `BOARD_SENDER`, for the broker to store and deliver (§7). */
 export interface BoardMessage {

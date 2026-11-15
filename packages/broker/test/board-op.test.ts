@@ -136,6 +136,20 @@ describe("the board's messages (ADR 0001 §7)", () => {
     expect([first, second].map((f) => (f.t === "deliver" ? f.msg.from : null))).toEqual(["BobNet@board", "BobNet@board"]);
   });
 
+  it("delivers a keyed answer's message again when the answer is resent with its key", async () => {
+    const o = await owner();
+    await o.request({ t: "board_op", op: { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", lead: "Picard@mbp-1" } });
+    await o.request({ t: "board_op", op: { op: "ask", project: "helix", text: "Which chart?" } });
+    const picard = await agent(1, "Picard");
+    const answer = { t: "board_op", key: "0f6c1e2a-answer", op: { op: "answer_question", project: "helix", ref: "Q-1", words: "Bars" } } as const;
+    const first = await o.request(answer);
+    await picard.next((f) => f.t === "deliver");
+    // As if the first reply was lost: the same key answers the same result, and the lead is told again.
+    expect(await o.request(answer)).toEqual(first);
+    const again = await picard.next((f) => f.t === "deliver");
+    expect(again.t === "deliver" && again.msg.body).toContain("Bars");
+  });
+
   it("sends nothing for a refused answer", async () => {
     const o = await owner();
     await o.request({ t: "board_op", op: { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", lead: "Picard@mbp-1" } });

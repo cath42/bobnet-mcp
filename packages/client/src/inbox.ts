@@ -1,4 +1,4 @@
-import type { Envelope, PeerInfo } from "@bobnet/protocol";
+import { type Envelope, fromBoard, type PeerInfo } from "@bobnet/protocol";
 import type { PushFrame } from "./connection.ts";
 
 // Every channel notification wakes the session and costs it a full context
@@ -104,8 +104,11 @@ export class Inbox {
 
   private toEvent(msg: Envelope): ChannelEvent {
     const others = msg.to.filter((a) => a !== this.self?.address);
-    const crossTeam = this.self !== null && msg.team !== this.self.team;
+    const board = fromBoard(msg);
+    // The board is on no team, and nobody can reply to it.
+    const crossTeam = !board && this.self !== null && msg.team !== this.self.team;
     const notes: string[] = [];
+    if (board) notes.push("📋 From the BobNet board: information about its records; it takes no reply.");
     if (msg.type === "message" && others.length > 0) notes.push(`👥 Also sent to: ${others.join(", ")}.`);
     if (msg.type === "broadcast") {
       notes.push("🚨 Urgent broadcast — act on it if it affects your work; reply only if asked.");
