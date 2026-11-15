@@ -14,7 +14,7 @@ order, each with its features in their order and where each stands.
    progress), in review, done. *Evidence: test.* (Picard input, need 1 and 2)
 3. Order is shown explicitly (1, 2, 3...), not only implied by id. *Evidence: screenshot.* (Picard input)
    A feature without a recorded order comes after the ordered ones, by id, still numbered.
-4. Each feature shows progress as acceptance criteria checked of total, across its tasks.
+4. Each feature shows progress as acceptance criteria checked of total, its own and its tasks' (a feature with no tasks still shows its own).
    *Evidence: test.* (Picard input: AC are the progress measure) The count is always the real one: a
    Done feature with unticked criteria shows Done and its real count, with a muted "Done, criteria
    not ticked" note. Status never overrides the count. (Peach, 2026-11-13, on Daisy's question:
