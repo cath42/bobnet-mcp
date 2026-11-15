@@ -470,6 +470,11 @@ supervisors.
 - `board_get` on a session returns its runs with `ctx`, the feature's previous session of the same
   kind for the dashed line, and per role the p25/p50/p75 of earlier runs on the feature for the grey
   band. That moves `baseline` from the supervisor to a query.
+  *Amended 2026-11-15 (BOB-4 review, finding 1):* a run carries `ctx` only when the `get` asks for it
+  (`ctx: true`), which the dashboard does. The MCP tool `board_get` doesn't offer it: its reply goes
+  into an agent's context, pretty-printed, and 400 numbers a run is thousands of tokens nobody there
+  reads. `calls` is the run's count of calls; `ctx` is downsampled to at most 400 points. The dashed
+  line and the band are computed by the dashboard from the feature's sessions, not by a query.
 - A closed session's tokens, a running agent's and the chart come from the same rows (notes 38).
   Every past session keeps its runs, not only the latest four.
 
@@ -505,7 +510,9 @@ the pushed commit and sends `push {repo, branch, sha, worker}`. `Board` matches 
 the project, not on an agent.
 
 **"Usually about N min"** is the median duration of the last 20 finished runs of the same (`project`,
-`source`, `name`), or (`laptop`, `name`) for slot runs, that passed. It is shown once there are three.
+`source`, `name`), or (`project`, `laptop`, `name`) for slot runs, that passed. It is shown once there
+are three. (Amended 2026-11-15, BOB-4 review finding 2: every project's slot run is named `land`, and
+one project's land isn't another's.)
 **Running long** is past 1.5× that (notes 47). An agent shows "waiting on CI" while a run tied to it
 is `running` or `queued`. This is derived, not a worker state.
 
