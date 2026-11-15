@@ -47,8 +47,10 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   Deploy-ready: e12cdc8 -> a720d5f broker/protocol src is only 0b + 0c (Board migration 2, op key,
   told, widened ItemRef); no Broker migrations, no new DO class.
 - rc.31: tagged 15ea0a3 (= a720d5f + docs + versions), installed at ~/.local/share/bobnet/v2.0.0-rc.31.
-  NOT announced to poe until the broker deploy is done. Waiting on Casper's go for the deploy, from
-  the v2.0.0-rc.31 tag.
+  NOT announced to poe until the broker deploy is checked.
+- Broker DEPLOYED on Casper's go, 03:18:03Z, from the v2.0.0-rc.31 tree (15ea0a3): Current Version
+  ID 58701295-2bcc-466b-a9fb-855158081b44. Last time the new code served ~20 min after deploy, so
+  check (1) waits until the supervisors have reconnected onto it.
   After the deploy: (1) every supervisor peer on both laptops reconnects, no "could not report"
   (re-check after a couple of minutes); (2) GET /v1/board/export as the owner answers 200, version 1
   (runs migration 2); (3) wrangler version id into this plan. Then poe: rc.31 on both supervisors.
