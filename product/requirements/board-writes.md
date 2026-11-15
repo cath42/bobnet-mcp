@@ -20,7 +20,16 @@ rather than by convention.
 5. Closing a release that still has features not Done is allowed only after a confirmation that
    names each open feature and where it goes (another release, or out of any release). Nothing is
    closed with work silently left in it. *Evidence: test.*
-6. Every write carries who made it, in the item's history ([board-service.md](board-service.md) 7).
+6. A release opens by itself: when the first session starts on any of its features, a `planned`
+   release becomes `open`, recorded as the system's write with that session as the cause. Nobody
+   opens one by hand, and it is not a gate (Peach, 2026-11-14, on Luigi's BOB-2 question; the same
+   rule as the open feature, set by sessions and never by hand). Starting a session on a feature of a
+   `closed` release is refused with the reason; undoing the close (ADR 0001 §5) comes first.
+   *Evidence: test.*
+7. A `planned` release may be closed, by Casper's gate and under criterion 5 like any other: it is
+   how a release is dropped unstarted. Its features are named and sent elsewhere first. A release
+   with no features closes with no confirmation. *Evidence: test.* (Peach, 2026-11-14)
+8. Every write carries who made it, in the item's history ([board-service.md](board-service.md) 7).
    *Evidence: test.*
 
 ## Added by Casper's feedback (BOB-1 #6, round 2)
