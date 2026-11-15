@@ -1,4 +1,4 @@
-import { BOARD_READS, BoardOp, type BoardCaller, type BoardExportV1, type BoardImportReply, type BoardReply, type Identity } from "@bobnet/protocol";
+import { BOARD_READS, BoardOp, type BoardCaller, type BoardReadName, type BoardExportV1, type BoardImportReply, type BoardReply, type Identity } from "@bobnet/protocol";
 import { DurableObject } from "cloudflare:workers";
 import { migrate } from "../schema.ts";
 import { BoardError } from "./errors.ts";
@@ -66,6 +66,6 @@ export class Board extends DurableObject<Env> {
   }
 }
 
-function isRead(op: BoardOp): op is Extract<BoardOp, { op: "projects" | "list" | "get" | "grants" }> {
+function isRead(op: BoardOp): op is Extract<BoardOp, { op: BoardReadName }> {
   return BOARD_READS.includes(op.op);
 }

@@ -945,3 +945,102 @@ describe("close_session (ADR 0001 §6)", () => {
     expect(s!.close).toMatchObject({ need: "casper", waits_on: ["Q-1"] });
   });
 });
+
+describe("the views' reads: waits, overview, the roadmap's counts (ADR 0001 §7, design/BOB-1/spec.md)", () => {
+  const waits = (caller: BoardCaller = owner, extra: Partial<{ project: string; since: string }> = {}) => ok(caller, { op: "waits", ...extra });
+
+  it("lists what waits on Casper, oldest first, blocking when it holds up a named task, session or feature", async () => {
+    const { r1, f1, f2, t1, t2 } = await helix();
+    await helixRules();
+    const picard = agent("Picard");
+    await ok(picard, { op: "ask", project: "helix", text: "Which chart?", options: [{ key: "a", text: "Bars" }, { key: "b", text: "Lines", recommended: true }], holds: [t1] });
+    await ok(picard, { op: "ask", project: "helix", kind: "action", text: "Add the token", needed_before: { release: r1 } });
+    await ok(picard, { op: "ask", project: "helix", text: "Ship it?" });
+    const session = { feature: f2, kind: "build" as const, label: "1" };
+    await join(f2);
+    await ok(picard, { op: "close_session", project: "helix", session, need: "casper", waits_on: ["Q-2"], summary: "Waits", handoff: { path: "/h.md", text: "h" } });
+    await ok(owner, { op: "criteria", project: "helix", ref: t2, change: { action: "add", text: "Casper accepts", casper_gate: true } });
+    await ok(owner, { op: "update", project: "helix", ref: t2, set: { status: "In Review" } });
+    const bug = (await ok(agent("Bill"), { op: "capture", project: "helix", capture_id: uuid(1), title: "Crashes", type: "bug", blocks_use: true, found_in: f1 })).ref!;
+    await ok(owner, { op: "create", project: "helix", kind: "backlog", type: "bug", title: "Typo" });
+
+    const { waits: list } = await waits();
+    expect(list.map((w) => [w.kind, w.ref, w.blocking])).toEqual([
+      ["question", "Q-1", true],
+      ["action", "A-1", false],
+      ["question", "Q-2", true],
+      ["review_gate", t2, true],
+      ["bug", bug, true],
+    ]);
+    expect(list[0]).toMatchObject({ project: "helix", feature: f1, text: "Which chart?", recommended: { key: "b", text: "Lines" }, holds: { items: [t1], sessions: [] }, asked_by: "Picard@mbp-1" });
+    expect(list[1]).toMatchObject({ needed_before: { release: r1 }, feature: null });
+    // The session closed on Q-2 is on it, not a second item (notes 23).
+    expect(list[2]).toMatchObject({ waiting_sessions: [session], feature: f2 });
+    expect(list[3]).toMatchObject({ feature: f2, text: "Count it", holds: { items: [t2], sessions: [] }, asked_by: null });
+    expect(list[4]).toMatchObject({ feature: f1, asked_by: "Bill@mbp-1" });
+
+    // An answer, a ticked gate or an archived bug leaves the list: it keeps no state of its own.
+    await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "b", words: "Lines, thin" });
+    await ok(owner, { op: "criteria", project: "helix", ref: t2, change: { action: "check", n: 1, evidence: "seen" } });
+    await ok(owner, { op: "archive", project: "helix", ref: bug, reason: "fixed" });
+    const after = await waits();
+    expect(after.waits.map((w) => w.ref)).toEqual(["A-1", "Q-2"]);
+    expect(after.answered).toEqual([{ project: "helix", ref: "Q-1", kind: "question", text: "Which chart?", key: "b", words: "Lines, thin", at: expect.any(String) }]);
+    // His day starts where the dashboard says it does.
+    expect((await waits(owner, { since: new Date(Date.now() + 60_000).toISOString() })).answered).toEqual([]);
+    // An answer from conversation isn't "from here".
+    await ok(picard, { op: "record_answer", project: "helix", ref: "Q-2", words: "Yes" });
+    expect((await waits()).answered.map((a) => a.ref)).toEqual(["Q-1"]);
+  });
+
+  it("covers the projects the caller reads, or the one it names", async () => {
+    await helix();
+    await helixRules();
+    await ok(owner, { op: "create_project", key: "solo", name: "Solo", prefix: "SOLO" });
+    await ok(owner, { op: "ask", project: "solo", text: "Alone?" });
+    await ok(agent("Picard"), { op: "ask", project: "helix", text: "Ship?" });
+    expect((await waits()).waits.map((w) => w.project).sort()).toEqual(["helix", "solo"]);
+    expect((await waits(owner, { project: "helix" })).waits.map((w) => w.project)).toEqual(["helix"]);
+    expect((await waits(agent("Bill"))).waits.map((w) => w.project)).toEqual(["helix"]);
+    expect(await waits(agent("Nobody"))).toEqual({ waits: [], answered: [] });
+    expect(await refused(agent("Bill"), { op: "waits", project: "solo" })).toMatchObject({ code: "forbidden" });
+    expect((await ok(agent("Bill"), { op: "overview" })).projects.map((p) => p.project.key)).toEqual(["helix"]);
+  });
+
+  it("gives each project's overview row: its open release, open features, next Ready one, first wait and backlog", async () => {
+    const { r1, f1, f2 } = await helix();
+    await helixRules();
+    const r0 = (await ok(owner, { op: "create_release", project: "helix", title: "Release 0" })).ref!;
+    await ok(owner, { op: "order_releases", project: "helix", refs: [r0, r1] });
+    await ok(owner, { op: "close_release", project: "helix", ref: r0 });
+    await runInDurableObject(board(), (_, state) => {
+      state.storage.sql.exec("UPDATE releases SET status = 'open' WHERE ref = ?", r1);
+    });
+    const ready = (await ok(owner, { op: "create", project: "helix", kind: "feature", type: "increment", title: "Later", release: r1 })).ref!;
+    await ok(owner, { op: "update", project: "helix", ref: ready, set: { status: "Ready" } });
+    await ok(owner, { op: "update", project: "helix", ref: f2, set: { status: "Ready" } });
+    await join(f1);
+    await ok(agent("Picard"), { op: "ask", project: "helix", text: "Later?" });
+    await ok(agent("Picard"), { op: "ask", project: "helix", text: "Now?", holds: [f1] });
+    await ok(owner, { op: "create", project: "helix", kind: "backlog", type: "bug", title: "Crash", release: r1 });
+    await ok(owner, { op: "create", project: "helix", kind: "backlog", type: "chore", title: "Tidy" });
+
+    const [row, ...rest] = (await ok(owner, { op: "overview" })).projects;
+    expect(rest).toEqual([]);
+    expect(row).toMatchObject({
+      project: { key: "helix", lead: "Picard@mbp-1" },
+      release: { ref: r1, status: "open", features: { done: 0, total: 2 }, backlog: { items: 1, bugs: 1, oldest: expect.any(String) } },
+      release_number: 2,
+      open: [{ ref: f1, open_since: expect.any(String) }],
+      // The open release's Ready feature comes before one in no release.
+      next_ready: { ref: ready },
+      waits_on_you: "Q-2",
+      backlog: { items: 2, bugs: 1 },
+    });
+    // A Done feature with criteria not ticked reads from its progress; no flag of its own.
+    expect((await ok(owner, { op: "list", project: "helix", of: "releases" })).releases!.map((r) => r.backlog)).toEqual([
+      { items: 0, bugs: 0, oldest: null },
+      { items: 1, bugs: 1, oldest: expect.any(String) },
+    ]);
+  });
+});

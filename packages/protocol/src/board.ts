@@ -159,6 +159,14 @@ export const BoardOp = z.discriminatedUnion("op", [
     history: z.boolean().optional(),
   }),
   z.object({ op: z.literal("grants"), ...project }),
+  /**
+   * What waits on Casper (§7), across every project the caller reads, or one: derived on read, never
+   * stored. `since` starts "answered from here today" (his day, which only the dashboard knows; UTC
+   * midnight by default).
+   */
+  z.object({ op: z.literal("waits"), project: ProjectKey.optional(), since: at.optional() }),
+  /** One row per project the caller reads, or one: its release, open features, next Ready feature and backlog. */
+  z.object({ op: z.literal("overview"), project: ProjectKey.optional() }),
 
   // Writes
   z.object({
@@ -366,7 +374,8 @@ export type BoardOp = z.infer<typeof BoardOp>;
 export type BoardOpInput = z.input<typeof BoardOp>;
 export type BoardOpName = BoardOp["op"];
 
-export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants"];
+export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview";
+export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview"] satisfies BoardReadName[];
 /** The supervisor's own operations, which only its connection makes (§8). */
 export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_end", "push", "slot_run"];
 
@@ -398,6 +407,66 @@ export interface ReleaseRecord {
   closed_at: string | null;
   closed_by: string | null;
   features: { done: number; total: number };
+  /** Backlog items that name it as their release (roadmap-view's counts line). */
+  backlog?: BacklogCounts;
+}
+
+/** A triage list's counts: items not archived, the bugs among them, and the oldest's creation. */
+export interface BacklogCounts {
+  items: number;
+  bugs: number;
+  oldest: string | null;
+}
+
+/**
+ * One thing that waits on Casper (§7, waiting-on-casper 1), derived on read. `blocking`: it holds up a
+ * named task, session or feature (notes 22, 35): a question or action with holds or a session waiting
+ * on it, a review gate (it holds its item), a bug that blocks use. A session closed on a question is
+ * folded onto it (`waiting_sessions`, notes 23).
+ */
+export interface WaitRecord {
+  project: string;
+  kind: "question" | "action" | "review_gate" | "bug";
+  /** The question's or action's ref, or the item's. */
+  ref: string;
+  feature: string | null;
+  /** The question's text, or the item's title. */
+  text: string;
+  recommended: { key: string; text: string } | null;
+  holds: { items: string[]; sessions: SessionRef[] };
+  waiting_sessions: SessionRef[];
+  needed_before: QuestionRecord["needed_before"];
+  /** Who asked, or who captured the bug; null for a review gate. */
+  asked_by: string | null;
+  /** Since when it waits: asked, captured, or put In Review. */
+  since: string;
+  blocking: boolean;
+}
+
+/** An answer or done mark Casper sent from the dashboard (spec: "Answered from here today"). */
+export interface AnsweredRecord {
+  project: string;
+  ref: string;
+  kind: "question" | "action";
+  text: string;
+  key: string | null;
+  words: string | null;
+  at: string;
+}
+
+/** A project on the overview (spec: Overview, Projects). Who is on a feature now is the snapshot's. */
+export interface OverviewRow {
+  project: ProjectRecord;
+  /** The first open release, by order, and its number in that order (1, 2, 3). */
+  release: ReleaseRecord | null;
+  release_number: number | null;
+  /** Its open features (`open_since` set). */
+  open: ItemSummary[];
+  /** The next Ready feature: by release order, then the board's order. */
+  next_ready: ItemSummary | null;
+  /** The oldest wait that holds work up, if any. */
+  waits_on_you: string | null;
+  backlog: BacklogCounts;
 }
 
 export interface ItemSummary {
@@ -546,6 +615,9 @@ export interface BoardResults {
   list: { releases?: ReleaseRecord[]; items?: ItemSummary[]; total: number; cursor: string | null };
   get: { item?: ItemRecord; release?: ReleaseRecord; session?: SessionRecord; question?: QuestionRecord; history?: BoardEvent[] };
   grants: { grants: GrantRecord[] };
+  /** Oldest first; `answered` newest first, 50 at most. */
+  waits: { waits: WaitRecord[]; answered: AnsweredRecord[] };
+  overview: { projects: OverviewRow[] };
   create_project: BoardWritten;
   create_release: BoardWritten;
   create: BoardWritten;

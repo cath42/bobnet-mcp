@@ -1,15 +1,19 @@
 import {
   addressKey,
+  type AnsweredRecord,
+  type BacklogCounts,
   type BoardCaller,
   type BoardCtx,
   type BoardEvent,
   type BoardMessage,
   type BoardOp,
+  type BoardReadName,
   type BoardResults,
   type BoardWritten,
   type CriterionRecord,
   type GrantField,
   type GrantRecord,
+  type OverviewRow,
   type ItemRecord,
   type ItemSummary,
   type ProjectRecord,
@@ -19,6 +23,7 @@ import {
   type SessionRecord,
   type SessionRef,
   type SessionSummary,
+  type WaitRecord,
   type TokenTotals,
   parseRecipient,
 } from "@bobnet/protocol";
@@ -34,12 +39,14 @@ const PAGE = 100;
 const ORD_STEP = 1000;
 /** How long Casper may take back his dashboard answer (§7: the toast's Undo). */
 const UNDO_MS = 2 * 60 * 1000;
+/** "Answered from here today" lists this many at most. */
+const ANSWERED_MAX = 50;
 /** How long a write's operation key is kept (§12). */
 const OP_KEY_MS = 24 * 60 * 60 * 1000;
 
 type Op<K extends BoardOp["op"]> = Extract<BoardOp, { op: K }>;
 /** What a write answers: its record and event, and what the operation adds. */
-type Written = BoardResults[Exclude<BoardOp["op"], "projects" | "list" | "get" | "grants">];
+type Written = BoardResults[Exclude<BoardOp["op"], BoardReadName>];
 type Value = string | number | boolean | null | undefined;
 type Change = [field: string, old: Value, now: Value];
 
@@ -205,7 +212,7 @@ export class BoardStore {
 
   // ---------- Reads ----------
 
-  read(caller: BoardCaller, op: Op<"projects" | "list" | "get" | "grants">): BoardResults["projects" | "list" | "get" | "grants"] {
+  read(caller: BoardCaller, op: Op<BoardReadName>): BoardResults[BoardReadName] {
     switch (op.op) {
       case "projects":
         return this.projects(caller);
@@ -215,6 +222,10 @@ export class BoardStore {
         return this.get(caller, op);
       case "grants":
         return this.grants(caller, op.project);
+      case "waits":
+        return this.waits(caller, op);
+      case "overview":
+        return this.overview(caller, op);
     }
   }
 
@@ -358,6 +369,164 @@ export class BoardStore {
       closed_at: r.closed_at,
       closed_by: r.closed_by,
       features: { done: counts.done ?? 0, total: counts.total },
+      backlog: this.backlogCounts("release = ?", r.pk),
+    };
+  }
+
+  /** Backlog items not archived, matching `where`. */
+  private backlogCounts(where: string, ...args: SqlStorageValue[]): BacklogCounts {
+    const c = this.sql
+      .exec<{ items: number; bugs: number | null; oldest: string | null }>(
+        `SELECT count(*) AS items, sum(type = 'bug') AS bugs, min(created_at) AS oldest FROM items WHERE kind = 'backlog' AND archived_at IS NULL AND ${where}`,
+        ...args,
+      )
+      .one();
+    return { items: c.items, bugs: c.bugs ?? 0, oldest: c.oldest };
+  }
+
+  /** The projects a cross-project read covers: the one named, or every one the caller reads. */
+  private readableProjects(caller: BoardCaller, key: string | undefined): ProjectRow[] {
+    if (key !== undefined) return [this.readable(caller, key)];
+    const readable = this.rules.readable(caller);
+    return this.sql
+      .exec<ProjectRow>("SELECT * FROM projects ORDER BY key")
+      .toArray()
+      .filter((p) => readable === null || readable.has(p.pk));
+  }
+
+  /** What waits on Casper (§7), oldest first, and what he answered from here since `since`. */
+  private waits(caller: BoardCaller, op: Op<"waits">): BoardResults["waits"] {
+    const projects = this.readableProjects(caller, op.project);
+    const waits = projects.flatMap((p) => this.waitsOf(p)).sort(oldestFirst);
+    const midnight = new Date();
+    midnight.setUTCHours(0, 0, 0, 0);
+    const since = op.since === undefined ? midnight.toISOString() : new Date(op.since).toISOString();
+    const keys = new Map(projects.map((p) => [p.pk, p.key]));
+    const answered =
+      projects.length === 0
+        ? []
+        : this.sql
+            .exec<{ project: number; ref: string; kind: AnsweredRecord["kind"]; text: string; answer_key: string | null; answer_words: string | null; answered_at: string }>(
+              `SELECT project, ref, kind, text, answer_key, answer_words, answered_at FROM questions
+               WHERE project IN (${projects.map(() => "?").join(", ")}) AND answered_via = 'dashboard' AND answered_at >= ?
+               ORDER BY answered_at DESC, pk DESC LIMIT ${ANSWERED_MAX}`,
+              ...projects.map((p) => p.pk),
+              since,
+            )
+            .toArray()
+            .map((q) => ({ project: keys.get(q.project)!, ref: q.ref, kind: q.kind, text: q.text, key: q.answer_key, words: q.answer_words, at: q.answered_at }));
+    return { waits, answered };
+  }
+
+  /**
+   * One project's waits, oldest first: open questions and actions with the sessions closed on them,
+   * items In Review with a Casper gate unticked, and backlog bugs that block use. The one definition
+   * of a wait and of `blocking`, which Waits and the overview both read.
+   */
+  private waitsOf(p: ProjectRow): WaitRecord[] {
+    const waits: WaitRecord[] = [];
+    for (const { pk } of this.sql.exec<{ pk: number }>("SELECT pk FROM questions WHERE project = ? AND state = 'open' ORDER BY pk", p.pk).toArray()) {
+      const q = this.questionRecord(pk);
+      const waiting = this.sql
+        .exec<{ session: number }>("SELECT session FROM session_waits_on WHERE question = ? ORDER BY session", pk)
+        .toArray()
+        .map((w) => this.sessionRef(w.session)!);
+      const held = this.sql.exec<{ item: number }>("SELECT item FROM question_holds WHERE question = ? AND item IS NOT NULL ORDER BY rowid LIMIT 1", pk).toArray()[0];
+      const recommended = q.options.find((o) => o.recommended);
+      waits.push({
+        project: p.key,
+        kind: q.kind,
+        ref: q.ref,
+        feature: q.session?.feature ?? (held ? this.featureRef(held.item) : null) ?? q.holds_sessions[0]?.feature ?? waiting[0]?.feature ?? null,
+        text: q.text,
+        recommended: recommended ? { key: recommended.key, text: recommended.text } : null,
+        holds: { items: q.holds, sessions: q.holds_sessions },
+        waiting_sessions: waiting,
+        needed_before: q.needed_before,
+        asked_by: q.asked_by,
+        since: q.created_at,
+        blocking: q.holds.length > 0 || q.holds_sessions.length > 0 || waiting.length > 0,
+      });
+    }
+    const gated = this.sql
+      .exec<ItemRow>(
+        `SELECT * FROM items i WHERE i.project = ? AND i.status = 'In Review' AND i.archived_at IS NULL
+           AND EXISTS (SELECT 1 FROM criteria c WHERE c.item = i.pk AND c.casper_gate = 1 AND c.state = 'open')
+         ORDER BY i.pk`,
+        p.pk,
+      )
+      .toArray();
+    for (const row of gated) {
+      const ref = this.refOf(row.pk);
+      // Since it went In Review, as its history says; an imported item has only its last update.
+      const since = this.sql
+        .exec<{ at: string | null }>(
+          "SELECT max(e.at) AS at FROM events e JOIN event_changes c ON c.event = e.seq WHERE e.tbl = 'items' AND e.pk = ? AND c.field = 'status' AND c.new = 'In Review'",
+          row.pk,
+        )
+        .one().at;
+      waits.push({ ...this.itemWait(p, row, "review_gate"), holds: { items: [ref], sessions: [] }, asked_by: null, since: since ?? row.updated_at });
+    }
+    const bugs = this.sql
+      .exec<ItemRow>("SELECT * FROM items WHERE project = ? AND kind = 'backlog' AND type = 'bug' AND blocks_use = 1 AND archived_at IS NULL AND status != 'Done' ORDER BY pk", p.pk)
+      .toArray();
+    for (const row of bugs) {
+      waits.push({ ...this.itemWait(p, row, "bug"), feature: row.found_in === null ? null : this.refOf(row.found_in), asked_by: row.captured_by, since: row.created_at });
+    }
+    return waits.sort(oldestFirst);
+  }
+
+  private itemWait(p: ProjectRow, row: ItemRow, kind: "review_gate" | "bug"): WaitRecord {
+    return {
+      project: p.key,
+      kind,
+      ref: this.refOf(row.pk),
+      feature: this.featureRef(row.pk),
+      text: row.title,
+      recommended: null,
+      holds: { items: [], sessions: [] },
+      waiting_sessions: [],
+      needed_before: null,
+      asked_by: null,
+      since: row.created_at,
+      blocking: true,
+    };
+  }
+
+  /** The feature an item is or is under, by ref. */
+  private featureRef(item: number): string | null {
+    const row = this.sql.exec<{ kind: string; parent: number | null }>("SELECT kind, parent FROM items WHERE pk = ?", item).one();
+    return row.kind === "feature" ? this.refOf(item) : row.kind === "task" && row.parent !== null ? this.refOf(row.parent) : null;
+  }
+
+  /** Each project as the overview shows it: who is on a feature now is the dashboard's, from the snapshots. */
+  private overview(caller: BoardCaller, op: Op<"overview">): BoardResults["overview"] {
+    return {
+      projects: this.readableProjects(caller, op.project).map((p): OverviewRow => {
+        const releases = this.sql.exec<ReleaseRow>("SELECT * FROM releases WHERE project = ? ORDER BY ord IS NULL, ord, pk", p.pk).toArray();
+        const number = releases.findIndex((r) => r.status === "open");
+        const release = releases[number];
+        const open = this.sql
+          .exec<SummaryRow>(`${SUMMARY} WHERE i.project = ? AND i.kind = 'feature' AND i.open_since IS NOT NULL AND i.archived_at IS NULL ${ORDERED}`, p.pk)
+          .toArray();
+        const ready = this.sql
+          .exec<SummaryRow>(
+            `${SUMMARY} LEFT JOIN releases rel ON rel.pk = i.release
+             WHERE i.project = ? AND i.kind = 'feature' AND i.status = 'Ready' AND i.archived_at IS NULL AND (rel.status IS NULL OR rel.status != 'closed')
+             ORDER BY rel.pk IS NULL, rel.ord IS NULL, rel.ord, rel.pk, i.ord IS NULL, i.ord, i.pk LIMIT 1`,
+            p.pk,
+          )
+          .toArray()[0];
+        return {
+          project: this.projectRecord(p),
+          release: release ? this.releaseRecord(release) : null,
+          release_number: release ? number + 1 : null,
+          open: open.map(summary),
+          next_ready: ready ? summary(ready) : null,
+          waits_on_you: this.waitsOf(p).find((w) => w.blocking)?.ref ?? null,
+          backlog: this.backlogCounts("project = ?", p.pk),
+        };
+      }),
     };
   }
 
@@ -415,7 +584,7 @@ export class BoardStore {
   /** One write, inside the caller's transaction. Returns its result and what it changed, for the broker to push. */
   write(
     caller: BoardCaller,
-    op: Exclude<BoardOp, Op<"projects" | "list" | "get" | "grants">>,
+    op: Exclude<BoardOp, Op<BoardReadName>>,
   ): { result: Written; changed: { project: string; seq: number; refs: string[] } | null; messages: BoardMessage[] } {
     const tx = new Tx(this.sql, caller);
     const result = this.apply(tx, op);
@@ -428,7 +597,7 @@ export class BoardStore {
    * first reply, messages included, and writes nothing; keys last a day. A refused write rolls back,
    * key and all, so its retry is refused again.
    */
-  writeOnce(caller: BoardCaller, op: Exclude<BoardOp, Op<"projects" | "list" | "get" | "grants">>, key: string): ReturnType<BoardStore["write"]> {
+  writeOnce(caller: BoardCaller, op: Exclude<BoardOp, Op<BoardReadName>>, key: string): ReturnType<BoardStore["write"]> {
     const at = new Date();
     this.sql.exec("DELETE FROM op_keys WHERE at < ?", new Date(at.getTime() - OP_KEY_MS).toISOString());
     const actor = whoOf(caller);
@@ -442,7 +611,7 @@ export class BoardStore {
     return reply;
   }
 
-  private apply(tx: Tx, op: Exclude<BoardOp, Op<"projects" | "list" | "get" | "grants">>): Written {
+  private apply(tx: Tx, op: Exclude<BoardOp, Op<BoardReadName>>): Written {
     switch (op.op) {
       case "create_project":
         return this.createProject(tx, op);
@@ -1918,6 +2087,10 @@ function ctxBlob(points: number[]): ArrayBuffer {
   const view = new DataView(buf);
   points.forEach((v, i) => view.setUint32(i * 4, v, true));
   return buf;
+}
+
+function oldestFirst(a: WaitRecord, b: WaitRecord): number {
+  return a.since.localeCompare(b.since) || a.project.localeCompare(b.project) || a.ref.localeCompare(b.ref, undefined, { numeric: true });
 }
 
 function openRelease(r: ReleaseRow): void {
