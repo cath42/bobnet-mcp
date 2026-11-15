@@ -24,14 +24,18 @@ it, is what §11 meant; I've updated §11 to name it. Protocol and routes are un
    2xx and `reply.ok` is true, and print the broker's `code` and `message`.
 
 2. **The project comes in with no rules, so after the post only the owner can write it.**
-   *Must-fix before BOB-14.* The document's project `grants` is always `[]`. ADR 0001 §5 says the
-   table is seeded when a project is created **or imported**, from Peach's rows, and BOB-14 #4 needs
-   Peach writing through the MCP tools right after the cut-over. Add `--grants <file>`: a JSON array of
-   `ExportGrant` (Peach's rows for the project), validated with the protocol's schema, written into
-   the project's `grants`, and listed in the report. These are project rows only, which the import
-   already takes from a laptop (only rules for every project are limited to an empty board, §11). In
-   the same change, add `--lead` and `--po` to the doc's example: they are where answers go (§7), and
-   the command leaves them null when they aren't given. BobNet's are Mario and Peach on mbp-1.
+   *Must-fix before BOB-14* (it's BOB-14 #7). The document's `grants` are always `[]`. ADR 0001 §5
+   says the table is seeded when a project is created **or imported**, from Peach's rows, and BOB-14
+   #4 needs Peach writing through the MCP tools right after the cut-over. Add `--grants <file>`: a JSON
+   array of `ExportGrant`, validated with the protocol's schema and listed in the report. A row naming
+   the project goes in the project's `grants`. A `'*'` row goes in the document's top-level `grants`,
+   and Peach's rows include one (`migration.md`, "BOB-14 grant seeding": a `'*'` read for Mario@mbp-1,
+   so the backup is full). §11 takes a rule for every project from a laptop only into an empty board.
+   So `--post` from mbp-1 works only if BobNet is the first thing on the live board; otherwise the
+   broker answers `403` (and finding 1 makes that visible), and Casper adds that one row as the owner.
+   The command should say so before posting when the document carries a `'*'` row. In the same change,
+   add `--lead` and `--po` to the doc's example: they are where answers go (§7), and the command leaves
+   them null when they aren't given. BobNet's are Mario and Peach on mbp-1.
 
 3. **Rounding fractional ordinals collapses their order.** *Later, before BOB-9* (BobNet's board has
    none). Helix has `204204`, `204204.1`, `.2`, `.3` under LAND-39: all four become `204204`
@@ -61,13 +65,14 @@ it, is what §11 meant; I've updated §11 to name it. Protocol and routes are un
    each "was LAND-30"). Don't widen the rule, because it would link the wrong ones. List every `was
    <id>` it didn't take, with the item that says it, so the PO can settle each one (BOB-9 #6).
 
-7. **BOB-9 #5 isn't met: the open feature comes from status, not sessions.** *Later, before BOB-9;
-   Luigi has flagged it.* The code opens a feature that's In Progress. #5 asks for the open feature to
-   be derived from sessions (LAND-49 has six sessions but says Ready, and at `9d4a2f41b` it says Done).
-   Sessions live in the supervisor's state for the project, the same records `sessionAt` reads, and
-   the import runs in the supervisor, so it can read them there: a feature with a session that has no
-   end at the commit's time gets the `imported` session and `open_since`. Doing that crosses no part
-   and needs no ADR. Peach can say whether status stays a fallback.
+7. **BOB-9 #5 (the open feature from sessions) isn't built; whether it should be is open.**
+   *Later, if Picard's answer needs it.* The code opens a feature that's In Progress. For BobNet that's
+   Peach's answer (`migration.md`, Import answers 4: no open feature is invented from any other
+   status), and BobNet has none. BOB-9 #5 still says "derived from sessions" (LAND-49 has six sessions
+   but says Ready, and Done at `9d4a2f41b`), and Picard has been asked. If the answer is sessions:
+   they live in the supervisor's state for the project, the same records `sessionAt` reads, and the
+   import runs in the supervisor, so a feature with a session that has no end at the commit's time gets
+   the `imported` session and `open_since`. That crosses no part and needs no ADR.
 
 8. **After the move, a dotted id in `spawn_worker`'s tasks is refused without naming its new ref.**
    *Later, before BOB-9; moot if Casper picks dotted.* `supervisor.ts:387` refuses any task that
@@ -141,8 +146,9 @@ I'm not ruling on these. Here's where the code or the schema makes one answer co
   per-release override flag is easy either way. The hard part is undoing it: there's no reopen
   operation, so a release imported `closed` by mistake stays closed (finding 5). Settle it before the
   post.
-- **Dropped fields (assignee, references, priority).** Carrying any of them as text, appended to
-  notes the way the final summary is, is trivial. Carrying them as fields is a §2 column, a new
+- **Dropped fields (assignee, references, priority).** Peach has settled BobNet's (references go to
+  notes as a list, BOB-14 #6), and Helix's assignee and priority are with Picard. Carrying any of them
+  as text, appended to notes the way the final summary is, is trivial. Carrying them as fields is a §2 column, a new
   optional key in `ExportItem`, and my ADR. Older readers strip unknown keys, so an older importer
   would drop them silently. References are the big one (747 in Helix, 25 in BobNet).
 - **Absorbed archived items.** An archived item re-created elsewhere (80 in Helix, such as
