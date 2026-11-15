@@ -68,6 +68,10 @@ my rows: Mario@mbp-1 gets a `*` read row (cross-project read, ADR 0001 §5), whi
 Mario@* is not seeded: it would cover Mario on any laptop, wider than the backup needs. Casper's `*`
 read is his own owner row.
 
+The file is `product/bobnet-grants.json` (BOB-14 #7), passed as `--grants`: Peach writes everything and
+asks Casper; Mario reads and asks Casper; Daisy, Toad and Luigi read only; nobody has `admin` (the owner
+changes rules); no `sessions` (the supervisor joins sessions itself). All on mbp-1.
+
 **Helix's board (asked Picard, open):** (a) containers → features, same as BobNet; (b) R1 "Partner
 demo" came out closed because it is archived: right?; (c) assignee/priority/references: references go
 to notes; is dropping assignee (590) and priority (130) acceptable?; (d) which feature is open at the

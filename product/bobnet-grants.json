@@ -1,0 +1,81 @@
+[
+  {
+    "project": "bobnet",
+    "agent": "Peach",
+    "laptop": "mbp-1",
+    "role": "PO",
+    "read": true,
+    "items": "all",
+    "fields": [
+      "status",
+      "order",
+      "content",
+      "criteria",
+      "triage",
+      "create"
+    ],
+    "sessions": false,
+    "questions": true,
+    "admin": false
+  },
+  {
+    "project": "bobnet",
+    "agent": "Mario",
+    "laptop": "mbp-1",
+    "role": "lead",
+    "read": true,
+    "items": "none",
+    "fields": [],
+    "sessions": false,
+    "questions": true,
+    "admin": false
+  },
+  {
+    "project": "bobnet",
+    "agent": "Daisy",
+    "laptop": "mbp-1",
+    "role": "designer",
+    "read": true,
+    "items": "none",
+    "fields": [],
+    "sessions": false,
+    "questions": false,
+    "admin": false
+  },
+  {
+    "project": "bobnet",
+    "agent": "Toad",
+    "laptop": "mbp-1",
+    "role": "architect",
+    "read": true,
+    "items": "none",
+    "fields": [],
+    "sessions": false,
+    "questions": false,
+    "admin": false
+  },
+  {
+    "project": "bobnet",
+    "agent": "Luigi",
+    "laptop": "mbp-1",
+    "role": "builder",
+    "read": true,
+    "items": "none",
+    "fields": [],
+    "sessions": false,
+    "questions": false,
+    "admin": false
+  },
+  {
+    "project": "*",
+    "agent": "Mario",
+    "laptop": "mbp-1",
+    "role": "backup",
+    "read": true,
+    "items": "none",
+    "fields": [],
+    "sessions": false,
+    "questions": false,
+    "admin": false
+  }
+]
