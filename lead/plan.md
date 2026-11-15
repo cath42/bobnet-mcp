@@ -34,6 +34,8 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - Peach w_01bfd4e5 (8ad6c9c): BOB-7 Done (AC 1-6, DoD). BOB-2 AC 5 checked (open: 10, 11).
   BOB-14 AC 5 open: no item-history view yet. For the release-1 close: Casper's live look at the
   gates and the close dialog is still wanted (not a blocker; goes in the close summary).
+- 05:1xZ poe: Casper off ~8h; Helix back on. Told poe Helix can start now (views are broker-only,
+  deploys don't cut agents, no restart foreseen). Bob keeps to at most 2 worker slots; Helix up to 3.
 - Luigi w_6a83777e: BOB-8 (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
   BOB-7, BOB-8, BOB-10, BOB-3, BOB-4, BOB-5. Toad reviews each; broker deploy after each review.
