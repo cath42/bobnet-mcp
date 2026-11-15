@@ -135,6 +135,12 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   (under 24 h, session resumable), expires ~01:33Z 2026-11-16 or Helix denies it with resume: false. Told poe.
 - Mario closed BOB-5 (5) and BOB-8 (4) sessions, all with tokens. Slip: BOB-8 review A has minors_fixed 1;
   the fixed finding was Toad's major 1 (48ac061 -> 0b8a185). Peach w_5af5cf6d: BOB-10 AC 5/DoD 2, 4; BOB-4 AC 5-7.
+- Peach w_5af5cf6d: BOB-10 Done (AC 5 from live MCP descriptions). BOB-4 AC 5-7 open for Casper's look.
+  Mario closed BOB-10 build A, review A, review accept-rc34.
+- BOB-4 AC 7 gap (Mario): runs never get remote_url. run_start goes out before Remote Control resolves
+  (supervisor.ts ~990, worker.ts ~445). Toad consult c_af36fbd6: new op run_remote, set-once, by
+  (project, id), https only, no row created; ADR 0001 §9 line (Toad). Luigi w_d1122105 builds it (BOB-4 build remote).
+  Rollout: broker deploy (Casper) first, then rc.35 + restart (poe).
 ## Release-1 close: what's left
 - rc.34 live (poe) -> outbox drains -> BOB-10 AC 5 (worker's close_session description), BOB-4 AC 5-7
   live data; close the open sessions (after the drain).
