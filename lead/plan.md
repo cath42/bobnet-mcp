@@ -55,7 +55,15 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   description) MUST be in before the client release; 2, 5, 6 any time: all sent to Luigi (one commit).
 - Broker DEPLOYED (5th) 05:37:22Z from v2 3501eb6 (= f095e38 + lead/; packages same as 214304a):
   Version ID 498a41c1-a98d-4731-9c35-b483380ff1c2. Checks ~05:43Z.
-- Peach w_0d736f9e: accept BOB-8, BOB-10, BOB-2 AC 10.
+- BOB-10 deploy checks 05:43Z PASS (no report errors).
+- Peach w_0d736f9e: BOB-8 Done; BOB-2 AC 10 checked (open: AC 11, DoD); BOB-10 In Review (AC 5 waits on
+  rc.33's client; AC 3 on screen with BOB-5). Live look wanted from Casper: Triage on a phone, gates,
+  close dialog (release-1 close summary).
+- Luigi 72eeb56: Toad's BOB-10 findings 1, 2, 5, 6.
+- rc.33 CUT: version commit d584f4c (on v2), tag v2.0.0-rc.33 pushed, installed at
+  ~/.local/share/bobnet/v2.0.0-rc.33. Broker DEPLOYED (6th) 05:45:56Z from d584f4c: Version ID
+  6671ac8d-de76-40e8-8f6d-2dc0fcde87dc. Sent to poe (m_522451f6), no hurry, at a close; check 3 is
+  mine (worker tool description), then Peach ticks BOB-10 AC 5.
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
