@@ -19,6 +19,8 @@
   - §10: CI as built: POST /v1/runs, the gh adapter, broker migration 8 (c_27511d4c, c_f3e94196).
 
   From `architecture/reviews/2026-11-15-bob2-rest-review.md`.
+  **Amended 2026-11-15** (Toad; records a consult, c_9fd5b936, on BOB-10 as built): §2, a bug's
+  criterion and its close. From `architecture/reviews/2026-11-15-bob10-bugs-review.md`.
 - **For:** BOB-2 (the service) and BOB-7 (who writes); BOB-3, 4, 5, 8, 9 and 10 build on it.
 - **Reads:** product/requirements/ (all), product/backlog/tasks/bob-2..10, design/BOB-1/notes.md and
   spec.md, lead/BOB-1-casper-feedback.md, Peach's message on criterion 0 (2026-11-14).
@@ -137,6 +139,16 @@ kind (bugs.md: "captured like any backlog item, with type bug").
 **Dropped and archived** items keep their record and id: `archived_at` and `archive_reason`, not a
 sixth status (the five are Helix's, board-service 8). Dropping at triage, closing a bug without a fix
 (bugs.md 4) and Helix's archive folder all map to it.
+
+**A bug's close** (amendment 2026-11-15, BOB-10, bugs.md 4 and 5). A bug gets one acceptance
+criterion, "It no longer happens", when it is created or captured with none, or when an item with
+none becomes a bug; criteria it has are kept. Done on a bug is refused (`conflict`) unless it has an
+ac and every ac is checked; checking takes evidence, and the landed commit is that evidence. The
+store infers nothing from pushes, runs or CI: "the fix has landed" is the PO's claim, with the
+commit. A bug is never created Done. The gate is on the transition, so it covers `update` and
+`close_session`'s moves (one transaction: a refused move refuses the close); unchecking afterwards
+leaves it Done, as with any item. Closing without a fix is archive with a reason, as above. Import
+(§11) writes rows as they are and is not gated.
 
 **Order** is `ord`, an integer per scope (features in a release, releases in a project, backlog items
 in triage), sparse like Backlog.md's ordinal. `NULL` sorts after the ordered ones, by id
