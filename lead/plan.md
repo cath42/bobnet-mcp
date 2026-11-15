@@ -9,6 +9,9 @@ Broker not deployed since BOB-12; the deploy is Casper's.
 - Luigi (w_92cfd796): BOB-2 §7, questions and answers, service side; then the 60 s wait test (#12).
 
 ## Next, in order
+0. Luigi, after §7: the import appends each item's references to its notes as a "References:"
+   list (Peach, product/requirements/migration.md "Import answers"; BOB-14 #6). Helix's answers
+   wait on Picard and may add more.
 1. BOB-2: close_release and undo; step 4 view data; CI (POST /v1/runs, the gh adapter).
 2. BOB-14, the pilot: broker deploy (Casper), `--post`, then `board: service` in bobnet's config.
 3. BOB-9, Helix, at Picard's date.
