@@ -6,7 +6,9 @@ Broker not deployed since BOB-12; the deploy is Casper's.
 ## Running
 - Toad (w_39a3303d): done, d64d65b (architecture/reviews/2026-11-14-backlog-import-review.md).
 - Peach (w_bf298cca): done, 9e6c4d1 (product/requirements/migration.md "Import answers").
-- Luigi (w_92cfd796): BOB-2 §7, questions and answers, service side; then the 60 s wait test (#12).
+- Luigi (w_92cfd796): done, f34a0f2 (§7 service side) and 6724d0e (#12 test); no migrations.
+- Toad (w_e78313f8): review of f34a0f2 and 6724d0e, and Luigi's two open questions.
+- Luigi (w_8ca50011): item 0 below.
 
 ## Next, in order
 0. Luigi, after §7, before BOB-14: Toad's import review findings 1 (--post exits 0 on a refused
