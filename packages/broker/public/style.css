@@ -212,6 +212,7 @@ main.wide { max-width: 1320px; }
 .chart .lab { font-size: 11.5px; fill: var(--text); }
 .chart .lab.m { fill: var(--muted); }
 .tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 12.5px; box-shadow: 0 4px 14px color-mix(in srgb, var(--text) 12%, transparent); display: grid; gap: 2px; min-width: 150px; font-variant-numeric: tabular-nums; z-index: 2; }
+.tip[hidden] { display: none; }
 .tip .row { display: flex; justify-content: space-between; gap: 12px; }
 .tip .row i { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--k); margin-right: 6px; vertical-align: 3px; }
 .tip .row i.dash { border-top-style: dashed; }
@@ -317,7 +318,7 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
 .ov-needs .acts .hint { font-size: 12.5px; }
 .ov-needs .acts button { min-height: 32px; padding: 2px 10px; }
 .ov .more { margin: 0; font-size: 13px; color: var(--muted); padding-top: 8px; border-top: 1px solid var(--line); }
-.now-list li { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; }
+.now-list .a-btn { display: grid; gap: 2px 10px; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; }
 .now-list .l-path { grid-column: 1 / -1; grid-row: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 14px; }
 .now-list .l-path .id { margin-right: 4px; }
 .now-list .l-task { color: var(--text); text-decoration: none; margin-right: 8px; }
@@ -353,3 +354,137 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
 .fh-m .crit { min-width: 180px; }
 .fh-m .now { color: var(--ok); }
 .counts-line a, .note a { color: var(--accent); }
+
+/* The steps view (BOB-4): a feature's sessions as a chain, its tasks beside it, its history under it */
+.feat { display: grid; gap: 14px; }
+.two { display: grid; gap: 18px; }
+.two > section, .two > aside { display: grid; gap: 10px; align-content: start; min-width: 0; }
+@media (min-width: 1100px) {
+  .two { grid-template-columns: minmax(0, 1fr) 340px; align-items: start; }
+  .two > aside { grid-column: 2; grid-row: 1 / span 2; position: sticky; top: 70px; }
+  .two > .hist { grid-column: 1; }
+}
+.next-banner { text-decoration: none; color: inherit; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.step { position: relative; padding: 0 0 14px 26px; min-width: 0; }
+.step::before { content: ""; position: absolute; left: 7px; top: 18px; bottom: 0; border-left: 2px solid var(--line); }
+.step:last-child::before { display: none; }
+.step > .dot2 { position: absolute; left: 0; top: 10px; width: 16px; height: 16px; border-radius: 50%; background: var(--k, var(--idle)); border: 3px solid var(--bg); box-sizing: border-box; }
+.step[data-kind="design"] { --k: var(--k-design); } .step[data-kind="build"] { --k: var(--k-build); }
+.step[data-kind="review"] { --k: var(--k-review); } .step[data-kind="retro"] { --k: var(--k-retro); }
+.step[data-state="running"] > .dot2 { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 35%, transparent); }
+.step.next > .dot2 { background: var(--bg); border: 2px dashed var(--warn); }
+.step > .card { display: grid; gap: 8px; min-width: 0; }
+.step.next > .card { border-style: dashed; border-color: var(--warn); }
+.kind { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--k, var(--muted)); }
+.step .top { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; justify-content: flex-start; }
+.links a, .runw a, .a-detail a, .events a { color: var(--accent); }
+.step .when { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.step .top .badge { margin-left: auto; }
+.step details summary { margin: 0; font-size: 13px; cursor: pointer; }
+.outcome { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+.outcome .need { font-weight: 600; }
+.outcome .need[data-need="casper"] { color: var(--warn); }
+.outcome .need[data-need="none"] { color: var(--ok); }
+.outcome .need[data-need="answer"] { color: var(--accent); }
+.links { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; align-items: baseline; }
+.links .off { color: var(--muted); }
+pre.handoff { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wrap; font-size: 12.5px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+.tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 13.5px; }
+.tasks li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; align-items: baseline; padding: 4px 0; border-top: 1px solid var(--line); }
+.tasks li .tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tasks li .ac { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tasks li .on-it { grid-column: 2 / -1; display: grid; gap: 2px; }
+.tasks li.on { background: color-mix(in srgb, var(--ok) 8%, transparent); box-shadow: inset 3px 0 0 var(--ok); padding-left: 6px; }
+.badge[data-state="running"] { color: var(--ok); }
+.loose { display: grid; gap: 6px; }
+.who { display: block; font-size: 12px; color: var(--muted); }
+.who b { color: var(--text); font-size: 12.5px; margin-right: 4px; }
+.who .dot { margin-right: 4px; }
+.who[data-state="waiting on you"], .who[data-state^="quiet"] { color: var(--warn); }
+.on-now { display: grid; gap: 4px; border-left: 3px solid var(--ok); }
+.tref { margin-right: 8px; } .tref .id { margin-right: 4px; }
+/* An agent's line opens its detail row: one at a time (spec, BOB-3 gap 2) */
+.lines li.a-line { grid-template-columns: minmax(0, 1fr); }
+.a-btn { cursor: pointer; display: grid; gap: 2px; min-width: 0; border-radius: 6px; }
+.a-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.a-line.open > .a-btn { color: var(--text); }
+.a-st.warn { color: var(--warn); } .a-st.run { color: var(--accent); } .a-st.muted { color: var(--muted); }
+.a-detail { display: grid; gap: 6px; font-size: 13px; padding: 8px 10px; background: var(--bg); border-radius: 8px; }
+.a-detail .actions { margin: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.a-detail code { font-size: 12px; overflow-wrap: anywhere; }
+.s-agents .cp { white-space: normal; }
+.more.queued { color: var(--muted); }
+.dot.run { background: transparent; box-shadow: inset 0 0 0 2px var(--accent); }
+/* Waiting on a run: CI or the laptop's run slot. Accent, not amber: it isn't Casper's to act on. */
+.ring { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent); border-top-color: var(--accent); flex: none; margin-top: 4px; }
+@media (prefers-reduced-motion: no-preference) { .ring { animation: spin 1.2s linear infinite; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+.runw { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--text); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); border-left: 3px solid var(--accent); border-radius: 6px; padding: 6px 10px; }
+.runw b { color: var(--accent); }
+.runw .run-link { font-weight: 600; }
+.runw.long { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 9%, var(--surface)); }
+.runw.long b { color: var(--warn); } .runw.long .ring { border-top-color: var(--warn); }
+.runw.failed { border-left-color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, var(--surface)); }
+.runw.failed b { color: var(--bad); } .runw.failed .ring { animation: none; border-color: var(--bad); }
+.runw.queued { border-left-style: dashed; } .runw.queued .ring { animation: none; border-style: dotted; border-top-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+/* Context per call on a session card: a toggle in the links row, the chart and the agents' table under it */
+.ctx-btn { border: 0; background: transparent; padding: 0; min-height: 0; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; gap: 4px; align-items: baseline; }
+.ctx-btn:hover { text-decoration: underline; }
+.ctx-btn[aria-expanded="true"] { font-weight: 600; }
+.ctxp { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 10px; min-width: 0; }
+.ctxp .chart { padding: 10px 12px; background: var(--bg); }
+.ctxp .seg { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; }
+.ctxp .seg button { white-space: nowrap; }
+.ctx-agents tr.total td { border-top: 1px solid var(--line); background: var(--bg); }
+.ctx-agents tr.sel td { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.ctx-agents td.bar { width: 18%; }
+/* History: read only, newest first */
+.hist { display: grid; gap: 10px; }
+.hist-btn { justify-self: start; }
+.events { list-style: none; margin: 0; padding: 0; display: grid; }
+.events li { display: grid; grid-template-columns: minmax(12em, auto) minmax(0, 1fr); gap: 2px 14px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.events li:first-child { border-top: 0; }
+.events .ev-h { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; color: var(--muted); font-size: 13px; }
+.events .ev-at { font-variant-numeric: tabular-nums; }
+.events .ev-who { color: var(--text); }
+.events .ev-what { display: grid; gap: 2px; min-width: 0; }
+.events .ev-why { grid-column: 2; font-size: 13px; }
+.events li.undone .ev-what, .events li.ev-import { color: var(--muted); }
+.events li.ev-import { display: block; font-size: 13px; }
+.events .ev { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); font-size: 12.5px; cursor: pointer; }
+.events .ev.all { display: block; }
+.events details.chg summary { cursor: pointer; }
+.events details.chg .show { color: var(--accent); font-size: 12.5px; }
+.events details.chg del, .events details.chg .new { display: block; white-space: pre-wrap; font-size: 12.5px; margin-top: 4px; overflow-wrap: anywhere; }
+.more-btn { justify-self: start; }
+/* Capture: found in, preset from a feature */
+#capture form { grid-template-columns: minmax(0, 1fr); }
+.found-in { min-width: 0; display: flex; gap: 8px; align-items: center; margin: 0; font-size: 13px; color: var(--muted); }
+.found-in span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.found-in .x { min-width: 44px; min-height: 44px; border: 0; background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; }
+@media (max-width: 760px) {
+  /* On a phone the panel takes the card's whole width: the chart is what matters, the chain's indent isn't. */
+  .ctxp { margin: 0 -14px; padding: 10px 0 0; }
+  .ctxp .chart { border-radius: 0; border-left: 0; border-right: 0; padding: 10px; }
+  .ctxp > .note, .ctxp > .seg { margin-left: 12px; margin-right: 12px; }
+  .ctxp .table-wrap { border-radius: 0; border-left: 0; border-right: 0; }
+  .ctx-agents td.bar { display: none; }
+  table.stack.ctx-agents tr { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 8px 12px; }
+  table.stack.ctx-agents td:first-child { grid-column: 1 / -1; }
+  table.stack.ctx-agents td[data-label="Model"] { display: none; }
+  table.stack.ctx-agents tr td { background: transparent; }
+  table.stack.ctx-agents tr.total { background: var(--bg); }
+  .events li { grid-template-columns: minmax(0, 1fr); }
+  .events .ev-why { grid-column: 1; }
+  .hist-btn, .more-btn, .hist .seg { width: 100%; }
+  .hist .seg button { flex: 1; }
+  .a-detail .actions button { flex: 1; min-height: 44px; }
+}
+@media (max-width: 520px) {
+  .tasks li { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .tasks li .tt { white-space: normal; grid-column: 1 / -1; grid-row: 2; }
+  .tasks li .badge { grid-column: 2; grid-row: 1; justify-self: start; }
+  .tasks li .ac { grid-column: 3; grid-row: 1; }
+  .tasks li .on-it { grid-column: 1 / -1; grid-row: 3; }
+}

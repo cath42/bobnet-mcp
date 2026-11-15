@@ -62,6 +62,51 @@ function fakeBroker() {
     board.features.find((x) => x.ref === "BOB-14").progress = { checked: 4, total: 7 };
     Object.assign(board.features.find((x) => x.ref === "BOB-3"), { open_since: iso(20) });
   }
+  // BOB-4's shots: BOB-4 open on its fixes, with a design, a build and a review closed before them. The sessions, runs,
+  // tasks and events are made up in BobNet's shape: no board has them yet.
+  const bob4 = window.BOB4 && (() => {
+    Object.assign(board.features.find((x) => x.ref === "BOB-3"), { status: "Done", progress: { checked: 9, total: 9 } });
+    const fx = board.features.find((x) => x.ref === "BOB-4");
+    Object.assign(fx, { open_since: iso(400), progress: { checked: 5, total: 9 }, tasks: { done: 3, total: 7 } });
+    const tok = (n) => ({ input: Math.round(n * 0.02), output: Math.round(n * 0.03), cache_read: Math.round(n * 0.9), cache_write: Math.round(n * 0.05) });
+    const ctx = (n, start, step, seed) => Array.from({ length: n }, (_, i) => Math.round(start + i * step + ((i * 7919 + seed) % 13) * step * 0.6));
+    const run = (id, agent, role, a, b, c, over = {}) => ({ id, agent, role, laptop: "mbp-1", model: "opus", effort: "high", started_at: iso(a), ended_at: b === null ? null : iso(b), resumed: false,
+      tokens: tok(c.reduce((n, v) => n + v, 0)), calls: c.length, ctx: c, remote_url: null, tasks: [], ...over });
+    const close = (over) => ({ need: "none", waits_on: [], blockers: [], majors: [], minors_fixed: 0, sent_back: [], summary: "", handoff_path: null, handoff_text: null, commit: null, closed_by: "Mario@mbp-1", ...over });
+    const sum = (runs) => runs.reduce((t, r) => ({ input: t.input + r.tokens.input, output: t.output + r.tokens.output, cache_read: t.cache_read + r.tokens.cache_read, cache_write: t.cache_write + r.tokens.cache_write }), tok(0));
+    const ss = (kind, label, a, b, runs, over = {}) => ({ feature: "BOB-4", kind, label, started_at: iso(a), ended_at: b === null ? null : iso(b), imported: false, close: null, tasks_moved: [], tokens: sum(runs), runs, ci_runs: [], ...over });
+    const t = (n, status, title, checked, total) => ({ ref: `BOB-4${n}`, kind: "task", type: "task", status, title, parent: "BOB-4", release: "R1", ord: n * 1000, labels: [], progress: { checked, total }, tasks: null, open_since: null, archived_at: null, created_at: iso(900) });
+    const tasks = [t(1, "Done", "Sessions as a chain, with the next step", 3, 3), t(2, "Done", "A closed session's outcome from its close", 4, 4), t(3, "Done", "Tasks under each session, and in no session yet", 2, 2),
+      t(4, "In Progress", "On it now, and agents on their tasks", 1, 3), t(5, "In Progress", "Context per call inside a session", 0, 2), t(6, "Ready", "The run line for CI and the run slot", 0, 3), t(7, "Draft", "History on the Feature view", 0, 0)];
+    const sessions = [
+      ss("design", "spec", 1500, 1380, [run("w_d1", "Daisy", "daisy", 1500, 1380, ctx(60, 18000, 900, 3))], { close: close({ summary: "The steps view specced: the chain, outcomes, run lines and context per call.", handoff_path: "~/.local/state/bobnet/handoffs/bobnet/w_d38c1154.md", handoff_text: "# Daisy: BOB-4 spec\n\nThe chain, the outcome line, the run line, context per call, history.", commit: "44bf8f4aa1" }), tasks_moved: [{ task: "BOB-41", status: "Ready" }, { task: "BOB-42", status: "Ready" }, { task: "BOB-43", status: "Ready" }] }),
+      ss("build", "A", 900, 560, [run("w_l1", "Luigi", "luigi", 900, 700, ctx(120, 22000, 1100, 5), { remote_url: "https://claude.ai/code/session_1" }), run("w_l2", "Luigi", "luigi", 690, 560, ctx(70, 21000, 1000, 9))],
+        { close: close({ minors_fixed: 2, summary: "The chain, outcomes and task lists built and tested; shots taken.", handoff_path: "~/.local/state/bobnet/handoffs/bobnet/w_a53c1f42.md", handoff_text: "# Luigi: BOB-4 build A", commit: "6733f0a6aa" }),
+          tasks_moved: [{ task: "BOB-41", status: "Done" }, { task: "BOB-42", status: "Done" }, { task: "BOB-43", status: "Done" }, { task: "BOB-44", status: "In Review" }] }),
+      ss("review", "1", 540, 470, [run("w_t1", "Toad", "toad", 540, 470, ctx(45, 25000, 1300, 2))], { close: close({ majors: ["BOB-44"], sent_back: ["BOB-44"], summary: "One major: an agent on two tasks shows once. Sent back to a fixes build." }), tasks_moved: [{ task: "BOB-44", status: "In Progress" }] }),
+      ss("build", "Fixes", 60, null, [run("w_9ff16006", "Luigi", "luigi", 50, null, [])], {
+        tasks_moved: [{ task: "BOB-44", status: "In Progress" }],
+        ci_runs: [{ source: "github-actions", external_id: "4812", name: "test (v2)", url: "https://github.com/cath42/bobnet-mcp/actions", repo: "cath42/bobnet-mcp", branch: "v2", sha: "abc", laptop: null, status: "running", started_at: iso(12), ended_at: null, worker: "w_9ff16006", usual_ms: 9 * 60_000 }],
+      }),
+    ];
+    const ev = (seq, minAgo, op, ref, changes, over = {}) => ({ seq, at: iso(minAgo), actor: { kind: "agent", who: "Peach@mbp-1", role: "po", worker: "w_p", session: null }, op, record: { table: "items", ref }, reason: null, undo_of: null,
+      changes: changes.map(([field, old, n]) => ({ field, old, new: n })), ...over });
+    const owner = { kind: "owner", who: "owner@example.com", role: null, worker: null, session: null };
+    const luigiIn = (label) => ({ kind: "agent", who: "Luigi@mbp-1", role: "luigi", worker: "w_l1", session: { feature: "BOB-4", kind: "build", label } });
+    const history = [
+      { seq: 1, at: iso(2000), actor: { kind: "board", who: "import@mbp-1", role: null, worker: null, session: null }, op: "import", record: { table: "projects", ref: "bobnet" }, reason: "imported from Backlog.md at bobnet 0c1d2e3 (bobnet-board v1, exported 2026-11-15)", undo_of: null, changes: [] },
+      ev(20, 1600, "update", "BOB-4", [["status", "Draft", "Ready"]], { reason: "Spec landed at 44bf8f4; ready for build" }),
+      ev(21, 1370, "create", "BOB-41", []), ev(22, 1370, "create", "BOB-42", []),
+      ev(30, 880, "update", "BOB-41", [["status", "Ready", "In Progress"]], { actor: luigiIn("A") }),
+      ev(31, 600, "criteria", "BOB-4", [["ac #1 state", "open", "checked"], ["ac #1 evidence", null, "test-ui/dashboard.test.ts 'opens on #feature/<project>/<id>, its sessions in the order they ran'; shots bob4-feature-390, bob4-feature-1440"]], { actor: luigiIn("A") }),
+      ev(32, 590, "update", "BOB-41", [["status", "In Progress", "Done"]], { actor: luigiIn("A") }),
+      ev(40, 300, "set_release", "BOB-4", [["release", "R1", "R2"]], { actor: owner }),
+      ev(41, 299, "undo", "BOB-4", [["release", "R2", "R1"]], { actor: owner, undo_of: 40 }),
+      ev(50, 30, "update", "BOB-4", [["description", "Capability 3.", "Capability 3, product/requirements/steps-view.md, as the approved prototype shows it."]]),
+    ];
+    return { fx, tasks, sessions, history };
+  })();
+
   // BobNet's backlog as imported (BOB-14), all chores in no release; their ages are made up, a few hours to a few days.
   const b = (ref, title, hoursAgo, over = {}) => ({
     ref, kind: "backlog", type: "chore", status: "Ready", title, parent: null, release: null, ord: null, labels: [], progress: { checked: 0, total: 0 }, tasks: null,
@@ -125,9 +170,14 @@ function fakeBroker() {
       case "projects": return { projects };
       case "overview": return { projects: projects.filter((p) => !op.project || p.key === op.project).map(overviewRow) };
       case "waits": return { waits, answered: [] };
+      case "get":
+        if (!bob4) return { item: { ...boardOf(op.project).features.find((x) => x.ref === op.ref), sessions: [] }, history: [] };
+        if (op.session) return { session: bob4.sessions.find((x) => x.kind === op.session.kind && x.label === op.session.label) };
+        return { item: { ...bob4.fx, sessions: bob4.sessions.map(({ feature, kind, label, started_at, ended_at }) => ({ feature, kind, label, started_at, ended_at })) }, history: bob4.history };
       case "list": {
         const bd = boardOf(op.project);
         if (op.of === "releases") return { releases: bd.releases.map((r, i) => releaseRecord(r, i, bd)), total: bd.releases.length, cursor: null };
+        if (op.of === "tasks") return { items: bob4?.tasks ?? [], total: bob4?.tasks.length ?? 0, cursor: null };
         const items = op.of === "backlog" ? bd.backlog : bd.features;
         return { items, total: items.length, cursor: null };
       }
@@ -153,7 +203,16 @@ function fakeBroker() {
     { ...worker, id: "w_9453f36a", name: "Toad", role: "architect", session: "BOB-10 review 1", task: "BOB-10", tokens: 900_000, state: "waiting-approval" },
     { ...worker, id: "w_m", name: "Mario", role: "lead", session: null, task: "lead", tokens: 5_600_000 },
   ] : [worker];
-  const pending = window.BOB3 ? [{ id: "r_1", worker_id: "w_9453f36a", name: "Toad", kind: "approval", tool: "Bash", tier: "human", created_at: iso(2), preview: "git log --oneline v2..origin/v2" }] : [];
+  if (window.BOB4) {
+    others.splice(0, others.length,
+      { ...worker, id: "w_9ff16006", session: "BOB-4 build Fixes", task: "BOB-4", task_refs: ["BOB-44", "BOB-45"], tokens: { input: 40_000, output: 90_000, cache_read: 2_700_000, cache_write: 160_000 }, started_at: iso(50),
+        remote_url: "https://claude.ai/code/session_2", ctx: Array.from({ length: 64 }, (_, i) => 21000 + i * 1200), calls: 64, context: 97000, checkpoint: "BOB-44: one line per agent and session; waiting on CI" },
+      { ...worker, id: "w_9453f36a", name: "Toad", role: "architect", session: null, task: "consult", tokens: 600_000, last_event_at: iso(23) },
+      { ...worker, id: "w_da", name: "Daisy", role: "designer", session: null, task: "spec", tokens: 400_000, state: "waiting-approval" },
+      { ...worker, id: "w_m", name: "Mario", role: "lead", session: null, task: "lead", tokens: 5_600_000 },
+      { ...worker, id: "w_pe", name: "Peach", role: "po", session: null, task: "accept", state: "queued", tokens: 0 });
+  }
+  const pending = window.BOB4 ? [{ id: "r_2", worker_id: "w_da", name: "Daisy", kind: "approval", tool: "Bash", tier: "lead", created_at: iso(2), preview: "git push origin HEAD" }] : window.BOB3 ? [{ id: "r_1", worker_id: "w_9453f36a", name: "Toad", kind: "approval", tool: "Bash", tier: "human", created_at: iso(2), preview: "git log --oneline v2..origin/v2" }] : [];
   const dashboard = { peers: [], laptops: [{ laptop: "mbp-1", at: iso(0), snapshot: { supervisor: { started_at: iso(600), concurrency: 3, active: 1, queued: 0 }, workers: others, pending, usage: [] } }], boards: [], updates: [], traffic: [] };
 
   class FakeSocket extends EventTarget {
@@ -202,6 +261,13 @@ const all = [
   ["bob3acc-roadmap-two-projects", "roadmap/bobnet", [], false],
   ["bob3acc-roadmap-helix", "roadmap/helix", [(p) => p.locator("#rel-R2").getByRole("button", { name: /done \(/ }).click()], true],
   ["bob3acc-feature-done-unticked", "feature/LAND-22", [], false],
+  // BOB-4: the steps view (#1-4, 6-9), context per call in a session (#5), history (BOB-14 #5), capture's found in, an agent's detail row.
+  ["bob4-feature", "feature/bobnet/BOB-4", [], true],
+  ["bob4-feature-ctx", "feature/bobnet/BOB-4", [(p) => p.locator("#step-build-A").getByRole("button", { name: /^Context per call/ }).click(), (p) => p.locator("#step-build-A .ctxp .seg button", { hasText: "Luigi" }).click(), (p) => p.locator("#step-build-A").scrollIntoViewIfNeeded()], false],
+  ["bob4-feature-history", "feature/bobnet/BOB-4", [(p) => p.getByRole("button", { name: /^History/ }).click(), (p) => p.getByRole("button", { name: /^With its tasks/ }).click(), (p) => p.locator(".hist").scrollIntoViewIfNeeded()], false],
+  ["bob4-capture-found-in", "feature/bobnet/BOB-4", [(p) => p.click("#capture-open")], false],
+  ["bob4-overview-agent", "overview", [(p) => p.locator("#working .a-line", { hasText: "Luigi" }).locator(".a-btn").click()], false],
+  ["bob4-overview-lead-permission", "overview", [(p) => p.locator("#working .a-line", { hasText: "Daisy" }).locator(".a-btn").click()], false],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 
@@ -212,6 +278,7 @@ try {
     for (const [w, [width, height]] of Object.entries(widths)) {
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2 });
       if (name.startsWith("bob3")) await page.addInitScript(() => (window.BOB3 = true));
+      if (name.startsWith("bob4")) await page.addInitScript(() => (window.BOB4 = true));
       if (name.startsWith("bob3acc")) {
         await page.addInitScript(() => (window.TWO = true));
         await page.addInitScript({ path: join(here, "../../../design/BOB-1/sample/helix.js") });
