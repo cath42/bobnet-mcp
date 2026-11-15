@@ -463,6 +463,20 @@ for an ended run is `ok` and changes nothing), `push` by (`repo`, `sha`), `slot_
 it (§12). §12's capture queue stays separate because captures come from every client, not only
 supervisors.
 
+**Amendment, 2026-11-15: a row that can never be taken doesn't hold up the rest** (BOB-27, review
+`reviews/2026-11-15-bob27-board-reports-review.md`). The supervisor checks each row against
+`BoardOp` before it sends the row; a slot run's name is clipped to the protocol's 100 first. A row
+that fails the check is dropped as `bad_row`. So is a row the broker refuses with `invalid`,
+`forbidden`, `conflict`, `frame_too_large`, `secret_detected` or `bad_frame`, and a row made as a
+role that is no longer configured. Each one dropped is logged and audited `board:refused`. Any
+other failure (`unavailable`, which a timeout becomes, `disconnected`, or an unknown code) waits
+with every row behind it. A wait is logged once per row, and the per-minute stall check retries it.
+After the local check, a broker's `bad_frame` can only mean version skew, so **a broker that takes
+a new supervisor op deploys before the supervisor that sends it**. Otherwise the new rows are
+dropped. A new optional field doesn't need that order: supervisor ops are not strict, so an old
+broker strips the field. The capture queue still waits on `bad_frame`, because a capture is never
+dropped.
+
 - The supervisor sends `run_start` when a worker starts and `run_end` with tokens and `ctx` when it
   ends. A running worker's live context stays in the snapshot (`WorkerSnapshot.ctx`), as today.
 - The orchestrator's share of a session (today `orchestrator` on `ProjectBoard` sessions) is a run
