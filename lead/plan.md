@@ -73,7 +73,10 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   with BOB-4, before BOB-9; 4 left.
 - Luigi 3855419: BOB-3 follow-ups. Broker DEPLOYED (7th) 06:27:28Z from v2 8d34eef (= 3855419 + lead/):
   Version ID f17550b3-5f07-47f3-9870-70ef3bc62bbe. Checks ~06:33Z. Peach w_19fd3bfe accepts BOB-3.
-- Luigi w_335afdd9: BOB-4 (+ history = BOB-14 AC 5, found-in preset, #feature/<project>/<id>).
+- BOB-3 deploy checks 06:33Z PASS.
+- ~06:35Z the usage limit stopped Luigi w_335afdd9 (BOB-4 begun, uncommitted in his worktree) and Peach
+  w_19fd3bfe (BOB-3: AC 2, 4-7, DoD 1, 3, 4 checked; no handoff). Casper: "Limit hit, pls continue".
+- 13:52Z resumed: Luigi w_a53c1f42 (BOB-4 from the uncommitted diff), Peach w_a2341d79 (finish BOB-3).
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
