@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync, renameSync } from
 import { join, relative, resolve, isAbsolute } from "node:path";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import {
+  BoardOp,
   type BoardCtx,
   type BoardOpInput,
   type BoardResults,
@@ -109,7 +110,15 @@ const ORPHAN_TTL_MS = 24 * 3_600_000;
 /** The most tasks a board ctx carries (the protocol's BoardCtx). */
 const MAX_TASKS = 50;
 /** A queued board report the board refuses is dropped, not retried: a retry gets the same answer and blocks the rows behind it. */
-const FINAL_BOARD_ERRORS = new Set(["invalid", "forbidden", "conflict", "frame_too_large", "secret_detected"]);
+const FINAL_BOARD_ERRORS = new Set(["invalid", "forbidden", "conflict", "frame_too_large", "secret_detected", "bad_frame"]);
+/** The longest name a slot run takes (the protocol's); a slot's command is often longer. */
+const SLOT_NAME_MAX = 100;
+
+/** A slot run's name clipped to what the protocol takes, so its report can be made. */
+function fitRunName(op: BoardOpInput): BoardOpInput {
+  if (op.op !== "slot_run" || op.name.length <= SLOT_NAME_MAX) return op;
+  return { ...op, name: `${op.name.slice(0, SLOT_NAME_MAX - 1)}…` };
+}
 
 interface Consult {
   id: string;
@@ -1615,6 +1624,8 @@ export class Supervisor {
 
   private flushing = false;
   private flushAgain = false;
+  /** The outbox row a board report wait was last logged for. */
+  private boardWaitLogged: number | null = null;
 
   private flushOutbox(): void {
     if (this.flushing) {
@@ -1661,11 +1672,20 @@ export class Supervisor {
       try {
         report = JSON.parse(item.body) as { ctx: BoardCtx | null; op: BoardOpInput };
         if (!names.has(item.to_name.toLowerCase())) throw Object.assign(new Error(`${item.to_name} is no longer a role here`), { code: "not_hosted" });
-        await this.broker.boardOp(item.to_name, report.op, report.ctx ?? undefined, 0);
+        const op = fitRunName(report.op);
+        // A row the protocol won't take is checked here: sent, the broker's bad_frame would hold up all behind it.
+        const checked = BoardOp.safeParse(op);
+        if (!checked.success) throw Object.assign(new Error(checked.error.issues[0]?.message ?? "not a board operation"), { code: "bad_row" });
+        await this.broker.boardOp(item.to_name, op, report.ctx ?? undefined, 0);
       } catch (err) {
         const code = (err as { code?: string }).code ?? (report ? undefined : "bad_row");
         const final = code !== undefined && (FINAL_BOARD_ERRORS.has(code) || code === "bad_row" || (code === "not_hosted" && !names.has(item.to_name.toLowerCase())));
-        if (!final) return;
+        if (!final) {
+          // Said once per row, so a wait that doesn't end is seen in the log (BOB-27).
+          if (this.boardWaitLogged !== item.seq) this.log.warn("board reports wait", { seq: item.seq, op: report?.op.op, code, err: (err as Error).message });
+          this.boardWaitLogged = item.seq;
+          return;
+        }
         this.log.error("a board report can't be made; dropped", { op: report?.op.op, worker: report?.ctx?.worker, code, err: (err as Error).message });
         this.store.audit("supervisor", "board:refused", report?.ctx?.worker ?? null, { op: report?.op.op ?? null, code, message: (err as Error).message });
       }

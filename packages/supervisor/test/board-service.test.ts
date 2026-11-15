@@ -165,14 +165,31 @@ describe("a run's reports", () => {
   it("drops a report made as a role no longer configured, and one that doesn't parse, so neither holds up the rest", async () => {
     const { sup, broker } = await setup();
     const ctx = { worker: "w_gone", role: "gone", project: "bobnet", session: null, tasks: [] };
-    store.addOutbox("Gone", JSON.stringify({ ctx, op: { op: "run_end", project: "bobnet", id: "w_gone" } }), "board_op");
+    store.addOutbox("Gone", JSON.stringify({ ctx, op: { op: "run_end", project: "bobnet", id: "w_gone", ended_at: "2026-11-15T00:00:00.000Z", tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, calls: 0 } }), "board_op");
     store.addOutbox("Luigi", "{not json", "board_op");
-    store.addOutbox("Luigi", JSON.stringify({ ctx: { ...ctx, worker: "w_1", role: "luigi" }, op: { op: "run_end", project: "bobnet", id: "w_1" } }), "board_op");
+    store.addOutbox("Luigi", JSON.stringify({ ctx: { ...ctx, worker: "w_1", role: "luigi" }, op: { op: "run_end", project: "bobnet", id: "w_1", ended_at: "2026-11-15T00:00:00.000Z", tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, calls: 0 } }), "board_op");
     broker.board = () => ({ ref: null, seq: 1 });
     sup.onConnected();
     await until(() => store.outbox().length === 0);
     expect(ops(broker, "run_end").map((o) => o.as)).toEqual(["Luigi"]);
     expect(store.auditLog().filter((a) => a.action === "board:refused").map((a) => JSON.parse(a.detail).code).sort()).toEqual(["bad_row", "not_hosted"]);
+  });
+
+  it("clips a slot run's long name, and drops a row the protocol won't take, so neither holds up the rest (BOB-27)", async () => {
+    const { sup, broker } = await setup();
+    const ctx = { worker: "w_1", role: "luigi", project: "bobnet", session: null, tasks: [] };
+    const long = `cd /Users/ct/Code/bobnet-mcp-luigi/packages/broker; npx vitest run test/board.test.ts -t "progress" 2>&1 | tail -15`;
+    store.addOutbox("Luigi", JSON.stringify({ ctx, op: { op: "slot_run", project: "bobnet", external_id: "mbp-1:s1", name: long, status: "running" } }), "board_op");
+    store.addOutbox("Luigi", JSON.stringify({ ctx, op: { op: "run_end", project: "bobnet" } }), "board_op");
+    store.addOutbox("Luigi", JSON.stringify({ ctx, op: { op: "run_end", project: "bobnet", id: "w_1", ended_at: "2026-11-15T00:00:00.000Z", tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, calls: 0 } }), "board_op");
+    broker.board = () => ({ ref: null, seq: 1 });
+    sup.onConnected();
+    await until(() => store.outbox().length === 0);
+    const [slot] = ops(broker, "slot_run").map((o) => o.op as Extract<BoardOpInput, { op: "slot_run" }>);
+    expect(slot!.name).toHaveLength(100);
+    expect(slot!.name.endsWith("…")).toBe(true);
+    expect(ops(broker, "run_end")).toHaveLength(1);
+    expect(store.auditLog().filter((a) => a.action === "board:refused").map((a) => JSON.parse(a.detail).code)).toEqual(["bad_row"]);
   });
 });
 
