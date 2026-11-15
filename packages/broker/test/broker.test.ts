@@ -269,6 +269,8 @@ describe("dashboard", () => {
     expect(live).toMatchObject({ laptop: "mbp-1", snapshot: { workers: [{ id: "w_1" }] } });
     const d = await owner.request({ t: "dashboard" });
     expect(d.laptops).toEqual([{ laptop: "mbp-1", at: expect.any(String), snapshot }]);
+    // The broker's clock, which the dashboard judges a report's age by (Toad, BOB-26 minor 6).
+    expect(Math.abs(Date.parse(d.now!) - Date.now())).toBeLessThan(60_000);
   });
 
   const board: ProjectBoard = {

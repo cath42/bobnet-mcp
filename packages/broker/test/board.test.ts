@@ -634,9 +634,13 @@ describe("the supervisor's operations (ADR 0001 §4, §9, §10)", () => {
     const first = await ok(bill, end);
     expect(await ok(bill, { ...end, tokens: tokens(5) })).toMatchObject({ seq: first.seq });
 
+    // Context per call only when asked: an agent's board_get of a session doesn't carry a chart (Toad, BOB-4 review 1).
     const got = await ok(owner, { op: "get", project: "helix", session, history: true });
-    expect(got.session).toMatchObject({ tokens: tokens(100), runs: [{ id: "w_bill", agent: "Bill", laptop: "mbp-1", calls: 3, tokens: tokens(100), tasks: [t1], ended_at: at(30), ctx: [1000, 70000, 0x10000000], remote_url: null }] });
+    expect(got.session).toMatchObject({ tokens: tokens(100), runs: [{ id: "w_bill", agent: "Bill", laptop: "mbp-1", calls: 3, tokens: tokens(100), tasks: [t1], ended_at: at(30), remote_url: null }] });
+    expect(got.session!.runs[0]).not.toHaveProperty("ctx");
     expect(got.session!.runs[0]).not.toHaveProperty("cost_usd");
+    const charted = await ok(owner, { op: "get", project: "helix", session, ctx: true });
+    expect(charted.session!.runs[0]!.ctx).toEqual([1000, 70000, 0x10000000]);
     await runInDurableObject(board(), (_, state) => {
       const blob = state.storage.sql.exec<{ ctx: ArrayBuffer }>("SELECT ctx FROM runs WHERE id = 'w_bill'").one().ctx;
       const view = new DataView(blob);
@@ -707,7 +711,7 @@ describe("the supervisor's operations (ADR 0001 §4, §9, §10)", () => {
       ok(bill, { op: "slot_run", project: "helix", external_id: `s_${n}`, name: "land", status, started_at: at(start), ...(end === undefined ? {} : { ended_at: at(end) }) });
     await slot(1, "passed", 1, 3);
     await slot(2, "passed", 4, 10);
-    const two = (await ok(owner, { op: "get", project: "helix", session })).session!;
+    const two = (await ok(owner, { op: "get", project: "helix", session, ctx: true })).session!;
     expect(two.runs[0]).toMatchObject({ remote_url: "https://claude.ai/code/s_1", ctx: [] });
     expect(two.ci_runs.map((c) => [c.external_id, c.status, c.usual_ms])).toEqual([["s_1", "passed", null], ["s_2", "passed", null]]);
     await slot(3, "passed", 11, 15);

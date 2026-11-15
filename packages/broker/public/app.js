@@ -413,7 +413,7 @@ async function loadFeature(key, ref) {
       boardOp({ op: "get", project: key, ref, history: true, with_tasks: true }),
       listAll({ op: "list", project: key, of: "tasks", feature: ref }, "items"),
     ]);
-    const sessions = await Promise.all(got.item.sessions.map(({ feature, kind, label }) => boardOp({ op: "get", project: key, session: { feature, kind, label } }).then((r) => r.session)));
+    const sessions = await Promise.all(got.item.sessions.map(({ feature, kind, label }) => boardOp({ op: "get", project: key, session: { feature, kind, label }, ctx: true }).then((r) => r.session)));
     sessions.sort((a, b) => a.started_at.localeCompare(b.started_at));
     feats.set(id, { item: got.item, history: got.history ?? [], tasks, sessions, error: null });
   } catch (err) {
@@ -1169,8 +1169,15 @@ function sessionOf(w) {
 }
 /** The agents on a feature now, from their declared sessions; nothing is guessed from a brief (roadmap-view 5). */
 const onFeature = (key, ref) => running().filter((w) => w.project === key && sessionOf(w)?.feature === ref);
+/**
+ * How far this device's clock runs ahead of the broker's: a report's `at` is the broker's, and a phone
+ * set a few minutes off would otherwise call every laptop stale (Toad, BOB-26 minor 6). Taken from the
+ * dashboard reply's `now`, then from each live report, which the broker stamps as it sends.
+ */
+let skew = 0;
+const brokerNow = () => Date.now() - skew;
 /** A laptop whose supervisor hasn't reported for three heartbeats (60 s each): it is down or cut off, so its last report is history. */
-const staleReport = (l) => Date.now() - Date.parse(l.at) > 3 * 60_000;
+const staleReport = (l) => brokerNow() - Date.parse(l.at) > 3 * 60_000;
 /** Requests a live supervisor can still act on: a stale laptop's last list is never offered (BOB-26). */
 const pendingAll = () => [...state.laptops.values()].filter((l) => !staleReport(l)).flatMap((l) => l.snapshot.pending.map((p) => ({ ...p, laptop: l.laptop })));
 const projectName = (key) => svc.projects?.find((p) => p.key === key)?.name ?? key;
@@ -1946,6 +1953,7 @@ function connect() {
           break;
         }
         if (f.rid === dashboardRid) {
+          if (f.result.now) skew = Date.now() - Date.parse(f.result.now);
           state.peers = f.result.peers;
           state.laptops = new Map(f.result.laptops.map((l) => [l.laptop, l]));
           state.boards = new Map((f.result.boards ?? []).map((b) => [`${b.laptop}|${b.board.project}`, b]));
@@ -1965,6 +1973,7 @@ function connect() {
         break;
       }
       case "report":
+        skew = Date.now() - Date.parse(f.at);
         state.laptops.set(f.laptop, { laptop: f.laptop, at: f.at, snapshot: f.snapshot });
         scheduleRender();
         break;

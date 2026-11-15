@@ -177,8 +177,8 @@ describe("import (ADR 0001 §11)", () => {
     expect(added).toMatchObject([{ table: "projects", record: "helix", actor: { kind: "board", who: "import@mbp-1" } }]);
     expect(added[0]!.reason).toContain("imported from BobNet's board");
     // The rebuilt board works: a session found by name, a run's context as it was.
-    const got = await ok(owner, { op: "get", project: "helix", session: { feature: f1, kind: "build", label: "1" } });
-    expect(got.session).toMatchObject({ runs: [{ id: "w_bill", calls: 2 }] });
+    const got = await ok(owner, { op: "get", project: "helix", session: { feature: f1, kind: "build", label: "1" }, ctx: true });
+    expect(got.session).toMatchObject({ runs: [{ id: "w_bill", calls: 2, ctx: [1000, 0x10000000] }] });
   });
 
   it("refuses a project the board has, by key or prefix, and writes nothing", async () => {

@@ -167,6 +167,8 @@ export const BoardOp = z.discriminatedUnion("op", [
     history: z.boolean().optional(),
     /** With `history`, a feature's history includes its tasks' events, merged in order (spec: History, With its tasks). */
     with_tasks: z.boolean().optional(),
+    /** A session's runs with their context per call (§9): the dashboard's chart asks; an agent's read leaves it out. */
+    ctx: z.boolean().optional(),
   }),
   z.object({ op: z.literal("grants"), ...project }),
   /**
@@ -575,8 +577,8 @@ export interface RunRecord {
   resumed: boolean;
   tokens: TokenTotals;
   calls: number;
-  /** Context per call, in tokens, as its run_end reported it (§9); empty while it runs. */
-  ctx: number[];
+  /** Context per call, in tokens, as its run_end reported it (§9); empty while it runs. Only on a `get` with `ctx`. */
+  ctx?: number[];
   /** Its Remote Control session, when it ran with one. */
   remote_url: string | null;
   tasks: string[];

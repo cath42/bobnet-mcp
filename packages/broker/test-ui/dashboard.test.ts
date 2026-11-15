@@ -302,7 +302,10 @@ describe("Sessions", () => {
   it("marks a laptop that stopped reporting and never offers its last requests (BOB-26)", async () => {
     const ws = FakeSocket.last;
     const old = { id: "r_old", worker_id: "w_gone", name: "Luigi", kind: "approval", tool: "Bash", tier: "human", created_at: iso(600), preview: "rm -rf dist" };
+    // Its last report came 10 min ago, by the broker's clock: mbp-1's heartbeat since says what time it is now.
+    const heartbeat = () => ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
     ws.frame({ t: "report", laptop: "mbp-2", at: iso(10), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [old], usage: [] } });
+    heartbeat();
     await settle();
     const card = [...$("laptops").children].find((c) => c.textContent!.includes("mbp-2"))!;
     expect(card.textContent).toContain("no recent report");
@@ -317,6 +320,20 @@ describe("Sessions", () => {
     await go("#now");
     expect($("needs-list").textContent).toContain("r_old");
     ws.frame({ t: "report", laptop: "mbp-2", at: iso(10), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [], usage: [] } });
+    heartbeat();
+    await settle();
+    await go("#sessions");
+  });
+
+  it("judges a report's age by the broker's clock, not this device's (Toad, BOB-26 minor 6)", async () => {
+    const ws = FakeSocket.last;
+    const ask = { id: "r_skew", worker_id: "w_1", name: "records-agent", kind: "approval", tool: "Bash", tier: "human", created_at: iso(12), preview: "git status" };
+    // This device runs 10 min ahead: the report the broker stamps now reads 10 min old here, and is live.
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(10), snapshot: { ...dashboard.laptops[0]!.snapshot, pending: [ask] } });
+    await settle();
+    await go("#now");
+    expect($("needs-list").textContent).toContain("r_skew");
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
     await settle();
     await go("#sessions");
   });

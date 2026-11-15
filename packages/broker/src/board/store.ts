@@ -333,7 +333,7 @@ export class BoardStore {
     if ((op.ref === undefined) === (op.session === undefined)) throw new BoardError("invalid", "get takes a ref or a session, one of them");
     if (op.session) {
       const s = this.session(p, op.session);
-      return { session: this.sessionRecord(s), ...(op.history ? { history: this.history("sessions", s.pk) } : {}) };
+      return { session: this.sessionRecord(s, op.ctx === true), ...(op.history ? { history: this.history("sessions", s.pk) } : {}) };
     }
     if (op.ref === undefined) throw new BoardError("invalid", "get takes a ref or a session");
     if (/^[QA]-\d+$/.test(op.ref)) {
@@ -1904,7 +1904,7 @@ export class BoardStore {
 
   // ---------- Sessions, questions, runs ----------
 
-  private sessionRecord(s: SessionRow): SessionRecord {
+  private sessionRecord(s: SessionRow, withCtx = false): SessionRecord {
     const feature = this.refOf(s.feature);
     const tasks = (role: string) =>
       this.sql.exec<{ item: number }>("SELECT item FROM session_tasks WHERE session = ? AND role = ? ORDER BY item", s.pk, role).toArray().map((r) => this.refOf(r.item));
@@ -1937,7 +1937,7 @@ export class BoardStore {
             },
       tasks_moved: this.tasksMoved(s.pk),
       tokens: this.sessionTokens(s.pk),
-      runs: runs.map((r) => this.runRecord(r)),
+      runs: runs.map((r) => this.runRecord(r, withCtx)),
       ci_runs: this.sql
         .exec<CiRunRow>("SELECT * FROM ci_runs WHERE session = ? ORDER BY coalesce(started_at, ended_at), pk", s.pk)
         .toArray()
@@ -1986,7 +1986,8 @@ export class BoardStore {
     return Math.round(ms.length % 2 ? ms[mid]! : (ms[mid - 1]! + ms[mid]!) / 2);
   }
 
-  private runRecord(r: RunRow): RunRecord {
+  /** A run; its context per call only when asked (§9): up to 2000 numbers an agent's board_get has no use for. */
+  private runRecord(r: RunRow, withCtx = false): RunRecord {
     return {
       id: r.id,
       agent: r.agent,
@@ -1999,7 +2000,7 @@ export class BoardStore {
       resumed: r.resumed === 1,
       tokens: { input: r.input, output: r.output, cache_read: r.cache_read, cache_write: r.cache_write },
       calls: r.calls,
-      ctx: ctxPoints(r["ctx"] ?? null),
+      ...(withCtx ? { ctx: ctxPoints(r["ctx"] ?? null) } : {}),
       remote_url: (r["remote_url"] as string | null) ?? null,
       tasks: this.sql.exec<{ item: number }>("SELECT item FROM run_tasks WHERE run = ? ORDER BY item", r.pk).toArray().map((t) => this.refOf(t.item)),
     };

@@ -537,6 +537,7 @@ export class Broker extends DurableObject<Env> {
         .toArray()
         .map((u): UpdateItem => ({ seq: u.seq, from: u.from_addr, laptop: u.laptop, text: u.text, at: u.at })),
       traffic: recent.slice(0, DASHBOARD_ITEMS).map(traffic),
+      now: new Date().toISOString(),
     };
   }
 

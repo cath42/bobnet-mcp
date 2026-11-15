@@ -278,6 +278,8 @@ export interface Dashboard {
   boards: Array<{ laptop: string; at: string; board: ProjectBoard }>;
   updates: UpdateItem[];
   traffic: TrafficItem[];
+  /** The broker's clock as it answered: the dashboard judges a report's age by it, not by its own device's clock. */
+  now?: string;
 }
 
 // ---------- Client → broker ----------
