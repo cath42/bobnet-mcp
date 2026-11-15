@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ServerFrame } from "@bobnet/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket as WsClient, WebSocketServer } from "ws";
 import { BOARD_TOOLS, fitHandoff, handoffBudget } from "../src/board-tools.ts";
 import { CaptureQueue, type CaptureSend } from "../src/capture-queue.ts";
@@ -29,8 +29,8 @@ const until = async (cond: () => boolean, ms = 3000) => {
 const queued = (d: string) => readdirSync(d).filter((n) => n.endsWith(".json"));
 
 /** A broker that answers registers, and board_op with what `board` says. */
-function fakeBroker(board: (op: Record<string, unknown>) => { ok: unknown } | { code: string; message: string } = () => ({ ok: {} })) {
-  const wss = new WebSocketServer({ port: 0 });
+function fakeBroker(board: (op: Record<string, unknown>) => { ok: unknown } | { code: string; message: string } = () => ({ ok: {} }), port = 0) {
+  const wss = new WebSocketServer({ port });
   const ops: Array<Record<string, unknown>> = [];
   const sockets = new Set<import("ws").WebSocket>();
   wss.on("connection", (ws) => {
@@ -53,7 +53,13 @@ function fakeBroker(board: (op: Record<string, unknown>) => { ok: unknown } | { 
   return {
     url: `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`,
     ops,
+    port: (wss.address() as AddressInfo).port,
     close: () => new Promise<void>((r) => wss.close(() => r())),
+    /** The broker goes away: its connections drop and it takes no new ones. */
+    down: () => {
+      for (const ws of sockets) ws.terminate();
+      return new Promise<void>((r) => wss.close(() => r()));
+    },
   };
 }
 
@@ -126,6 +132,57 @@ describe("a board operation while the broker is away", () => {
     });
     expect(Date.now() - t0).toBeGreaterThanOrEqual(190);
   });
+});
+
+describe("a board tool while the broker is down (BOB-2 #12, ADR 0001 §12)", () => {
+  async function away() {
+    const broker = fakeBroker(() => ({ ok: { item: { ref: "LAND-1" } } }));
+    cleanup.push(broker.close);
+    const s = createServer({ url: broker.url, credentials: { clientId: "x", clientSecret: "y" }, log: quiet, WebSocketImpl: WsImpl, captureDir: dir() });
+    s.connection.start();
+    cleanup.push(() => s.connection.stop());
+    await s.register({ name: "Luigi" });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "t", version: "1" });
+    await Promise.all([s.server.connect(a), client.connect(b)]);
+    const lost = Date.now();
+    await broker.down();
+    await until(() => !s.connection.connected);
+    // The agent's own MCP client allows the tool longer than the board waits.
+    const get = () =>
+      client.callTool({ name: "board_get", arguments: { project: "helix", ref: "LAND-1" } }, undefined, { timeout: 120_000 }) as Promise<{ isError?: boolean; content: Array<{ text: string }> }>;
+    return { broker, get, lost };
+  }
+
+  it("waits the full 60 s, then fails saying since when, for the agent to retry", async () => {
+    const { get, lost } = await away();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    cleanup.push(() => vi.useRealTimers());
+    let settled = false;
+    const result = get().finally(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(59_900);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    const r = await result;
+    expect(r.isError).toBe(true);
+    const since = /^unavailable: the board is unavailable since (\S+); wait and retry$/.exec(r.content[0]!.text);
+    expect(since).not.toBeNull();
+    // Since the broker was lost, not since the call.
+    expect(Date.parse(since![1]!)).toBeGreaterThanOrEqual(lost - 1);
+    expect(Date.parse(since![1]!)).toBeLessThan(lost + 1000);
+  });
+
+  it("goes through when the broker is back within the wait", async () => {
+    const { broker, get } = await away();
+    const result = get();
+    await new Promise((r) => setTimeout(r, 300));
+    const back = fakeBroker(() => ({ ok: { item: { ref: "LAND-1" } } }), broker.port);
+    cleanup.push(back.down);
+    const r = await result;
+    expect(r.isError ?? false).toBe(false);
+    expect(JSON.parse(r.content[0]!.text)).toMatchObject({ item: { ref: "LAND-1" } });
+    expect(back.ops).toHaveLength(1);
+  }, 10_000);
 });
 
 describe("the board tools in the channel client", () => {
