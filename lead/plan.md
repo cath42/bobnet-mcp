@@ -1,7 +1,22 @@
 # Plan (Mario)
 
-Updated 2026-11-15 02:10Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41cbc1dc), deployed on
-Casper's go through poe; ubu1 on rc.29; mbp-1's supervisor restarts into rc.29 next.
+Updated 2026-11-15 02:50Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41cbc1dc, live
+02:33:23Z); mbp-1's supervisor on rc.29 since 02:34:28Z (pid 36994); ubu1 on rc.29.
+
+## After the rc.29 restart: checks (sent to poe)
+- (a) versions: FAIL. Every peer has `client: null`: all registered with the old broker code.
+- (b) reports: the first two failed (02:34:28Z, 02:34:31Z) with the old broker's schema error:
+  `cost_usd` was required until 42a7924 (Nov 14), and rc.29 doesn't send it. The new version went
+  live 02:33:23Z; mbp-1 reconnected 64 s later and was served by the old code. Nothing has failed
+  since. The live code is new (peers carry the `client` key). The snapshot validates against
+  rc.29's ReportFrame (checked offline on a copy of supervisor.db). No code bug, no redeploy, no
+  release. The pin is NOT in effect yet: laptop_supervisors came with 2460707 (Nov 14), so the old
+  code's registration didn't write it.
+- (c) stale land: PASS ("rebased first", e221738..7ee3adf).
+- (d) consumed_by: PASS for spawn delivery. m_0e7fbbf0 was delivered again (the rc.28 mid-turn gap).
+  Its fix e221738 is on v2, for rc.30.
+- Fully deployed needs each laptop to re-register with the new broker: restart mbp-1's supervisor
+  (poe) and ubu1's (poe@ubu1). poe's own sessions too. Then (a) shows versions and (b) pins.
 
 ## Running
 - Toad (w_39a3303d): done, d64d65b (architecture/reviews/2026-11-14-backlog-import-review.md).
