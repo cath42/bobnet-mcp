@@ -526,6 +526,27 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     await go("#roadmap/bobnet");
   });
 
+  it("shows a Done feature with unticked criteria as Done, its real count, and 'Done, criteria not ticked' (BOB-3 #3)", async () => {
+    const land22 = feat("BOB-22", "R1", "Done", { title: "Tracts through the write path", progress: { checked: 3, total: 138 } });
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 73, refs: [] });
+    await lists(releases, [...features, land22]);
+    (view().querySelector("#rel-R1 tr.fold button") as HTMLElement).click();
+    await settle();
+    const row = [...view().querySelectorAll("#rel-R1 tr")].find((tr) => tr.querySelector("a.id")?.textContent === "BOB-22")!;
+    expect(row.querySelector(".badge")!.textContent).toBe("done");
+    expect(row.textContent).toContain("3 of 138");
+    expect(row.querySelector(".sub-note")!.textContent).toBe("Done, criteria not ticked");
+    // A Done feature with every criterion ticked has no note.
+    const ticked = [...view().querySelectorAll("#rel-R1 tr")].find((tr) => tr.querySelector("a.id")?.textContent === "BOB-1")!;
+    expect(ticked.querySelector(".sub-note")).toBeNull();
+    await go("#feature/BOB-22");
+    expect($("feature-head").textContent).toContain("3 of 138 criteria");
+    expect($("feature-head").querySelector(".sub-note")!.textContent).toBe("Done, criteria not ticked");
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 74, refs: [] });
+    await go("#roadmap/bobnet");
+    await lists();
+  });
+
   it("turns the gates on behind Edit your gates, naming the PO for anything else", async () => {
     (view().querySelector(".gates-btn") as HTMLButtonElement).click();
     await settle();

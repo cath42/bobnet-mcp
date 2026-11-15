@@ -77,16 +77,30 @@ function fakeBroker() {
     b("BOB-23", "Broker: internal error with the rid, audit tail read, stale-report banner", 6),
   ];
   let next = 26;
-  const releaseRecord = (r, i) => {
-    const fs = board.features.filter((x) => x.release === r.ref);
-    return { goal: null, ord: i + 1, spec_url: null, closed_at: r.status === "closed" ? new Date().toISOString() : null, closed_by: null, ...r,
-      features: { done: fs.filter((x) => x.status === "Done").length, total: fs.length }, backlog: counts((d) => d.release === r.ref) };
+  // BOB-3's acceptance (AC 1, 3, 8): a second project in the service, Helix's real board as Daisy's sample has it
+  // (design/BOB-1/sample/helix.js, 282cca2fe: 29 features, 3 releases, 103 drafts; LAND-22 Done at 3 of 138).
+  const hx = window.TWO && window.SAMPLES?.helix;
+  const helix = hx && {
+    releases: hx.releases.map((r, i) => ({ ref: `R${i + 1}`, title: r.title.replace(/^"|"$/g, ""), status: ["closed", "open", "planned"][i] ?? "planned" })),
+    features: [
+      ...hx.releases.flatMap((r, i) => r.features.map((x) => f(x.id, `R${i + 1}`, x.status, x.title, x.ac[0], x.ac[1], { ord: Number(x.ordinal), tasks: { done: x.tasksDone, total: x.tasks }, open_since: x.id === hx.feature ? iso(90) : null }))),
+      ...hx.noRelease.map((x) => f(x.id, null, x.status, x.title, 0, 0, { ord: null })),
+    ],
+    backlog: hx.drafts.map((d) => ({ ref: d.id, kind: "backlog", type: d.type === "bug" ? "bug" : "chore", status: "Draft", title: d.title, parent: null, release: null, ord: null, labels: [], progress: { checked: 0, total: 0 },
+      tasks: null, open_since: null, archived_at: null, created_at: iso(d.age * 24 * 60), captured_by: "Picard@mbp-1", casper_words: null, bug_where: null, blocks_use: false, parent_hint: null })),
   };
-  const counts = (pick) => {
-    const its = board.backlog.filter(pick);
+  const boardOf = (key) => (key === "helix" && helix ? helix : board);
+  const releaseRecord = (r, i, bd = board) => {
+    const fs = bd.features.filter((x) => x.release === r.ref);
+    return { goal: null, ord: i + 1, spec_url: null, closed_at: r.status === "closed" ? new Date().toISOString() : null, closed_by: null, ...r,
+      features: { done: fs.filter((x) => x.status === "Done").length, total: fs.length }, backlog: counts((d) => d.release === r.ref, bd) };
+  };
+  const counts = (pick, bd = board) => {
+    const its = bd.backlog.filter(pick);
     return { items: its.length, bugs: its.filter((d) => d.type === "bug").length, oldest: its.map((d) => d.created_at).sort()[0] ?? null };
   };
   const project = { key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] };
+  const projects = helix ? [project, { key: "helix", name: "Helix", prefix: "LAND", draft_prefix: "DRAFT", lead: "Picard@mbp-1", po: "Picard@mbp-1", repos: [] }] : [project];
   // Example waits for the overview's shots: no record of them exists to sample (as Daisy's prototype marks them).
   const waits = [
     { project: "bobnet", kind: "question", ref: "Q-3", feature: "BOB-9", text: "Import Helix's board at its current main, or at the last release tag?", recommended: null,
@@ -94,25 +108,27 @@ function fakeBroker() {
     { project: "bobnet", kind: "action", ref: "A-1", feature: null, text: "Add the CI token to the broker's secrets", recommended: null,
       holds: { items: [], sessions: [] }, waiting_sessions: [], needed_before: { release: "R2" }, asked_by: "Mario@mbp-1", since: iso(600), blocking: false },
   ];
-  const overviewRow = () => {
-    const open = board.releases.findIndex((r) => r.status === "open");
-    const live = board.features.filter((x) => x.open_since && x.status !== "Done");
+  const overviewRow = (p = project) => {
+    const bd = boardOf(p.key);
+    const open = bd.releases.findIndex((r) => r.status === "open");
+    const live = bd.features.filter((x) => x.open_since && x.status !== "Done");
     return {
-      project, release: open < 0 ? null : releaseRecord(board.releases[open], open), release_number: open < 0 ? null : open + 1,
-      open: live, next_ready: board.features.find((x) => x.status === "Ready" && !x.open_since) ?? null,
-      waits_on_you: waits.find((w) => w.blocking)?.ref ?? null, backlog: counts(() => true), no_release: counts((d) => d.release === null),
+      project: p, release: open < 0 ? null : releaseRecord(bd.releases[open], open, bd), release_number: open < 0 ? null : open + 1,
+      open: live, next_ready: bd.features.find((x) => x.status === "Ready" && !x.open_since) ?? null,
+      waits_on_you: p === project ? (waits.find((w) => w.blocking)?.ref ?? null) : null, backlog: counts(() => true, bd), no_release: counts((d) => d.release === null, bd),
     };
   };
   const last = (release) => Math.max(0, ...board.features.filter((x) => x.release === release).map((x) => x.ord)) + 1000;
   let seq = 100;
   const answer = (op) => {
     switch (op.op) {
-      case "projects": return { projects: [project] };
-      case "overview": return { projects: [overviewRow()] };
+      case "projects": return { projects };
+      case "overview": return { projects: projects.filter((p) => !op.project || p.key === op.project).map(overviewRow) };
       case "waits": return { waits, answered: [] };
       case "list": {
-        if (op.of === "releases") return { releases: board.releases.map(releaseRecord), total: board.releases.length, cursor: null };
-        const items = op.of === "backlog" ? board.backlog : board.features;
+        const bd = boardOf(op.project);
+        if (op.of === "releases") return { releases: bd.releases.map((r, i) => releaseRecord(r, i, bd)), total: bd.releases.length, cursor: null };
+        const items = op.of === "backlog" ? bd.backlog : bd.features;
         return { items, total: items.length, cursor: null };
       }
       case "update": { const x = board.backlog.find((y) => y.ref === op.ref); Object.assign(x, op.set); return { ref: op.ref, seq: ++seq }; }
@@ -181,6 +197,11 @@ const all = [
   ["bob3-roadmap", "roadmap/bobnet", [], true],
   ["bob3-roadmap-unfolded", "roadmap/bobnet", [(p) => p.getByRole("button", { name: /done \(/ }).click()], true],
   ["bob3-feature", "feature/BOB-3", [], false],
+  // BOB-3's acceptance (Peach, w_a2341d79): two service projects (AC 1), LAND-22 Done at 3 of 138 (AC 3), Helix-sized on a phone (AC 8).
+  ["bob3acc-overview-two-projects", "overview", [], true],
+  ["bob3acc-roadmap-two-projects", "roadmap/bobnet", [], false],
+  ["bob3acc-roadmap-helix", "roadmap/helix", [(p) => p.locator("#rel-R2").getByRole("button", { name: /done \(/ }).click()], true],
+  ["bob3acc-feature-done-unticked", "feature/LAND-22", [], false],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 
@@ -191,6 +212,10 @@ try {
     for (const [w, [width, height]] of Object.entries(widths)) {
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2 });
       if (name.startsWith("bob3")) await page.addInitScript(() => (window.BOB3 = true));
+      if (name.startsWith("bob3acc")) {
+        await page.addInitScript(() => (window.TWO = true));
+        await page.addInitScript({ path: join(here, "../../../design/BOB-1/sample/helix.js") });
+      }
       await page.addInitScript(fakeBroker);
       await page.goto(`${base}#${hash}`);
       await page.waitForSelector(hash.startsWith("triage") ? ".totals" : hash.startsWith("overview") ? ".prow" : hash.startsWith("feature") ? "#feature-head" : "section.release");
