@@ -96,6 +96,11 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - Toad (37cba11): BOB-4 MAJOR before deploy: run ctx on every board_get (~10-20k tokens per MCP call);
   fix get {ctx?: boolean}. BOB-26 signed off; minor 6 (stale rule uses browser clock). Both sent to
   Luigi as one commit ahead of BOB-5; deploy from its hash. Minors 2-4 after BOB-5.
+- Daisy w_4f2af61c (9eba303): BOB-4 gaps 1, 3-5 accepted, 2 changed; 10 small changes to Luigi
+  (own commit, before BOB-5 lands).
+- Luigi 27bbdd0: Toad's BOB-4 major (get ctx?: boolean) + BOB-26 minor 6 (broker `now`). Broker
+  DEPLOYED (8th) 15:52:53Z from v2 c2fdf97 (= 27bbdd0 + lead/): Version ID
+  61ec883e-77a6-4b75-b56c-97ee71990a70 (BOB-4, BOB-26 dashboard part). Checks ~15:58Z.
 - Luigi w_b7d5a605: BOB-5 (last view). Then: deploy (BOB-4 + BOB-26 dashboard, or with BOB-5), rc.34.
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
