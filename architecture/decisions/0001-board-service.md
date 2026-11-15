@@ -459,7 +459,7 @@ today's rows, `board_op` for these) by an additive store migration. It is flushe
 connect, as today's rows are (`supervisor.ts:1392` `flushOutbox`), and a row is deleted only after the broker's
 `ok`. Each operation is idempotent by key: `run_start` and `run_end` by run id (a second `run_end`
 for an ended run is `ok` and changes nothing), `push` by (`repo`, `sha`), `slot_run` by its
-`external_id`. A replay after a lost `ok` does no harm. `session_join` is not queued: spawn waits for
+`external_id`, `run_remote` by run id (it sets the link once). A replay after a lost `ok` does no harm. `session_join` is not queued: spawn waits for
 it (§12). §12's capture queue stays separate because captures come from every client, not only
 supervisors.
 
@@ -476,6 +476,17 @@ a new supervisor op deploys before the supervisor that sends it**. Otherwise the
 dropped. A new optional field doesn't need that order: supervisor ops are not strict, so an old
 broker strips the field. The capture queue still waits on `bad_frame`, because a capture is never
 dropped.
+
+**Amendment, 2026-11-15: a run's Remote Control link, `run_remote`** (BOB-4 AC 7, review
+`reviews/2026-11-15-bob4-run-remote-review.md`). A worker's link arrives after its `run_start`, so
+`run_start` can't carry it. `run_remote {project, id, remote_url}` is a supervisor op. It goes through
+the same outbox, queued after the run's `run_start`, and only for the ctx's own worker. It is
+idempotent by (`project`, `id`), and `remote_url` is set once: `UPDATE ... WHERE remote_url IS NULL`.
+With no run, a replay, or a run that already has a link, it changes nothing and answers `ok` with no
+event; the outbox treats that as delivered. It never creates a run. `remote_url` is `https://` only
+on every op that carries it, because the dashboard renders it as a link. Rollout: the broker
+deploys first, then the supervisor that sends it. Until then an old broker answers `bad_frame` and
+the row is dropped (`board:refused`); that run keeps a null link.
 
 - The supervisor sends `run_start` when a worker starts and `run_end` with tokens and `ctx` when it
   ends. A running worker's live context stays in the snapshot (`WorkerSnapshot.ctx`), as today.
