@@ -429,9 +429,10 @@ is `running` or `queued`. This is derived, not a worker state.
   projects, rules or events), which is the rebuild (`403` otherwise). Only the owner makes rules for
   every project on a board in use.
 - **The Backlog.md import (BOB-9)** is a supervisor command that reads a project's Backlog.md at a
-  named commit with today's reader (`board.ts` `parseBacklogItem`, the only Markdown reader that
-  survives), plus Helix's `lead/questions.md` for `Q-n` and `A-n`. It writes that same export shape
-  and posts it to the import. It is the one place Markdown is read, and it runs once per project.
+  named commit with today's reader (`board.ts` `readBacklogFile`, the only Markdown reader that
+  survives; the dashboard's `parseBacklogItem` is it, cut), plus Helix's `lead/questions.md` for
+  `Q-n` and `A-n`. It writes that same export shape, with the project's rules from Peach's rows (§5)
+  and its lead and PO, and posts it to the import. It is the one place Markdown is read, and it runs once per project.
   Its report lists what it couldn't map (a task whose milestone differs from its feature's, a
   dependency on a missing id), for the PO to settle before the cut-over. A feature in flight at the
   cut-over gets an open session marked `imported`, so `open_since` holds (BOB-9 #5).
