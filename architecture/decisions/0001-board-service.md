@@ -279,6 +279,11 @@ steps view's "waiting" is derived: closed with `need: casper` and a question sti
   - backlog bugs with `blocks_use` that aren't archived;
   - pending human-tier permissions from the snapshots.
 
+**Amendment, 2026-11-14** (same review, R2 and finding 2). `record_answer` also sends the board's
+message to the project's `lead` and to `asked_by`, minus the recorder, saying it was answered in
+conversation and by whom. The dashboard sends its answers, done marks and undos with §12's `key`, so
+a reply lost between `Board` and `Broker` is replayed with its message, not lost.
+
 ### 8. Operations, the protocol and the MCP tools
 
 `packages/protocol/src/board.ts` defines every operation once, as a zod discriminated union
@@ -452,6 +457,16 @@ is `running` or `queued`. This is derived, not a worker state.
   `packages/client`, which the supervisor already imports.
 - **The dashboard** shows the board unavailable (`#states`), and Casper's captures queue in the
   browser's `localStorage` the same way, with the same `capture_id`.
+
+**Amendment, 2026-11-14: a write is sent once, whatever the connection does** (review
+`reviews/2026-11-14-bob5-service-review.md`, R1). `board_op` gains an optional `key`, a UUID that
+`BrokerConnection.boardOp` and the dashboard make once per write. `Board` stores the key with the
+actor, the op and its reply in `op_keys` (board migration 2), in the write's transaction, and keeps
+it 24 hours. A repeat returns the stored reply, messages included, and writes nothing. The same key
+with another actor or op is `invalid`. The connection resends a keyed write with the same key on
+`disconnected`, `timeout` or `unavailable` within the 60 s wait, so an agent never sees "may have
+committed". A frame without a key behaves as before. The cached reply is not board data: it is never
+exported and never parsed as structure.
 
 ## What Luigi builds first
 
