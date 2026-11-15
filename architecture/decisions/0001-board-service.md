@@ -216,6 +216,19 @@ close sessions), `questions` (may ask Casper and record his answers given in con
 missing, so nothing is closed with work silently left), and `undo` of the owner's own event, applied
 as a new event (`undo_of`). A closed release refuses features.
 
+*Close and undo (2026-11-15, Luigi's consult on BOB-2 piece a).* `close_release` takes `moves`: one
+per feature in the release that is neither Done nor archived, each to a planned or open release, or
+to none. Each moved feature goes last in its destination. The release is the only one whose status
+changes. Closing a planned release is allowed until Peach says otherwise. Backlog hints that name the
+release are left as they are. The transaction writes one `close_release` event per move (on `items`),
+then the release's event last, and replies with that last seq. `undo` takes the owner's own
+`set_release` and `close_release` events, within the same two minutes. A close's group is the
+release's event plus the `close_release` item events just before it with the same `at` and actor
+(one transaction shares `tx.at`), so no migration is needed. Undo refuses (`conflict`) when a record
+no longer holds the event's new value, or when a destination has since been closed. It restores
+release and `ord`, and a tie in `ord` falls back to `pk`. `order_releases` has no `undo`: the
+dashboard sends the inverse order.
+
 ### 6. The structured session close (BOB-2 #8, BOB-4 #2)
 
 Sessions start from spawns. When `spawn_worker` declares `session: {feature, kind, label}` for a
