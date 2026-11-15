@@ -111,7 +111,8 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   04:43Z (312 rows) behind a slot_run whose name (the command) is > protocol max 100; broker answers
   bad_frame, not in FINAL_BOARD_ERRORS, flush retries silently. Sessions had 0 tokens, no runs.
   Mario built the fix (Luigi mid-BOB-5): 5d4617f (clip slot name, BoardOp check -> bad_row, bad_frame
-  final, wait logged once). Toad w_a4cdad59 reviews.
+  final, wait logged once). Toad w_a4cdad59 (553352b): signed off for rc.34, replay safe; finding 1
+  (dashboard shows a laptop's outbox), 2 (BoardCtx check), nit 3 captured as a backlog task for Peach.
 - rc.34 CUT: a2db59e, tag v2.0.0-rc.34, installed ~/.local/share/bobnet/v2.0.0-rc.34; supersedes rc.33
   (never went live). Carries BOB-27, BOB-26 orphan expiry, BOB-10 descriptions. No broker deploy needed.
   Sent to poe (m_569e5987) with checks: outbox drains, 3 orphans expire, peers rc.34.
