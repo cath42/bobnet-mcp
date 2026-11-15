@@ -126,7 +126,8 @@ Not built in BOB-7, and where it goes:
   context, bar, tokens) and a Session total. Phone: the panel runs edge to edge in the card, labels go to
   the key, a tap shows the tooltip, and the table stacks without the bar or the model.
 - The chain ends on a dashed **Next** step: what the feature's state calls for, or "Waits on you" with the
-  question, the recommendation and what comes after.
+  question, the recommendation and what comes after (when a record holds it). Amber (`--warn`) only when it
+  waits on Casper; any other next step is `--accent` (see *BOB-4 as built*, 1).
 - Beside the chain (desktop, sticky) or under it (tablet, phone): **In no session yet** (tasks no session has
   touched) and **All tasks as the board has them now** (open on desktop, folded below 1100 px).
 - **History** (BOB-14 AC 5; decided 2026-11-15, built with BOB-4). The last section of the main column,
@@ -135,8 +136,9 @@ Not built in BOB-7, and where it goes:
   - A switch: **This feature** (default) · **With its tasks (N)**. With tasks, each line leads with the
     task's id (a link that scrolls to its row in All tasks).
   - One line per board event, **newest first**: time ("15 Nov 04:42", the full time as a tooltip) · who
-    ("Peach, PO"; "Casper" for the owner's own; "CI"; "the board" for its own) · what. When the event
-    carries a session, the session follows the who as a link to its card: "Luigi, engineer · build A".
+    ("Peach, PO"; "Luigi" when the role key is the agent's name; "Casper" for the owner's own; "CI"; "the
+    board" for its own) · what. When the event carries a session, the session follows the who as a link to
+    its card: "Luigi · build A".
   - **What**, in words from the event's changes: "status Ready → In Progress"; "release R1 → R2"; "criterion
     5 checked" with its evidence muted on the next line, cut to two lines (tap for all); "criterion 3
     unchecked"; "title changed" / "description changed" / "notes changed" with **Show** opening old and
@@ -272,6 +274,65 @@ link to the project's roadmap). Which one: the first with an agent on it, else t
 
 **Capture from a feature screen (Luigi's BOB-10 gap 1): it presets "found in".** Built with BOB-4. See
 *Capture from the Feature view* under the Feature view above.
+
+### BOB-4 as built: decided 2026-11-15 (Luigi's gaps 1-5, shots `bob4-*`; Toad's review)
+Accepted as built: the route `#feature/<project>/<id>`, the head card, On it now with its run line, the
+chain (kind dots, closed/running/waiting, outcome line, summary, links, Tasks it moved / is on), the context
+per call panel and its table, the task lists beside or under the chain at all three widths, History (switch,
+words, Show, reasons, take-backs, the import line), capture's found-in line with ×, the agent detail row,
+quiet, "waiting on Mario" and the queued line. Also accepted, Luigi's own calls: **Handoff** opens the stored
+close text in the card (path as tooltip); the close commit links to GitHub only when the project has a repo;
+session state closed / running / waiting (waiting includes an open session nobody is in); one open detail
+row per place; durations in the dashboard's `duration()` ("2h 0m", "5h 40m", not "1 h 12 min"); times in
+the browser's locale clock ("07:39 AM" is right on an en-US browser).
+
+**Gaps:**
+1. **The next step's rule: accepted as built.** A wait on Casper for the feature first; else Draft → "<PO>
+   makes it Ready"; no sessions → design; after design → build; after build → review; after review with
+   majors, blockers or sent back → "a build session for the fixes", else "<PO>'s acceptance"; an open last
+   session adds "once <it> closes"; a close with need casper / answer → "waits on you" / "waits on an
+   answer" with the Q refs. Add one case: **a Done feature has no Next** (no banner, no dashed step; the chain
+   ends on its last session). No "Then: …" while no record holds it. Colour: the banner's edge and the dashed
+   step are **amber only when it waits on Casper**; otherwise `--accent` (edge, dashed border, dashed dot,
+   the NEXT label). Amber means "you" everywhere else on the dashboard; "a review session, once Fixes closes"
+   is not his. When a second reader needs the rule (BOB-5, the Overview's Next), it moves into the store
+   (Toad, gap 1); the words stay these.
+2. **"With its tasks (N)": change.** N counting the tasks' events alone reads as a task count. Each side of
+   the switch shows the number of lines it lists: **This feature (6) · With its tasks (10)**. The folded
+   button always counts the feature's own: "History · 6 changes since 13 Nov", whichever side was last open.
+3. **Roles in history: accepted as built.** The role as stored; shown only when it isn't the agent's own
+   name; `po` → "PO" is the one mapping (no table of role keys, Toad). The spec's example is amended above.
+   The same goes for the context chart's note: it names the agent, not the role key ("fewer than three
+   earlier **Luigi** runs", not "luigi runs").
+4. **Overview's run line: accepted, deferred.** Built when the `overview` read carries each open session's
+   latest CI or slot run (Toad, gap 4; one read, no fan-out). Until then Working now has no third line and
+   Now's CI banner stays.
+5. **Now stays in the tabs** until Waits on you (BOB-5) ships: agreed.
+
+**Changes (small; they can ride with BOB-5):**
+- **One state per agent, everywhere.** On it now and the running card say "waiting on CI"; the same agent's
+  line under a task row (Tasks it is on, All tasks) says "working" with a green dot. A task row's agent line
+  takes the same state, dot and colour as On it now.
+- **Session names through `stepName` everywhere.** The task rows' agent lines read "· build Fixes" and
+  Working now reads "BOB-4 build Fixes ›"; both are "Fixes" (BOB-3 ruling 5).
+- **Next banner and step colour:** gap 1 above.
+- **History, With its tasks:** the task id gets its own column (the width of the longest id); the feature's
+  own lines leave it empty, so time, who and what line up on every row. Today a task line pushes its time
+  right. Phone: the id leads the time line.
+- **History, a changed field:** one control. Drop the ▸ before "description changed"; keep **Show** on the
+  same line as the words (today the line drops below the who).
+- **Several tasks on one agent line** (On it now, the running card, Working now): separate them with " · "
+  ("BOB-44 On it now, and agents on their tasks · BOB-45 Context per call inside a session"). On a phone
+  they run together today.
+- **The detail row's buttons:** Allow / Deny and Stop / Reset are two groups. Phone: Allow · Deny on one line,
+  Stop · Reset on the next, each half width, 44 px; never Stop beside Deny (today all four share one line).
+  Tablet and desktop: one line, 24 px between the groups.
+- **Toad's question (BOB-26): a stale laptop's requests aren't dropped silently.** While a laptop whose
+  report is stale has requests that aren't offered, Needs you ends with one muted line: "mbp-1 hasn't
+  reported for 6 min: 2 requests from it wait until it does." Nothing when it has none. Toad's minor 6
+  (judge staleness by the broker's clock) comes with it.
+- Toad's findings 1-4 are his to rule; finding 4's "N calls" from `calls`, not the downsampled `ctx`, is
+  what the spec means by calls.
 
 ### States (`#states`)
 Board unavailable (red banner: since when, showing what it last said, captures wait on the device), loading,
