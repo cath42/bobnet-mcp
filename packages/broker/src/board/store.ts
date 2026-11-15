@@ -1237,6 +1237,12 @@ export class BoardStore {
     const feature = this.feature(p, op.session.feature);
     const ref = this.refOf(feature.pk);
     if (feature.archived_at) throw new BoardError("invalid", `${ref} is archived`);
+    const release = feature.release === null ? null : this.sql.exec<ReleaseRow>("SELECT * FROM releases WHERE pk = ?", feature.release).one();
+    // A closed release takes no new sessions (board-writes 6; Toad's consult c_81cf334e); undo is named only while it can be.
+    if (release?.status === "closed") {
+      const undoable = release.closed_at !== null && Date.parse(tx.at) - Date.parse(release.closed_at) <= UNDO_MS;
+      throw new BoardError("conflict", `${ref} is in ${release.ref}, which is closed: a closed release takes no new sessions${undoable ? "; undo the close first" : ""}`);
+    }
     const { kind, label } = op.session;
     const name = `${ref} ${kind} ${label}`;
     const existing = this.sql
@@ -1254,6 +1260,11 @@ export class BoardStore {
     if (!feature.open_since) {
       this.setItem(feature.pk, { open_since: tx.at }, tx.at);
       seq = tx.event("session_join", "items", feature.pk, ref, [["open_since", null, tx.at]]);
+    }
+    // So is opening the release: its first session opens a planned one, never a hand (board-writes 6).
+    if (release?.status === "planned") {
+      this.sql.exec("UPDATE releases SET status = 'open' WHERE pk = ?", release.pk);
+      seq = tx.event("session_join", "releases", release.pk, release.ref, [["status", "planned", "open"]]);
     }
     return { ref: name, seq, created: !existing };
   }

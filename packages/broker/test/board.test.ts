@@ -485,6 +485,47 @@ describe("sessions", () => {
     expect(await refused(agent("Bill"), { op: "session_join", project: "helix", session: { feature: f1, kind: "build", label: "2" } })).toMatchObject({ code: "forbidden" });
   });
 
+  it("opens a planned release when its first session starts, as the session's write (board-writes 6)", async () => {
+    const { r1, f1, f2 } = await helix();
+    const r2 = (await ok(owner, { op: "create_release", project: "helix", title: "Release 2" })).ref!;
+    const history = async (ref: string) => (await ok(owner, { op: "get", project: "helix", ref, history: true })).history!;
+    // A feature in no release opens none.
+    await join(f2);
+    expect((await ok(owner, { op: "get", project: "helix", ref: r1 })).release!.status).toBe("planned");
+
+    await join(f1);
+    expect((await ok(owner, { op: "get", project: "helix", ref: r1 })).release!.status).toBe("open");
+    expect((await history(r1)).at(-1)).toMatchObject({
+      op: "session_join",
+      actor: { kind: "agent", who: "Sup@mbp-1", session: { feature: f1, kind: "build", label: "1" } },
+      changes: [{ field: "status", old: "planned", new: "open" }],
+    });
+    // Once: a second session on it, or on another of its features, writes nothing to the release.
+    await join(f1, "2");
+    const f3 = (await ok(owner, { op: "create", project: "helix", kind: "feature", type: "increment", title: "More", release: r1 })).ref!;
+    await join(f3);
+    expect((await history(r1)).map((e) => e.op)).toEqual(["create_release", "session_join"]);
+    expect((await ok(owner, { op: "get", project: "helix", ref: r2 })).release!.status).toBe("planned");
+  });
+
+  it("refuses a session on a feature of a closed release, naming undo only while it can be made", async () => {
+    const { r1, f1 } = await helix();
+    await join(f1);
+    const done = (await ok(owner, { op: "create", project: "helix", kind: "feature", type: "increment", title: "Shipped", release: r1 })).ref!;
+    await ok(owner, { op: "update", project: "helix", ref: done, set: { status: "Done" } });
+    await ok(owner, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: null }] });
+    const review = { feature: done, kind: "review" as const, label: "1" };
+    const start = () => refused(sup("Sup", review), { op: "session_join", project: "helix", session: review });
+    expect(await start()).toEqual({ ok: false, code: "conflict", message: `${done} is in ${r1}, which is closed: a closed release takes no new sessions; undo the close first` });
+    expect((await item(done)).sessions).toEqual([]);
+    await runInDurableObject(board(), (_, state) => {
+      state.storage.sql.exec("UPDATE releases SET closed_at = ? WHERE ref = ?", "2026-01-01T00:00:00.000Z", r1);
+    });
+    expect(await start()).toMatchObject({ message: `${done} is in ${r1}, which is closed: a closed release takes no new sessions` });
+    // Moved out by the close, f1 is in no release and takes sessions.
+    expect(await join(f1, "2")).toMatchObject({ created: true });
+  });
+
   it("lets no one set the open feature by hand", async () => {
     const { f1 } = await helix();
     expect(await refused(owner, { op: "update", project: "helix", ref: f1, set: { open_since: "2026-11-14" } as never })).toMatchObject({ code: "invalid" });
