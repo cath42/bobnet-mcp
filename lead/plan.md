@@ -12,6 +12,10 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - `board: service` for bobnet staged: ~/.local/state/bobnet/handoffs/bobnet/bob14-board-service.md, sent to poe.
 - After that restart: Peach does BOB-14's cut-over (AC 1 count/sample, 3 remove product/backlog +
   pointers, 4 MCP only + a builder refusal, 5, 6; 7 at the nightly backup). Peach accepts BOB-2.
+- 04:39Z poe applied `board: service` for bobnet. Checks 1, 2 PASS (ready lists bobnet; no report
+  errors since). Check 3: Mario's board tools answer (R1, R2; BOB-7 in full). Peach's read: w_f84edce0.
+- 04:40Z spawned Peach w_f84edce0 (BOB-14 cut-over + accept BOB-2) and Luigi w_9ff16006 (BOB-7).
+  board_list `progress` shows 0/0 for features with criteria: Luigi to fix if a bug.
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
   BOB-7, BOB-8, BOB-10, BOB-3, BOB-4, BOB-5. Toad reviews each; broker deploy after each review.
 
