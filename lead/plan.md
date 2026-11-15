@@ -90,6 +90,10 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - Luigi w_a53c1f42 done: BOB-4 at 5474b52 (+ cdedac5 service, c404749 BOB-3 evidence). Broker deploy
   only. Toad w_f6528678 reviews. Luigi w_53a2f2f6 on BOB-26 (no session: a backlog item can't have one);
   its supervisor part needs rc.34.
+- Luigi w_53a2f2f6 done: BOB-26 at 6d4ef04 (expireOrphans: no session / role gone / resumed later /
+  >24h, audited, deny without resume; dashboard doesn't offer a stale laptop's requests). Mario read
+  the supervisor diff: OK. Added to Toad w_f6528678's review. Needs rc.34 + broker deploy.
+- Luigi w_b7d5a605: BOB-5 (last view). Then: deploy (BOB-4 + BOB-26 dashboard, or with BOB-5), rc.34.
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
