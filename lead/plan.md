@@ -77,6 +77,9 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - ~06:35Z the usage limit stopped Luigi w_335afdd9 (BOB-4 begun, uncommitted in his worktree) and Peach
   w_19fd3bfe (BOB-3: AC 2, 4-7, DoD 1, 3, 4 checked; no handoff). Casper: "Limit hit, pls continue".
 - 13:52Z resumed: Luigi w_a53c1f42 (BOB-4 from the uncommitted diff), Peach w_a2341d79 (finish BOB-3).
+- Peach w_a2341d79: BOB-3 not Done: AC 1 (two-project shot), AC 3 (3-of-138 test + shot), AC 8, DoD 2.
+  Luigi asked for the test and shots with BOB-4. AC 8 is Casper's call: board question Q-1 (fixture now,
+  recommended, or hold until BOB-9). Casper's live look at Roadmap + Overview also covers AC 1.
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
