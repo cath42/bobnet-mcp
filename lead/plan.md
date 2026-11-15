@@ -48,6 +48,8 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   Daisy, for the gates: the release ↑/↓ Undo is an inverse order_releases, not `undo`.
 - Toad (w_b9c1997a): signed off all five (architecture/reviews/2026-11-15-bob2-rest-review.md, 708c97b);
   consults recorded in ADR 0001 §5, §6, §8, §10. Low findings 1-4 -> Luigi w_4411f00c (ride a later deploy).
+- Broker DEPLOYED (2nd) on Casper's go, 04:08:40Z, from fa05243's tree: Version ID
+  d5f2d7db-7936-4a34-bd4f-13739701ce52 (broker migration 8). Checks pending.
 - rc.32: tagged 2173995 (BOB-2 rest + 1518102), installed at ~/.local/share/bobnet/v2.0.0-rc.32,
   NOT announced. Needs broker migration 8 deployed first. Luigi's fa05243 (findings 1-4, broker + docs
   only, Mario read it OK; Toad signed it off, ef09481) makes the deploy tree fa05243, not the tag. Asked Casper for the second deploy from
