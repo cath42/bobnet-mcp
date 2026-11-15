@@ -57,7 +57,7 @@ It answers three questions in this order: what needs me, who is working on what 
 - A **Done feature with unticked criteria** shows done, its real count, and "Done, criteria not ticked".
 - More than three done features in a release fold into one row naming their numbers ("21 done (1–19, 21–22):
   show them"), so the open work is at the top on a phone.
-- "Not in a release" comes last, unnumbered.
+- "Not in a release" comes last, unnumbered, with the same counts line (built in BOB-3; see Casper's gates).
 - Phone: each feature row becomes a card (style.css's `table.stack`); done rows show only number, id and title.
 
 ### Casper's gates (`#roadmap/<project>/edit`, `#triage/<project>/edit`) (board-writes C2, 4, 5)
@@ -70,6 +70,27 @@ It answers three questions in this order: what needs me, who is working on what 
   for where it goes (a later release, by default the next; or out of any release). Close is the danger colour.
   A closed release stays on the roadmap, folded, and drops out of the move selects.
 - Phone: the dialog is a bottom sheet with full-width buttons.
+- **Where a feature can go** (decided 2026-11-14, BOB-7 gap 2; the prototype is right, "a later release"
+  above was loose): every release that isn't closed, earlier or later, then **Out of any release** last. The
+  default is the next open release after the one closing; if there is none, Out of any release. Built so.
+- **A closed release, folded** (decided 2026-11-14, BOB-7 gap 1). Built as Luigi has it, with two changes:
+  - Header: number, title, the **closed** badge, then the count line: "N of M features done · closed
+    <date>"; when all are done, "M features, all done · closed <date>"; with none, "No features · closed
+    <date>" (never "0 of 0"). The counts line under it stays.
+  - Gates on: ↑ Earlier / ↓ Later stay (Casper may still order releases); Close release is gone.
+  - One fold row instead of the table: "Closed, folded: N features. Show them" (a button that unfolds it,
+    like the done fold). With no features the row is **muted text, not a link or button**: "Closed, with
+    no features" (today it is in the accent colour and reads as clickable).
+  - Unfolded, the rows are as in any release; the Release selects leave this release out for every other
+    feature.
+
+Not built in BOB-7, and where it goes:
+- The **Release select on a backlog item** (`#triage/<project>/edit`, `c8-gates-backlog-item`) comes with
+  the Triage view in **BOB-8**, as drawn: Edit your gates on Triage gives each item a Release select of
+  the open releases plus No release, saved at once with Undo.
+- **"Not in a release" counts line** (backlog items in no release, open bugs among them, oldest) is as on
+  every release, and comes with **BOB-3** (roadmap) once the service counts items in no release; until then
+  the line is left out, not shown as zeros.
 
 ### Feature, the steps view (`#feature/<id>`) (steps-view 1-8)
 - Picker of features that are open or Ready, across projects.
