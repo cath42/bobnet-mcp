@@ -400,6 +400,8 @@ describe("dashboard actions", () => {
   it("refuses actions from laptops, and for a laptop with no supervisor online", async () => {
     const bob = await agent(1, "Bob");
     expect(await errorCode(bob.request({ t: "action", laptop: "mbp-1", action: { kind: "stop", worker: "w_1" } }))).toBe("forbidden");
+    // Allow or deny of a permission is the owner's own (BOB-7 #5).
+    expect(await errorCode(bob.request({ t: "action", laptop: "mbp-1", action: { kind: "answer", request: "r_1", decision: "allow" } }))).toBe("forbidden");
     const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
     expect(await errorCode(owner.request({ t: "action", laptop: "mbp-2", action: { kind: "stop", worker: "w_1" } }))).toBe("offline");
   });

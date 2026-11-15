@@ -220,12 +220,14 @@ const SUMMARY = `
     (SELECT ref FROM item_refs WHERE item = i.parent AND is_primary = 1) AS parent_ref,
     (SELECT ref FROM releases WHERE pk = coalesce(i.release, (SELECT f.release FROM items f WHERE f.pk = i.parent))) AS release_ref,
     (SELECT group_concat(label, char(31)) FROM (SELECT label FROM item_labels WHERE item = i.pk ORDER BY label)) AS labels,
-    CASE WHEN i.kind = 'feature'
-      THEN (SELECT count(*) FROM criteria c JOIN items t ON t.pk = c.item WHERE t.parent = i.pk AND t.archived_at IS NULL AND c.section = 'ac')
-      ELSE (SELECT count(*) FROM criteria c WHERE c.item = i.pk AND c.section = 'ac') END AS ac_total,
-    CASE WHEN i.kind = 'feature'
-      THEN (SELECT count(*) FROM criteria c JOIN items t ON t.pk = c.item WHERE t.parent = i.pk AND t.archived_at IS NULL AND c.section = 'ac' AND c.state = 'checked')
-      ELSE (SELECT count(*) FROM criteria c WHERE c.item = i.pk AND c.section = 'ac' AND c.state = 'checked') END AS ac_checked,
+    (SELECT count(*) FROM criteria c WHERE c.item = i.pk AND c.section = 'ac')
+      + CASE WHEN i.kind = 'feature'
+        THEN (SELECT count(*) FROM criteria c JOIN items t ON t.pk = c.item WHERE t.parent = i.pk AND t.archived_at IS NULL AND c.section = 'ac')
+        ELSE 0 END AS ac_total,
+    (SELECT count(*) FROM criteria c WHERE c.item = i.pk AND c.section = 'ac' AND c.state = 'checked')
+      + CASE WHEN i.kind = 'feature'
+        THEN (SELECT count(*) FROM criteria c JOIN items t ON t.pk = c.item WHERE t.parent = i.pk AND t.archived_at IS NULL AND c.section = 'ac' AND c.state = 'checked')
+        ELSE 0 END AS ac_checked,
     CASE WHEN i.kind = 'feature' THEN (SELECT count(*) FROM items t WHERE t.parent = i.pk AND t.archived_at IS NULL) END AS tasks_total,
     CASE WHEN i.kind = 'feature' THEN (SELECT count(*) FROM items t WHERE t.parent = i.pk AND t.archived_at IS NULL AND t.status = 'Done') END AS tasks_done
   FROM items i`;

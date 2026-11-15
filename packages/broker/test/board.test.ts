@@ -439,6 +439,35 @@ describe("Casper's gates: closing a release, and undo (ADR 0001 §5)", () => {
     await ok(owner, { op: "close_release", project: "helix", ref: r1 });
     expect(await refused(owner, { op: "undo", project: "helix", seq: out.seq })).toMatchObject({ code: "conflict", message: expect.stringMatching(/closed now/) });
   });
+
+  it("records each gate as Casper's, takes a release order back by its inverse, and leaves a feature's release to the gate alone (board-writes 4, 8)", async () => {
+    const { r1, r2, f2, f3 } = await releases();
+    await helixRules();
+    const order = async () => ((await ok(owner, { op: "list", project: "helix", of: "releases" })).releases ?? []).map((r) => r.ref);
+    expect(await order()).toEqual([r1, r2]);
+    await ok(owner, { op: "order_releases", project: "helix", refs: [r2, r1] });
+    expect(await order()).toEqual([r2, r1]);
+    const reordered = (await ok(owner, { op: "get", project: "helix", ref: r2, history: true })).history!.at(-1)!;
+    expect(reordered).toMatchObject({ op: "order_releases", actor: { kind: "owner", who: "owner@example.com" } });
+    // The dashboard's Undo of a release move is the inverse order (Daisy), not `undo`.
+    expect(await refused(owner, { op: "undo", project: "helix", seq: reordered.seq })).toMatchObject({ code: "invalid" });
+    await ok(owner, { op: "order_releases", project: "helix", refs: [r1, r2] });
+    expect(await order()).toEqual([r1, r2]);
+
+    // A feature goes last in its new release, recorded as Casper's.
+    await ok(owner, { op: "set_release", project: "helix", ref: f2, release: r2 });
+    expect(await features(r2)).toEqual([expect.any(String), f2]);
+    expect((await item(f2)).history.at(-1)).toMatchObject({ op: "set_release", actor: { kind: "owner" }, changes: expect.arrayContaining([{ field: "release", old: null, new: r2 }]) });
+
+    // Nobody else places a feature, by the gate or by an update; the PO's update of a feature's release is pointed at the gate.
+    expect(await refused(agent("Picard"), { op: "update", project: "helix", ref: f3, set: { release: r2 } })).toMatchObject({ code: "invalid", message: expect.stringContaining("set_release") });
+    expect(await refused(agent("Picard"), { op: "close_release", project: "helix", ref: r2, moves: [{ feature: f2, to: null }] })).toMatchObject({ code: "forbidden" });
+    // A feature promoted from a backlog item is in no release until the gate places it.
+    const drafted = (await ok(agent("Picard"), { op: "create", project: "helix", kind: "backlog", type: "task", title: "Big one", release: r1 })).ref!;
+    await ok(agent("Picard"), { op: "promote", project: "helix", ref: drafted });
+    expect((await item(drafted)).release).toBeNull();
+    expect(await features(null)).toContain(drafted);
+  });
 });
 
 describe("projects (criterion 7)", () => {
@@ -467,6 +496,18 @@ describe("progress (criterion 5)", () => {
     expect((await item(t1)).progress).toEqual({ checked: 1, total: 2 });
     const { items } = await ok(owner, { op: "list", project: "helix", of: "features" });
     expect(items!.find((i) => i.ref === f1)).toMatchObject({ progress: { checked: 1, total: 3 }, tasks: { done: 0, total: 2 } });
+  });
+
+  it("counts a feature's own criteria with its tasks', so a feature with no tasks shows its own", async () => {
+    const { f1, f2 } = await helix();
+    await ok(owner, { op: "criteria", project: "helix", ref: f2, change: { action: "add", text: "Its own" } });
+    await ok(owner, { op: "criteria", project: "helix", ref: f2, change: { action: "add", text: "Landed", section: "dod" } });
+    await ok(owner, { op: "criteria", project: "helix", ref: f1, change: { action: "add", text: "Its own" } });
+    await ok(owner, { op: "criteria", project: "helix", ref: f1, change: { action: "check", n: 1, evidence: "test" } });
+    const { items } = await ok(owner, { op: "list", project: "helix", of: "features" });
+    expect(items!.find((i) => i.ref === f1)!.progress).toEqual({ checked: 1, total: 3 });
+    expect(items!.find((i) => i.ref === f2)!.progress).toEqual({ checked: 0, total: 1 });
+    expect((await item(f2)).progress).toEqual({ checked: 0, total: 1 });
   });
 });
 
@@ -739,6 +780,8 @@ describe("questions (ADR 0001 §7)", () => {
       expect(await refused(who, { op: "answer_question", project: "helix", ref: "Q-1", key: "a" })).toMatchObject({ code: "forbidden" });
       expect(await refused(who, { op: "mark_done", project: "helix", ref: "A-1" })).toMatchObject({ code: "forbidden" });
     }
+    // Recording his answer from conversation is the lead's or PO's (the questions flag), never a builder's (BOB-7 #5).
+    expect(await refused(agent("Bill"), { op: "record_answer", project: "helix", ref: "Q-1", key: "a", words: "Bars" })).toMatchObject({ code: "forbidden" });
     expect(await refused(owner, { op: "answer_question", project: "helix", ref: "Q-1" })).toMatchObject({ code: "invalid" });
     expect(await refused(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "c" })).toMatchObject({ code: "invalid" });
     expect(await refused(owner, { op: "answer_question", project: "helix", ref: "A-1", words: "done" })).toMatchObject({ code: "invalid" });

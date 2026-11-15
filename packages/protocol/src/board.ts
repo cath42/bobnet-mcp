@@ -409,7 +409,7 @@ export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_star
 // ---------- Records ----------
 
 export interface Progress {
-  /** Acceptance criteria checked, of total: a task's own, a feature's across its tasks. */
+  /** Acceptance criteria checked, of total: a task's own; a feature's own and its tasks' (BobNet's features carry their own). */
   checked: number;
   total: number;
 }
