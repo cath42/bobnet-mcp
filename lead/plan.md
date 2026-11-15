@@ -46,7 +46,15 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   migration 8 laptop_supervisors.projects). None is in the 03:18Z deploy or rc.31: they need a
   second broker deploy (+ CI_TOKENS secret, Casper's) and rc.32 after it.
   Daisy, for the gates: the release ↑/↓ Undo is an inverse order_releases, not `undo`.
-- Toad (w_b9c1997a): reviewing those four, recording consult rulings in ADR 0001, deploy order + checks.
+- Toad (w_b9c1997a): signed off all five (architecture/reviews/2026-11-15-bob2-rest-review.md, 708c97b);
+  consults recorded in ADR 0001 §5, §6, §8, §10. Low findings 1-4 -> Luigi w_4411f00c (ride a later deploy).
+- rc.32: tagged 2173995 (BOB-2 rest + 1518102), installed at ~/.local/share/bobnet/v2.0.0-rc.32,
+  NOT announced. Needs broker migration 8 deployed first. Asked Casper for the second deploy from
+  the rc.32 tag. CI_TOKENS secret NOT needed for rc.32 (gh adapter needs none); a later
+  `wrangler secret put` + Access app entry is Casper's call.
+  After the deploy: (1) agents reconnected/no report errors; (2) export still version 1;
+  (3) after rc.32, no "board report can't be made; dropped" for ci_run in supervisor.log.
+  No live CI row to check until a repo has workflows (Helix at BOB-9).
 - Peach (w_a066c9e6): done, 6de7894 (board-writes.md 6, 7): a release opens automatically when its
   first session starts (system write); closing a planned release is allowed (Casper's close gate).
 - Luigi (w_1e72629b): done, 1518102 (no migration): session_join opens a planned release; a start under a closed release is refused. Added to Toad w_b9c1997a's review.
