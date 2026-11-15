@@ -12,6 +12,13 @@
   items get `<prefix>-n`; `ItemRef` widens to the dotted pattern (§2, §8, §11). What Luigi changes,
   and before which post: "Dotted ids: what Luigi changes", after the build order. From
   `architecture/reviews/2026-11-14-backlog-import-review.md`, "If Casper picks dotted ids".
+  **Amended 2026-11-15** (Toad; records consults on what was built, narrowing nothing):
+  - §5: close and undo (c_ef62b5e6).
+  - §6: a release opens on its first session (c_81cf334e; Peach's board-writes 6 and 7).
+  - §8: the `waits` and `overview` reads (c_07660cc7).
+  - §10: CI as built: POST /v1/runs, the gh adapter, broker migration 8 (c_27511d4c, c_f3e94196).
+
+  From `architecture/reviews/2026-11-15-bob2-rest-review.md`.
 - **For:** BOB-2 (the service) and BOB-7 (who writes); BOB-3, 4, 5, 8, 9 and 10 build on it.
 - **Reads:** product/requirements/ (all), product/backlog/tasks/bob-2..10, design/BOB-1/notes.md and
   spec.md, lead/BOB-1-casper-feedback.md, Peach's message on criterion 0 (2026-11-14).
@@ -216,7 +223,7 @@ close sessions), `questions` (may ask Casper and record his answers given in con
 missing, so nothing is closed with work silently left), and `undo` of the owner's own event, applied
 as a new event (`undo_of`). A closed release refuses features.
 
-*Close and undo (2026-11-15, Luigi's consult on BOB-2 piece a).* `close_release` takes `moves`: one
+*Close and undo (2026-11-15, Luigi's consult c_ef62b5e6 on BOB-2 piece a; built in d824e95).* `close_release` takes `moves`: one
 per feature in the release that is neither Done nor archived, each to a planned or open release, or
 to none. Each moved feature goes last in its destination. The release is the only one whose status
 changes. Closing a planned release is allowed until Peach says otherwise. Backlog hints that name the
@@ -270,6 +277,17 @@ Closing the feature's last open session clears `open_since`.
 
 A session with no close shows "running" while a worker in it runs, else "no close recorded". The
 steps view's "waiting" is derived: closed with `need: casper` and a question still open.
+
+*A release opens by itself (2026-11-15, Luigi's consult c_81cf334e; board-writes 6 and 7, 6de7894).*
+In `session_join`, once the feature is open, a `planned` release it is in becomes `open`. This is
+one `session_join` event on `releases`, [status planned→open], written in the same transaction and
+by the same actor as `open_since`, so the session is the cause. A feature in no release opens
+nothing. No other operation opens a release, and there is no gate for it. `session_join`, for a new
+session or a rejoin, is refused (`conflict`) when the feature's release is `closed`. That is checked
+before the session is created. A close moves every feature that isn't Done out of the release (§5),
+so this refusal only ever applies to Done features. The message offers undo only while the close can
+still be undone. Closing a `planned` release is allowed, and undoing it brings back the status the
+close recorded. No migration.
 
 ### 7. Questions, actions and answers (BOB-5)
 
@@ -360,6 +378,40 @@ once the last one has moved (a later release says so). A project is on the servi
 supervisor's config says `board: service` instead of `backlog:` (Casper's config; Luigi adds the
 option).
 
+*The view reads (2026-11-15, Luigi's consult c_07660cc7; built in cd8c98c).* Two owner-facing
+reads join `projects`, `list`, `get` and `grants` in `BOARD_READS` (`BoardReadName`,
+`protocol/src/board.ts`). Both are derived when read, store nothing, and need no migration:
+
+- **`waits {project?, since?}`** returns `{waits: WaitRecord[], answered: AnsweredRecord[]}`. It
+  covers the one project named, or every project the caller reads; a project it can't read is left
+  out. `waits` is §7's list, oldest first by `since`:
+  - open questions and actions, with `session_waits_on` folded on as `waiting_sessions`;
+  - items In Review with an unticked `casper_gate` criterion (`review_gate`). Their `since` is the
+    last status→In Review event, or `updated_at` for an imported item;
+  - backlog bugs with `blocks_use` that are neither archived nor Done (`bug`).
+
+  `blocking` is defined once, in `store.ts` `waitsOf`, and both reads use it. It means the wait
+  holds up a named task, session or feature (notes 22): a question with holds or a waiting session,
+  any review gate (it holds its own item), any such bug. A wait's `feature` is found in this order:
+  the question's session's feature, its first held item's feature, a held or waiting session's
+  feature. A bug's is `found_in`. `answered` lists only the owner's `via: dashboard` answers and done
+  marks since `since`, newest first, 50 at most. `since` defaults to UTC midnight; the dashboard
+  sends Casper's day. An undone answer drops out, because undo clears it.
+- **`overview {project?}`** returns `{projects: OverviewRow[]}`. Per project it gives:
+  - the first `open` release by order, with `release_number`, its 1-based position among all the
+    project's releases (closed ones included), which is roadmap-view's numbering;
+  - the open features (`open_since` set);
+  - `next_ready`: Ready features in a release that isn't closed come first, by release order and
+    then board order, before those in no release;
+  - `waits_on_you`: the oldest blocking wait's ref;
+  - backlog counts.
+
+  Who is on a feature now comes from the snapshots, not from this read.
+- `ReleaseRecord` gains an optional `backlog: BacklogCounts` (items that aren't archived and name
+  the release, the bugs among them, the oldest's creation). Optional, so it is additive.
+
+Neither read is an MCP tool. The dashboard calls them, from the same deploy that serves it.
+
 ### 9. Runs, tokens and context per call (steps-view 7, 10; notes 36-38)
 
 `runs`: one row per worker run: `id` (worker id: a resume is a new worker, and its `run_end` reports
@@ -444,6 +496,42 @@ the project, not on an agent.
 `source`, `name`), or (`laptop`, `name`) for slot runs, that passed. It is shown once there are three.
 **Running long** is past 1.5× that (notes 47). An agent shows "waiting on CI" while a run tied to it
 is `running` or `queued`. This is derived, not a worker state.
+
+*How it was built (2026-11-15, Luigi's consults c_27511d4c and c_f3e94196; c0dbd0d, 8d7c1c5).*
+
+- **`ci_run`** is one `BoardOp` with two transports. Whichever one carries it, `Board` upserts by
+  (`source`, `external_id`), in either order (`store.ts` `reportCi`):
+  - The project is the one named, else the only project whose repos list `repo`. The first post
+    fixes it: a later post naming another project is `conflict` (409).
+  - An ended status (`passed`, `failed`, `cancelled`) is final. A later post only fills fields that
+    are still null.
+  - Each post that changes something writes one event, `actor_kind` `ci`, whose actor is the source.
+  - `name` is set by the first post.
+  - A GitHub re-run is its own run: `external_id` `<run id>-<attempt>`.
+- **The tie** goes through `pushes` (`repo` case-insensitive, `sha`) to the push's worker, the
+  run's session, and its `run_tasks`. A `push` also ties the untied non-slot runs already on its
+  commit, so either one may come first.
+- **POST /v1/runs** (`index.ts`) accepts only `Identity` kind `ci`. `CI_TOKENS` /
+  `CI_TOKENS_<x>` (`auth.ts`) map an Access client ID to a source. A laptop mapping wins if one
+  client ID is in both maps. The source always comes from the token: a body that names another is
+  refused (403). A CI identity gets no socket, no board read, no export and no import. The owners'
+  sockets get `board_changed` through `Broker.boardChanged`.
+- **The gh adapter, option (i):** the supervisor registers with `projects`, the keys of its
+  `board: service` projects. It sends them on every register, so the latest list replaces the last
+  one. `Broker` keeps them in `laptop_supervisors.projects` (**broker migration 8**, additive) and
+  passes them as `serves` in the pinned supervisor connection's `BoardCaller`.
+  - `Board` takes a ctx-less `ci_run` over the socket only from that connection, only for a project
+    in `serves`, and always as source `github-actions` (`store.ts` `ghRun`). This is the one
+    supervisor operation without a worker, and it is not a precedent for another.
+  - `supervisor/src/ci-poll.ts` runs `gh run list` (20 runs) in each service project's checkout
+    every 2 minutes. It reports each status change once, through the outbox, `as` the supervisor's
+    own peer. `stale`, `skipped`, `neutral` and `action_required` count as `cancelled`.
+  - An older supervisor registers no projects, so it reports nothing. An older broker strips
+    `projects` (RegisterFrame is not strict) and refuses `ci_run` as an unknown op. The supervisor
+    drops that report as final and logs it: noisy, but harmless.
+- **One source per GitHub repo.** A repo the gh adapter reads should not also post through a CI
+  token mapped to `github-actions`. The adapter's rows are per workflow run and the token's are per
+  job, so the two would double-count (review 2026-11-15, finding 1).
 
 ### 11. Export, backup and import (board-service 11, BOB-2 #11)
 
