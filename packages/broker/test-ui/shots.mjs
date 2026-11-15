@@ -60,7 +60,7 @@ function fakeBroker() {
     open_since: null, archived_at: null, created_at: iso(hoursAgo * 60), captured_by: "Peach@mbp-1", casper_words: null, bug_where: null, blocks_use: false, parent_hint: null, ...over,
   });
   board.backlog = [
-    b("BOB-11", "Land refuses a stale tip before the check", 80), b("BOB-12", "Owner JWT: pin the laptop reporter, correct the README claim", 80),
+    b("BOB-11", "Land refuses a stale tip before the check", 80, { parent_hint: "BOB-2" }), b("BOB-12", "Owner JWT: pin the laptop reporter, correct the README claim", 80),
     b("BOB-13", "Supervisor stores an inbound message before acking it", 80), b("BOB-15", "Guard Keychain reads and correct the worker-isolation claim", 60),
     b("BOB-16", "Protocol: client version on register, and an unsupported error code", 60), b("BOB-22", "Tests: silence board.test noise, one client-to-broker end-to-end test, Playwright decision", 30),
     b("BOB-21", "Tokens only: cost_usd optional, then remove the brief fallbacks", 30), b("BOB-17", "Broker: boards after the dashboard reply; sweep old reports", 30),

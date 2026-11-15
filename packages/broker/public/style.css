@@ -130,6 +130,7 @@ tr.pick:hover td { background: var(--bg); }
 tr.pick[aria-selected="true"] td { background: var(--bg); }
 tr.pick[aria-selected="true"] td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 td .sub { color: var(--muted); font-size: 13px; }
+td .sub a { color: var(--accent); }
 .ac { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 14px; }
 .banner { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: var(--radius); padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
 .banner.idle { border-left-color: var(--idle); }
@@ -292,6 +293,7 @@ table.triage td.age { white-space: nowrap; }
 .seg.filters button { white-space: nowrap; }
 .totals .hot { border-left: 3px solid var(--bad); }
 .totals .hot b { color: var(--bad); }
+dialog .note.refused { color: var(--bad); font-size: 13px; }
 .dest { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .dest li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 14px; padding: 6px 0; border-top: 1px solid var(--line); }
 .dest select { font: inherit; font-size: 14px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); max-width: 50vw; }

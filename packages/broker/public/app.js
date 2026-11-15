@@ -657,7 +657,7 @@ function moveFeature(key, data, f, to, select) {
   const dest = data.releases.find((x) => x.ref === to);
   const po = poOf(svc.projects.find((x) => x.key === key));
   // A moved feature goes last in its new release; the PO orders it (notes 19).
-  gate(key, { op: "set_release", project: key, ref: f.ref, release: to }, `Moved ${f.ref} to ${dest ? dest.title : "no release"}, last in its order (${po} orders it). Recorded as yours.`,
+  gate(key, { op: "set_release", project: key, ref: f.ref, release: to }, `Moved ${f.ref} to ${dest ? `“${dest.title}”` : "no release"}, last in its order (${po} orders it). Recorded as yours.`,
     (res) => ({ op: "undo", project: key, seq: res.seq }));
 }
 
@@ -773,6 +773,11 @@ function viewTriage() {
     h("div", null, h("b", null, `${ages[Math.floor(ages.length / 2)]} d`), h("span", null, "median age")),
     h("div", null, h("b", null, ages.filter((d) => d < 7).length), h("span", null, "captured this week"))));
   const options = [...rels.filter((r) => r.status !== "closed").map((r) => [r.ref, r.title]), ["", "No release"]];
+  // An item in a closed release shows it, selected and not to be picked again (Toad, BOB-8 review 3).
+  const optionsOf = (d) => {
+    const closed = rels.find((r) => r.ref === d.release && r.status === "closed");
+    return closed ? [[closed.ref, closed.title, true], ...options] : options;
+  };
   out.push(shown.length
     ? h("div", { class: "table-wrap" }, h("table", { class: "stack triage" },
         h("thead", null, h("tr", null, h("th", null, "Item"), h("th", null, "Type"), h("th", null, "Release"), h("th", null, "Age"))),
@@ -780,11 +785,12 @@ function viewTriage() {
           cut.map((d) => h("tr", { class: capturedHere.has(`${key}:${d.ref}`) ? "is-open" : "" },
             h("td", { class: "wide keep", "data-label": "" }, h("span", { class: "id" }, d.ref), h("span", { class: "title" }, d.title),
               d.casper_words ? h("div", { class: "sub" }, `Casper: “${d.casper_words}”`) : null,
+              d.parent_hint ? h("div", { class: "sub muted" }, "Parent hint: ", h("a", { href: `#feature/${d.parent_hint}` }, d.parent_hint)) : null,
               capturedHere.has(`${key}:${d.ref}`) ? h("div", { class: "now" }, "just captured, from the dashboard") : null),
             h("td", { "data-label": "Type" }, isBug(d) ? badge("bug", d.blocks_use ? "bug · blocks use" : "bug") : h("span", { class: "muted" }, d.type)),
             h("td", { "data-label": "Release" }, edit
               ? h("select", { class: "move", "aria-label": `Release of ${d.ref}`, onchange: (e) => moveItem(key, data, d, e.target.value || null, e.target) },
-                  options.map(([v, label]) => h("option", { value: v, selected: v === (d.release ?? "") || null }, label)))
+                  optionsOf(d).map(([v, label, off]) => h("option", { value: v, selected: v === (d.release ?? "") || null, disabled: off || null }, label)))
               : d.release ?? h("span", { class: "muted" }, "none")),
             h("td", { "data-label": "Age", class: "age" }, age(d.created_at)))),
           shown.length > cut.length ? h("tr", { class: "fold" }, h("td", { colspan: 4, class: "full" }, button(`Show all ${shown.length}`, "", () => { state.triage.all = true; render(); }))) : null)))
@@ -797,7 +803,7 @@ function viewTriage() {
 async function moveItem(key, data, d, to, select) {
   if (select) select.disabled = true;
   const before = d.release ?? null;
-  const name = (ref) => (ref ? `in ${data.releases.find((r) => r.ref === ref)?.title ?? ref}` : "in no release");
+  const name = (ref) => (ref ? `in “${data.releases.find((r) => r.ref === ref)?.title ?? ref}”` : "in no release");
   const send = async (release, said, undo) => {
     try {
       const res = await boardOp({ op: "update", project: key, ref: d.ref, set: { release } }, true);
@@ -816,6 +822,9 @@ async function moveItem(key, data, d, to, select) {
 const QUEUE = "bobnet.captures";
 const queued = () => { try { return JSON.parse(localStorage.getItem(QUEUE) ?? "[]"); } catch { return []; } };
 const setQueued = (ops) => (ops.length ? localStorage.setItem(QUEUE, JSON.stringify(ops)) : localStorage.removeItem(QUEUE));
+/** The board refused these as they stand: they never go as they are, so each comes back in the dialog (Toad, BOB-8 review 1). */
+const REFUSED = new Set(["invalid", "forbidden", "conflict", "bad_frame", "frame_too_large", "secret_detected"]);
+const refused = (err) => REFUSED.has(err.code);
 
 /** The first sentence, or line, is the title; the whole text is kept as Casper's words. */
 const titleOf = (text) => text.split(/(?<=[.!?])\s|\n/)[0].trim().slice(0, 300);
@@ -830,10 +839,11 @@ function captureProject() {
   return keys.includes(state.project) ? state.project : keys[0];
 }
 
-function openCapture() {
+/** With `back`, a refused capture, its text and choices as Casper made them, and why it was refused. */
+function openCapture(back = null) {
   const dlg = $("capture");
-  let key = captureProject();
-  let bug = false, where = "staging", blocks = false;
+  let key = back?.op.project ?? captureProject();
+  let bug = back?.op.type === "bug", where = back?.op.bug_where ?? "staging", blocks = !!back?.op.blocks_use;
   const nameOf = (k) => svc.projects.find((p) => p.key === k)?.name ?? k;
   const keep = (fn) => { const v = $("cap-text")?.value ?? ""; fn(); $("cap-text").value = v; $("cap-text").focus(); };
   const draw = () => dlg.replaceChildren(h("form", { method: "dialog", onsubmit: (e) => { e.preventDefault(); submit(); } },
@@ -845,7 +855,8 @@ function openCapture() {
       h("button", { type: "button", "aria-pressed": String(bug), onclick: () => keep(() => { bug = true; draw(); }) }, "Bug"))),
     bug ? h("div", { class: "opt" }, h("span", null, "Where"), h("span", { class: "seg" }, ["staging", "production"].map((w) => h("button", { type: "button", "aria-pressed": String(where === w), onclick: () => keep(() => { where = w; draw(); }) }, w))),
       h("label", { class: "check" }, h("input", { type: "checkbox", id: "cap-blocks", checked: blocks || null, onchange: (e) => keep(() => { blocks = e.target.checked; draw(); }) }), "Blocks use")) : null,
-    h("p", { class: "note" }, bug && blocks ? "A bug that blocks use also goes on Waits on you until it is slotted or closed." : `It goes to ${nameOf(key)}'s triage list, with your words as you typed them. Release and feature are set at triage.`),
+    back ? h("p", { class: "note refused" }, `Not captured: ${back.message}`) : null,
+    h("p", { class: "note" }, bug && blocks ? "A bug that blocks use goes first in the triage list, marked blocks use." : `It goes to ${nameOf(key)}'s triage list, with your words as you typed them. Release and feature are set at triage.`),
     h("div", { class: "foot" }, button("Cancel", "", () => dlg.close()), h("button", { type: "submit", class: "primary" }, "Capture"))));
   const submit = () => {
     const text = $("cap-text").value.trim();
@@ -857,6 +868,7 @@ function openCapture() {
     });
   };
   draw();
+  if (back) $("cap-text").value = back.op.casper_words;
   if (typeof dlg.showModal === "function") dlg.showModal();
   else dlg.setAttribute("open", "");
   $("cap-text").focus();
@@ -864,7 +876,8 @@ function openCapture() {
 
 /** Never asks back: with the board away, it waits on this device and goes when the board is back. */
 async function capture(key, name, op) {
-  const also = op.blocks_use ? ", and on Waits on you" : "";
+  // Not "and on Waits on you" until BOB-5 ships that tab (spec: BOB-8 as built).
+  const also = op.blocks_use ? ", marked blocks use" : "";
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     setQueued([...queued(), op]);
     return toast(`Captured. It waits on this device and goes to ${name}'s triage list when the board is back.`);
@@ -874,7 +887,10 @@ async function capture(key, name, op) {
     capturedHere.add(`${key}:${res.ref}`);
     toast(`Captured as ${res.ref} in ${name}'s triage list${also}.`);
   } catch (err) {
-    toast(err.message, false);
+    if (refused(err)) return openCapture({ op, message: err.message });
+    // The board away, or the socket: it waits here under its capture_id, which the board takes once.
+    setQueued([...queued(), op]);
+    return toast(`Captured. It waits on this device and goes to ${name}'s triage list when the board is back.`);
   }
   if (backlogs.has(key)) await loadBacklog(key);
 }
@@ -889,8 +905,13 @@ async function flushCaptures() {
       capturedHere.add(`${op.project}:${res.ref}`);
       sent++;
     } catch (err) {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      toast(`A capture that waited on this device was refused: ${err.message}`, false);
+      // Still away: the rest wait for the next welcome.
+      if (!refused(err)) return;
+      setQueued(queued().filter((x) => x.capture_id !== op.capture_id));
+      // One refusal at a time in the dialog; once Casper has sent it again or let it go, the rest go.
+      if (sent) toast(`Sent ${plural(sent, "capture")} that waited on this device.`);
+      $("capture").addEventListener("close", () => flushCaptures(), { once: true });
+      return openCapture({ op, message: err.message });
     }
     setQueued(queued().filter((x) => x.capture_id !== op.capture_id));
     if (backlogs.has(op.project)) loadBacklog(op.project);
@@ -1202,7 +1223,7 @@ function scheduleRender() {
   }, 250);
 }
 
-$("capture-open").addEventListener("click", openCapture);
+$("capture-open").addEventListener("click", () => openCapture());
 $("project").addEventListener("change", (e) => {
   state.project = e.target.value;
   state.inc = null;
@@ -1260,7 +1281,7 @@ function connect() {
         break;
       case "error":
         if (sentOps.has(f.rid)) {
-          sentOps.get(f.rid).reject(new Error(f.message));
+          sentOps.get(f.rid).reject(Object.assign(new Error(f.message), { code: f.code }));
           sentOps.delete(f.rid);
           break;
         }

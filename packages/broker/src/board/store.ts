@@ -2268,8 +2268,21 @@ function summary(r: SummaryRow): ItemSummary {
     open_since: r.open_since,
     archived_at: r.archived_at,
     created_at: r.created_at,
-    ...(r.kind === "backlog"
-      ? { captured_by: r.captured_by, casper_words: r.casper_words, bug_where: r.bug_where, blocks_use: r.blocks_use === 1, parent_hint: r.parent_hint_ref }
-      : {}),
+    ...(r.kind === "backlog" ? triage(r) : {}),
   };
+}
+
+/** Casper's words on a list row, clipped; board_get has them whole (Toad, BOB-8 review 4). */
+export const WORDS_CLIP = 280;
+
+/** A backlog row's triage fields, those it has: a page of rows is paid for in tokens. */
+function triage(r: SummaryRow): Partial<ItemSummary> {
+  const words = r.casper_words && r.casper_words.length > WORDS_CLIP ? `${r.casper_words.slice(0, WORDS_CLIP - 1)}…` : r.casper_words;
+  const out: Partial<ItemSummary> = {};
+  if (r.captured_by) out.captured_by = r.captured_by;
+  if (words) out.casper_words = words;
+  if (r.bug_where) out.bug_where = r.bug_where;
+  if (r.blocks_use === 1) out.blocks_use = true;
+  if (r.parent_hint_ref) out.parent_hint = r.parent_hint_ref;
+  return out;
 }

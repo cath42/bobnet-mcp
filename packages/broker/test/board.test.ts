@@ -747,11 +747,19 @@ describe("triage (capture 3-5, BOB-8)", () => {
     const { r1, f1 } = await helix();
     const bug = await ok(agent("Data"), { op: "capture", project: "helix", capture_id: uuid(11), title: "Login fails", type: "bug", bug_where: "production", blocks_use: true, casper_words: "can't log in" });
     await ok(owner, { op: "create", project: "helix", kind: "backlog", type: "task", title: "Hinted", parent_hint: f1, release: r1 });
+    const long = "x".repeat(2000);
+    const wordy = await ok(agent("Data"), { op: "capture", project: "helix", capture_id: uuid(12), title: "Long", casper_words: long });
     const rows = (await ok(owner, { op: "list", project: "helix", of: "backlog" })).items!;
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ ref: bug.ref, type: "bug", captured_by: "Data@mbp-1", casper_words: "can't log in", bug_where: "production", blocks_use: true, parent_hint: null, release: null });
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatchObject({ ref: bug.ref, type: "bug", captured_by: "Data@mbp-1", casper_words: "can't log in", bug_where: "production", blocks_use: true, release: null });
     expect(rows[0]!.created_at).toMatch(/^\d{4}-/);
-    expect(rows[1]).toMatchObject({ title: "Hinted", captured_by: null, casper_words: null, blocks_use: false, parent_hint: f1, release: r1 });
+    // A row carries only the triage fields it has (Toad, BOB-8 review 4).
+    expect(rows[0]).not.toHaveProperty("parent_hint");
+    expect(rows[1]).toMatchObject({ title: "Hinted", parent_hint: f1, release: r1 });
+    for (const k of ["captured_by", "casper_words", "bug_where", "blocks_use"]) expect(rows[1]).not.toHaveProperty(k);
+    // Casper's words are clipped on a row and whole on the item.
+    expect(rows[2]!.casper_words).toBe(`${"x".repeat(279)}…`);
+    expect((await item(wordy.ref!)).casper_words).toBe(long);
     // A feature's or task's row carries no triage fields.
     const features = (await ok(owner, { op: "list", project: "helix", of: "features" })).items!;
     expect(features[0]).not.toHaveProperty("casper_words");
