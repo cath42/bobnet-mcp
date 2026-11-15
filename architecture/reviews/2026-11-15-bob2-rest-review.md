@@ -180,3 +180,18 @@ All five are broker and supervisor changes in one tree, so there is **one broker
    export, source `github-actions`, `worker` set, within about 2 minutes.
 4. **Nothing on the dashboard changes yet.** close_release, Undo, Waits and Overview have no UI
    until the views (BOB-3/5/7/8). So no check is possible there, and none is missed.
+
+## Addendum: fa05243 (fixes for findings 1–4)
+
+**fa05243 signed off.** Broker and docs only, nothing to fix; the broker can deploy from it (with
+rc.32 at 2173995 installed after, as above), so the fixes need no third deploy.
+
+1. `docs/ci-reporting.md`: `external_id` is per job (`run_id-run_attempt-job`, plus
+   `strategy.job-index` in a matrix), the token goes into the Access app (README step 1), and one
+   repo uses the adapter or a token, not both.
+2. `auth.ts:70`: a CI token mapped to `slot`, any case, gets 401 (`ci-runs.test.ts`, `CI_TOKENS_RESERVED`).
+3. `broker.ts:264` writes NULL when no projects are sent. The read at `broker.ts:429-430` maps NULL
+   to `[]`, so an older supervisor still reports nothing (`board-op.test.ts` checks both rows).
+4. `whoOf` gives `github-actions via supervisor@mbp-1` for the adapter's events, with `actor_kind`
+   still `ci`. The source stays `github-actions`, so dedupe on `(source, external_id)` is the same.
+   POST /v1/runs has no `via` and is unchanged.
