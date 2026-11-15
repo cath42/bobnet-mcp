@@ -128,6 +128,9 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - Luigi 04bf33f: Daisy's BOB-5 1-7 (Now tab gone, CI line under Working now). Broker DEPLOYED (11th)
   16:37:50Z from v2 f83f88a: Version ID aa8d5972-9088-4e1c-b194-8347a33b9356. Daisy w_de986ce0 checks shots.
 - 16:38Z: mbp-1 still on rc.32; outbox 374 board_op rows and growing. Waiting on poe's rc.34 restart.
+- 16:48:58Z: mbp-1 on rc.34 (poe). Mario w_ec37eca9: board side PASS at ~16:52Z: BOB-5 build A (14:51Z,
+  in the stuck window) and build B carry runs, tokens and slot runs; the outbox drained. Waiting on poe's checks (1)-(4).
+  No Luigi was cut by the restart: w_a54cca4d ended 16:36Z (04bf33f).
 ## Release-1 close: what's left
 - rc.34 live (poe) -> outbox drains -> BOB-10 AC 5 (worker's close_session description), BOB-4 AC 5-7
   live data; close the open sessions (after the drain).
