@@ -1,4 +1,4 @@
-// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5) at phone, tablet and desktop
+// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5) and its follow-ups (the CI line under Working now) at phone, tablet and desktop
 // widths, against a fake broker in the page holding a copy of BobNet's board (2026-11-14; its backlog
 // 2026-11-15). The page is public/ as served.
 //   node test-ui/shots.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob7-*.png, bob8-*.png, bob10-*.png, bob3-*.png)
@@ -245,6 +245,9 @@ function fakeBroker() {
   }
   const pending = window.BOB5 ? [{ id: "r_5", worker_id: "w_ho", name: "Howard", kind: "approval", tool: "Bash", tier: "human", created_at: iso(14), preview: "kill 33987" }] : window.BOB4 ? [{ id: "r_2", worker_id: "w_da", name: "Daisy", kind: "approval", tool: "Bash", tier: "lead", created_at: iso(2), preview: "git push origin HEAD" }] : window.BOB3 ? [{ id: "r_1", worker_id: "w_9453f36a", name: "Toad", kind: "approval", tool: "Bash", tier: "human", created_at: iso(2), preview: "git log --oneline v2..origin/v2" }] : [];
   const dashboard = { peers: [], laptops: [{ laptop: "mbp-1", at: iso(0), snapshot: { supervisor: { started_at: iso(600), concurrency: 3, active: 1, queued: 0 }, workers: others, pending, usage: [] } }], boards: [], updates: [], traffic: [] };
+  // Now's CI banner, now a line under Working now (BOB-5 as built 3): one run in progress, one failed.
+  if (window.CI) dashboard.boards.push({ laptop: "mbp-1", at: iso(0), board: { project: "bobnet", ref: "f90256f0", backlog: null, sessions: [], runs: [], baseline: null, commits: [],
+    ci: [{ name: "test", status: "in_progress", conclusion: null, created_at: iso(4), sha: "1a2b3c4d5e6f" }, { name: "e2e", status: "completed", conclusion: "failure", created_at: iso(12), sha: "9f8e7d6c5b4a" }] } });
 
   class FakeSocket extends EventTarget {
     static OPEN = 1;
@@ -312,6 +315,7 @@ const all = [
   ["bob5-overview", "overview", [], true],
   ["bob5-overview-answer", "overview", [(p) => p.locator("#needs li", { hasText: "two companies" }).getByRole("button", { name: "Answer" }).click()], false],
   ["bob5-capture-blocks-use", "triage/bobnet", capture, false],
+  ["bob5-ci-line", "overview", [(p) => p.locator(".ov-now").scrollIntoViewIfNeeded()], false],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 
@@ -325,6 +329,7 @@ try {
       if (name.startsWith("bob4")) await page.addInitScript(() => (window.BOB4 = true));
       if (name.startsWith("bob5")) {
         await page.addInitScript(() => (window.BOB5 = true));
+        if (name === "bob5-ci-line") await page.addInitScript(() => (window.CI = true));
         await page.addInitScript({ path: join(here, "../../../design/BOB-1/sample/records.js") });
       }
       if (name.startsWith("bob3acc") || name.startsWith("bob5")) {

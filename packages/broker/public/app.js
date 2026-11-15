@@ -63,8 +63,10 @@ function s(tag, attrs, ...children) {
 
 // ---------- Actions ----------
 
-/** Requests sent and not yet answered by the broker, by rid. */
+/** Requests sent and not yet answered by the broker, by rid: the button, and the toast its result reads as, if not the supervisor's. */
 const sentActions = new Map();
+/** The toast a sent action's result reads as, by the broker's action id. */
+const actionToasts = new Map();
 let toastTimer = null;
 
 /** A toast; with `undo`, an Undo button that takes the change back. */
@@ -77,15 +79,15 @@ function toast(text, ok = true, undo = null) {
   toastTimer = setTimeout(() => (el.hidden = true), 8000);
 }
 
-/** Sends a dashboard action to a laptop's supervisor; the button stays disabled until it's settled. True once sent. */
-function act(laptop, action, button, confirmText) {
+/** Sends a dashboard action to a laptop's supervisor; the button stays disabled until it's settled. True once sent. With `done`, its result's toast. */
+function act(laptop, action, button, confirmText, done = null) {
   if (confirmText && !confirm(confirmText)) return false;
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     toast("Not connected; try again in a moment.", false);
     return false;
   }
   const id = String(++rid);
-  sentActions.set(id, button);
+  sentActions.set(id, { button, done });
   if (button) button.disabled = true;
   ws.send(JSON.stringify({ t: "action", rid: id, laptop, action }));
   return true;
@@ -249,54 +251,6 @@ function showRun(w) {
   location.hash = "usage";
 }
 
-function viewNow() {
-  const run = running();
-  const pending = pendingAll();
-  const queued = workers().filter((w) => w.state === "queued");
-  const ci = projects().flatMap((e) => (e.board.ci ?? []).filter((r) => r.status !== "completed").map((r) => ({ ...r, project: e.board.project })));
-  const out = [];
-  for (const r of ci) out.push(h("div", { class: "banner" }, h("b", null, "Waiting on CI"), h("span", null, `${r.project}: ${r.name} on ${r.sha.slice(0, 8)}`), h("span", { class: "muted" }, "started ", ago(r.created_at), " ago")));
-  if (pending.length) {
-    out.push(h("section", null, h("h2", null, "Waiting on a decision ", h("span", { class: "count" }, pending.length)),
-      h("ul", { class: "list", id: "needs-list" }, pending.map((p) => h("li", { dataset: { tier: p.tier } },
-        h("b", null, p.name), p.kind === "question" ? " asks a question" : ` wants ${p.tool}`,
-        h("div", { class: "muted" }, `${p.tier === "human" ? "needs you" : "orchestrator decides"} · ${p.id} · ${p.laptop} · waiting `, ago(p.created_at)),
-        h("div", { class: "preview" }, p.preview),
-        p.kind === "question"
-          ? h("div", { class: "actions" }, h("span", { class: "muted" }, "Answer it through the orchestrator, or "), button("Deny", "danger", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "deny" }, b)))
-          : h("div", { class: "actions" },
-              button("Allow", "primary", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "allow" }, b, p.tier === "human" ? `Allow ${p.name} to run ${p.tool}?\n\n${p.preview}` : null)),
-              button("Deny", "danger", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "deny" }, b))))))));
-  }
-  const boardOf = (w) => projects().find((e) => e.board.project === w.project)?.board;
-  out.push(h("section", null, h("h2", null, "Running now ", h("span", { class: "count" }, run.length || "")),
-    run.length
-      ? h("div", { class: "table-wrap" }, h("table", { class: "stack", id: "running" },
-          h("thead", null, h("tr", null, h("th", null, "Agent"), h("th", null, "Working on"), h("th", null, "Model"), h("th", null, "Machine"), h("th", { class: "num" }, "Worked"), h("th", { class: "num" }, "Tokens"), h("th", { class: "num" }, "Context now"), h("th", null, ""))),
-          h("tbody", null, run.map((w) => {
-            const xs = refsOf(w).map((id) => boardOf(w)?.backlog?.items.find((i) => i.id === id)).filter(Boolean), x = xs.length === 1 ? xs[0] : null;
-            const head = headlineOf(w.task);
-            return h("tr", { class: "pick", tabindex: "0", title: "Show its context per call", onclick: () => showRun(w), onkeydown: (e) => e.key === "Enter" && showRun(w) },
-              h("td", null, h("b", null, w.name), h("div", { class: "cp" }, w.session ?? w.project), w.state !== "running" ? h("div", null, h("span", { class: "badge", dataset: { state: w.state } }, w.state)) : null,
-                w.remote_url ? h("div", null, h("a", { href: w.remote_url, target: "_blank", rel: "noopener", title: "Follow it and type to it in Claude", onclick: (e) => e.stopPropagation() }, "Open in Claude ↗")) : null,
-                quietMinutes(w) >= QUIET_MIN ? h("div", { class: "quiet", style: "color:var(--warn)", title: "No activity from it in that long. Nothing interrupts it: stop or reset it if it's stuck." }, `quiet ${quietMinutes(w)} min`) : null),
-              h("td", { class: "wide" },
-                head ? [h("span", { class: "title" }, head), x ? h("div", { class: "cp" }, "about ", chip(x.id), x.title) : xs.length ? h("div", { class: "cp" }, "about ", xs.map((i) => chip(i.id))) : null]
-                  : x ? [chip(x.id), " ", h("span", { class: "title" }, x.title)] : [xs.map((i) => chip(i.id)), h("span", { class: "title" }, w.task)],
-                w.checkpoint ? h("div", { class: "cp" }, w.checkpoint) : null),
-              h("td", { "data-label": "Model" }, fmtModel(w)),
-              h("td", { "data-label": "Machine" }, w.laptop),
-              h("td", { class: "num", "data-label": "Worked" }, w.started_at ? ago(w.started_at) : "–"),
-              h("td", { class: "num", "data-label": "Tokens" }, fmtTokens(totalTokens(w.tokens))),
-              h("td", { class: "num", "data-label": "Context now" }, w.calls ? `${fmtTokens(w.context ?? 0)} · ${w.calls} calls` : "–"),
-              h("td", { class: "full" }, h("div", { class: "actions", style: "margin:0;justify-content:flex-end" },
-                button("Stop", "danger", (b) => act(w.laptop, { kind: "stop", worker: w.id }, b, `Stop ${w.name} (${w.id})? It is interrupted, then ended.`)),
-                button("Reset", "", (b) => act(w.laptop, { kind: "reset", worker: w.id }, b, `Reset ${w.name} (${w.id})? It is stopped and a fresh worker starts the same task with no prior context.`)))));
-          }))))
-      : h("div", { class: "banner idle" }, h("span", null, "Nothing is running."), (() => { const last = workers().map((w) => w.ended_at).filter(Boolean).sort().at(-1); return last ? h("span", { class: "muted" }, "The last worker ended ", ago(last), " ago.") : null; })()),
-    h("p", { class: "note" }, queued.length ? `${queued.length} queued: ${queued.map((w) => w.name).join(", ")}. ` : "", run.length ? "Click an agent for its context per call." : "")));
-  return out;
-}
 
 // ---------- Rendering: kanban ----------
 
@@ -1258,12 +1212,12 @@ function viewOverview() {
       h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count", id: "needs-count" }, waitCount() || "")),
         h("div", { class: "card" },
           !ov.waits && !perms.length ? h("p", { class: "muted", style: "margin:0" }, "Reading the board…")
-            : holding ? h("ul", { class: "lines", id: "needs" }, perms.map(permissionLine), blocking.map(waitLine))
+            : holding ? h("ul", { class: "lines", id: "needs" }, oldestFirst(perms, blocking).map((x) => (x.p ? permissionLine(x.p) : waitLine(x.w))))
             : h("p", { class: "muted", style: "margin:0" }, "Nothing is held up by you."),
           holding || rest ? h("a", { class: "more", href: "#waits" }, rest ? `${holding} ${holding === 1 ? "holds" : "hold"} work up · ${rest} more when you have time →` : "Waits on you →") : null,
           staleLines())),
       h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length || "")),
-        now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map(nowLine)), queuedLine()) : h("div", { class: "empty-card" }, "No agent is working.", queuedLine())),
+        now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map(nowLine)), queuedLine(), ciLines()) : h("div", { class: "empty-card" }, "No agent is working.", queuedLine(), ciLines())),
       h("section", { class: "ov-proj" }, h("h2", null, "Projects"),
         h("div", { class: "plist", id: "plist" },
           !ov.rows && !legacy.length ? h("div", { class: "empty-card" }, svc.projects ? "Reading the board…" : "No project's board yet.") : null,
@@ -1277,6 +1231,23 @@ function staleLines() {
     const n = l.snapshot.pending.filter((p) => p.tier === "human").length;
     const min = Math.floor((brokerNow() - Date.parse(l.at)) / 60_000);
     return n ? h("p", { class: "more stale-line" }, `${l.laptop} hasn't reported for ${min} min: ${plural(n, "request")} from it wait${n === 1 ? "s" : ""} until it does.`) : null;
+  });
+}
+
+const CI_FAILED = new Set(["failure", "timed_out", "startup_failure"]);
+/**
+ * One muted line per CI run in progress, a failed one in red (BOB-5 as built 3): "CI running: BobNet · test on 1a2b3c4d · started 4 min ago".
+ * A run failed shows until its workflow runs again. A stopgap for Now's banner; it goes when the per-agent run line lands (BOB-4 gap 4).
+ */
+function ciLines() {
+  return projects().flatMap((e) => {
+    const latest = new Map();
+    for (const r of [...(e.board.ci ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at))) if (!latest.has(r.name)) latest.set(r.name, r);
+    return [...latest.values()].filter((r) => r.status !== "completed" || CI_FAILED.has(r.conclusion)).reverse().map((r) => {
+      const failed = r.status === "completed";
+      return h("p", { class: "more ci-line", dataset: failed ? { failed: "" } : {} },
+        `CI ${failed ? "failed" : "running"}: ${projectName(e.board.project)} · ${r.name} on ${r.sha.slice(0, 8)} · started `, ago(r.created_at), " ago");
+    });
   });
 }
 
@@ -1311,6 +1282,8 @@ const humanPerms = () => pendingAll().filter((p) => p.tier === "human");
 /** What the tab and Needs you count: the board's waits and his permissions. */
 const waitCount = () => humanPerms().length + (ov.waits?.length ?? 0);
 const waitId = (w) => `${w.project}/${w.ref}`;
+/** Permissions and the board's waits in one list, oldest first, as { p } or { w }. */
+const oldestFirst = (perms, waits) => [...perms.map((p) => ({ p, since: p.created_at })), ...waits.map((w) => ({ w, since: w.since }))].sort((a, b) => a.since.localeCompare(b.since));
 const permId = (p) => `perm/${p.laptop}/${p.id}`;
 const permText = (p) => (p.kind === "question" ? `${p.name} asks: ${p.preview}` : `${p.name} wants ${p.tool}`);
 const ANSWER_VERB = { question: "Answer", action: "Mark done", permission: "Allow or deny" };
@@ -1318,8 +1291,8 @@ const ANSWER_VERB = { question: "Answer", action: "Mark done", permission: "Allo
 const waitAge = (iso) => (Date.now() - Date.parse(iso) < DAY ? since(iso) : age(iso));
 /** Who asked: an agent by name; the owner's sign-in is an email (a domain with a dot), and that is Casper himself. */
 const askedBy = (a) => (/@[^@]*\./.test(a) ? "you" : shortName(a));
-/** "Mario, BobNet's lead" */
-const leadOf = (key) => `${leadName(key)}, ${projectName(key)}'s lead`;
+/** "Mario, BobNet's lead," before "gets a message" (BOB-5 as built). */
+const leadOf = (key) => `${leadName(key)}, ${projectName(key)}'s lead,`;
 /** Who got a message, from the board's `told`: "sent to" (Daisy), never "heard by". */
 const sentTo = (told) => (told?.length ? `; sent to ${told.map(shortName).join(" and ")}` : "");
 
@@ -1419,22 +1392,27 @@ async function undoAnswer(w, seq) {
   await loadOverview();
 }
 
-/** A permission's form (notes 42): a note to the agent, then Deny or Allow, with today's confirmation for Allow. */
+/**
+ * A permission's form (notes 42; BOB-5 as built 1, 2): a note that goes only with Deny (the SDK's allow carries none),
+ * then Deny or Allow, with today's confirmation for Allow. The supervisor's answer can't be taken back: no Undo.
+ */
 function permissionForm(p) {
   const a = state.answering;
   const close = () => { state.answering = null; render(); };
+  const what = `${p.name}'s ${p.kind === "question" ? "question" : p.tool}`;
   const decide = (decision, b) => {
-    const message = a.words.trim();
+    const message = decision === "deny" ? a.words.trim() : "";
+    const done = decision === "allow" ? `Allowed ${what}.` : `Denied ${what}${message ? `; your note went to ${p.name}` : ""}.`;
     const sent = act(p.laptop, { kind: "answer", request: p.id, decision, ...(message ? { message } : {}) }, b,
-      decision === "allow" ? `Allow ${p.name} to run ${p.tool}?\n\n${p.preview}` : null);
+      decision === "allow" ? `Allow ${p.name} to run ${p.tool}?\n\n${p.preview}` : null, done);
     if (sent) close();
   };
   return h("form", { class: "answer", onsubmit: (e) => e.preventDefault() },
     p.preview ? h("code", { class: "preview" }, p.preview) : null,
-    h("label", { class: "words" }, h("span", null, `Note to ${p.name} (optional)`),
-      h("textarea", { rows: 2, placeholder: "e.g. go ahead, it's idle", oninput: (e) => (a.words = e.target.value) }, a.words)),
+    h("label", { class: "words" }, h("span", null, `Note to ${p.name}, sent with Deny (optional)`),
+      h("textarea", { rows: 2, placeholder: "e.g. not that process; use the pool's stop script", oninput: (e) => (a.words = e.target.value) }, a.words)),
     h("div", { class: "foot" },
-      h("span", { class: "who-gets" }, p.kind === "question" ? `Answer it through the orchestrator, or deny it here; ${p.name} gets your note.` : `${p.name} gets your decision and note.`),
+      h("span", { class: "who-gets" }, p.kind === "question" ? `Answer it through the orchestrator, or deny it here; ${p.name} gets your note. It can't be taken back.` : `${p.name} gets your decision; a note goes only with Deny. It can't be taken back.`),
       h("button", { type: "button", onclick: close }, "Cancel"),
       button("Deny", "danger", (b) => decide("deny", b)),
       p.kind === "question" ? null : button("Allow", "primary", (b) => decide("allow", b))));
@@ -1466,8 +1444,8 @@ function waitItem(w) {
       h("span", { class: "muted" }, projectName(w.project), w.feature && w.feature !== w.ref ? [" · ", h("a", { href: featureHref(w.project, w.feature) }, w.feature)] : null),
       h("span", { class: "age" }, waitAge(w.since))),
     h("div", { class: "q" }, w.text),
+    w.recommended ? h("div", { class: "rec" }, "Recommended: ", w.recommended.text) : null,
     h("div", { class: "meta" },
-      w.recommended ? h("span", null, "Recommended: ", w.recommended.text) : null,
       w.blocking ? h("span", { class: "holds" }, w.kind === "bug" ? "Blocks use" : `Holds up ${heldNames(w)}`) : null,
       w.blocking ? null : neededBefore(w),
       w.asked_by ? h("span", null, `from ${askedBy(w.asked_by)}`) : null,
@@ -1487,7 +1465,7 @@ function permItem(p) {
       h("span", { class: "age" }, waitAge(p.created_at))),
     h("div", { class: "q" }, permText(p)),
     h("div", { class: "meta" },
-      h("span", { class: "holds" }, `Holds up ${p.name}${ss ? ` (${ss.label})` : ""}`),
+      h("span", { class: "holds" }, `Holds up ${p.name}${ss ? ` (${declaredStep(w)})` : ""}`),
       h("span", null, `on ${p.laptop}`),
       open ? null : answerToggle(id, ANSWER_VERB.permission)),
     open ? permissionForm(p) : null);
@@ -2110,13 +2088,13 @@ function viewSessions() {
 
 // ---------- Views ----------
 
-const VIEWS = { overview: viewOverview, waits: viewWaits, now: viewNow, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions };
+// Now left the tabs (BOB-5 as built 3): "#now" opens the Overview, as any unknown view does.
+const VIEWS = { overview: viewOverview, waits: viewWaits, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions };
 const viewName = () => (VIEWS[location.hash.slice(1).split("/")[0]] ? location.hash.slice(1).split("/")[0] : "overview");
 
 function render() {
   const v = viewName();
   for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${v}`);
-  $("now-count").textContent = running().length ? String(running().length) : "";
   // Nothing waits: the count leaves the tab.
   $("waits-count").textContent = waitCount() || "";
   const keys = [...new Set([...projects().map((e) => e.board.project), ...(svc.projects ?? []).map((p) => p.key)])];
@@ -2204,14 +2182,15 @@ function connect() {
           break;
         }
         if (sentActions.has(f.rid)) {
-          const b = sentActions.get(f.rid);
+          const { button: b } = sentActions.get(f.rid);
           sentActions.delete(f.rid);
           if (b) b.disabled = false;
           toast(f.message, false);
         }
         break;
       case "action_result":
-        toast(f.message, f.ok);
+        toast(f.ok && actionToasts.has(f.id) ? actionToasts.get(f.id) : f.message, f.ok);
+        actionToasts.delete(f.id);
         break;
       case "ok":
         if (sentOps.has(f.rid)) {
@@ -2220,7 +2199,9 @@ function connect() {
           break;
         }
         if (sentActions.has(f.rid)) {
+          const { done } = sentActions.get(f.rid);
           sentActions.delete(f.rid);
+          if (done && f.result?.id) actionToasts.set(f.result.id, done);
           toast("Sent; waiting for the supervisor…");
           break;
         }

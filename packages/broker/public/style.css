@@ -357,6 +357,7 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
 .waits li .top .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .waits li .age { margin-left: auto; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .waits li .q { font-weight: 600; }
+.waits li .rec { font-size: 13px; }
 .waits li .meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 14px; align-items: center; }
 .waits li .meta a, .waits li .top a { color: var(--accent); }
 .waits li .holds { color: var(--bad); }
@@ -509,6 +510,8 @@ pre.handoff { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wra
 .events.with-tasks .ev-h { display: grid; grid-template-columns: var(--idw) auto minmax(0, 1fr); }
 .events .ev-task .id { font-size: 12.5px; }
 .ov .stale-line { border-top: 0; padding-top: 4px; }
+.ov .ci-line { border-top: 0; padding-top: 4px; }
+.ov .ci-line[data-failed] { color: var(--bad); }
 .events details.chg .show { color: var(--accent); font-size: 12.5px; }
 .events details.chg del, .events details.chg .new { display: block; white-space: pre-wrap; font-size: 12.5px; margin-top: 4px; overflow-wrap: anywhere; }
 .more-btn { justify-self: start; }

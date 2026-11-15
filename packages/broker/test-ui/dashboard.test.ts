@@ -113,104 +113,53 @@ beforeAll(async () => {
   ws.frame({ t: "ok", rid: req["rid"], result: dashboard });
 });
 
-describe("Now", () => {
+describe("Now's parts on the Overview (BOB-5 as built 3)", () => {
   beforeAll(() => go("#now"));
 
-  it("connects to its own host and shows live once rendered", () => {
+  it("connects to its own host, shows live once rendered, and opens the Overview on #now, Now gone from the tabs", () => {
     expect(FakeSocket.last.url).toMatch(/\/v1\/ws$/);
     expect($("conn").dataset["state"]).toBe("live");
-    expect($("now-count").textContent).toBe("1");
-  });
-
-  it("shows who is running, on what task, with model, machine, tokens and context, and CI being waited on", () => {
-    const row = $("running").querySelector("tbody tr")!.textContent!;
-    expect(row).toContain("records-agent");
-    expect(row).toContain("LAND-41.18");
-    expect(row).toContain("land: tracts take updates");
-    expect(row).toContain("opus · high");
-    expect(row).toContain("mbp-1");
-    expect(row).toContain("1.5M");
-    expect(row).toContain("61k · 3 calls");
-    expect(view().textContent).toContain("Waiting on CI");
+    expect([...$("tabs").querySelectorAll("a")].map((a) => a.textContent!.replace(/\d+$/, "").trim())).toEqual(["Overview", "Waits on you", "Roadmap", "Feature", "Triage", "Usage", "Sessions"]);
+    expect($("tabs").querySelector("[aria-current]")!.getAttribute("href")).toBe("#overview");
+    expect($("working").textContent).toContain("records-agent");
     expect(view().textContent).not.toMatch(/\$\d/);
-    expect($("running").querySelector("a")).toBeNull();
   });
 
-  it("flags a running worker quiet for 15 minutes or more, for Casper to judge", async () => {
-    expect($("running").querySelector(".quiet")).toBeNull();
+  it("puts a muted line per CI run in progress under Working now, a failed one in red, and nothing once it passes", async () => {
     const ws = FakeSocket.last;
-    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
-    snap.workers = snap.workers.map((w) => (w.state === "running" ? { ...w, last_event_at: iso(16) } : w)) as never;
-    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    const lines = () => [...view().querySelectorAll(".ov-now .ci-line")];
+    expect(lines().map((l) => l.textContent)).toEqual(["CI running: helix · ci on 437577e9 · started 5m ago"]);
+    expect(lines()[0]!.hasAttribute("data-failed")).toBe(false);
+    const ci = (runs: unknown[]) => ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board: { ...board, ci: runs } });
+    // A failed run shows until its workflow runs again; an older failure of the same workflow doesn't.
+    ci([{ name: "ci", status: "completed", conclusion: "failure", created_at: iso(5), sha: "437577e9aa00" }, { name: "ci", status: "completed", conclusion: "failure", created_at: iso(60), sha: "1111111100" }]);
     await settle();
-    expect($("running").querySelector(".quiet")!.textContent).toBe("quiet 16 min");
-    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
+    expect(lines().map((l) => l.textContent)).toEqual(["CI failed: helix · ci on 437577e9 · started 5m ago"]);
+    expect(lines()[0]!.hasAttribute("data-failed")).toBe(true);
+    ci([{ name: "ci", status: "completed", conclusion: "success", created_at: iso(2), sha: "2222222200" }, { name: "ci", status: "completed", conclusion: "failure", created_at: iso(5), sha: "437577e9aa00" }]);
     await settle();
-  });
-
-  it("links a worker running with Remote Control to its session", async () => {
-    const ws = FakeSocket.last;
-    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
-    snap.workers = snap.workers.map((w) => (w.state === "running" ? { ...w, remote_url: "https://claude.ai/code/session_abc" } : w)) as never;
-    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
-    await settle();
-    const link = $("running").querySelector("a")!;
-    expect(link.getAttribute("href")).toBe("https://claude.ai/code/session_abc");
-    expect(link.getAttribute("target")).toBe("_blank");
-    expect(link.textContent).toBe("Open in Claude ↗");
-    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
+    expect(lines()).toHaveLength(0);
+    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board });
     await settle();
   });
 
-  it("sends actions for pending requests and running workers, confirming the risky ones", async () => {
+  it("shows a refused action and re-enables its button", async () => {
     const ws = FakeSocket.last;
     const snap = structuredClone(dashboard.laptops[0]!.snapshot);
     snap.workers[0] = worker({ state: "waiting-approval" });
     snap.pending.push({ id: "r_9", worker_id: "w_1", name: "records-agent", kind: "approval", tool: "Bash", tier: "human", created_at: iso(0), preview: "git push origin HEAD:main" } as never);
     ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
     await settle();
-    expect($("needs-list").textContent).toContain("git push origin HEAD:main");
-    expect($("needs-list").textContent).toContain("needs you");
-
-    const asked: string[] = [];
-    let answer = false;
-    globalThis.confirm = (q?: string) => (asked.push(String(q)), answer);
-    const buttons = (root: Element) => [...root.querySelectorAll("button")] as HTMLButtonElement[];
-    const allow = buttons($("needs-list")).find((b) => b.textContent === "Allow")!;
-    allow.click(); // declined
-    expect(asked[0]).toContain("git push origin HEAD:main");
-    expect(ws.sent.filter((f) => f["t"] === "action")).toHaveLength(0);
-    answer = true;
-    allow.click();
-    expect(ws.sent.filter((f) => f["t"] === "action").at(-1)).toMatchObject({ laptop: "mbp-1", action: { kind: "answer", request: "r_9", decision: "allow" } });
-    expect(allow.disabled).toBe(true);
-    ws.frame({ t: "action_result", id: "a_1", laptop: "mbp-1", ok: true, message: "r_9 allowed" });
-    expect($("toast").textContent).toBe("r_9 allowed");
-
-    const stop = buttons($("running")).find((b) => b.textContent === "Stop")!;
-    stop.click();
-    expect(ws.sent.filter((f) => f["t"] === "action").at(-1)).toMatchObject({ action: { kind: "stop", worker: "w_1" } });
-    // Stop doesn't also open the agent's chart.
-    expect(location.hash).not.toBe("#usage");
-  });
-
-  it("shows a refused action and re-enables its button", () => {
-    const ws = FakeSocket.last;
-    const deny = [...$("needs-list").querySelectorAll("button")].find((b) => b.textContent === "Deny") as HTMLButtonElement;
+    ($("needs").querySelector(".answer-btn") as HTMLButtonElement).click();
+    const deny = [...view().querySelectorAll("form.answer button")].find((b) => b.textContent === "Deny") as HTMLButtonElement;
     deny.click();
     const rid = ws.sent.at(-1)!["rid"];
     ws.frame({ t: "error", rid, code: "offline", message: "No supervisor is online on mbp-1" });
     expect($("toast").textContent).toBe("No supervisor is online on mbp-1");
     expect($("toast").dataset["ok"]).toBe("false");
     expect(deny.disabled).toBe(false);
-  });
-
-  it("opens an agent's context per call when its row is clicked", async () => {
-    ($("running").querySelector("tbody tr") as HTMLElement).click();
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
     await settle();
-    expect(location.hash).toBe("#usage");
-    expect(view().textContent).toContain("showing records-agent's run");
-    expect(view().querySelector("#role-pick option[selected]")!.textContent).toBe("records");
   });
 });
 
@@ -310,8 +259,8 @@ describe("Sessions", () => {
     const card = [...$("laptops").children].find((c) => c.textContent!.includes("mbp-2"))!;
     expect(card.textContent).toContain("no recent report");
     expect(card.textContent).toContain("1 request from its last report not offered");
-    await go("#now");
-    expect(view().textContent).not.toContain("r_old");
+    await go("#waits");
+    expect(view().querySelector('[data-ref="r_old"]')).toBeNull();
     await go("#overview");
     expect(view().textContent).not.toContain("rm -rf dist");
     // Not dropped silently: Needs you ends with a line naming the laptop (spec, BOB-4 as built).
@@ -319,8 +268,8 @@ describe("Sessions", () => {
     // Reporting again makes it live: its requests are offered.
     ws.frame({ t: "report", laptop: "mbp-2", at: iso(0), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [old], usage: [] } });
     await settle();
-    await go("#now");
-    expect($("needs-list").textContent).toContain("r_old");
+    await go("#waits");
+    expect(view().querySelector('[data-ref="r_old"]')).not.toBeNull();
     ws.frame({ t: "report", laptop: "mbp-2", at: iso(10), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [], usage: [] } });
     heartbeat();
     await settle();
@@ -333,8 +282,8 @@ describe("Sessions", () => {
     // This device runs 10 min ahead: the report the broker stamps now reads 10 min old here, and is live.
     ws.frame({ t: "report", laptop: "mbp-1", at: iso(10), snapshot: { ...dashboard.laptops[0]!.snapshot, pending: [ask] } });
     await settle();
-    await go("#now");
-    expect($("needs-list").textContent).toContain("r_skew");
+    await go("#waits");
+    expect(view().querySelector('[data-ref="r_skew"]')).not.toBeNull();
     ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
     await settle();
     await go("#sessions");
@@ -377,11 +326,6 @@ describe("a review session", () => {
       worker({ id: "w_h", name: "Homer", role: "homer", task: "LAND-41 review 1: QUICK fix of R1-1", session: "LAND-41 review 1", task_ref: "LAND-41.1", task_refs: ["LAND-41.1", "LAND-41.16"] }),
     ] as never;
     ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
-    await go("#now");
-    // Two items and no headline: a chip each, never a stringified array.
-    const homer = [...$("running").querySelectorAll("tbody tr")].find((r) => r.textContent!.includes("Homer"))!;
-    expect(homer.textContent).not.toContain("[object");
-    expect(homer.querySelectorAll(".chip")).toHaveLength(2);
     await go("#feature");
     const pick = $("inc-pick") as HTMLSelectElement;
     pick.value = "LAND-41";
@@ -1130,20 +1074,21 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     expect(document.querySelector('#tabs a[aria-current]')!.getAttribute("href")).toBe("#overview");
     // The waits and the permission: four, the action not holding work up.
     expect($("needs-count").textContent).toBe("5");
+    // Oldest first, as Waits on you (BOB-5 as built): the waits since an hour, the permission a minute.
     const lines = [...$("needs").querySelectorAll("li")];
-    expect(lines.map((l) => l.querySelector(".badge")!.textContent)).toEqual(["permission", "question", "question", "bug · blocks use"]);
-    expect(lines[0]!.textContent).toContain("records-agent wants Bash");
+    expect(lines.map((l) => l.querySelector(".badge")!.textContent)).toEqual(["question", "question", "bug · blocks use", "permission"]);
+    expect(lines[3]!.textContent).toContain("records-agent wants Bash");
     // Each answerable line has its one button; the form opens in place (notes 40).
-    expect([...lines[0]!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Allow or deny"]);
-    expect([...lines[1]!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Answer"]);
-    expect(lines[3]!.querySelector("button")).toBeNull();
-    expect(lines[1]!.querySelector(".l-t")!.textContent).toBe("Which roadmap order wins?");
+    expect([...lines[3]!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Allow or deny"]);
+    expect([...lines[0]!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Answer"]);
+    expect(lines[2]!.querySelector("button")).toBeNull();
+    expect(lines[0]!.querySelector(".l-t")!.textContent).toBe("Which roadmap order wins?");
     // Holds-up wording (spec, BOB-3 gap 5): its own feature's session by who is in it, another's with its feature,
     // BOB-3 counted once with its session, two named then "+N more"; a session with nobody in it by kind and label.
-    expect(lines[0]!.querySelector(".l-m")!.textContent).toBe("helix · LAND-41 · holds up records-agent (build 3)");
-    expect(lines[1]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up Luigi (build A), BOB-9 build B +1 more");
-    expect(lines[2]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up Fixes, review 2");
-    expect(lines[3]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · blocks use");
+    expect(lines[3]!.querySelector(".l-m")!.textContent).toBe("helix · LAND-41 · holds up records-agent (build 3)");
+    expect(lines[0]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up Luigi (build A), BOB-9 build B +1 more");
+    expect(lines[1]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up Fixes, review 2");
+    expect(lines[2]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · blocks use");
     expect(view().querySelector(".ov-needs .more")!.textContent).toBe("4 hold work up · 1 more when you have time →");
     expect(view().querySelector(".ov-needs .more")!.getAttribute("href")).toBe("#waits");
     // The count shows on the tab too (waiting-on-casper 3).
@@ -1194,7 +1139,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     expect($("needs-count").textContent).toBe("");
     // Nothing waits: the count leaves the tab.
     expect($("waits-count").textContent).toBe("");
-    expect(view().querySelector(".ov-now .empty-card")!.textContent).toBe("No agent is working.");
+    expect(view().querySelector(".ov-now .empty-card")!.textContent).toBe("No agent is working.CI running: helix · ci on 437577e9 · started 5m ago");
     const cells = [...view().querySelectorAll('.prow[data-project="bobnet"] .pc')].map((c) => c.textContent);
     expect(cells[2]).toBe("Open nowno feature open");
     expect(cells[3]).toBe("NextReady: BOB-9Move Helix's board");
@@ -1209,7 +1154,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     const line = () => $("needs").querySelector("li")!;
     (line().querySelector(".answer-btn") as HTMLButtonElement).click();
     // A question by the tool: answered through the orchestrator, or denied here; no Allow.
-    expect(line().querySelector(".who-gets")!.textContent).toBe("Answer it through the orchestrator, or deny it here; records-agent gets your note.");
+    expect(line().querySelector(".who-gets")!.textContent).toBe("Answer it through the orchestrator, or deny it here; records-agent gets your note. It can't be taken back.");
     expect([...line().querySelectorAll("form.answer button")].map((b) => b.textContent)).toEqual(["Cancel", "Deny"]);
     (line().querySelector(".answer-btn") as HTMLButtonElement).click();
   });
@@ -1221,7 +1166,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     const q258 = wait("Q-258", "question", "Ship rehearsal 1 with the known gap?", true, { project: "helix", feature: "LAND-49", since: iso(60 * 30),
       recommended: { key: "b", text: "Ship it, note the gap" }, waiting_sessions: [fixes], asked_by: "Bob@mbp-1" });
     const a15 = wait("A-15", "action", "Book the demo room", false, { project: "helix", feature: null, since: iso(60 * 24 * 3), needed_before: { text: "the demo" }, asked_by: "Peach@mbp-1" });
-    const q259 = wait("Q-259", "question", "Which tract for rehearsal 2?", false, { project: "helix", feature: "LAND-49", since: iso(60 * 5), needed_before: { text: "rehearsal 2 (49.13)" }, asked_by: "Bob@mbp-1" });
+    const q259 = wait("Q-259", "question", "Which tract for rehearsal 2?", false, { project: "helix", feature: "LAND-49", since: iso(60 * 5), needed_before: { text: "rehearsal 2 (49.13)" }, asked_by: "Bob@mbp-1", recommended: { key: "b", text: "Tract 7" } });
     const gate = wait("BOB-12", "review_gate", "Casper's look at the roadmap", true, { feature: "BOB-12", since: iso(60 * 24 * 2), asked_by: null, holds: { items: ["BOB-12"], sessions: [] } });
     const bug = wait("BOB-31", "bug", "Login fails on a phone", true, { feature: null, since: iso(60 * 4) });
     const perm = { id: "r_9", worker_id: "w_1", name: "records-agent", kind: "approval", tool: "Bash", tier: "human", created_at: iso(90), preview: "git push origin HEAD" };
@@ -1263,7 +1208,10 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect(q.querySelector(".top a")!.getAttribute("href")).toBe("#feature/helix/LAND-49");
       expect(q.querySelector(".q")!.textContent).toBe("Ship rehearsal 1 with the known gap?");
       // The session closed on it shows on the question, not as an item of its own (notes 23).
-      expect(q.querySelector(".meta")!.textContent).toBe("Recommended: Ship it, note the gapHolds up FixesfromBobFixes closed on it (need: casper)Open LAND-49Answer".replace("fromBob", "from Bob"));
+      // The recommendation on its own line, then the meta line with the button at its right (BOB-5 as built).
+      expect(q.querySelector(".rec")!.textContent).toBe("Recommended: Ship it, note the gap");
+      expect(q.querySelector(".meta")!.textContent).toBe("Holds up FixesfromBobFixes closed on it (need: casper)Open LAND-49Answer".replace("fromBob", "from Bob"));
+      expect(item("Q-259").querySelector(".rec")!.nextElementSibling!.classList.contains("meta")).toBe(true);
       expect(q.querySelector(".holds")!.textContent).toBe("Holds up Fixes");
       // Needed before, muted, and no Holds up, on what waits for a later milestone (notes 35).
       expect(item("A-15").querySelector(".before")!.textContent).toBe("Needed before the demo");
@@ -1297,7 +1245,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       const form = () => item("Q-258").querySelector("form.answer")!;
       expect([...form().querySelectorAll(".opt-row")].map((o) => o.textContent)).toEqual(["Ship it, note the gaprecommended", "Hold it for the fix"]);
       expect([...form().querySelectorAll("input[type=radio]")].some((r) => (r as HTMLInputElement).checked)).toBe(false);
-      expect(form().querySelector(".who-gets")!.textContent).toBe("Recorded on Q-258 as yours, word for word; Bob, Helix's lead gets a message.");
+      expect(form().querySelector(".who-gets")!.textContent).toBe("Recorded on Q-258 as yours, word for word; Bob, Helix's lead, gets a message.");
       const send = () => form().querySelector('button[type="submit"]') as HTMLButtonElement;
       expect(send().disabled).toBe(true);
       const words = "  Ship it. Say so in the notes, “gap” and all.  ";
@@ -1323,7 +1271,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       await answerWith([a15, gate, bug, q259], [{ project: "helix", ref: "Q-258", kind: "question", text: q258.text, key: "b", words: words.trim(), at: iso(0) }]);
       const done = $("waits-answered").querySelector("li")!;
       expect(done.querySelector(".said")!.textContent).toBe(`You picked Ship it, note the gap“${words.trim()}”`);
-      expect(done.querySelector(".meta")!.textContent).toBe("Bob, Helix's lead got a messagefrom the dashboard");
+      expect(done.querySelector(".meta")!.textContent).toBe("Bob, Helix's lead, got a messagefrom the dashboard");
       // Undo, within two minutes: the board takes back his own event.
       ($("toast").querySelector("button") as HTMLButtonElement).click();
       const [undo] = pending("undo");
@@ -1376,11 +1324,13 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect($("waits-answered").querySelector("blockquote")!.textContent).toBe("“Room 2, Thursday”");
     });
 
-    it("allows or denies a permission with a note to the agent, confirming Allow as today (#5)", async () => {
+    it("allows or denies a permission, the note only with Deny, confirming Allow as today, no Undo (#5; BOB-5 as built 1, 2)", async () => {
       (item("r_9").querySelector(".answer-btn") as HTMLButtonElement).click();
       const form = () => item("r_9").querySelector("form.answer")!;
       expect(form().querySelector(".preview")!.textContent).toBe("git push origin HEAD");
-      expect(form().querySelector(".who-gets")!.textContent).toBe("records-agent gets your decision and note.");
+      expect(form().querySelector(".words span")!.textContent).toBe("Note to records-agent, sent with Deny (optional)");
+      expect(form().querySelector("textarea")!.getAttribute("placeholder")).toBe("e.g. not that process; use the pool's stop script");
+      expect(form().querySelector(".who-gets")!.textContent).toBe("records-agent gets your decision; a note goes only with Deny. It can't be taken back.");
       expect([...form().querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Cancel", "Deny", "Allow"]);
       const box = form().querySelector("textarea") as HTMLTextAreaElement;
       box.value = "go ahead, it's idle";
@@ -1391,13 +1341,56 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect(asked).toEqual(["Allow records-agent to run Bash?\n\ngit push origin HEAD"]);
       expect(FakeSocket.last.sent.at(-1)!["t"]).not.toBe("action");
       globalThis.confirm = () => true;
+      // Allow with text still allows; the note doesn't go with it.
       ([...form().querySelectorAll("button")].find((b) => b.textContent === "Allow") as HTMLButtonElement).click();
-      expect(FakeSocket.last.sent.at(-1)).toMatchObject({ t: "action", laptop: "mbp-1", action: { kind: "answer", request: "r_9", decision: "allow", message: "go ahead, it's idle" } });
+      const allow = FakeSocket.last.sent.at(-1)!;
+      expect(allow).toMatchObject({ t: "action", laptop: "mbp-1", action: { kind: "answer", request: "r_9", decision: "allow" } });
+      expect((allow["action"] as Record<string, unknown>)["message"]).toBeUndefined();
       expect(item("r_9").querySelector("form.answer")).toBeNull();
-      // Deny needs no confirmation.
+      FakeSocket.last.frame({ t: "ok", rid: allow["rid"], result: { id: "a_allow" } });
+      FakeSocket.last.frame({ t: "action_result", id: "a_allow", laptop: "mbp-1", ok: true, message: "r_9 allowed" });
+      expect($("toast").textContent).toBe("Allowed records-agent's Bash.");
+      expect($("toast").querySelector("button")).toBeNull();
+      // Deny needs no confirmation; its note goes, and the toast says so.
       (item("r_9").querySelector(".answer-btn") as HTMLButtonElement).click();
+      box.value = "";
+      const note = form().querySelector("textarea") as HTMLTextAreaElement;
+      note.value = "use the pool's stop script";
+      note.dispatchEvent(new Event("input"));
       ([...form().querySelectorAll("button")].find((b) => b.textContent === "Deny") as HTMLButtonElement).click();
-      expect(FakeSocket.last.sent.at(-1)).toMatchObject({ t: "action", action: { kind: "answer", request: "r_9", decision: "deny" } });
+      const deny = FakeSocket.last.sent.at(-1)!;
+      expect(deny).toMatchObject({ t: "action", action: { kind: "answer", request: "r_9", decision: "deny", message: "use the pool's stop script" } });
+      FakeSocket.last.frame({ t: "ok", rid: deny["rid"], result: { id: "a_deny" } });
+      FakeSocket.last.frame({ t: "action_result", id: "a_deny", laptop: "mbp-1", ok: true, message: "r_9 denied" });
+      expect($("toast").textContent).toBe("Denied records-agent's Bash; your note went to records-agent.");
+      // No note: no "; your note …". A refusal reads as the supervisor's own words.
+      (item("r_9").querySelector(".answer-btn") as HTMLButtonElement).click();
+      const empty = form().querySelector("textarea") as HTMLTextAreaElement;
+      empty.value = "";
+      empty.dispatchEvent(new Event("input"));
+      ([...form().querySelectorAll("button")].find((b) => b.textContent === "Deny") as HTMLButtonElement).click();
+      FakeSocket.last.frame({ t: "ok", rid: FakeSocket.last.sent.at(-1)!["rid"], result: { id: "a_deny2" } });
+      FakeSocket.last.frame({ t: "action_result", id: "a_deny2", laptop: "mbp-1", ok: true, message: "r_9 denied" });
+      expect($("toast").textContent).toBe("Denied records-agent's Bash.");
+      FakeSocket.last.frame({ t: "action_result", id: "a_other", laptop: "mbp-1", ok: false, message: "r_9 isn't pending" });
+      expect($("toast").textContent).toBe("r_9 isn't pending");
+      // No line under Answered from here today for a permission.
+      expect($("waits-answered")?.querySelector('[data-ref="r_9"]') ?? null).toBeNull();
+    });
+
+    it("names a permission's session by its step on both lists: Holds up records-agent (Fixes) (BOB-5 as built)", async () => {
+      const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+      snap.workers = [worker({ state: "waiting-approval", session: "LAND-41 build Fixes" })] as never;
+      snap.pending = [perm] as never;
+      FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+      await settle();
+      expect(item("r_9").querySelector(".holds")!.textContent).toBe("Holds up records-agent (Fixes)");
+      await go("#overview");
+      const line = [...$("needs").querySelectorAll("li")].find((l) => l.textContent!.includes("records-agent wants Bash"))!;
+      expect(line.querySelector(".l-m")!.textContent).toBe("Helix · LAND-41 · holds up records-agent (Fixes)");
+      snap.workers = [worker({ state: "waiting-approval" })] as never;
+      FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+      await go("#waits");
     });
 
     it("answers from the Overview's Needs you in place, with the same form (notes 40)", async () => {
