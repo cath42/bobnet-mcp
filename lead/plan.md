@@ -5,13 +5,15 @@ Broker not deployed since BOB-12; the deploy is Casper's.
 
 ## Running
 - Toad (w_39a3303d): review of e74a747, the Backlog.md import; plus what dotted ids would change.
-- Peach (w_bf298cca): Luigi's import questions 1-4; asks Picard for Helix's board.
+- Peach (w_bf298cca): done, 9e6c4d1 (product/requirements/migration.md "Import answers").
 - Luigi (w_92cfd796): BOB-2 §7, questions and answers, service side; then the 60 s wait test (#12).
 
 ## Next, in order
 0. Luigi, after §7: the import appends each item's references to its notes as a "References:"
    list (Peach, product/requirements/migration.md "Import answers"; BOB-14 #6). Helix's answers
    wait on Picard and may add more.
+   Also the supervisor: a message injected mid-turn never gets inbox consumed_by, so it reaches
+   the role's next worker again (poe's check 3 after rc.28; worker.ts taken()). Told poe.
 1. BOB-2: close_release and undo; step 4 view data; CI (POST /v1/runs, the gh adapter).
 2. BOB-14, the pilot: broker deploy (Casper), `--post`, then `board: service` in bobnet's config.
 3. BOB-9, Helix, at Picard's date.
