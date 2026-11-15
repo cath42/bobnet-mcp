@@ -96,18 +96,18 @@ function fakeBroker() {
 }
 
 const widths = { 390: [390, 844], 1024: [1024, 768], 1440: [1440, 900] };
-// [file, hash, steps, full page?]
+// [file, hash, steps, full page?, what to wait for after the steps]
 const shots = [
   ["bob7-roadmap", "roadmap/bobnet", [], true],
   ["bob7-gates-edit", "roadmap/bobnet/edit", [], true],
   ["bob7-gates-moved", "roadmap/bobnet/edit", [(p) => p.selectOption('select[aria-label="Release of BOB-25"]', "R2")], false],
   ["bob7-close-release", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click()], false],
-  ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true],
+  ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 
 const browser = await chromium.launch();
 try {
-  for (const [name, hash, steps, full] of shots) {
+  for (const [name, hash, steps, full, until] of shots) {
     for (const [w, [width, height]] of Object.entries(widths)) {
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2 });
       await page.addInitScript(fakeBroker);
@@ -116,6 +116,12 @@ try {
       for (const step of steps) {
         await step(page);
         await page.waitForTimeout(400);
+      }
+      if (until) await page.waitForSelector(until);
+      // A full page reads top to bottom: the header not stuck mid-page, the toast left out (Daisy, BOB-7 3).
+      if (full) {
+        await page.addStyleTag({ content: "header { position: static !important; } #toast { display: none !important; }" });
+        await page.evaluate(() => window.scrollTo(0, 0));
       }
       await page.screenshot({ path: join(out, `${name}-${w}.png`), fullPage: full });
       await page.close();

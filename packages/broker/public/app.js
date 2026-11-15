@@ -450,15 +450,16 @@ function viewBacklogRoadmap() {
  * own writes: each saves at once, with Undo in its toast.
  */
 const svc = { projects: null, roadmaps: new Map(), loading: new Set(), again: new Set() };
-/** Board operations sent and not yet answered, by rid. */
+/** Board operations sent and not yet answered, by rid; a write keeps its frame, to resend under its key. */
 const sentOps = new Map();
 
 function boardOp(op, write = false) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Not connected; try again in a moment."));
   const id = String(++rid);
   // A write carries a key, made once per write, so the board takes it once (ADR 0001 §12).
-  ws.send(JSON.stringify({ t: "board_op", rid: id, op, ...(write ? { key: crypto.randomUUID() } : {}) }));
-  return new Promise((resolve, reject) => sentOps.set(id, { resolve, reject }));
+  const frame = JSON.stringify({ t: "board_op", rid: id, op, ...(write ? { key: crypto.randomUUID() } : {}) });
+  ws.send(frame);
+  return new Promise((resolve, reject) => sentOps.set(id, { resolve, reject, frame: write ? frame : null }));
 }
 
 async function listAll(op, field) {
@@ -580,20 +581,29 @@ function releaseSection(key, data, r, i, edit) {
       r ? h("span", { class: "n" }, i + 1) : null,
       h("b", null, r ? r.title : "Not in a release"),
       relState ? badge(relState === "all done" ? "done" : relState, relState) : null,
-      h("span", { class: "muted" }, r ? `${r.features.done} of ${plural(r.features.total, "feature")} done${closed && r.closed_at ? ` · closed ${r.closed_at.slice(0, 10)}` : ""}` : plural(fs.length, "feature")),
+      h("span", { class: "muted" }, r ? releaseCount(r) : plural(fs.length, "feature")),
       edit && r ? h("span", { class: "gate" },
         h("button", { type: "button", disabled: i === 0 || null, "aria-label": `Move ${r.title} earlier`, onclick: () => moveRelease(key, rels, i, -1) }, "↑ Earlier"),
         h("button", { type: "button", disabled: i === rels.length - 1 || null, "aria-label": `Move ${r.title} later`, onclick: () => moveRelease(key, rels, i, 1) }, "↓ Later"),
         closed ? null : button("Close release", "danger", () => closeRelease(key, data, r))) : null),
     b ? h("div", { class: "counts-line" }, h("span", null, plural(b.items, "backlog item")), h("span", null, plural(b.bugs, "open bug")), b.oldest ? h("span", null, `oldest ${duration(Date.now() - Date.parse(b.oldest)).split(" ")[0]}`) : null) : null,
     shut
-      ? h("div", { class: "table-wrap" }, h("table", { class: "stack" }, h("tbody", null, h("tr", { class: "fold" }, h("td", { colspan: cols, class: "full" },
-          button(fs.length ? `Closed, folded: ${plural(fs.length, "feature")}. Show them` : "Closed, with no features", "", () => { state.open.add(`rel:${key}:${r.ref}`); render(); }))))))
+      ? fs.length
+        ? h("div", { class: "table-wrap" }, h("table", { class: "stack" }, h("tbody", null, h("tr", { class: "fold" }, h("td", { colspan: cols, class: "full" },
+            button(`Closed, folded: ${plural(fs.length, "feature")}. Show them`, "", () => { state.open.add(`rel:${key}:${r.ref}`); render(); }))))))
+        : h("div", { class: "empty-card" }, "Closed, with no features")
       : fs.length
         ? h("div", { class: "table-wrap" }, h("table", { class: "stack" },
             h("thead", null, h("tr", null, h("th", null, "# Feature"), h("th", null, "State"), h("th", null, "Criteria"), h("th", null, "Tasks"), edit ? h("th", null, "Release") : null)),
             h("tbody", null, rows)))
         : h("div", { class: "empty-card" }, "No features in this release yet."));
+}
+
+/** A release's count line: a closed one never reads "0 of 0" (Daisy, spec at 249115d). */
+function releaseCount(r) {
+  const { done, total } = r.features;
+  const count = !total ? "No features" : r.status === "closed" && done === total ? `${plural(total, "feature")}, all done` : `${done} of ${plural(total, "feature")} done`;
+  return r.status === "closed" && r.closed_at ? `${count} · closed ${r.closed_at.slice(0, 10)}` : count;
 }
 
 function featureRow(key, data, r, f, n, edit) {
@@ -621,7 +631,8 @@ function featureRow(key, data, r, f, n, edit) {
 async function gate(key, op, said, undoOp) {
   try {
     const res = await boardOp(op, true);
-    toast(said, true, () => undoGate(key, typeof undoOp === "function" ? undoOp(res) : undoOp));
+    // seq 0: the board wrote nothing (a stale view, a repeat), so there is nothing to undo.
+    toast(said, true, res.seq === 0 ? null : () => undoGate(key, typeof undoOp === "function" ? undoOp(res) : undoOp));
   } catch (err) {
     toast(err.message, false);
   }
@@ -1034,6 +1045,8 @@ function connect() {
       case "welcome":
         backoff = 1000;
         dashboardRid = request("dashboard");
+        // A write the drop cut off goes again under its key: the board answers a repeat with its first reply (Toad, BOB-7 review).
+        for (const op of sentOps.values()) if (op.frame) ws.send(op.frame);
         loadProjects();
         break;
       case "error":
@@ -1106,8 +1119,11 @@ function connect() {
   });
   ws.addEventListener("close", () => {
     setConn("down");
-    for (const op of sentOps.values()) op.reject(new Error("The connection dropped; try again in a moment."));
-    sentOps.clear();
+    for (const [id, op] of sentOps) {
+      if (op.frame) continue;
+      op.reject(new Error("The connection dropped; try again in a moment."));
+      sentOps.delete(id);
+    }
     setTimeout(connect, backoff);
     backoff = Math.min(backoff * 2, 30_000);
   });

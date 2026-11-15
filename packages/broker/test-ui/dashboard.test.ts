@@ -592,6 +592,53 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     await lists();
   });
 
+  it("counts a closed release without 0 of 0, and says an empty one is closed in muted text (Daisy, BOB-7 1, 2)", async () => {
+    const closed = [...releases, rel("R4", "R4 Empty", "closed", 0, 0)];
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 72, refs: [] });
+    await lists(closed, features);
+    expect(view().querySelector("#rel-R3 .rel-h .muted")!.textContent).toBe("1 feature, all done · closed 2026-11-10");
+    expect(view().querySelector("#rel-R4 .rel-h .muted")!.textContent).toBe("No features · closed 2026-11-10");
+    const empty = view().querySelector("#rel-R4 .empty-card")!;
+    expect(empty.textContent).toBe("Closed, with no features");
+    expect(view().querySelector("#rel-R4 button")?.textContent ?? "").not.toContain("Closed");
+    expect(view().querySelector("#rel-R1 .rel-h .muted")!.textContent).toBe("5 of 6 features done");
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 73, refs: [] });
+    await lists();
+  });
+
+  it("toasts a move the board didn't need to write without Undo (Toad, BOB-7 1)", async () => {
+    const select = view().querySelector('select[aria-label="Release of BOB-8"]') as HTMLSelectElement;
+    select.value = "R1";
+    select.dispatchEvent(new Event("change"));
+    reply(pending("set_release")[0]!, { ref: "BOB-8", seq: 0 });
+    await settle();
+    expect(toastEl().textContent).toContain("Moved BOB-8");
+    expect(toastEl().querySelector("button.undo")).toBeNull();
+    await lists();
+  });
+
+  it("sends a write the connection dropped again after the welcome, under its key, and answers it (Toad, BOB-7 2)", async () => {
+    const select = view().querySelector('select[aria-label="Release of BOB-7"]') as HTMLSelectElement;
+    select.value = "R2";
+    select.dispatchEvent(new Event("change"));
+    const [move] = pending("set_release");
+    const old = FakeSocket.last;
+    old.dispatchEvent(new Event("close"));
+    await new Promise((r) => setTimeout(r, 1100));
+    expect(FakeSocket.last).not.toBe(old);
+    expect(toastEl().dataset["ok"]).not.toBe("false");
+    FakeSocket.last.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
+    const [again] = pending("set_release");
+    expect(again).toMatchObject({ rid: move!.rid, key: move!.key, op: move!.op });
+    reply(again!, { ref: "BOB-7", seq: 90 });
+    await settle();
+    expect(toastEl().textContent).toContain("Moved BOB-7 to R2");
+    expect(toastEl().querySelector("button.undo")).not.toBeNull();
+    reply(pending("projects")[0]!, { projects: [{ key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] }] });
+    await settle();
+    await lists();
+  });
+
   it("refetches the project when the board changes", async () => {
     FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 80, refs: ["BOB-8"] });
     expect(pending("list").length).toBe(2);
