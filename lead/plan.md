@@ -43,7 +43,14 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   wire additive and rc.32-safe; finding 1 MAJOR (dashboard capture lost on `unavailable`; fix before
   Peach accepts), 3 and 4 minor, sent to Luigi w_3c382245 with Daisy's (one follow-up commit, then
   BOB-10). Finding 2 (Triage release Undo is a blind inverse update) accepted for now; a real fix is
-  a service `undo` of a release-only update. BOB-8 deploy goes from Luigi's follow-up hash. (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
+  a service `undo` of a release-only update. BOB-8 deploy goes from Luigi's follow-up hash.
+- Luigi 0b8a185: BOB-8 follow-ups. Broker DEPLOYED (4th) 05:26:33Z from v2 b3b6672 (= 0b8a185 +
+  lead/): Version ID 0acf3c27-6aa2-4bfa-9172-19a59d9ed29a. Omitted summary keys are optional in the
+  protocol (rc.32-safe). Checks at ~05:32Z.
+- Luigi w_3c382245: BOB-10 at 214304a (bug criterion "It no longer happens", Done refused until
+  checked). Broker deploy + a RELEASE (client MCP tool descriptions): batch the release with the
+  next one; no restart needed for release 1's views otherwise. Toad w_9453f36a reviews.
+  Gap 1 (dashboard capture "found in" preset from a feature screen): Daisy, with BOB-4. (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
   BOB-7, BOB-8, BOB-10, BOB-3, BOB-4, BOB-5. Toad reviews each; broker deploy after each review.
 
