@@ -51,6 +51,8 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
 - Broker DEPLOYED on Casper's go, 03:18:03Z, from the v2.0.0-rc.31 tree (15ea0a3): Current Version
   ID 58701295-2bcc-466b-a9fb-855158081b44. Last time the new code served ~20 min after deploy, so
   check (1) waits until the supervisors have reconnected onto it.
+  Check (2) PASS: Casper read /v1/board/export as owner, version 1 (03:2xZ): migration 2 ran.
+  Check (1) pending: no supervisor reconnect since the deploy as of 03:20:43Z (old sockets, old code).
   After the deploy: (1) every supervisor peer on both laptops reconnects, no "could not report"
   (re-check after a couple of minutes); (2) GET /v1/board/export as the owner answers 200, version 1
   (runs migration 2); (3) wrangler version id into this plan. Then poe: rc.31 on both supervisors.
