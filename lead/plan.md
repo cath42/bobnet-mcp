@@ -24,6 +24,10 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   tab; shots packages/broker/test-ui/shots/bob7-*). Broker deploy needed, no release, no migration.
   Mario read the store diff: OK. Toad w_080605d6 reviews; Daisy w_1f97dcec rules on gaps 1, 2.
   Deploy after Toad's sign-off; then Peach accepts BOB-7.
+- Daisy w_1f97dcec (249115d): gap 2 accepted, gap 1 with changes 1-3 (count line, muted text, shot
+  retakes). Toad w_080605d6 (34ff0fd): signed off, deploy-ready; minors 1 (seq-0 Undo), 2 (resend
+  with key after welcome). All five sent to Luigi as one small BOB-7 commit ahead of BOB-8; the
+  BOB-7 deploy goes from that commit (one deploy, not two).
 - Luigi w_6a83777e: BOB-8 (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
   BOB-7, BOB-8, BOB-10, BOB-3, BOB-4, BOB-5. Toad reviews each; broker deploy after each review.
