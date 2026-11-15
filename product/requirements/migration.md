@@ -38,3 +38,38 @@ in the service reads or writes Markdown after it.
 
 - *Settled (Casper, 2026-11-14, "2. Yes"):* BobNet's own board moves first, as the pilot, through the same
   import path, then Helix (BOB-9). BobNet's board stays on Backlog.md until then.
+
+## Import answers (Peach, 2026-11-14)
+
+Settling Luigi's questions from the dry-run reports (`~/.local/state/bobnet/handoffs/bobnet/w_fb457dcd-*-import.md`).
+BobNet's board is settled here; Helix's is Picard's call (asked, answers not yet in).
+
+**BobNet's board (settled):**
+
+1. **A container that holds tasks becomes a feature (type `increment`).** Right. A `chore` or `task` with
+   children is a feature in practice. BOB-1.1 → BOB-26 as a flat id is fine; numbering is Casper's.
+2. **Release status from the archived rule: right for BobNet.** An archived milestone is closed, the first
+   one not archived is open, the rest planned. BobNet has none archived: R1 open, R2 planned, as the
+   report says. (Helix's R1 closing is Picard's to confirm: see below.)
+3. **Fields.** *Assignee:* dropped, correct: who works on what is Mario's and comes from sessions, never
+   from a card. *Priority:* dropped, correct: the order inside a release (ordinal) is the priority; the
+   4 priorities are not worth a field. *References:* **do not drop them.** The 25 are the trace from a
+   card to its requirement and ADR, which a reviewer needs. No new field: **the import appends them to
+   the item's notes as a `References:` list, one path or URL per line**, as it does for a final summary.
+   That is a code change (Luigi), small, and it applies to Helix's too (747 of them).
+4. **The open feature at import (BOB-9 #5): BobNet has none.** No BobNet item is `In Progress` (checked
+   2026-11-14), so no `imported` session is needed at the BOB-14 import. If one is `In Progress` at the
+   cut-over, it gets the `imported` session as ADR 0001 §11 says. The import must not invent an open
+   feature from a status other than `In Progress`.
+
+**BOB-14 grant seeding (Mario's message m_9597e3c1, Toad's m_d4aaa682):** the nightly backup on mbp-1
+exports only what mbp-1's read grants cover. At the BobNet import the project's grants are seeded from
+my rows: Mario@mbp-1 gets a `*` read row (cross-project read, ADR 0001 §5), which makes the backup full.
+Mario@* is not seeded: it would cover Mario on any laptop, wider than the backup needs. Casper's `*`
+read is his own owner row.
+
+**Helix's board (asked Picard, open):** (a) containers → features, same as BobNet; (b) R1 "Partner
+demo" came out closed because it is archived: right?; (c) assignee/priority/references: references go
+to notes; is dropping assignee (590) and priority (130) acceptable?; (d) which feature is open at the
+import: origin/main has no `In Progress` feature in the report; `main`'s LAND-2 is In Progress;
+(e) land-23.7 has invalid YAML: Picard fixes or drops it.
