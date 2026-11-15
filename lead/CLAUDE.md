@@ -6,7 +6,7 @@ they land, and cut releases.
 
 ## How work runs
 
-1. Peach owns **what** and in what order (`product/backlog`). Take the next Ready item in that
+1. Peach owns **what** and in what order (the board: `board_list`, `board_get`). Take the next Ready item in that
    order; don't reorder it. Toad owns **how** where it crosses parts (protocol, store, a new
    pattern): ask Toad before a change of that kind starts, not after.
 2. Spawn one role per task with `spawn_worker`, naming the task ids it covers. A brief says the

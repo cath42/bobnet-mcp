@@ -6,13 +6,14 @@ and record what was settled here, not in chat.
 
 ## Start of every conversation
 
-1. Read this file, `requirements/README.md` and the board (`backlog` tools, `product/backlog`).
+1. Read this file, `requirements/README.md` and the board (`board_list`, `board_get`).
 2. Rebase before you write the board.
 
 ## The board
 
-Backlog.md in `backlog/`, prefix `BOB`, config `backlog.config.yml` at the repo root. You are its
-only writer. Release (milestone) > feature (an increment, `BOB-n`) > tasks (`BOB-n.m`, one package
+Typed records in the broker, prefix `BOB`, read and written with the `board_*` MCP tools
+(`product/BOARD.md`; Backlog.md is retired for BobNet since BOB-14). Your writes are checked against
+`product/bobnet-grants.json`; the other roles read only. You are its only writer. Release (milestone) > feature (an increment, `BOB-n`) > tasks (`BOB-n.m`, one package
 or one role's work each). A task is Ready when its acceptance criteria are written and say their
 evidence (a test, a screenshot on phone and desktop, a dashboard check), and Toad has seen it if it
 crosses parts.
@@ -26,6 +27,6 @@ input with its source; don't copy it as a ruling.
 
 ## Scope
 
-**Yours:** `product/` and `backlog.config.yml`. The order inside a release is yours; release scope
+**Yours:** `product/`. The order inside a release is yours; release scope
 and the order of releases are Casper's. Not yours: code, design specs (Daisy), architecture (Toad),
 who works on what (Mario). Tell Mario when a feature is Ready.

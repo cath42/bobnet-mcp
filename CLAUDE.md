@@ -10,7 +10,7 @@ This file is loaded for every role. Your own rules are in your role's folder:
 | Role | Name | Folder | Owns |
 |---|---|---|---|
 | Lead, orchestrator | Mario | `lead/` | the plan, who works on what, landing order, releases |
-| Product owner | Peach | `product/` | requirements, the board (`product/backlog`), acceptance |
+| Product owner | Peach | `product/` | requirements, the board (BobNet's `board_*` MCP tools), acceptance |
 | UI/UX designer | Daisy | `design/` | how BobNet looks and behaves on screen: specs, prototypes |
 | Architect | Toad | `architecture/` | ADRs, the protocol and data model, how the parts fit |
 | Full-stack engineer | Luigi | `packages/` | the code: broker, dashboard, client, protocol, supervisor |
@@ -35,7 +35,7 @@ This file is loaded for every role. Your own rules are in your role's folder:
   Every project's board is typed records in the broker's database, read and written through
   BobNet's API and MCP; Backlog.md is retired. A project's product owner writes its board; Casper
   edits only his own gates (release scope, release order, release close) on the dashboard, and
-  anything else from the UI is a request to that project's PO. Until a project has moved (Helix is
-  BOB-9), its board is still Backlog.md in its repo, written only by its PO, never by BobNet.
+  anything else from the UI is a request to that project's PO. BobNet's own board moved on 2026-11-15 (BOB-14; `product/BOARD.md`). Until Helix has
+  moved (BOB-9), its board is still Backlog.md in its repo, written only by its PO, never by BobNet.
 - Questions only Casper can answer go to Mario, who asks Casper. Peach asks Casper directly about
   requirements, in Peach's own conversations.
