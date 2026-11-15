@@ -131,6 +131,10 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - 16:48:58Z: mbp-1 on rc.34 (poe). Mario w_ec37eca9: board side PASS at ~16:52Z: BOB-5 build A (14:51Z,
   in the stuck window) and build B carry runs, tokens and slot runs; the outbox drained. Waiting on poe's checks (1)-(4).
   No Luigi was cut by the restart: w_a54cca4d ended 16:36Z (04bf33f).
+- poe m_1c46fc3b: rc.34 checks (1) (2) (4) PASS; (3) r_1ce58412 (Helix, Bender) still orphaned: as built
+  (under 24 h, session resumable), expires ~01:33Z 2026-11-16 or Helix denies it with resume: false. Told poe.
+- Mario closed BOB-5 (5) and BOB-8 (4) sessions, all with tokens. Slip: BOB-8 review A has minors_fixed 1;
+  the fixed finding was Toad's major 1 (48ac061 -> 0b8a185). Peach w_5af5cf6d: BOB-10 AC 5/DoD 2, 4; BOB-4 AC 5-7.
 ## Release-1 close: what's left
 - rc.34 live (poe) -> outbox drains -> BOB-10 AC 5 (worker's close_session description), BOB-4 AC 5-7
   live data; close the open sessions (after the drain).
