@@ -39,7 +39,11 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - Luigi w_6a83777e done: BOB-8 + BOB-2 AC 10 at 5c5f355 (additive ItemSummary fields; reads 3-14 ms
   under load at Helix size). Broker deploy needed, no release. Toad w_176b85c2 reviews; Daisy
   w_7cd48eba rules on gaps 2-4. BOB-10 waits for a free Bob slot (2 max while Helix runs).
-- (was) Luigi w_6a83777e: BOB-8 (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
+- Daisy w_7cd48eba (d48b771): gaps 2-4 ruled, 3 small changes. Toad w_176b85c2 (48ac061): deploy-ready,
+  wire additive and rc.32-safe; finding 1 MAJOR (dashboard capture lost on `unavailable`; fix before
+  Peach accepts), 3 and 4 minor, sent to Luigi w_3c382245 with Daisy's (one follow-up commit, then
+  BOB-10). Finding 2 (Triage release Undo is a blind inverse update) accepted for now; a real fix is
+  a service `undo` of a release-only update. BOB-8 deploy goes from Luigi's follow-up hash. (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
   BOB-7, BOB-8, BOB-10, BOB-3, BOB-4, BOB-5. Toad reviews each; broker deploy after each review.
 
