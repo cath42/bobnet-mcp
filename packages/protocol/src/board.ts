@@ -165,6 +165,8 @@ export const BoardOp = z.discriminatedUnion("op", [
     ref: z.union([QuestionRef, ItemAlias, ReleaseRef]).optional(),
     session: SessionRef.optional(),
     history: z.boolean().optional(),
+    /** With `history`, a feature's history includes its tasks' events, merged in order (spec: History, With its tasks). */
+    with_tasks: z.boolean().optional(),
   }),
   z.object({ op: z.literal("grants"), ...project }),
   /**
@@ -573,6 +575,10 @@ export interface RunRecord {
   resumed: boolean;
   tokens: TokenTotals;
   calls: number;
+  /** Context per call, in tokens, as its run_end reported it (§9); empty while it runs. */
+  ctx: number[];
+  /** Its Remote Control session, when it ran with one. */
+  remote_url: string | null;
   tasks: string[];
 }
 
@@ -596,6 +602,25 @@ export interface SessionRecord extends SessionSummary {
   /** Summed from the session's runs, never declared. */
   tokens: TokenTotals;
   runs: RunRecord[];
+  /** CI and run-slot runs tied to it through its workers' pushes or slots (§10), oldest first. */
+  ci_runs: CiRunRecord[];
+}
+
+/** A CI or run-slot run (§10). `usual_ms`: the median of the last 20 like it that passed, once there are three. */
+export interface CiRunRecord {
+  source: string;
+  external_id: string;
+  name: string;
+  url: string | null;
+  repo: string | null;
+  branch: string | null;
+  sha: string | null;
+  laptop: string | null;
+  status: "queued" | "running" | "passed" | "failed" | "cancelled";
+  started_at: string | null;
+  ended_at: string | null;
+  worker: string | null;
+  usual_ms: number | null;
 }
 
 export interface QuestionRecord {

@@ -222,6 +222,24 @@ describe("import (ADR 0001 §11)", () => {
     expect(comparable(await exported())).toEqual(comparable(out));
   });
 
+  it("starts the history of an item that came over without events at its project's import, its tasks' merged in on ask (BOB-14 #5)", async () => {
+    const doc = document({}, [
+      { ref: "BOB-1", kind: "feature", type: "increment" },
+      { ref: "BOB-1.1", kind: "task", parent: "BOB-1" },
+    ]);
+    expect(await imported(doc)).toMatchObject({ ok: true });
+    await ok(owner, { op: "update", project: "bobnet", ref: "BOB-1.1", set: { status: "Ready" } });
+    await ok(owner, { op: "update", project: "bobnet", ref: "BOB-1", set: { title: "Steps" } });
+    const own = (await ok(owner, { op: "get", project: "bobnet", ref: "BOB-1", history: true })).history!;
+    expect(own.map((e) => [e.op, e.record.table])).toEqual([["import", "projects"], ["update", "items"]]);
+    expect(own[0]!.reason).toContain("imported from Backlog.md at bobnet 1234567");
+    const all = (await ok(owner, { op: "get", project: "bobnet", ref: "BOB-1", history: true, with_tasks: true })).history!;
+    expect(all.map((e) => [e.op, e.record.ref])).toEqual([["import", "bobnet"], ["update", "BOB-1.1"], ["update", "BOB-1"]]);
+    // An item made in the service starts with its own creation.
+    const made = (await ok(owner, { op: "create", project: "bobnet", kind: "backlog", type: "task", title: "Next" })).ref!;
+    expect((await ok(owner, { op: "get", project: "bobnet", ref: made, history: true })).history!.map((e) => e.op)).toEqual(["create"]);
+  });
+
   it("takes what the Backlog.md import writes (import review, finding 9; the supervisor's test pins the fixture)", async () => {
     expect(await imported(backlogImport)).toMatchObject({ ok: true, projects: [{ key: "bobnet", items: 8, next_item: 4 }] });
     // A dotted primary, a task under a task under its feature, a re-creation's old id, and a renumbered one.

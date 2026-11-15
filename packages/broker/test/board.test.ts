@@ -635,7 +635,7 @@ describe("the supervisor's operations (ADR 0001 §4, §9, §10)", () => {
     expect(await ok(bill, { ...end, tokens: tokens(5) })).toMatchObject({ seq: first.seq });
 
     const got = await ok(owner, { op: "get", project: "helix", session, history: true });
-    expect(got.session).toMatchObject({ tokens: tokens(100), runs: [{ id: "w_bill", agent: "Bill", laptop: "mbp-1", calls: 3, tokens: tokens(100), tasks: [t1], ended_at: at(30) }] });
+    expect(got.session).toMatchObject({ tokens: tokens(100), runs: [{ id: "w_bill", agent: "Bill", laptop: "mbp-1", calls: 3, tokens: tokens(100), tasks: [t1], ended_at: at(30), ctx: [1000, 70000, 0x10000000], remote_url: null }] });
     expect(got.session!.runs[0]).not.toHaveProperty("cost_usd");
     await runInDurableObject(board(), (_, state) => {
       const blob = state.storage.sql.exec<{ ctx: ArrayBuffer }>("SELECT ctx FROM runs WHERE id = 'w_bill'").one().ctx;
@@ -695,6 +695,25 @@ describe("the supervisor's operations (ADR 0001 §4, §9, §10)", () => {
     // Another laptop's slot run of the same id is not this one's to change.
     const elsewhere = { ...bill, laptop: "mbp-2" };
     expect(await refused(elsewhere, { ...slot, status: "failed" })).toMatchObject({ code: "conflict" });
+  });
+
+  it("gives a session its runs' Remote Control and its slot runs, with the usual time once three like it passed (§10)", async () => {
+    const { f1 } = await helix();
+    const session = { feature: f1, kind: "build" as const, label: "1" };
+    const bill = sup("Bill", session);
+    await ok(bill, { op: "session_join", project: "helix", session });
+    await ok(bill, { op: "run_start", project: "helix", id: "w_bill", started_at: at(0), session, remote_url: "https://claude.ai/code/s_1" });
+    const slot = (n: number, status: "passed" | "running", start: number, end?: number) =>
+      ok(bill, { op: "slot_run", project: "helix", external_id: `s_${n}`, name: "land", status, started_at: at(start), ...(end === undefined ? {} : { ended_at: at(end) }) });
+    await slot(1, "passed", 1, 3);
+    await slot(2, "passed", 4, 10);
+    const two = (await ok(owner, { op: "get", project: "helix", session })).session!;
+    expect(two.runs[0]).toMatchObject({ remote_url: "https://claude.ai/code/s_1", ctx: [] });
+    expect(two.ci_runs.map((c) => [c.external_id, c.status, c.usual_ms])).toEqual([["s_1", "passed", null], ["s_2", "passed", null]]);
+    await slot(3, "passed", 11, 15);
+    await slot(4, "running", 20);
+    const four = (await ok(owner, { op: "get", project: "helix", session })).session!;
+    expect(four.ci_runs.at(-1)).toMatchObject({ source: "slot", name: "land", laptop: "mbp-1", status: "running", worker: "w_bill", ended_at: null, usual_ms: 4 * 60_000 });
   });
 });
 

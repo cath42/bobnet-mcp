@@ -20,6 +20,7 @@ import {
   type QuestionRecord,
   type ReleaseRecord,
   type RunRecord,
+  type CiRunRecord,
   type SessionRecord,
   type SessionRef,
   type SessionSummary,
@@ -121,7 +122,11 @@ interface UndoneEvent {
 interface CiRunRow {
   pk: number;
   project: number;
-  status: string;
+  source: string;
+  external_id: string;
+  name: string;
+  laptop: string | null;
+  status: CiRunRecord["status"];
   url: string | null;
   repo: string | null;
   branch: string | null;
@@ -340,7 +345,21 @@ export class BoardStore {
       return { release: this.releaseRecord(r), ...(op.history ? { history: this.history("releases", r.pk) } : {}) };
     }
     const row = this.item(p, op.ref);
-    return { item: this.itemRecord(row), ...(op.history ? { history: this.history("items", row.pk) } : {}) };
+    return { item: this.itemRecord(row), ...(op.history ? { history: this.itemHistory(p, row, op.with_tasks === true) } : {}) };
+  }
+
+  /**
+   * An item's events. One that came over in an import with no history of its own (a Backlog.md import
+   * brings none) starts with its project's import, so the history says where it begins (BOB-14 #5).
+   * `withTasks`: a feature's own events and its tasks', in the order they happened (spec: History, With its tasks).
+   */
+  private itemHistory(p: ProjectRow, row: ItemRow, withTasks: boolean): BoardEvent[] {
+    const own = this.history("items", row.pk);
+    const tasks = withTasks && row.kind === "feature" ? this.sql.exec<{ pk: number }>("SELECT pk FROM items WHERE parent = ? ORDER BY pk", row.pk).toArray() : [];
+    const events = tasks.length ? [...own, ...tasks.flatMap((t) => this.history("items", t.pk))].sort((a, b) => a.seq - b.seq) : own;
+    if (own.some((e) => e.op === "create" || e.op === "capture")) return events;
+    const imp = this.sql.exec<{ seq: number }>("SELECT seq FROM events WHERE tbl = 'projects' AND pk = ? AND op = 'import' ORDER BY seq LIMIT 1", p.pk).toArray()[0];
+    return imp ? [...this.history("projects", p.pk).filter((e) => e.seq === imp.seq), ...events] : events;
   }
 
   private itemRecord(row: ItemRow): ItemRecord {
@@ -1919,7 +1938,52 @@ export class BoardStore {
       tasks_moved: this.tasksMoved(s.pk),
       tokens: this.sessionTokens(s.pk),
       runs: runs.map((r) => this.runRecord(r)),
+      ci_runs: this.sql
+        .exec<CiRunRow>("SELECT * FROM ci_runs WHERE session = ? ORDER BY coalesce(started_at, ended_at), pk", s.pk)
+        .toArray()
+        .map((c) => this.ciRunRecord(c)),
     };
+  }
+
+  private ciRunRecord(c: CiRunRow): CiRunRecord {
+    return {
+      source: c.source,
+      external_id: c.external_id,
+      name: c.name,
+      url: c.url,
+      repo: c.repo,
+      branch: c.branch,
+      sha: c.sha,
+      laptop: c.laptop,
+      status: c.status,
+      started_at: c.started_at,
+      ended_at: c.ended_at,
+      worker: c.worker,
+      usual_ms: this.usualMs(c),
+    };
+  }
+
+  /** "Usually about N min" (§10): the median of the last 20 passed runs of the same project, source and name (a slot run's: laptop and name), once there are three. */
+  private usualMs(c: CiRunRow): number | null {
+    const like =
+      c.source === "slot"
+        ? this.sql.exec<{ ms: number }>(
+            `SELECT (julianday(ended_at) - julianday(started_at)) * 86400000 AS ms FROM ci_runs
+             WHERE source = 'slot' AND laptop IS ? AND name = ? AND status = 'passed' AND started_at IS NOT NULL AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 20`,
+            c.laptop,
+            c.name,
+          )
+        : this.sql.exec<{ ms: number }>(
+            `SELECT (julianday(ended_at) - julianday(started_at)) * 86400000 AS ms FROM ci_runs
+             WHERE project = ? AND source = ? AND name = ? AND status = 'passed' AND started_at IS NOT NULL AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 20`,
+            c.project,
+            c.source,
+            c.name,
+          );
+    const ms = like.toArray().map((r) => r.ms).sort((a, b) => a - b);
+    if (ms.length < 3) return null;
+    const mid = Math.floor(ms.length / 2);
+    return Math.round(ms.length % 2 ? ms[mid]! : (ms[mid - 1]! + ms[mid]!) / 2);
   }
 
   private runRecord(r: RunRow): RunRecord {
@@ -1935,6 +1999,8 @@ export class BoardStore {
       resumed: r.resumed === 1,
       tokens: { input: r.input, output: r.output, cache_read: r.cache_read, cache_write: r.cache_write },
       calls: r.calls,
+      ctx: ctxPoints(r["ctx"] ?? null),
+      remote_url: (r["remote_url"] as string | null) ?? null,
       tasks: this.sql.exec<{ item: number }>("SELECT item FROM run_tasks WHERE run = ? ORDER BY item", r.pk).toArray().map((t) => this.refOf(t.item)),
     };
   }
@@ -2245,6 +2311,13 @@ function supervisorOp(caller: BoardCaller, op: { op: string; project: string }):
 function sameSession(a: SessionRef | null, b: SessionRef | null): boolean {
   if (a === null || b === null) return a === b;
   return a.feature === b.feature && a.kind === b.kind && a.label === b.label;
+}
+
+/** Context per call as the runs table keeps it: little-endian uint32s (§9). */
+function ctxPoints(blob: SqlStorageValue): number[] {
+  if (!(blob instanceof ArrayBuffer)) return [];
+  const view = new DataView(blob);
+  return Array.from({ length: Math.floor(blob.byteLength / 4) }, (_, i) => view.getUint32(i * 4, true));
 }
 
 /** Context per call as the runs table keeps it: little-endian uint32s (§9). */
