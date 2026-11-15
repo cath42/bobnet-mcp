@@ -41,8 +41,13 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
   Finding 5: Peach confirmed BLOCKS (19fdde9); Helix's R1 is Picard's to fix or confirm. Finding 7 waits on Picard.
 - Peach (w_48c8180e): 0b accepted as follow-up, NOT BOB-5: BOB-5 stays Ready (#1-#3 lists/groups/
   Needed-before, #4's answer UI with Undo + one key per answer, #5 allow/deny, #6 counts, phone shots).
-- Luigi (w_2bb286e8): BOB-2 rest: (a) close_release + undo, (b) step 4 view data, (c) CI runs.
-  The broker deploy is pinned to the 0c commit Toad signs off; BOB-2 lands don't ride it.
+- Luigi (w_2bb286e8): done, BOB-2 rest: d824e95 (close_release + undo, set_release undo), cd8c98c
+  (waits/overview reads), c0dbd0d (POST /v1/runs, CI_TOKENS secret), 8d7c1c5 (gh adapter, BROKER
+  migration 8 laptop_supervisors.projects). None is in the 03:18Z deploy or rc.31: they need a
+  second broker deploy (+ CI_TOKENS secret, Casper's) and rc.32 after it.
+  Daisy, for the gates: the release ↑/↓ Undo is an inverse order_releases, not `undo`.
+- Toad (w_b9c1997a): reviewing those four, recording consult rulings in ADR 0001, deploy order + checks.
+- Peach (w_a066c9e6): who opens a release (planned -> open), and may a planned release be closed.
 - Toad (w_17300a34): signed off a720d5f (architecture/reviews/2026-11-14-dotted-ids-review.md, 167c07a).
   Deploy-ready: e12cdc8 -> a720d5f broker/protocol src is only 0b + 0c (Board migration 2, op key,
   told, widened ItemRef); no Broker migrations, no new DO class.
