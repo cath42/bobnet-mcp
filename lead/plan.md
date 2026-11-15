@@ -36,7 +36,10 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   gates and the close dialog is still wanted (not a blocker; goes in the close summary).
 - 05:1xZ poe: Casper off ~8h; Helix back on. Told poe Helix can start now (views are broker-only,
   deploys don't cut agents, no restart foreseen). Bob keeps to at most 2 worker slots; Helix up to 3.
-- Luigi w_6a83777e: BOB-8 (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
+- Luigi w_6a83777e done: BOB-8 + BOB-2 AC 10 at 5c5f355 (additive ItemSummary fields; reads 3-14 ms
+  under load at Helix size). Broker deploy needed, no release. Toad w_176b85c2 reviews; Daisy
+  w_7cd48eba rules on gaps 2-4. BOB-10 waits for a free Bob slot (2 max while Helix runs).
+- (was) Luigi w_6a83777e: BOB-8 (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
   BOB-7, BOB-8, BOB-10, BOB-3, BOB-4, BOB-5. Toad reviews each; broker deploy after each review.
 
