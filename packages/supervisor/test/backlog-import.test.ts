@@ -3,8 +3,9 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BoardExportV1 } from "@bobnet/protocol";
-import { describe, expect, it } from "vitest";
-import { type BacklogFiles, backlogToExport, readBacklogAt, readQuestions } from "../src/backlog-import.ts";
+import { describe, expect, it, vi } from "vitest";
+import { type BacklogFiles, backlogToExport, importBacklogCommand, readBacklogAt, readQuestions } from "../src/backlog-import.ts";
+import type { ImportPosted } from "../src/board-backup.ts";
 
 // The Backlog.md import (ADR 0001 §11, BOB-9): a backlog at a commit as one board export.
 
@@ -28,6 +29,22 @@ const milestones: Array<[BacklogFiles["files"][number]["folder"], string]> = [
   ["archive/milestones", "---\nid: m-2\ntitle: \"R1 Partner demo\"\n---\n"],
   ["milestones", "---\nid: m-3\ntitle: \"R2 Edit\"\n---\n"],
 ];
+
+/** A repository with a backlog committed in it, and the commit. */
+function repo(files: Record<string, string>): { dir: string; sha: string } {
+  const dir = mkdtempSync(join(tmpdir(), "backlog-"));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+  git("init", "-q");
+  git("config", "user.email", "t@example.com");
+  git("config", "user.name", "T");
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(join(dir, path, ".."), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  }
+  git("add", ".");
+  git("commit", "-q", "-m", "one");
+  return { dir, sha: git("rev-parse", "--short=12", "HEAD").trim() };
+}
 
 describe("the Backlog.md import", () => {
   it("keeps undotted ids, renumbers dotted ones numerically past every id, and maps every link to the new refs", () => {
@@ -158,21 +175,51 @@ describe("the Backlog.md import", () => {
   });
 
   it("reads the backlog through git at the named commit, never the worktree", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "backlog-"));
-    const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
-    git("init", "-q");
-    git("config", "user.email", "t@example.com");
-    git("config", "user.name", "T");
-    mkdirSync(join(dir, "product/backlog/tasks"), { recursive: true });
-    mkdirSync(join(dir, "lead"));
-    writeFileSync(join(dir, "product/backlog/tasks/land-1 - §-odd name.md"), task("LAND-1", { type: "increment" }));
-    writeFileSync(join(dir, "lead/questions.md"), "The next ID is **Q-5**.\n");
-    git("add", ".");
-    git("commit", "-q", "-m", "one");
-    const sha = git("rev-parse", "--short=12", "HEAD").trim();
+    const { dir, sha } = repo({
+      "product/backlog/tasks/land-1 - §-odd name.md": task("LAND-1", { type: "increment" }),
+      "lead/questions.md": "The next ID is **Q-5**.\n",
+    });
     writeFileSync(join(dir, "product/backlog/tasks/land-2.md"), task("LAND-2"));
     const read = await readBacklogAt(dir, "HEAD", "product/backlog", "lead/questions.md");
     expect(read).toMatchObject({ sha, questions: "The next ID is **Q-5**.\n" });
     expect(read.files.map((f) => [f.folder, f.path])).toEqual([["tasks", "product/backlog/tasks/land-1 - §-odd name.md"]]);
+  });
+
+  describe("the command's --post", () => {
+    const run = async (answer: ImportPosted, extra: string[] = []) => {
+      const { dir } = repo({ "product/backlog/tasks/bob-1.md": task("BOB-1", { type: "increment" }) });
+      const errors: string[] = [];
+      const err = vi.spyOn(console, "error").mockImplementation((...a) => void errors.push(a.join(" ")));
+      const out = vi.spyOn(console, "log").mockImplementation(() => {});
+      const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const posted: BoardExportV1[] = [];
+      try {
+        const code = await importBacklogCommand(
+          ["--repo", dir, "--ref", "HEAD", "--project", "bobnet", "--name", "BobNet", "--prefix", "BOB", "--post", ...extra],
+          () => async (doc) => (posted.push(doc), answer),
+        );
+        return { code, errors, posted };
+      } finally {
+        err.mockRestore();
+        out.mockRestore();
+        write.mockRestore();
+      }
+    };
+
+    it("exits 0 only when the broker took the import", async () => {
+      expect((await run({ status: 200, reply: { ok: true, projects: [{ key: "bobnet", items: 1, events: 1, next_item: 2 }] } })).code).toBe(0);
+    });
+
+    it("exits 1 and says why when the broker refuses it", async () => {
+      const refused = await run({ status: 403, reply: { ok: false, code: "forbidden", message: "rules for every project come from a laptop only into an empty board" } });
+      expect(refused.code).toBe(1);
+      expect(refused.errors).toEqual(["Not imported: the broker answered 403, forbidden: rules for every project come from a laptop only into an empty board"]);
+      expect((await run({ status: 409, reply: { ok: false, code: "conflict", message: "bobnet exists" } })).code).toBe(1);
+      const unreadable = await run({ status: 502, reply: null });
+      expect(unreadable.code).toBe(1);
+      expect(unreadable.errors).toEqual(["Not imported: the broker answered 502, no reply it could read"]);
+      // A 2xx whose reply isn't ok isn't taken either.
+      expect((await run({ status: 200, reply: { ok: false, code: "invalid", message: "x" } })).code).toBe(1);
+    });
   });
 });

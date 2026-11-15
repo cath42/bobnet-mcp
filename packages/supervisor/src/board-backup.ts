@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { BoardExportV1 } from "@bobnet/protocol";
+import { BoardExportV1, type BoardImportReply } from "@bobnet/protocol";
 import type { Logger } from "@bobnet/client/log";
 
 // The board's nightly backup (ADR 0001 §11): the board's export, written to board.json in a git
@@ -109,8 +109,15 @@ export function exportFetcher(url: string, credentials: { clientId: string; clie
   };
 }
 
+/** What the broker answered an import: its status, and its reply when the body was JSON. */
+export interface ImportPosted {
+  status: number;
+  reply: BoardImportReply | null;
+}
+
 /** POST /v1/board/import with this laptop's Access service token (the Backlog.md import's --post). */
-export function importPoster(url: string, credentials: { clientId: string; clientSecret: string }): (doc: unknown) => Promise<unknown> {
+
+export function importPoster(url: string, credentials: { clientId: string; clientSecret: string }): (doc: unknown) => Promise<ImportPosted> {
   const target = new URL("/v1/board/import", url.replace(/^ws/, "http"));
   return async (doc) => {
     const res = await fetch(target, {
@@ -119,6 +126,6 @@ export function importPoster(url: string, credentials: { clientId: string; clien
       headers: { "content-type": "application/json", "CF-Access-Client-Id": credentials.clientId, "CF-Access-Client-Secret": credentials.clientSecret },
       body: JSON.stringify(doc),
     });
-    return { status: res.status, reply: await res.json().catch(() => null) };
+    return { status: res.status, reply: (await res.json().catch(() => null)) as BoardImportReply | null };
   };
 }

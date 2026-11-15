@@ -12,6 +12,7 @@ import {
   ItemType,
 } from "@bobnet/protocol";
 import { type BacklogFile, catFiles, readBacklogFile } from "./board.ts";
+import type { ImportPosted } from "./board-backup.ts";
 
 // The Backlog.md import (ADR 0001 §11, BOB-9): a project's Backlog.md at a named commit, and its
 // lead/questions.md, as one board export for POST /v1/board/import. The one place Markdown is read,
@@ -570,7 +571,7 @@ const USAGE = `bobnet-supervisor import-backlog --repo <path> --ref <commit> --p
 Reads the backlog at the commit and writes the board export and the report. Nothing is posted without --post.`;
 
 /** The command: a dry run unless --post, which sends the document to the broker in config.json. */
-export async function importBacklogCommand(argv: string[], post?: () => (doc: BoardExportV1) => Promise<unknown>): Promise<number> {
+export async function importBacklogCommand(argv: string[], post?: () => (doc: BoardExportV1) => Promise<ImportPosted>): Promise<number> {
   const { values: v } = parseArgs({
     args: argv,
     options: {
@@ -609,7 +610,13 @@ export async function importBacklogCommand(argv: string[], post?: () => (doc: Bo
       console.error(`Not posted: ${report.problems.length} things couldn't map; settle them first`);
       return 1;
     }
-    console.log(JSON.stringify(await post()(doc)));
+    const { status, reply } = await post()(doc);
+    if (status < 200 || status >= 300 || !reply?.ok) {
+      const why = reply && !reply.ok ? `${reply.code}: ${reply.message}` : "no reply it could read";
+      console.error(`Not imported: the broker answered ${status}, ${why}`);
+      return 1;
+    }
+    console.log(JSON.stringify(reply));
   }
   return 0;
 }
