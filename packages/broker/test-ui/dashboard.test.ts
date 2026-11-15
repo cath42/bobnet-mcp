@@ -314,6 +314,8 @@ describe("Sessions", () => {
     expect(view().textContent).not.toContain("r_old");
     await go("#overview");
     expect(view().textContent).not.toContain("rm -rf dist");
+    // Not dropped silently: Needs you ends with a line naming the laptop (spec, BOB-4 as built).
+    expect(view().querySelector(".ov-needs .stale-line")!.textContent).toBe("mbp-2 hasn't reported for 10 min: 1 request from it waits until it does.");
     // Reporting again makes it live: its requests are offered.
     ws.frame({ t: "report", laptop: "mbp-2", at: iso(0), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [old], usage: [] } });
     await settle();
@@ -598,6 +600,9 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     await opened([...features, land22]);
     expect($("feature-head").textContent).toContain("3 of 138 criteria");
     expect($("feature-head").querySelector(".sub-note")!.textContent).toBe("Done, criteria not ticked");
+    // A Done feature has no Next: no banner, no dashed step (spec, BOB-4 as built 1).
+    expect(view().querySelector(".next-banner")).toBeNull();
+    expect($("next")).toBeNull();
     FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 74, refs: [] });
     await go("#roadmap/bobnet");
     await lists();
@@ -1311,6 +1316,9 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
     expect(next.querySelector(".top")!.textContent).toBe("Nexta review session");
     expect(next.textContent).toContain("Once Fixes closes");
     expect(view().querySelector(".next-banner")!.textContent).toBe("Nexta review session, once Fixes closes");
+    // Not Casper's: accent, not amber (spec, BOB-4 as built 1).
+    expect(view().querySelector(".next-banner")!.classList.contains("you")).toBe(false);
+    expect(next.classList.contains("you")).toBe(false);
   });
 
   it("finds a bare #feature/<id>'s project by its prefix (Toad, BOB-3 finding 2)", async () => {
@@ -1359,10 +1367,12 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
     expect(now.querySelectorAll(".a-line")).toHaveLength(1);
     const line = now.querySelector(".a-line")!;
     expect(line.querySelector(".l-who")!.textContent).toBe("Luigi luigi · waiting on CI · 700k tokens");
-    expect(line.querySelector(".l-m")!.textContent).toBe("Fixes › BOB-42BOB-42 titleBOB-43BOB-43 title");
+    expect(line.querySelector(".l-m")!.textContent).toBe("Fixes › BOB-42BOB-42 title · BOB-43BOB-43 title");
     const rows = [...$("all-tasks").querySelectorAll(".tasks li.on")];
     expect(rows.map((li) => li.querySelector(".id")!.textContent)).toEqual(["BOB-42", "BOB-43"]);
-    expect(rows[0]!.querySelector(".who")!.textContent).toBe("Luigi luigi · working · 700k tokens · build Fixes");
+    // One state per agent, everywhere; the session by its step name (spec, BOB-4 as built).
+    expect(rows[0]!.querySelector(".who")!.textContent).toBe("Luigi luigi · waiting on CI · 700k tokens · Fixes");
+    expect(rows[0]!.querySelector(".who .dot")!.classList.contains("run")).toBe(true);
     // A consult and a lead show nowhere on the feature: they declared no session.
     expect(now.textContent).not.toContain("Toad");
   });
@@ -1392,7 +1402,7 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
     expect(one.querySelector('.seg [aria-pressed="true"]')!.textContent).toBe("Luigi");
     expect(one.querySelector(".key")!.textContent).toBe("Luigi, build A · 5 calls");
     expect(one.querySelectorAll("svg line[stroke-dasharray]").length).toBeGreaterThan(0); // a new worker starts: the dotted drop
-    expect(one.querySelector(".note")!.textContent).toContain("fewer than three earlier luigi runs");
+    expect(one.querySelector(".note")!.textContent).toContain("fewer than three earlier Luigi runs");
   });
 
   it("opens an agent's detail row on its line, one at a time: model, laptop, worked, context, Open in Claude, Context per call, Stop and Reset (BOB-3 gap 2)", async () => {
@@ -1426,6 +1436,9 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
     expect(view().querySelector(".next-banner")!.textContent).toBe("Next: waits on youQ-7 · Ship it with one major?");
     const next = $("next");
     expect(next.textContent).toBe("NextWaits on youQ-7 Ship it with one major?Recommended: Fix it first");
+    // Amber means "you".
+    expect(next.classList.contains("you")).toBe(true);
+    expect(view().querySelector(".next-banner")!.classList.contains("you")).toBe(true);
   });
 
   it("folds its history to a count, and opens it newest first in words, with reasons, take-backs, the import and its tasks (BOB-14 #5)", async () => {
@@ -1450,14 +1463,19 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
     expect(lines()).toHaveLength(56);
     expect(lines().at(-1)!.textContent).toMatch(/^Came over from Backlog\.md in the import, \d+ \w{3} \d{4}\. Its history before that is in git \(1234567\)\.$/);
     expect(view().querySelector(".hist .more-btn")).toBeNull();
-    // With its tasks: each task's line leads with its id.
-    const withTasks = [...view().querySelectorAll(".hist .seg button")].find((b) => b.textContent === "With its tasks (1)") as HTMLButtonElement;
+    // Each side of the switch counts the lines it lists (spec, BOB-4 as built 2).
+    expect([...view().querySelectorAll(".hist .seg button")].map((b) => b.textContent)).toEqual(["This feature (56)", "With its tasks (57)"]);
+    // With its tasks: each task's line leads with its id, in a column of its own, empty on the feature's own lines (as built 5).
+    const withTasks = [...view().querySelectorAll(".hist .seg button")].find((b) => b.textContent === "With its tasks (57)") as HTMLButtonElement;
     withTasks.click();
     await settle();
+    expect(view().querySelector(".events.with-tasks")!.getAttribute("style")).toBe("--idw:6ch");
     const task = lines().find((li) => li.querySelector(".ev-h a.id"))!;
-    expect(task.querySelector(".ev-h a.id")!.textContent).toBe("BOB-41");
+    expect(task.querySelector(".ev-task a.id")!.textContent).toBe("BOB-41");
     expect(task.querySelector(".ev-what")!.textContent).toBe("status Ready → Done");
-    expect(btn().textContent).toMatch(/^History · 57 changes/);
+    expect(lines()[0]!.querySelector(".ev-task")!.textContent).toBe("");
+    // The folded button counts the feature's own, whichever side was open.
+    expect(btn().textContent).toMatch(/^History · 56 changes/);
   });
 
   it("presets found in when capturing from the feature, clears it on ×, and on another project (BOB-10 gap 1)", async () => {
@@ -1494,6 +1512,10 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
     expect($("needs")?.textContent ?? "").not.toContain("Daisy");
     (line("Daisy").querySelector(".a-btn") as HTMLElement).click();
     expect([...line("Daisy").querySelectorAll(".a-detail button")].map((b) => b.textContent)).toEqual(["Allow", "Deny", "Stop", "Reset"]);
+    // Two groups: Allow · Deny, then Stop · Reset, never Stop beside Deny (spec, BOB-4 as built).
+    expect([...line("Daisy").querySelectorAll(".a-detail .grp")].map((g) => g.textContent)).toEqual(["AllowDeny", "StopReset"]);
+    // Working now names the session by its step, and its tasks apart.
+    expect(line("Luigi").querySelector(".l-path")!.textContent).toBe("BobNet › BOB-4Fixes › BOB-42 · BOB-43");
     expect(view().querySelector(".more.queued")!.textContent).toBe("1 queued: Yoshi");
     // Context per call from the Overview goes to the feature, its session card's panel open on the agent.
     (line("Luigi").querySelector(".a-btn") as HTMLElement).click();

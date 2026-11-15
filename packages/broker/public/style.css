@@ -321,7 +321,7 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
 .now-list .a-btn { display: grid; gap: 2px 10px; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; }
 .now-list .l-path { grid-column: 1 / -1; grid-row: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 14px; }
 .now-list .l-path .id { margin-right: 4px; }
-.now-list .l-task { color: var(--text); text-decoration: none; margin-right: 8px; }
+.now-list .l-task { color: var(--text); text-decoration: none; }
 .now-list .l-m { white-space: nowrap; font-variant-numeric: tabular-nums; text-align: right; }
 .dot.warn { background: var(--warn); }
 .plist { display: grid; gap: 10px; }
@@ -364,7 +364,10 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
   .two > aside { grid-column: 2; grid-row: 1 / span 2; position: sticky; top: 70px; }
   .two > .hist { grid-column: 1; }
 }
-.next-banner { text-decoration: none; color: inherit; }
+.next-banner { text-decoration: none; color: inherit; border-left-color: var(--accent); }
+.next-banner > b { color: var(--accent); }
+.next-banner.you { border-left-color: var(--warn); }
+.next-banner.you > b { color: var(--warn); }
 .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
 .step { position: relative; padding: 0 0 14px 26px; min-width: 0; }
 .step::before { content: ""; position: absolute; left: 7px; top: 18px; bottom: 0; border-left: 2px solid var(--line); }
@@ -373,9 +376,14 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
 .step[data-kind="design"] { --k: var(--k-design); } .step[data-kind="build"] { --k: var(--k-build); }
 .step[data-kind="review"] { --k: var(--k-review); } .step[data-kind="retro"] { --k: var(--k-retro); }
 .step[data-state="running"] > .dot2 { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 35%, transparent); }
-.step.next > .dot2 { background: var(--bg); border: 2px dashed var(--warn); }
+/* The next step is amber only when it waits on Casper; else the accent (spec, BOB-4 as built 1). */
+.step.next > .dot2 { background: var(--bg); border: 2px dashed var(--accent); }
+.step.next.you > .dot2 { border-color: var(--warn); }
+.step.next .kind { color: var(--accent); }
+.step.next.you .kind { color: var(--warn); }
 .step > .card { display: grid; gap: 8px; min-width: 0; }
-.step.next > .card { border-style: dashed; border-color: var(--warn); }
+.step.next > .card { border-style: dashed; border-color: var(--accent); }
+.step.next.you > .card { border-color: var(--warn); }
 .kind { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--k, var(--muted)); }
 .step .top { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; justify-content: flex-start; }
 .links a, .runw a, .a-detail a, .events a { color: var(--accent); }
@@ -413,6 +421,9 @@ pre.handoff { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wra
 .a-detail { display: grid; gap: 6px; font-size: 13px; padding: 8px 10px; background: var(--bg); border-radius: 8px; }
 .a-detail .actions { margin: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .a-detail code { font-size: 12px; overflow-wrap: anywhere; }
+/* Allow · Deny, then Stop · Reset: two groups, 24 px apart; never Stop beside Deny (spec, BOB-4 as built). */
+.a-detail .groups { column-gap: 24px; }
+.a-detail .grp { display: flex; gap: 8px; }
 .s-agents .cp { white-space: normal; }
 .more.queued { color: var(--muted); }
 .dot.run { background: transparent; box-shadow: inset 0 0 0 2px var(--accent); }
@@ -442,8 +453,9 @@ pre.handoff { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wra
 /* History: read only, newest first */
 .hist { display: grid; gap: 10px; }
 .hist-btn { justify-self: start; }
-.events { list-style: none; margin: 0; padding: 0; display: grid; }
-.events li { display: grid; grid-template-columns: minmax(12em, auto) minmax(0, 1fr); gap: 2px 14px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.events { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(12em, auto) minmax(0, 1fr); column-gap: 14px; }
+/* One column for the what on every line, so time, who and what line up (spec, BOB-4 as built 5). */
+.events li { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; gap: 2px 14px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
 .events li:first-child { border-top: 0; }
 .events .ev-h { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; color: var(--muted); font-size: 13px; }
 .events .ev-at { font-variant-numeric: tabular-nums; }
@@ -454,7 +466,11 @@ pre.handoff { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wra
 .events li.ev-import { display: block; font-size: 13px; }
 .events .ev { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); font-size: 12.5px; cursor: pointer; }
 .events .ev.all { display: block; }
-.events details.chg summary { cursor: pointer; }
+.events details.chg summary { cursor: pointer; list-style: none; margin: 0; color: inherit; font-size: inherit; }
+.events details.chg summary::-webkit-details-marker { display: none; }
+.events.with-tasks .ev-h { display: grid; grid-template-columns: var(--idw) auto minmax(0, 1fr); }
+.events .ev-task .id { font-size: 12.5px; }
+.ov .stale-line { border-top: 0; padding-top: 4px; }
 .events details.chg .show { color: var(--accent); font-size: 12.5px; }
 .events details.chg del, .events details.chg .new { display: block; white-space: pre-wrap; font-size: 12.5px; margin-top: 4px; overflow-wrap: anywhere; }
 .more-btn { justify-self: start; }
@@ -475,11 +491,13 @@ pre.handoff { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wra
   table.stack.ctx-agents td[data-label="Model"] { display: none; }
   table.stack.ctx-agents tr td { background: transparent; }
   table.stack.ctx-agents tr.total { background: var(--bg); }
+  .events { grid-template-columns: minmax(0, 1fr); }
   .events li { grid-template-columns: minmax(0, 1fr); }
   .events .ev-why { grid-column: 1; }
   .hist-btn, .more-btn, .hist .seg { width: 100%; }
   .hist .seg button { flex: 1; }
   .a-detail .actions button { flex: 1; min-height: 44px; }
+  .a-detail .grp { flex: 1 1 100%; }
 }
 @media (max-width: 520px) {
   .tasks li { grid-template-columns: auto minmax(0, 1fr) auto; }
