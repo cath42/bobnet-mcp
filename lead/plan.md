@@ -46,7 +46,7 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   a service `undo` of a release-only update. BOB-8 deploy goes from Luigi's follow-up hash.
 - Luigi 0b8a185: BOB-8 follow-ups. Broker DEPLOYED (4th) 05:26:33Z from v2 b3b6672 (= 0b8a185 +
   lead/): Version ID 0acf3c27-6aa2-4bfa-9172-19a59d9ed29a. Omitted summary keys are optional in the
-  protocol (rc.32-safe). Checks at ~05:32Z.
+  protocol (rc.32-safe). Checks 05:32Z PASS: no report errors; backlog rows omit null triage keys (new code serves). Peach accepts BOB-8 when a Bob slot frees.
 - Luigi w_3c382245: BOB-10 at 214304a (bug criterion "It no longer happens", Done refused until
   checked). Broker deploy + a RELEASE (client MCP tool descriptions): batch the release with the
   next one; no restart needed for release 1's views otherwise. Toad w_9453f36a reviews.
