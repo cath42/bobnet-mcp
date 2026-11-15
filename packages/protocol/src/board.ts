@@ -281,6 +281,21 @@ export const BoardOp = z.discriminatedUnion("op", [
     key: z.string().trim().min(1).max(20).optional(),
     words: z.string().trim().min(1).max(4000),
   }),
+  /** Casper's answer from the dashboard (§7): an option's key, his words verbatim, or both. Write-once, the owner's alone. */
+  z.object({
+    op: z.literal("answer_question"),
+    ...project,
+    ref: QuestionRef,
+    key: z.string().trim().min(1).max(20).optional(),
+    words: z.string().trim().min(1).max(4000).optional(),
+  }),
+  /** Casper marks an action done from the dashboard (§7), with an optional note. Write-once, the owner's alone. */
+  z.object({ op: z.literal("mark_done"), ...project, ref: QuestionRef, note: z.string().trim().min(1).max(4000).optional() }),
+  /**
+   * The owner takes back one of his own events, as a new event (§5, §7). For now only his dashboard
+   * answer or done mark, within two minutes: the question reopens.
+   */
+  z.object({ op: z.literal("undo"), ...project, seq: z.number().int().positive() }),
 
   // The supervisor's own (§6, §9, §10): authorised by the connection, idempotent by key. Who the
   // worker is (its id, which is its run's, its role and its session) comes from the verified ctx.
@@ -530,6 +545,9 @@ export interface BoardResults {
   close_session: BoardWritten & { tasks_moved: SessionRecord["tasks_moved"]; tokens: TokenTotals };
   ask: BoardWritten;
   record_answer: BoardWritten;
+  answer_question: BoardWritten;
+  mark_done: BoardWritten;
+  undo: BoardWritten;
   session_join: BoardWritten & { created: boolean };
   run_start: BoardWritten & { unknown_tasks: string[] };
   run_end: BoardWritten;
@@ -540,7 +558,17 @@ export interface BoardResults {
 export const BoardErrorCode = z.enum(["invalid", "conflict", "forbidden", "unavailable"]);
 export type BoardErrorCode = z.infer<typeof BoardErrorCode>;
 
-/** What `Board` answers the broker: the result, and what changed for the broker to push (§8). */
+/** The reserved sender of the board's messages (§7): no laptop may take its laptop id. */
+export const BOARD_SENDER = { name: "BobNet", laptop: "board" } as const;
+
+/** A message the board's write sends, from `BOARD_SENDER`, for the broker to store and deliver (§7). */
+export interface BoardMessage {
+  /** BobNet addresses, `name@laptop`. */
+  to: string[];
+  body: string;
+}
+
+/** What `Board` answers the broker: the result, what changed for the broker to push, and the messages to send (§7, §8). */
 export type BoardReply =
-  | { ok: true; result: unknown; changed: { project: string; seq: number; refs: string[] } | null }
+  | { ok: true; result: unknown; changed: { project: string; seq: number; refs: string[] } | null; messages: BoardMessage[] }
   | { ok: false; code: BoardErrorCode; message: string };

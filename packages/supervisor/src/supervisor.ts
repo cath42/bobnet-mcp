@@ -803,7 +803,7 @@ export class Supervisor {
     this.store.audit(`human:${frame.by}`, `dashboard:${a.kind}`, a.kind === "answer" ? null : a.worker, { id: frame.id, action: a });
     try {
       if (a.kind === "answer") {
-        const answer: Answer = a.decision === "deny" ? { decision: "deny", message: "denied from the dashboard" } : { decision: "allow" };
+        const answer: Answer = a.decision === "deny" ? { decision: "deny", message: a.message ?? "denied from the dashboard" } : { decision: "allow", ...(a.message ? { message: a.message } : {}) };
         const { request, resumed } = this.answer(a.request, answer, "human");
         reply(true, `${request.id} ${a.decision === "allow" ? "allowed" : "denied"}${resumed ? `; ${resumed.id} resumes the worker` : ""}`);
       } else if (a.kind === "stop") {

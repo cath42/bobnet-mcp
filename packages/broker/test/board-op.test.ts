@@ -110,3 +110,37 @@ describe("board_op", () => {
     await expect(after.request({ t: "peers" })).resolves.toMatchObject({ peers: expect.arrayContaining([expect.objectContaining({ name: "Riker", online: true })]) });
   });
 });
+
+describe("the board's messages (ADR 0001 §7)", () => {
+  it("stores and delivers an answer from BobNet@board to the lead and the asker, online or not yet registered", async () => {
+    const o = await owner();
+    await o.request({ t: "board_op", op: { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", lead: "Mario@mbp-2" } });
+    await o.request({ t: "board_op", op: { op: "grant", project: "helix", agent: "Picard", role: "lead", read: true, items: "none", fields: [], questions: true } });
+    const picard = await agent(1, "Picard");
+    await picard.request({ t: "board_op", as: "Picard", op: { op: "ask", project: "helix", text: "Which chart?", options: [{ key: "a", text: "Bars" }] } });
+
+    const { seq } = await o.request({ t: "board_op", op: { op: "answer_question", project: "helix", ref: "Q-1", key: "a", words: "Bars" } });
+    const got = await picard.next((f) => f.t === "deliver");
+    expect(got).toMatchObject({ to: "Picard@mbp-1", wake: true, msg: { type: "message", from: "BobNet@board", laptop: "board", to: ["Mario@mbp-2", "Picard@mbp-1"] } });
+    if (got.t !== "deliver") throw new Error("not a delivery");
+    expect(got.msg.body).toContain("Bars");
+    expect((await o.next((f) => f.t === "traffic")) as unknown).toMatchObject({ item: { from: "BobNet@board" } });
+
+    // Mario, the lead, registers later: the answer and the undo's second message wait for him.
+    await o.request({ t: "board_op", op: { op: "undo", project: "helix", seq } });
+    await picard.next((f) => f.t === "deliver" && /withdr/i.test(f.msg.body));
+    const mario = await Client.open(await laptopToken(2));
+    await expect(mario.request({ t: "register", name: "Mario" })).resolves.toMatchObject({ queued: 2 });
+    const first = await mario.next((f) => f.t === "deliver");
+    const second = await mario.next((f) => f.t === "deliver");
+    expect([first, second].map((f) => (f.t === "deliver" ? f.msg.from : null))).toEqual(["BobNet@board", "BobNet@board"]);
+  });
+
+  it("sends nothing for a refused answer", async () => {
+    const o = await owner();
+    await o.request({ t: "board_op", op: { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", lead: "Picard@mbp-1" } });
+    const picard = await agent(1, "Picard");
+    expect(await errorCode(o.request({ t: "board_op", op: { op: "answer_question", project: "helix", ref: "Q-1", words: "Yes" } }))).toBe("invalid");
+    expect(await picard.never((f) => f.t === "deliver")).toBe(true);
+  });
+});

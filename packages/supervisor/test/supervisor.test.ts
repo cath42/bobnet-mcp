@@ -670,6 +670,24 @@ describe("dashboard actions", () => {
     expect(store.auditLog().some((a) => a.actor === "human:owner@example.com" && a.action === "dashboard:answer")).toBe(true);
   });
 
+  it("passes the owner's note with a decision to the agent (ADR 0001 §7)", async () => {
+    const { sup, broker, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const denied = sessions[0]!.ask("Bash", { command: "git push origin HEAD:main" });
+    await until(() => sup.pending().length === 1);
+    const first = sup.pending()[0]!.id;
+    sup.onPush(action({ kind: "answer", request: first, decision: "deny", message: "Land it with the land tool" }));
+    await expect(denied).resolves.toMatchObject({ behavior: "deny", message: "Denied: Land it with the land tool" });
+    const allowed = sessions[0]!.ask("Bash", { command: "git push origin HEAD:main" });
+    await until(() => sup.pending().length === 1);
+    const second = sup.pending()[0]!.id;
+    sup.onPush(action({ kind: "answer", request: second, decision: "allow", message: "Once only" }));
+    await expect(allowed).resolves.toMatchObject({ behavior: "allow" });
+    await until(() => broker.results.length === 2);
+    expect(store.request(second)!.message).toBe("Once only");
+  });
+
   it("refuses an action whose owner token doesn't verify, and changes nothing", async () => {
     const { sup, broker, sessions } = await setup();
     const w = sup.spawn({ project: "helix", role: "bill", task: "t" });

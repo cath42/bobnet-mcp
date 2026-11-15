@@ -1,23 +1,26 @@
-import type {
-  BoardCaller,
-  BoardCtx,
-  BoardEvent,
-  BoardOp,
-  BoardResults,
-  BoardWritten,
-  CriterionRecord,
-  GrantField,
-  GrantRecord,
-  ItemRecord,
-  ItemSummary,
-  ProjectRecord,
-  QuestionRecord,
-  ReleaseRecord,
-  RunRecord,
-  SessionRecord,
-  SessionRef,
-  SessionSummary,
-  TokenTotals,
+import {
+  addressKey,
+  type BoardCaller,
+  type BoardCtx,
+  type BoardEvent,
+  type BoardMessage,
+  type BoardOp,
+  type BoardResults,
+  type BoardWritten,
+  type CriterionRecord,
+  type GrantField,
+  type GrantRecord,
+  type ItemRecord,
+  type ItemSummary,
+  type ProjectRecord,
+  type QuestionRecord,
+  type ReleaseRecord,
+  type RunRecord,
+  type SessionRecord,
+  type SessionRef,
+  type SessionSummary,
+  type TokenTotals,
+  parseRecipient,
 } from "@bobnet/protocol";
 import { BoardError } from "./errors.ts";
 import { Rules, type Scope } from "./rules.ts";
@@ -29,6 +32,8 @@ import { Rules, type Scope } from "./rules.ts";
 
 const PAGE = 100;
 const ORD_STEP = 1000;
+/** How long Casper may take back his dashboard answer (§7: the toast's Undo). */
+const UNDO_MS = 2 * 60 * 1000;
 
 type Op<K extends BoardOp["op"]> = Extract<BoardOp, { op: K }>;
 /** What a write answers: its record and event, and what the operation adds. */
@@ -105,6 +110,19 @@ interface SessionRow {
   handoff_text: string | null;
   commit_sha: string | null;
   closed_by: string | null;
+  [k: string]: SqlStorageValue;
+}
+
+interface QuestionRow {
+  pk: number;
+  ref: string;
+  kind: QuestionRecord["kind"];
+  text: string;
+  asked_by: string;
+  state: QuestionRecord["state"];
+  answer_key: string | null;
+  answer_words: string | null;
+  answered_via: "dashboard" | "conversation" | null;
   [k: string]: SqlStorageValue;
 }
 
@@ -380,11 +398,14 @@ export class BoardStore {
   // ---------- Writes ----------
 
   /** One write, inside the caller's transaction. Returns its result and what it changed, for the broker to push. */
-  write(caller: BoardCaller, op: Exclude<BoardOp, Op<"projects" | "list" | "get" | "grants">>): { result: Written; changed: { project: string; seq: number; refs: string[] } | null } {
+  write(
+    caller: BoardCaller,
+    op: Exclude<BoardOp, Op<"projects" | "list" | "get" | "grants">>,
+  ): { result: Written; changed: { project: string; seq: number; refs: string[] } | null; messages: BoardMessage[] } {
     const tx = new Tx(this.sql, caller);
     const result = this.apply(tx, op);
-    if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null };
-    return { result, changed: { project: tx.projectKey ?? "*", seq: tx.seqs.at(-1)!, refs: [...tx.refs] } };
+    if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null, messages: [] };
+    return { result, changed: { project: tx.projectKey ?? "*", seq: tx.seqs.at(-1)!, refs: [...tx.refs] }, messages: tx.messages };
   }
 
   private apply(tx: Tx, op: Exclude<BoardOp, Op<"projects" | "list" | "get" | "grants">>): Written {
@@ -424,6 +445,12 @@ export class BoardStore {
         return this.ask(tx, op);
       case "record_answer":
         return this.recordAnswer(tx, op);
+      case "answer_question":
+        return this.answerQuestion(tx, op);
+      case "mark_done":
+        return this.markDone(tx, op);
+      case "undo":
+        return this.undo(tx, op);
       case "session_join":
         return this.sessionJoin(tx, op);
       case "run_start":
@@ -1116,6 +1143,115 @@ export class BoardStore {
     return { ref: q.ref, seq: tx.event("record_answer", "questions", q.pk, q.ref, changes) };
   }
 
+  /** Casper's answer from the dashboard (§7): write-once, the owner's alone, and the lead hears it. */
+  private answerQuestion(tx: Tx, op: Op<"answer_question">): BoardWritten {
+    ownerOnly(tx.caller, "Answering a question");
+    const p = tx.project(this.project(op.project));
+    const q = this.question(p, op.ref);
+    if (q.kind === "action") throw new BoardError("invalid", `${q.ref} is an action: mark it done`);
+    if (op.key === undefined && op.words === undefined) throw new BoardError("invalid", `An answer to ${q.ref} picks an option, says something, or both`);
+    if (q.state !== "open") throw new BoardError("conflict", `${q.ref} is ${q.state} already: an answer is written once`);
+    const option = op.key === undefined ? null : this.option(q, op.key);
+    const seq = this.answer(tx, q, "answered", op.key ?? null, op.words ?? null, "answer_question");
+    const lines = [`Casper answered ${q.ref} (${p.key}): ${q.text}`];
+    if (option) lines.push(`Option ${option.key}: ${option.text}`);
+    if (op.words !== undefined) lines.push(`His words: ${op.words}`);
+    this.notify(tx, p, q, lines.join("\n"));
+    return { ref: q.ref, seq };
+  }
+
+  /** Casper marks an action done from the dashboard (§7), with an optional note: write-once, the owner's alone. */
+  private markDone(tx: Tx, op: Op<"mark_done">): BoardWritten {
+    ownerOnly(tx.caller, "Marking an action done");
+    const p = tx.project(this.project(op.project));
+    const q = this.question(p, op.ref);
+    if (q.kind === "question") throw new BoardError("invalid", `${q.ref} is a question: answer it`);
+    if (q.state !== "open") throw new BoardError("conflict", `${q.ref} is ${q.state} already: an action is marked done once`);
+    const seq = this.answer(tx, q, "done", null, op.note ?? null, "mark_done");
+    const lines = [`Casper marked ${q.ref} done (${p.key}): ${q.text}`];
+    if (op.note !== undefined) lines.push(`His note: ${op.note}`);
+    this.notify(tx, p, q, lines.join("\n"));
+    return { ref: q.ref, seq };
+  }
+
+  /** Writes an answer from the dashboard and its event. */
+  private answer(tx: Tx, q: QuestionRow, state: "answered" | "done", key: string | null, words: string | null, op: string): number {
+    this.sql.exec(
+      "UPDATE questions SET state = ?, answer_key = ?, answer_words = ?, answered_by = ?, answered_at = ?, answered_via = 'dashboard' WHERE pk = ?",
+      state,
+      key,
+      words,
+      tx.who,
+      tx.at,
+      q.pk,
+    );
+    const changes: Change[] = [["state", "open", state], ["answer_key", null, key], ["answer_words", null, words], ["answered_via", null, "dashboard"]];
+    return tx.event(op, "questions", q.pk, q.ref, changes);
+  }
+
+  /**
+   * The owner takes back one of his own events, as a new event that names it (§5). For now only his
+   * dashboard answer or done mark, within two minutes (§7): the question reopens, the history keeps
+   * what he withdrew, and the lead hears it.
+   */
+  private undo(tx: Tx, op: Op<"undo">): BoardWritten {
+    ownerOnly(tx.caller, "Undo");
+    const p = tx.project(this.project(op.project));
+    const e = this.sql
+      .exec<{ seq: number; at: string; op: string; tbl: string; pk: number | null; actor_kind: string }>(
+        "SELECT seq, at, op, tbl, pk, actor_kind FROM events WHERE seq = ? AND project = ?",
+        op.seq,
+        p.pk,
+      )
+      .toArray()[0];
+    if (!e) throw new BoardError("invalid", `No event ${op.seq} in ${p.key}`);
+    if (e.tbl !== "questions" || (e.op !== "answer_question" && e.op !== "mark_done") || e.actor_kind !== "owner") {
+      throw new BoardError("invalid", `Event ${op.seq} is a ${e.op}: undo takes back only Casper's answer or done mark from the dashboard`);
+    }
+    const q = this.questionRow(e.pk!);
+    const last = this.sql
+      .exec<{ seq: number }>(
+        "SELECT max(seq) AS seq FROM events WHERE tbl = 'questions' AND pk = ? AND op IN ('answer_question', 'mark_done', 'record_answer', 'undo')",
+        q.pk,
+      )
+      .one().seq;
+    if (q.state === "open" || last !== e.seq) throw new BoardError("conflict", `Event ${op.seq} on ${q.ref} is undone already`);
+    if (Date.parse(tx.at) - Date.parse(e.at) > UNDO_MS) {
+      throw new BoardError("conflict", `Too late to undo ${q.ref}'s answer: Undo lasts two minutes; ask the lead to reopen it`);
+    }
+    this.sql.exec("UPDATE questions SET state = 'open', answer_key = NULL, answer_words = NULL, answered_by = NULL, answered_at = NULL, answered_via = NULL WHERE pk = ?", q.pk);
+    const changes: Change[] = [
+      ["state", q.state, "open"],
+      ["answer_key", q.answer_key, null],
+      ["answer_words", q.answer_words, null],
+      ["answered_via", q.answered_via, null],
+    ];
+    const seq = tx.event("undo", "questions", q.pk, q.ref, changes, undefined, e.seq);
+    const what = q.kind === "action" ? "his done mark on" : "his answer to";
+    const lines = [`Casper withdrew ${what} ${q.ref} (${p.key}); it is open again: ${q.text}`];
+    if (q.answer_key !== null) lines.push(`Withdrawn option: ${q.answer_key}`);
+    if (q.answer_words !== null) lines.push(`Withdrawn words: ${q.answer_words}`);
+    this.notify(tx, p, q, lines.join("\n"));
+    return { ref: q.ref, seq };
+  }
+
+  /** The board's message about a question (§7): to the project's lead, and to whoever asked if that is someone else. */
+  private notify(tx: Tx, p: ProjectRow, q: QuestionRow, body: string): void {
+    const to = new Map<string, string>();
+    for (const raw of [p.lead, q.asked_by]) {
+      // asked_by is an email when the owner asked: not an address, and he knows.
+      const addr = raw?.includes("@") ? parseRecipient(raw, "") : null;
+      if (addr && !to.has(addressKey(addr))) to.set(addressKey(addr), raw!);
+    }
+    if (to.size > 0) tx.messages.push({ to: [...to.values()], body });
+  }
+
+  private option(q: QuestionRow, key: string): { key: string; text: string } {
+    const row = this.sql.exec<{ key: string; text: string }>("SELECT key, text FROM question_options WHERE question = ? AND key = ?", q.pk, key).toArray()[0];
+    if (!row) throw new BoardError("invalid", `${q.ref} has no option ${key}`);
+    return row;
+  }
+
   /** A worker's run (§9), once per id: a replay from the supervisor's outbox changes nothing. */
   private runStart(tx: Tx, op: Op<"run_start">): BoardWritten & { unknown_tasks: string[] } {
     const p = tx.project(this.project(op.project));
@@ -1406,12 +1542,14 @@ export class BoardStore {
     return `${this.refOf(s.feature)} ${s.kind} ${s.label}`;
   }
 
-  private question(p: ProjectRow, ref: string): { pk: number; ref: string; kind: QuestionRecord["kind"]; state: QuestionRecord["state"] } {
-    const row = this.sql
-      .exec<{ pk: number; ref: string; kind: QuestionRecord["kind"]; state: QuestionRecord["state"] }>("SELECT pk, ref, kind, state FROM questions WHERE project = ? AND ref = ?", p.pk, ref)
-      .toArray()[0];
+  private question(p: ProjectRow, ref: string): QuestionRow {
+    const row = this.sql.exec<QuestionRow>("SELECT * FROM questions WHERE project = ? AND ref = ?", p.pk, ref).toArray()[0];
     if (!row) throw new BoardError("invalid", `No question ${ref} in ${p.key}`);
     return row;
+  }
+
+  private questionRow(pk: number): QuestionRow {
+    return this.sql.exec<QuestionRow>("SELECT * FROM questions WHERE pk = ?", pk).one();
   }
 
   private runRow(id: string): RunRow | undefined {
@@ -1513,6 +1651,8 @@ class Tx {
   readonly at = new Date().toISOString();
   readonly seqs: number[] = [];
   readonly refs = new Set<string>();
+  /** What the write sends, from the board (§7), in the same transaction. */
+  readonly messages: BoardMessage[] = [];
   projectKey: string | null = null;
   private projectPk: number | null = null;
   /** The session a close tags its writes with, whatever the caller's ctx says. */
@@ -1559,14 +1699,14 @@ class Tx {
   }
 
   /** Records a change to one record, with one row per field that changed. */
-  event(op: string, table: string, pk: number, ref: string | null, changes: Change[], reason?: string): number {
+  event(op: string, table: string, pk: number, ref: string | null, changes: Change[], reason?: string, undoOf?: number): number {
     const caller = this.caller;
     const ctx = caller.kind === "agent" && caller.ctx?.project === this.projectKey ? caller.ctx : null;
     const session = this.sessionPk();
     const seq = this.sql
       .exec<{ seq: number }>(
-        `INSERT INTO events (at, project, actor_kind, actor, role, worker, session, op, tbl, pk, ref, reason)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+        `INSERT INTO events (at, project, actor_kind, actor, role, worker, session, op, tbl, pk, ref, reason, undo_of)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
         this.at,
         this.projectPk,
         caller.kind,
@@ -1579,6 +1719,7 @@ class Tx {
         pk,
         ref,
         reason ?? null,
+        undoOf ?? null,
       )
       .one().seq;
     for (const [field, old, now] of changes) {

@@ -9,8 +9,8 @@ import { BoardStore } from "./store.ts";
 /**
  * Every project's board (ADR 0001 §1): its own Durable Object, so it restores
  * on its own and its reads don't queue messages. Only the broker calls it, with
- * the caller it verified; it answers the result and what changed, and the
- * broker does the sending.
+ * the caller it verified; it answers the result, what changed and the messages
+ * the write sends (§7), and the broker does the sending.
  */
 export class Board extends DurableObject<Env> {
   private readonly store: BoardStore;
@@ -29,9 +29,9 @@ export class Board extends DurableObject<Env> {
     if (!parsed.success) return { ok: false, code: "invalid", message: parsed.error.issues[0]?.message ?? "Invalid operation" };
     const op = parsed.data;
     try {
-      if (isRead(op)) return { ok: true, result: this.store.read(caller, op), changed: null };
-      const { result, changed } = this.ctx.storage.transactionSync(() => this.store.write(caller, op));
-      return { ok: true, result, changed };
+      if (isRead(op)) return { ok: true, result: this.store.read(caller, op), changed: null, messages: [] };
+      const { result, changed, messages } = this.ctx.storage.transactionSync(() => this.store.write(caller, op));
+      return { ok: true, result, changed, messages };
     } catch (err) {
       if (err instanceof BoardError) return { ok: false, code: err.code, message: err.message };
       // The schema is the backstop for a link or a value the operation layer let through.

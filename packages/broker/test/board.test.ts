@@ -1,7 +1,7 @@
 import type { BoardCaller, BoardCtx, BoardOpInput, BoardReply, BoardResults, GrantField, ItemRecord, SessionRef } from "@bobnet/protocol";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 // The board service's core (ADR 0001 §2, §3, §5), called as the broker calls it.
 
@@ -551,6 +551,112 @@ describe("questions (ADR 0001 §7)", () => {
       options: [{ key: "a", recommended: true }, { key: "b", recommended: false }],
       answer: { key: "a", words: "Bars, obviously", by: "Picard@mbp-1", via: "conversation" },
     });
+  });
+
+  /** Picard asks Q-1 with two options and A-1, as Helix's lead asks Casper. */
+  async function asked() {
+    await helix();
+    await helixRules();
+    await ok(agent("Picard"), { op: "ask", project: "helix", text: "Which chart?", options: [{ key: "a", text: "Bars", recommended: true }, { key: "b", text: "Lines" }] });
+    await ok(agent("Picard"), { op: "ask", project: "helix", kind: "action", text: "Rotate the key" });
+  }
+
+  /** The messages an operation that must succeed sends. */
+  async function sent(caller: BoardCaller, op: BoardOpInput): Promise<Extract<BoardReply, { ok: true }>["messages"]> {
+    const reply = await call(caller, op);
+    if (!reply.ok) throw new Error(`${op.op} refused: ${reply.code}: ${reply.message}`);
+    return reply.messages;
+  }
+
+  it("takes the owner's answer once, verbatim, and refuses every other role", async () => {
+    await asked();
+    for (const who of [agent("Picard"), agent("Riker"), agent("Bill")]) {
+      expect(await refused(who, { op: "answer_question", project: "helix", ref: "Q-1", key: "a" })).toMatchObject({ code: "forbidden" });
+      expect(await refused(who, { op: "mark_done", project: "helix", ref: "A-1" })).toMatchObject({ code: "forbidden" });
+    }
+    expect(await refused(owner, { op: "answer_question", project: "helix", ref: "Q-1" })).toMatchObject({ code: "invalid" });
+    expect(await refused(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "c" })).toMatchObject({ code: "invalid" });
+    expect(await refused(owner, { op: "answer_question", project: "helix", ref: "A-1", words: "done" })).toMatchObject({ code: "invalid" });
+    expect(await refused(owner, { op: "mark_done", project: "helix", ref: "Q-1" })).toMatchObject({ code: "invalid" });
+
+    const words = "Bars,  but  \"stacked\"";
+    await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a", words });
+    expect(await refused(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "b" })).toMatchObject({ code: "conflict" });
+    expect(await refused(agent("Picard"), { op: "record_answer", project: "helix", ref: "Q-1", words: "Lines" })).toMatchObject({ code: "conflict" });
+    await ok(owner, { op: "mark_done", project: "helix", ref: "A-1", note: "Rotated" });
+    expect(await refused(owner, { op: "mark_done", project: "helix", ref: "A-1" })).toMatchObject({ code: "conflict" });
+
+    const q = await ok(owner, { op: "get", project: "helix", ref: "Q-1", history: true });
+    expect(q.question).toMatchObject({ state: "answered", answer: { key: "a", words, by: "owner@example.com", via: "dashboard" } });
+    expect(q.history!.at(-1)).toMatchObject({ op: "answer_question", actor: { kind: "owner" }, changes: expect.arrayContaining([{ field: "answer_words", old: null, new: words }]) });
+    expect((await ok(owner, { op: "get", project: "helix", ref: "A-1" })).question).toMatchObject({ state: "done", answer: { key: null, words: "Rotated", via: "dashboard" } });
+  });
+
+  it("sends the answer from BobNet@board to the lead and to whoever asked", async () => {
+    await asked();
+    await ok(owner, { op: "grant", project: "helix", agent: "Riker", role: "session PO", read: true, items: "open_feature", fields: [], questions: true });
+    await ok(agent("Riker"), { op: "ask", project: "helix", text: "Ship it?", options: [{ key: "y", text: "Yes" }] });
+    await ok(owner, { op: "ask", project: "helix", text: "Mine?" });
+
+    // Picard is the lead and asked: one recipient. The body names the question, the option and his words.
+    const [toLead, ...more] = await sent(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "b", words: "Lines, thin ones" });
+    expect(more).toEqual([]);
+    expect(toLead!.to).toEqual(["Picard@mbp-1"]);
+    expect(toLead!.body).toContain("Q-1");
+    expect(toLead!.body).toContain("Which chart?");
+    expect(toLead!.body).toContain("b: Lines");
+    expect(toLead!.body).toContain("Lines, thin ones");
+    // Riker asked: the lead and Riker, in one message.
+    expect((await sent(owner, { op: "answer_question", project: "helix", ref: "Q-2", key: "y" }))[0]!.to).toEqual(["Picard@mbp-1", "Riker@mbp-1"]);
+    // The owner asked: only the lead.
+    expect((await sent(owner, { op: "answer_question", project: "helix", ref: "Q-3", words: "Yes" }))[0]!.to).toEqual(["Picard@mbp-1"]);
+    const [done] = await sent(owner, { op: "mark_done", project: "helix", ref: "A-1" });
+    expect(done!.body).toContain("A-1");
+    expect(done!.body).toContain("done");
+    // An answer from conversation is the lead's own record: no message.
+    await ok(agent("Picard"), { op: "ask", project: "helix", text: "Again?" });
+    expect(await sent(agent("Picard"), { op: "record_answer", project: "helix", ref: "Q-4", words: "No" })).toEqual([]);
+  });
+
+  it("undoes the owner's answer within two minutes: the question reopens, the history keeps it, the lead hears", async () => {
+    await asked();
+    const { seq } = await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a", words: "Bars" });
+    expect(await refused(agent("Picard"), { op: "undo", project: "helix", seq })).toMatchObject({ code: "forbidden" });
+
+    const [note] = await sent(owner, { op: "undo", project: "helix", seq });
+    expect(note!.to).toEqual(["Picard@mbp-1"]);
+    expect(note!.body).toContain("Q-1");
+    expect(note!.body).toMatch(/withdr/i);
+    const q = await ok(owner, { op: "get", project: "helix", ref: "Q-1", history: true });
+    expect(q.question).toMatchObject({ state: "open", answer: null });
+    expect(q.history!.map((e) => e.op)).toEqual(["ask", "answer_question", "undo"]);
+    expect(q.history![1]!.changes).toContainEqual({ field: "answer_words", old: null, new: "Bars" });
+    expect(q.history![2]).toMatchObject({ undo_of: seq, changes: expect.arrayContaining([{ field: "state", old: "answered", new: "open" }, { field: "answer_words", old: "Bars", new: null }]) });
+
+    // Undone once; answered again, and that answer can be undone.
+    expect(await refused(owner, { op: "undo", project: "helix", seq })).toMatchObject({ code: "conflict" });
+    const again = await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "b" });
+    expect(await refused(owner, { op: "undo", project: "helix", seq })).toMatchObject({ code: "conflict" });
+    await ok(owner, { op: "undo", project: "helix", seq: again.seq });
+    const done = await ok(owner, { op: "mark_done", project: "helix", ref: "A-1" });
+    await ok(owner, { op: "undo", project: "helix", seq: done.seq });
+    expect((await ok(owner, { op: "get", project: "helix", ref: "A-1" })).question).toMatchObject({ state: "open", answer: null });
+  });
+
+  it("refuses an undo after two minutes, of another kind of event, or of an answer from conversation", async () => {
+    await asked();
+    const late = await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a" });
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 121_000 });
+    try {
+      expect(await refused(owner, { op: "undo", project: "helix", seq: late.seq })).toMatchObject({ code: "conflict", message: expect.stringMatching(/two minutes/) });
+    } finally {
+      vi.useRealTimers();
+    }
+    const asking = await ok(agent("Picard"), { op: "ask", project: "helix", text: "Another?" });
+    expect(await refused(owner, { op: "undo", project: "helix", seq: asking.seq })).toMatchObject({ code: "invalid" });
+    const said = await ok(agent("Picard"), { op: "record_answer", project: "helix", ref: asking.ref!, words: "Yes" });
+    expect(await refused(owner, { op: "undo", project: "helix", seq: said.seq })).toMatchObject({ code: "invalid" });
+    expect(await refused(owner, { op: "undo", project: "helix", seq: 9999 })).toMatchObject({ code: "invalid" });
   });
 
   it("refuses a project prefix, or draft prefix, that reads as a question's", async () => {

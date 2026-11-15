@@ -2,7 +2,9 @@ import {
   type Action,
   addressKey,
   BOARD_READS,
+  BOARD_SENDER,
   type BoardCaller,
+  type BoardMessage,
   type BoardReply,
   CLIENT_FRAME_TYPES,
   ClientFrame,
@@ -47,6 +49,9 @@ interface Conn {
   identity: Identity;
   connectedAt: number;
 }
+
+/** Whom a message is stored for: a peer, or an address that has not registered yet. */
+type Recipient = Pick<PeerRow, "key" | "name" | "laptop" | "conn_id">;
 
 interface PeerRow {
   key: string;
@@ -365,12 +370,37 @@ export class Broker extends DurableObject<Env> {
     } catch (err) {
       reply = { ok: false, code: "unavailable", message: `The board can't be reached (${err instanceof Error ? err.message : String(err)}); retry` };
     }
-    // Committed, whatever became of the caller's socket meanwhile: the owners refetch.
+    // Committed, whatever became of the caller's socket meanwhile: the owners refetch, and the board's messages go out.
     if (reply.ok && reply.changed) this.toOwners({ t: "board_changed", ...reply.changed });
+    if (reply.ok) for (const m of reply.messages) this.boardMessage(conn, m);
     const ws = this.socket(conn.connId);
     if (!ws) return;
     if (reply.ok) this.ok(ws, frame.rid, reply.result);
     else this.send(ws, { t: "error", rid: frame.rid, code: reply.code, message: reply.message });
+  }
+
+  /**
+   * A message the board's write sends (ADR 0001 §7), from its reserved sender, stored and delivered as
+   * any message is. A recipient that has never registered gets it when it does.
+   */
+  private boardMessage(conn: Conn, m: BoardMessage): void {
+    const recipients: Recipient[] = [];
+    for (const raw of new Set(m.to)) {
+      const addr = parseRecipient(raw, BOARD_SENDER.laptop);
+      if (!addr || addr.laptop.toLowerCase() === BOARD_SENDER.laptop) continue;
+      const key = addressKey(addr);
+      recipients.push(this.peer(key) ?? { key, name: addr.name, laptop: addr.laptop, conn_id: null });
+    }
+    if (recipients.length === 0) return;
+    const msg = this.store({ ...BOARD_SENDER, team: null }, "message", recipients, {
+      body: m.body,
+      urgent: false,
+      in_reply_to: null,
+      ttlSeconds: LIMITS.defaultMessageTtlSeconds,
+    });
+    this.fanOut(msg, recipients);
+    this.toOwners({ t: "traffic", item: traffic(msg) });
+    this.audit(conn, "board_message", { id: msg.id, to: recipients.map((p) => p.key) });
   }
 
   /** Who makes a board operation (ADR 0001 §4): the owner, or a peer this connection hosts, with what its supervisor says. */
@@ -531,9 +561,9 @@ export class Broker extends DurableObject<Env> {
   // ---------- Messages ----------
 
   private store(
-    sender: PeerRow,
+    sender: Pick<PeerRow, "name" | "laptop" | "team">,
     type: Envelope["type"],
-    recipients: PeerRow[],
+    recipients: Recipient[],
     opts: { body: string; urgent: boolean; in_reply_to: string | null; ttlSeconds: number },
   ): Envelope {
     const now = Date.now();
@@ -564,8 +594,8 @@ export class Broker extends DurableObject<Env> {
   }
 
   /** Pushes to every recipient that is online now; returns those it reached. */
-  private fanOut(msg: Envelope, recipients: PeerRow[]): PeerRow[] {
-    const reached: PeerRow[] = [];
+  private fanOut<R extends Recipient>(msg: Envelope, recipients: R[]): R[] {
+    const reached: R[] = [];
     for (const peer of recipients) {
       const ws = peer.conn_id ? this.socket(peer.conn_id) : undefined;
       if (ws && this.send(ws, { t: "deliver", to: formatAddress(peer), wake: wakes(msg), msg })) reached.push(peer);

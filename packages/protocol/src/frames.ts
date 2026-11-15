@@ -346,7 +346,8 @@ export const DashboardFrame = z.object({ t: z.literal("dashboard"), rid });
 
 /** What the owner can do from the dashboard. */
 export const Action = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("answer"), request: z.string().max(40), decision: z.enum(["allow", "deny"]) }),
+  /** `message` is the note to the agent with the decision. */
+  z.object({ kind: z.literal("answer"), request: z.string().max(40), decision: z.enum(["allow", "deny"]), message: z.string().trim().min(1).max(2000).optional() }),
   z.object({ kind: z.literal("stop"), worker: z.string().max(40) }),
   z.object({ kind: z.literal("reset"), worker: z.string().max(40) }),
 ]);

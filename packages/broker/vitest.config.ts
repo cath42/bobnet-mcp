@@ -23,6 +23,8 @@ export default defineConfig({
           LAPTOP_TOKENS: JSON.stringify({ "token-1.access": "mbp-1" }),
           // A second laptop's own secret, merged with the first.
           LAPTOP_TOKENS_MBP2: JSON.stringify({ "token-2.access": "mbp-2" }),
+          // A token mapped to the board's reserved laptop id, which no laptop may take.
+          LAPTOP_TOKENS_RESERVED: JSON.stringify({ "token-3.access": "Board" }),
           TEST_SIGNING_JWK: JSON.stringify(privateJwk),
         },
         outboundService(req) {

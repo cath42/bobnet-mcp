@@ -1,4 +1,4 @@
-import type { Identity } from "@bobnet/protocol";
+import { BOARD_SENDER, type Identity } from "@bobnet/protocol";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
 // Cloudflare Access sits in front of every route; the Worker verifies the
@@ -47,6 +47,11 @@ export async function authenticate(req: Request, env: Env): Promise<Identity | n
   const commonName = payload["common_name"];
   if (typeof commonName === "string" && commonName !== "") {
     const laptop = laptopTokens(env)[commonName];
+    // The board's messages come from BobNet@board (ADR 0001 §7): a laptop by that id could pass as it.
+    if (laptop?.toLowerCase() === BOARD_SENDER.laptop) {
+      console.error("a laptop token maps to the board's reserved id", { commonName });
+      return null;
+    }
     return laptop ? { kind: "laptop", laptop } : null;
   }
 
