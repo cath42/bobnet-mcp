@@ -117,7 +117,10 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   (never went live). Carries BOB-27, BOB-26 orphan expiry, BOB-10 descriptions. No broker deploy needed.
   Sent to poe (m_569e5987) with checks: outbox drains, 3 orphans expire, peers rc.34.
   Don't close more sessions until the outbox has drained (runs into closed sessions are refused).
-- Luigi w_b7d5a605: BOB-5 (last view). Then: deploy (BOB-4 + BOB-26 dashboard, or with BOB-5), rc.34.
+- Luigi w_b7d5a605 done: BOB-5 at f90256f (Waits on you tab, answering there and from Overview; dashboard
+  only, no protocol/store change). Broker DEPLOYED (10th) 16:21:39Z from v2 bbabca7: Version ID
+  bfdf77fc-9726-47d6-a188-702b92a3b203. ALL release-1 views are now deployed (BOB-3, 4, 5, 7, 8, 10).
+  Daisy w_a39671d2 rules gaps 1-3 (permission Undo, note on Allow, Now tab); Peach w_c? accepting BOB-5. Then: deploy (BOB-4 + BOB-26 dashboard, or with BOB-5), rc.34.
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
