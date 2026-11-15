@@ -143,6 +143,9 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   Rollout: broker deploy (Casper) first, then rc.35 + restart (poe).
 - Luigi w_d1122105: run_remote landed 8a2fba3 (session closed). Toad w_80368342 reviews it + ADR 0001 §9 line.
   Then: broker deploy (asked Casper ~16:55Z), rc.35, poe restart, Peach re-checks BOB-4 AC 7.
+- Toad w_80368342: run_remote signed off, c19f613 (review + ADR 0001 §9). Broker first, then rc.35.
+  Minor (pre-existing): run_start remote_url accepts javascript: (dashboard href); nits: claude.ai/ prefix,
+  this.worker() may throw in onRemoteControl. Luigi w_78b10e9e fixes all three before the deploy.
 ## Release-1 close: what's left
 - rc.34 live (poe) -> outbox drains -> BOB-10 AC 5 (worker's close_session description), BOB-4 AC 5-7
   live data; close the open sessions (after the drain).
