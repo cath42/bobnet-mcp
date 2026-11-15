@@ -30,7 +30,13 @@ Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41
 - Luigi (w_07934845): done, 5b6717e (0b: R1 op keys + Board migration 2, finding 2, R2, finding 3).
   Open: the dashboard answer UI must make one key per answer, done mark or undo (Daisy/Luigi then).
   Rollout: broker deploy BEFORE rc.31 (an old broker strips `key`, so no idempotency).
-- Toad (w_289cf060): reviewing 5b6717e.
+- Toad (w_289cf060): signed off 5b6717e, nothing to fix (architecture/reviews/2026-11-14-bob5-followups-review.md, 94cb5b9).
+  HARD rollout order (ADR 0001 §12): broker deploy with Board migration 2 FIRST, then rc.31 (supervisor
+  and any rc.31 channel client). Against the old broker the new client resends unkeyed writes, so a
+  lost reply doubles a create/ask/close. rc.30 against the new broker is safe. rc.31's notes must say
+  "needs the broker with Board migration 2". writeOnce is atomic (inside the write's transactionSync).
+  Peach told to accept BOB-5.
+- 02:58:13Z: transient broker socket drop (1006), reconnected 7 s later; not a deploy or restart.
 - Luigi (w_7735afa0): item 0c, dotted ids.
 - rc.30: tagged bd96a94, installed, poe told (m_25706d01). Supervisor only (e221738, b31489a).
 - Toad (w_1b639410): done, 6c52056: all four signed off. Later notes: Luigi (1) --post fetch
