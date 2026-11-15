@@ -105,6 +105,17 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
   de72168 (= e54d0ac + lead/): Version ID 61bca710-7bbc-4e5c-84a5-c6fe1083486f. Dashboard-only change:
   the hibernating sockets don't matter for assets; no 5-min wait needed.
 - Peach w_c1c64900: accept BOB-4, re-check BOB-3 (AC 8 per Q-1), BOB-14 AC 5.
+- Peach w_c1c64900: BOB-4 AC 1-4, 8, 9 + DoD 1, 3, 4; AC 5-7 need live data/look; BOB-3 AC 1, 3 checked;
+  BOB-14 AC 5 checked. None Done. Mario closed BOB-7's 4 sessions (structured closes for AC 7 evidence).
+- BOB-27 (bug, blocks use) found 16:0xZ: every bobnet board report on mbp-1 stuck in the outbox since
+  04:43Z (312 rows) behind a slot_run whose name (the command) is > protocol max 100; broker answers
+  bad_frame, not in FINAL_BOARD_ERRORS, flush retries silently. Sessions had 0 tokens, no runs.
+  Mario built the fix (Luigi mid-BOB-5): 5d4617f (clip slot name, BoardOp check -> bad_row, bad_frame
+  final, wait logged once). Toad w_a4cdad59 reviews.
+- rc.34 CUT: a2db59e, tag v2.0.0-rc.34, installed ~/.local/share/bobnet/v2.0.0-rc.34; supersedes rc.33
+  (never went live). Carries BOB-27, BOB-26 orphan expiry, BOB-10 descriptions. No broker deploy needed.
+  Sent to poe (m_569e5987) with checks: outbox drains, 3 orphans expire, peers rc.34.
+  Don't close more sessions until the outbox has drained (runs into closed sessions are refused).
 - Luigi w_b7d5a605: BOB-5 (last view). Then: deploy (BOB-4 + BOB-26 dashboard, or with BOB-5), rc.34.
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
