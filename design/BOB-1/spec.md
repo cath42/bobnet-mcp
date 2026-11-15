@@ -170,10 +170,11 @@ Not built in BOB-7, and where it goes:
   the item, one at a time. A question shows its options as radio cards (the recommended one first,
   tagged, none picked) and a text box for his own words; **Send answer** works once there is an option or
   words. An action has an optional note and **Mark done**. A permission has an optional note to the agent
-  and **Deny** / **Allow** (Casper said yes, round 3). The line by the buttons says it is
-  recorded as his words and who gets a message (the project's lead; for a permission, the agent). Sent: a
-  toast with Undo, the item leaves its group, and it shows under **Answered from here today** with the
-  option he picked and his words quoted exactly. On a phone the buttons are full width, 44 px tall.
+  that goes only with **Deny**, then **Deny** / **Allow** (Casper said yes, round 3; BOB-5 gaps 1-2). The line
+  by the buttons says it is recorded as his words and who gets a message ("Picard, Helix's lead, gets a
+  message"; for a permission, the agent). Sent: a toast with Undo, the item leaves its group, and it shows
+  under **Answered from here today** with the option he picked and his words quoted exactly. A permission
+  has neither Undo nor an Answered line (see *BOB-5 as built*). On a phone the buttons are 44 px tall.
 - A session closed with need: casper shows on the question it waits for, not as a second item.
 - Empty: "Nothing is held up by you." The count leaves the tab.
 
@@ -249,7 +250,7 @@ shipped and what it carries has a home. Its parts go here:
 - **Queued workers:** a muted line under Working now's list: "2 queued: Luigi, Toad".
 - **CI banner:** replaced by the run line (Working now's third line, the Feature view's run line).
 - Now leaves the tabs once all of the above is built (BOB-4) and Waits on you exists (BOB-5). Usage and
-  Sessions stay; they are not in this spec's scope.
+  Sessions stay; they are not in this spec's scope. (Done: see *BOB-5 as built*, ruling 3.)
 
 **3. A Backlog.md project's row on the Overview: accepted as built.** Its name (to its roadmap) and
 laptop, then one muted line: "Its board is still on Backlog.md, not in the service yet: its roadmap shows
@@ -306,8 +307,9 @@ the browser's locale clock ("07:39 AM" is right on an en-US browser).
    earlier **Luigi** runs", not "luigi runs").
 4. **Overview's run line: accepted, deferred.** Built when the `overview` read carries each open session's
    latest CI or slot run (Toad, gap 4; one read, no fan-out). Until then Working now has no third line and
-   Now's CI banner stays.
-5. **Now stays in the tabs** until Waits on you (BOB-5) ships: agreed.
+   Now's CI banner stays (now a line under Working now: BOB-5 ruling 3).
+5. **Now stays in the tabs** until Waits on you (BOB-5) ships: agreed. (It leaves with BOB-5's changes;
+   the CI banner becomes a line under Working now: *BOB-5 as built*, ruling 3.)
 
 **Changes (small; they can ride with BOB-5):**
 - **One state per agent, everywhere.** On it now and the running card say "waiting on CI"; the same agent's
@@ -333,6 +335,61 @@ the browser's locale clock ("07:39 AM" is right on an en-US browser).
   (judge staleness by the broker's clock) comes with it.
 - Toad's findings 1-4 are his to rule; finding 4's "N calls" from `calls`, not the downsampled `ctx`, is
   what the spec means by calls.
+
+### BOB-5 as built: decided 2026-11-15 (Luigi's gaps 1-3, shots `bob5-*`)
+Accepted as built: the tab (second, with its count), the project filter, the two groups, each item's
+lines, the answer forms (radio cards, words, Send answer off until there is one), one form at a time, the
+same form in place on Needs you, Answered from here today ("from the dashboard" included), rendering held
+while he types, capture's wording restored, all three widths. Also accepted, Luigi's own calls: no request id
+on a permission; a question-kind permission offers only Deny plus "answer it through the orchestrator"; an
+email reads "from you"; Needed before a release links to the roadmap; the permission's command shows inside
+its form. Phone: the permission's Cancel · Deny · Allow share one line in thirds, 44 px: accepted.
+
+**1. A permission: no Undo, no Answered line, until something records it.** The supervisor's answer can't
+be taken back, and the dashboard keeps no state (AC 3), so design for that:
+- The line by the buttons ends "It can't be taken back."
+- The toast has no Undo: "Allowed Howard's Bash." / "Denied Howard's Bash; your note went to Howard."
+  (no "; your note …" when there was none).
+- No line under Answered from here today; the agent's line on Working now moving off "waiting on you" is
+  the confirmation.
+- For Toad, not needed for release 1: the supervisor already marks a decided request (state, decided_by,
+  BOB-26). If a laptop's report carried its requests decided today (agent, tool, decision, decided_by, at,
+  note), the Answered list would show them with an "allowed" / "denied" badge, still without Undo.
+
+**2. The note on Allow: it says where it goes.** The SDK's allow carries no message, so the note goes only
+with Deny. Keep one field and say so:
+- Label: "Note to Howard, sent with Deny (optional)". Placeholder: "e.g. not that process; use the pool's
+  stop script".
+- Line by the buttons: "Howard gets your decision; a note goes only with Deny. It can't be taken back."
+- Allow with text in the box still allows; nothing else changes. No new behaviour, no hidden field swap.
+- For Toad: if the supervisor can deliver a note on Allow (e.g. as the agent's next message), the label
+  goes back to "Note to Howard (optional)". His call; nothing waits on it.
+
+**3. Now leaves the tabs now.** BOB-4 built every home BOB-3 ruling 2 named (the agent detail row with
+Stop, Reset, Open in Claude, Context per call, Allow / Deny for a lead's permission; quiet; "waiting on
+Mario"; the queued line), and Waits on you holds Casper's permissions. The one thing left, the CI banner,
+gets a stopgap home rather than keeping a whole tab:
+- Under Working now's list (after the queued line), one muted line per CI run in progress, from the same
+  `board.ci` Now reads: "CI running: BobNet · test on 1a2b3c4d · started 4 min ago". A failed run reads
+  "CI failed: …" in red. Nothing when none runs. Phone: it wraps.
+- The line goes when the per-agent run line lands (BOB-4 gap 4).
+- Tabs: **Overview · Waits on you · Roadmap · Feature · Triage · Usage · Sessions**. `#now` opens the
+  Overview (old links keep working).
+- This supersedes BOB-4 gap 5 and the last bullet of BOB-3 ruling 2.
+
+**Changes (small):**
+- **Needs you order:** oldest first, as Waits on you's Holds work up and the prototype. Built newest first
+  (the 14 min permission leads, the 5 day action ends).
+- **One session name:** the permission on Waits on you reads "Holds up Howard (build Fixes)"; the Overview
+  reads "(Fixes)". Both go through `stepName`: "Howard (Fixes)" (BOB-3 ruling 5).
+- **The recommendation is its own line.** When an item holds nothing up (Q-214, Q-215, Q-257, Q-259), the
+  recommendation runs on into "Needed before … from … Open …" on one line, and the button then drops to a
+  line of its own (Q-214, Q-259). Always: the recommendation on its line, then the meta line (holds up or
+  needed before, who asked, the session, the link) with the button at its right, as Q-258 is built.
+- **The lead's name in commas:** "Picard, Helix's lead, gets a message" in the form, and "Picard, Helix's
+  lead, got a message" under Answered (both read "lead gets" / "lead got" today; the slip was mine in notes
+  41 and 43).
+- Gaps 1 and 2's wording above.
 
 ### States (`#states`)
 Board unavailable (red banner: since when, showing what it last said, captures wait on the device), loading,
