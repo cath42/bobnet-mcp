@@ -80,6 +80,9 @@ No approvals for deploys or releases; ask Casper only real product calls or fail
 - Peach w_a2341d79: BOB-3 not Done: AC 1 (two-project shot), AC 3 (3-of-138 test + shot), AC 8, DoD 2.
   Luigi asked for the test and shots with BOB-4. AC 8 is Casper's call: board question Q-1 (fixture now,
   recommended, or hold until BOB-9). Casper's live look at Roadmap + Overview also covers AC 1.
+- Luigi c404749: BOB-3 evidence (3-of-138 test; shots bob3acc-*: two projects, Helix's sample on a phone,
+  Done unticked). cdedac5: BOB-4 service gap (runs' ctx + RC, ci_runs, item history, get with_tasks).
+  Peach re-checks BOB-3 with BOB-4's acceptance (one spawn). Toad reviews cdedac5 with BOB-4's UI.
 - Next release (rc.33): BOB-10's client MCP descriptions + Toad's finding 1. Cut once Luigi's
   fix commit lands; send poe to restart at a Bob/Helix close (no hurry: descriptions only). (+ BOB-7 gaps 3, 4; BOB-2 AC 10 Helix-sized test).
 - Then the views, Luigi, one at a time (one worktree), from design/BOB-1/spec.md, in Peach's order:
