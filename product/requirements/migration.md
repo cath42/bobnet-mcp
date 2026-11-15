@@ -78,6 +78,14 @@ flat number (Toad's import review, "If Casper picks dotted ids"). This supersede
 only for tasks: a container that becomes a feature is still a feature, and its id is its own. Toad amends ADR 0001 §2
 and `ItemRef`; Luigi changes the store and the import before BOB-9; Mario schedules both.
 
+**Grants: `admin` (Casper, 2026-11-15, to Mario).** No one besides the owner gets `admin`. `bobnet-grants.json`
+stays as it is.
+
+**A closed release holding work that isn't Done (import review finding 5, Peach, 2026-11-14): blocks.** The
+import reports it as a problem and `--post` refuses until it is fixed in the source (reopen the release, or finish
+or drop the work). Reason: no operation reopens a release after the post, so a note would leave Done work and
+open work under a closed release for good. Helix's R1 (LAND-49.13/.14 at Draft) is Picard's to settle with (b) above.
+
 **Helix's board (asked Picard, open):** (a) containers → features, same as BobNet; (b) R1 "Partner
 demo" came out closed because it is archived: right?; (c) assignee/priority/references: references go
 to notes; is dropping assignee (590) and priority (130) acceptable?; (d) which feature is open at the
