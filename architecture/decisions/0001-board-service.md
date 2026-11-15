@@ -7,6 +7,11 @@
   **Amended 2026-11-14** (Toad, cleared by Mario; narrows the accepted decision): the supervisor's
   own operations and `ctx` are authorized by the supervisor's connection (§4, §6), and
   `not_open_feature` is worded as built (§5). From the BOB-2 step 1 review.
+  **Amended 2026-11-15** (Toad, on Casper's decision to Mario that imported task ids keep their
+  dotted form): an imported item keeps its Backlog.md id, dotted or not, as its primary ref; new
+  items get `<prefix>-n`; `ItemRef` widens to the dotted pattern (§2, §8, §11). What Luigi changes,
+  and before which post: "Dotted ids: what Luigi changes", after the build order. From
+  `architecture/reviews/2026-11-14-backlog-import-review.md`, "If Casper picks dotted ids".
 - **For:** BOB-2 (the service) and BOB-7 (who writes); BOB-3, 4, 5, 8, 9 and 10 build on it.
 - **Reads:** product/requirements/ (all), product/backlog/tasks/bob-2..10, design/BOB-1/notes.md and
   spec.md, lead/BOB-1-casper-feedback.md, Peach's message on criterion 0 (2026-11-14).
@@ -76,6 +81,14 @@ reasons, a close's summary.
 
 Every table has an integer `pk`; links are foreign keys to `pk`. The ids people use (`LAND-49`,
 `Q-258`) are labels on records, so a record can move and change kind and keep its id.
+
+**Item ids, dotted and flat** (amended 2026-11-15). An item brought in by an import keeps the id it
+had, dotted or not: `LAND-49.14` stays `LAND-49.14`. Every item made on the board gets
+`<prefix>-<next_item>`, flat, whatever its kind or parent (`store.ts` `create`). A dot is part of
+the label and nothing else. It says the item was made before its project moved, not where the item
+is now: a dotted task that is moved, slotted or promoted keeps its id, and the store never reads a
+parent from one. `next_item` starts past the first segment of every id the project brought
+(`export.ts` `highest`), so a new flat ref never equals an imported one, dotted or not.
 
 | Table | What it holds |
 |---|---|
@@ -315,8 +328,19 @@ Owner-only operations (§5, §7) are in `BoardOp` but no MCP tool offers them. T
 operations are `session_join`, `run_start`, `run_end`, `push` and `slot_run` (§9, §10).
 
 `get`'s `ref` takes an `ItemAlias` (`protocol/src/board.ts`): an item's ref or any id it has had,
-such as Backlog.md's dotted `LAND-1.3`, so an old id still finds its item. Its reply names the
-item's primary ref. Writes and links keep `ItemRef`, so nothing is ever written under an old id.
+so an old id still finds its item. Its reply names the item's primary ref. Writes and links take
+an `ItemRef`. Since an imported primary may be dotted (§2), `ItemRef` has the same pattern as
+`ItemAlias`, `^[A-Z][A-Z0-9]{0,9}-\d{1,6}(\.\d{1,4})*$` (amended 2026-11-15). The two names stay
+because they mean different things: a ref the caller means as the item's, and any id it has had.
+That nothing is written under an old id is the store's rule, not the schema's: the store finds an
+item by any id it has had (`store.ts` `item`), links are `pk`s, and every reply and event names the
+primary (`refOf`). The widening is additive. A new broker takes flat and dotted refs, and an old
+client never sends a dotted one. Clients don't parse board replies with zod. The one break is the
+export: `ExportItem.ref` is an `ItemRef`, so a supervisor older than the widening fails
+`BoardExportV1.safeParse` on a board with a dotted primary and its nightly backup stops until it is
+upgraded. The widening therefore ships in the same release as the import that keeps dotted ids, and
+before the first post that carries one. The export stays version 1, because its shape doesn't
+change.
 
 The existing `board` frame and `ProjectBoard` stay for projects still on Backlog.md, and are removed
 once the last one has moved (a later release says so). A project is on the service when the
@@ -438,6 +462,9 @@ is `running` or `queued`. This is derived, not a worker state.
   survives; the dashboard's `parseBacklogItem` is it, cut), plus Helix's `lead/questions.md` for
   `Q-n` and `A-n`. It writes that same export shape, with the project's rules from Peach's rows (§5)
   and its lead and PO, and posts it to the import. It is the one place Markdown is read, and it runs once per project.
+  Ids under the project's prefix keep their form, dotted or not, and drafts keep `DRAFT-n` (§2);
+  only an id under another prefix, or a draft id outside `drafts/`, gets a new `<prefix>-n`, with
+  the old id kept as an alias.
   Its report lists what it couldn't map (a task whose milestone differs from its feature's, a
   dependency on a missing id), for the PO to settle before the cut-over. A feature in flight at the
   cut-over gets an open session marked `imported`, so `open_since` holds (BOB-9 #5).
@@ -492,6 +519,51 @@ Before step 1, Luigi fixes the review's findings 1-3: the stale-tip land, the ow
 token to laptops, and the supervisor's ack before a message is consumed (decision 3). Nothing goes
 live without a release and a broker deploy, which runs only when Casper asks for it.
 
+### Dotted ids: what Luigi changes (amendment 2026-11-15)
+
+One change, one commit, because the widening and the code that relies on it must ship together
+(§8). I've left the protocol line to Luigi for that reason: on its own it flips a supervisor test
+(`board-service.test.ts:86`) and does nothing useful until the import keeps dotted ids.
+
+1. **Protocol** (`packages/protocol/src/board.ts:44`). `ItemRef` takes `ItemAlias`'s pattern,
+   `^[A-Z][A-Z0-9]{0,9}-\d{1,6}(\.\d{1,4})*$`. Reword both doc comments to match §8: `ItemRef` is a
+   ref the caller means as the item's, possibly dotted when imported; `ItemAlias` is any id it has
+   had. Add a protocol test: `ItemRef` takes `LAND-49` and `LAND-49.14` and refuses `LAND-49.` and
+   `land-49`. `BoardExportV1` stays version 1.
+2. **Import** (`packages/supervisor/src/backlog-import.ts:249`). `keeps` drops `!id.includes(".")`.
+   An id under the prefix is kept, dotted or not. A `DRAFT-n` in `drafts/` is kept. Everything else
+   is renumbered past `next`, as today: an id under another prefix, or a draft id outside `drafts/`.
+   `next` (`:247`), aliases, "Was" absorption and `resolve` don't change. A task under a task, put
+   under its feature, keeps its id (`LAND-49.3.1` under LAND-49), and so does a dotted task whose
+   file sits under another feature. Neither is a problem in the report, because the label doesn't
+   promise a parent (§2). Update the header comment (`:23-24`), the report's "Renumbered" heading
+   (`:599`, now only other prefixes and stray drafts), `docs/board-export-v1.md` (the mapping rule at
+   § "Making one from Backlog.md", and `aliases` under "An item", which no longer holds Backlog.md's
+   dotted ids as a rule), and the tests that expect renumbering (`backlog-import.test.ts:77`, `:97`,
+   `:116`, `:137`).
+3. **Supervisor** (`packages/supervisor/src/supervisor.ts`). `spawn_worker`'s check (`:387`) and
+   `boardCtx` (`:1634`) take dotted tasks once `ItemRef` does. Flip `board-service.test.ts:86` so
+   `BOB-2.1` is accepted, and keep a refusal for something that isn't an id. On a service project the
+   session's feature check (`:397`, `FEATURE_ID`) takes an `ItemRef`, since a promoted dotted task is
+   a feature with a dotted ref. Backlog.md projects keep `FEATURE_ID`. The review's finding 8 goes
+   away: dotted ids are primaries now, and the Board resolves the rare alias in `ctx.tasks` itself.
+4. **Store** (`packages/broker/src/board/store.ts`): no code change. `create` mints flat refs
+   (`:554`), `item` finds any id (`:1578`), and the import's `highest` and prefix check
+   (`export.ts:306`, `:383`) already take dotted refs. Add broker tests: import a project with a
+   dotted primary, `get` it and `update` it by that ref, `create` after it gets a flat ref past its
+   first segment, and an export → import round trip keeps it (export orders items by `pk`, so a
+   feature's tasks keep their order). Aliases sort as text (`store.ts:303`, `export.ts:157`), so
+   `.10` comes before `.2`. That's cosmetic, so leave it.
+5. **Unchanged, still before BOB-9:** the review's findings 3-6 and 9.
+
+**Order.** The broker parses the import with the protocol's schema (`export.ts:323`), so a post
+carrying a dotted primary needs a broker deployed with the widened `ItemRef`, and the posting
+supervisor on a release that has it. BobNet's own board has one dotted id, `BOB-1.1`
+(`product/backlog/tasks/bob-1.1 …`), and a posted project can't be imported again (§11). If BOB-14
+posts before this change is live, `BOB-1.1` becomes a flat ref for good, with `BOB-1.1` as its alias.
+Whether to hold BOB-14 for that or accept it is Mario's call. Helix (BOB-9) needs this change live
+before its post.
+
 ## Consequences
 
 - The board is one more Durable Object in the same deploy, with its own SQLite and its own recovery.
@@ -531,6 +603,13 @@ live without a release and a broker deploy, which runs only when Casper asks for
   record (§10).
 - **Writing Casper's answers into Helix's `lead/questions.md`:** BobNet would become a writer of a
   project's files. Rejected (§7).
+- **Renumbering every dotted id on import, the old one kept as an alias** (the import as first
+  built): every id stays findable, but the names people use change. Casper chose dotted
+  (2026-11-15).
+- **New tasks dotted under their feature (`LAND-49.20`):** it needs a counter per feature and a rule
+  for what a move does to the id. Either the id is renamed on every move, or the label lies after
+  one. Both tie the id to the parent again, and that tie is what Helix's "Was LAND-n.m"
+  re-creations came from. Rejected; new items are flat (§2).
 
 ## Where I differ from the criteria, or sharpen them (for Peach)
 
