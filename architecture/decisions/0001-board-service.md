@@ -493,7 +493,10 @@ it 24 hours. A repeat returns the stored reply, messages included, and writes no
 with another actor or op is `invalid`. The connection resends a keyed write with the same key on
 `disconnected`, `timeout` or `unavailable` within the 60 s wait, so an agent never sees "may have
 committed". A frame without a key behaves as before. The cached reply is not board data: it is never
-exported and never parsed as structure.
+exported and never parsed as structure. The last send keeps its own 15 s request timeout, so a write
+can fail up to that long after the 60 s. Rollout: the broker carrying migration 2 deploys before any
+client that resends. An old broker strips the key, so a resend there would write twice
+(`reviews/2026-11-14-bob5-followups-review.md`).
 
 ## What Luigi builds first
 
