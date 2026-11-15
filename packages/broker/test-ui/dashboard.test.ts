@@ -1020,7 +1020,10 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     asked_by: "Mario@mbp-1", since: iso(60), blocking, ...over,
   });
   const waits = [
-    wait("Q-4", "question", "Which roadmap order wins?", true, { holds: { items: ["BOB-3.1"], sessions: [] }, waiting_sessions: [{ feature: "BOB-3", kind: "build", label: "A" }] }),
+    wait("Q-4", "question", "Which roadmap order wins?", true, {
+      holds: { items: ["BOB-3", "BOB-3.1"], sessions: [{ feature: "BOB-9", kind: "build", label: "B" }] }, waiting_sessions: [{ feature: "BOB-3", kind: "build", label: "A" }],
+    }),
+    wait("Q-5", "question", "Ship the fixes?", true, { waiting_sessions: [{ feature: "BOB-3", kind: "build", label: "Fixes" }, { feature: "BOB-3", kind: "review", label: "review 2" }] }),
     wait("A-2", "action", "Add the token", false, { feature: null }),
     wait("BOB-31", "bug", "Login fails on a phone", true),
   ];
@@ -1044,15 +1047,19 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     await answerOverview();
     expect(document.querySelector('#tabs a[aria-current]')!.getAttribute("href")).toBe("#overview");
     // The waits and the permission: four, the action not holding work up.
-    expect($("needs-count").textContent).toBe("4");
+    expect($("needs-count").textContent).toBe("5");
     const lines = [...$("needs").querySelectorAll("li")];
-    expect(lines.map((l) => l.querySelector(".badge")!.textContent)).toEqual(["permission", "question", "bug · blocks use"]);
+    expect(lines.map((l) => l.querySelector(".badge")!.textContent)).toEqual(["permission", "question", "question", "bug · blocks use"]);
     expect(lines[0]!.textContent).toContain("records-agent wants Bash");
     expect([...lines[0]!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Allow", "Deny"]);
     expect(lines[1]!.querySelector(".l-t")!.textContent).toBe("Which roadmap order wins?");
-    expect(lines[1]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up BOB-3.1, BOB-3 build A");
-    expect(lines[2]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · blocks use");
-    expect(view().querySelector(".ov-needs .more")!.textContent).toBe("3 hold work up · 1 more when you have time");
+    // Holds-up wording (spec, BOB-3 gap 5): its own feature's session by who is in it, another's with its feature,
+    // BOB-3 counted once with its session, two named then "+N more"; a session with nobody in it by kind and label.
+    expect(lines[0]!.querySelector(".l-m")!.textContent).toBe("helix · LAND-41 · holds up records-agent (build 3)");
+    expect(lines[1]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up Luigi (build A), BOB-9 build B +1 more");
+    expect(lines[2]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up Fixes, review 2");
+    expect(lines[3]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · blocks use");
+    expect(view().querySelector(".ov-needs .more")!.textContent).toBe("4 hold work up · 1 more when you have time");
     // No link to a Waits tab that isn't there yet.
     expect(view().querySelector('.ov-needs a[href="#waits"]')).toBeNull();
   });
@@ -1103,6 +1110,16 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     const cells = [...view().querySelectorAll('.prow[data-project="bobnet"] .pc')].map((c) => c.textContent);
     expect(cells[2]).toBe("Open nowno feature open");
     expect(cells[3]).toBe("NextReady: BOB-9Move Helix's board");
+  });
+
+  it("hints that a question of Casper's is answered through the orchestrator, as Now did", async () => {
+    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+    snap.workers = [worker({ state: "waiting-approval" })] as never;
+    snap.pending = [{ id: "r_8", worker_id: "w_1", name: "records-agent", kind: "question", tool: "AskUserQuestion", tier: "human", created_at: iso(1), preview: "Which one?" }] as never;
+    FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    await settle();
+    const line = $("needs").querySelector("li")!;
+    expect(line.querySelector(".acts")!.textContent).toBe("Answer it through the orchestrator, or Deny");
   });
 
   it("opens the triage list on a release from the roadmap's counts line (BOB-3 #6)", async () => {

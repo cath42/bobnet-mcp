@@ -406,11 +406,11 @@ export class BoardStore {
     };
   }
 
-  /** Backlog items not archived, matching `where`. */
+  /** Backlog items not archived, matching `where`; its bugs are the open ones, not Done. */
   private backlogCounts(where: string, ...args: SqlStorageValue[]): BacklogCounts {
     const c = this.sql
       .exec<{ items: number; bugs: number | null; oldest: string | null }>(
-        `SELECT count(*) AS items, sum(type = 'bug') AS bugs, min(created_at) AS oldest FROM items WHERE kind = 'backlog' AND archived_at IS NULL AND ${where}`,
+        `SELECT count(*) AS items, sum(type = 'bug' AND status <> 'Done') AS bugs, min(created_at) AS oldest FROM items WHERE kind = 'backlog' AND archived_at IS NULL AND ${where}`,
         ...args,
       )
       .one();

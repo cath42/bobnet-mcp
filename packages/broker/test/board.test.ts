@@ -1288,5 +1288,10 @@ describe("the views' reads: waits, overview, the roadmap's counts (ADR 0001 §7,
       { items: 0, bugs: 0, oldest: null },
       { items: 1, bugs: 1, oldest: expect.any(String) },
     ]);
+    // A Done bug is still a backlog item, but not an open bug.
+    await runInDurableObject(board(), (_, state) => {
+      state.storage.sql.exec("UPDATE items SET status = 'Done' WHERE title = 'Crash'");
+    });
+    expect((await ok(owner, { op: "overview", project: "helix" })).projects[0]!.backlog).toMatchObject({ items: 2, bugs: 0 });
   });
 });

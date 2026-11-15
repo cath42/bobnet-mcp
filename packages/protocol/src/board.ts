@@ -495,7 +495,7 @@ export interface OverviewRow {
   waits_on_you: string | null;
   backlog: BacklogCounts;
   /** Backlog items in no release (the roadmap's "Not in a release" counts line). */
-  no_release: BacklogCounts;
+  no_release?: BacklogCounts;
 }
 
 export interface ItemSummary {

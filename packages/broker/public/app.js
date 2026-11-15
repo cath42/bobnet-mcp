@@ -778,7 +778,27 @@ function waitingText(w) {
 }
 
 const WAIT_KIND = { question: ["question", "question"], action: ["action", "action"], review_gate: ["review", "review gate"], bug: ["bug", "bug · blocks use"] };
-const sessionName = (ss) => `${ss.feature} ${ss.kind} ${ss.label}`;
+/** A session by its kind and label ("build A", "review 1"), never repeating the kind; "Fixes" is a build label and stays "Fixes" (spec, BOB-3 gap 5). */
+const stepName = (ss) => (ss.label === "Fixes" || ss.label.toLowerCase().startsWith(`${ss.kind} `) ? ss.label : `${ss.kind} ${ss.label}`);
+/** The agents in a board session, from their declared sessions. */
+const inSession = (key, ss) => running().filter((w) => w.project === key && w.session === `${ss.feature} ${ss.kind} ${ss.label}`);
+/** Several names: at most two, then "+N more". */
+const upTo2 = (names) => (names.length > 2 ? `${names.slice(0, 2).join(", ")} +${names.length - 2} more` : names.join(", "));
+
+/** What a wait holds up, in words (spec, BOB-3 gap 5): a session of its own feature by who is in it, another's with its feature, then items; a feature and its own session count once. */
+function heldNames(w) {
+  const sessions = [...new Map([...w.holds.sessions, ...w.waiting_sessions].map((ss) => [`${ss.feature} ${ss.kind} ${ss.label}`, ss])).values()]
+    .sort((a, b) => (b.feature === w.feature) - (a.feature === w.feature));
+  const items = w.holds.items.filter((ref) => !sessions.some((ss) => ss.feature === ref));
+  return upTo2([
+    ...sessions.map((ss) => {
+      if (ss.feature !== w.feature) return `${ss.feature} ${stepName(ss)}`;
+      const who = inSession(w.project, ss);
+      return who.length ? `${who.map((x) => x.name).join(" and ")} (${stepName(ss)})` : stepName(ss);
+    }),
+    ...items,
+  ]);
+}
 
 function viewOverview() {
   if (svc.projects && !ov.rows && !ov.loading) loadOverview();
@@ -812,10 +832,9 @@ function viewOverview() {
 
 function waitLine(w) {
   const [st, label] = WAIT_KIND[w.kind];
-  const held = [...new Set([...w.holds.items, ...[...w.holds.sessions, ...w.waiting_sessions].map(sessionName)])];
   return h("li", { class: "hold" }, badge(st, label),
     h("span", { class: "l-t", title: w.text }, w.text),
-    h("span", { class: "l-m" }, `${projectName(w.project)}${w.feature ? ` · ${w.feature}` : ""} · ${w.kind === "bug" ? "blocks use" : `holds up ${held.join(", ")}`}`));
+    h("span", { class: "l-m" }, `${projectName(w.project)}${w.feature ? ` · ${w.feature}` : ""} · ${w.kind === "bug" ? "blocks use" : `holds up ${heldNames(w)}`}`));
 }
 
 function permissionLine(p) {
@@ -824,9 +843,9 @@ function permissionLine(p) {
   return h("li", { class: "hold can" }, badge("permission"),
     h("span", { class: "l-t", title: p.preview }, p.kind === "question" ? `${p.name} asks: ${p.preview}` : `${p.name} wants ${p.tool}`),
     h("span", { class: "acts" },
-      p.kind === "question" ? null : button("Allow", "primary", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "allow" }, b, `Allow ${p.name} to run ${p.tool}?\n\n${p.preview}`)),
+      p.kind === "question" ? h("span", { class: "muted hint" }, "Answer it through the orchestrator, or ") : button("Allow", "primary", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "allow" }, b, `Allow ${p.name} to run ${p.tool}?\n\n${p.preview}`)),
       button("Deny", "danger", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "deny" }, b))),
-    h("span", { class: "l-m" }, `${w ? projectName(w.project) : p.laptop}${ss ? ` · ${ss.feature}` : ""} · holds up ${p.name}`));
+    h("span", { class: "l-m" }, `${w ? projectName(w.project) : p.laptop}${ss ? ` · ${ss.feature}` : ""} · holds up ${p.name}${ss ? ` (${ss.label})` : ""}`));
 }
 
 function nowLine(w) {

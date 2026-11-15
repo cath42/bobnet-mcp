@@ -44,7 +44,7 @@ function fakeBroker() {
       f("BOB-7", "R1", "Ready", "Who may write what, and Casper's gates from the dashboard", 0, 6, { open_since: iso(40) }),
       f("BOB-14", "R1", "Ready", "Move BobNet's own board into the service (pilot)", 0, 7, { open_since: iso(45) }),
       f("BOB-8", "R1", "Ready", "Capture backlog items in one step, and triage them", 0, 6),
-      f("BOB-10", "R1", "Ready", "Bugs: capture, triage, 'blocks use' to Casper, close on fix", 0, 4),
+      f("BOB-10", "R1", "Ready", "Bugs: capture, triage, 'blocks use' to Casper, close on fix", 0, 4, { open_since: iso(40) }),
       f("BOB-9", "R1", "Ready", "Move Helix's board off Backlog.md into the service", 0, 6),
       f("BOB-3", "R1", "Ready", "The roadmap across projects", 0, 9),
       f("BOB-4", "R1", "Ready", "A feature's sessions, outcomes and tasks", 0, 8),
