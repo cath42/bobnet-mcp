@@ -663,6 +663,10 @@ export class Boards {
     }
   }
 
+  /**
+   * Legacy: the CI runs of a project still on Backlog.md, for ProjectBoard. A project on the service has
+   * its runs in the board (ADR 0001 §10); this goes with ProjectBoard, once the last project has moved.
+   */
   private async ciRuns(p: ProjectConfig): Promise<ProjectBoard["ci"]> {
     const cached = this.ci.get(p.key);
     const anyRunning = cached?.runs?.some((r) => r.status !== "completed");

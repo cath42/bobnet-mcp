@@ -1,4 +1,5 @@
-import { BoardExportV1, type BoardCaller, type BoardCtx, type BoardOpInput, type BoardReply, type BoardResults, type ExportItem, type ExportProject, type Identity } from "@bobnet/protocol";
+import { BoardExportV1, type BoardCaller, type BoardCtx, type BoardOpInput, type BoardReply, type BoardResults, type ExportItem, type ExportProject } from "@bobnet/protocol";
+import type { Reader } from "../src/board/export.ts";
 import { reset } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
@@ -25,8 +26,8 @@ async function ok<K extends keyof BoardResults>(caller: BoardCaller, op: BoardOp
   return reply.result as BoardResults[K];
 }
 
-const exported = async (by: Identity = { kind: "owner", email: "owner@example.com" }) => BoardExportV1.parse(await board().exportBoard(by));
-const imported = async (doc: unknown, by: Identity = { kind: "laptop", laptop: "mbp-1" }) => board().importBoard(by, doc);
+const exported = async (by: Reader = { kind: "owner", email: "owner@example.com" }) => BoardExportV1.parse(await board().exportBoard(by));
+const imported = async (doc: unknown, by: Reader = { kind: "laptop", laptop: "mbp-1" }) => board().importBoard(by, doc);
 
 /** Helix with a bit of everything: rules, a release, features and tasks, a session with a run and a push, and an answered question. */
 async function helix() {
@@ -142,7 +143,7 @@ describe("export (ADR 0001 §11)", () => {
   it("gives a laptop only the projects its read rules cover, and the owner every one", async () => {
     await helix();
     await ok(owner, { op: "create_project", key: "bobnet", name: "BobNet", prefix: "BOB" });
-    const keys = async (by: Identity) => (await exported(by)).projects.map((p) => p.key);
+    const keys = async (by: Reader) => (await exported(by)).projects.map((p) => p.key);
     expect(await keys({ kind: "owner", email: "owner@example.com" })).toEqual(["bobnet", "helix"]);
     expect(await keys({ kind: "laptop", laptop: "mbp-1" })).toEqual(["helix"]);
     expect(await keys({ kind: "laptop", laptop: "mbp-2" })).toEqual([]);

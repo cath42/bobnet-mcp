@@ -1,8 +1,8 @@
-import { BOARD_READS, BoardOp, type BoardCaller, type BoardReadName, type BoardExportV1, type BoardImportReply, type BoardReply, type Identity } from "@bobnet/protocol";
+import { BOARD_READS, BoardOp, type BoardCaller, type BoardReadName, type BoardExportV1, type BoardImportReply, type BoardReply } from "@bobnet/protocol";
 import { DurableObject } from "cloudflare:workers";
 import { migrate } from "../schema.ts";
 import { BoardError } from "./errors.ts";
-import { exportBoard, importBoard } from "./export.ts";
+import { exportBoard, importBoard, type Reader } from "./export.ts";
 import { BOARD_MIGRATIONS } from "./schema.ts";
 import { BoardStore } from "./store.ts";
 
@@ -31,30 +31,49 @@ export class Board extends DurableObject<Env> {
     const parsed = BoardOp.safeParse(input);
     if (!parsed.success) return { ok: false, code: "invalid", message: parsed.error.issues[0]?.message ?? "Invalid operation" };
     const op = parsed.data;
-    try {
+    return this.answer(op.op, () => {
       if (isRead(op)) return { ok: true, result: this.store.read(caller, op), changed: null, messages: [] };
       const { result, changed, messages } = this.ctx.storage.transactionSync(() =>
         key === undefined ? this.store.write(caller, op) : this.store.writeOnce(caller, op, key),
       );
       return { ok: true, result, changed, messages };
+    });
+  }
+
+  /** A CI run's start or end (§10), for POST /v1/runs: `source` is the CI token's, never the body's. */
+  async reportCi(source: string, input: unknown): Promise<BoardReply> {
+    const parsed = BoardOp.safeParse(typeof input === "object" && input !== null ? { ...input, op: "ci_run" } : input);
+    if (!parsed.success) return { ok: false, code: "invalid", message: parsed.error.issues[0]?.message ?? "Invalid run" };
+    const op = parsed.data;
+    if (op.op !== "ci_run") return { ok: false, code: "invalid", message: "Invalid run" };
+    return this.answer(op.op, () => {
+      const { result, changed, messages } = this.ctx.storage.transactionSync(() => this.store.ciRun(source, op));
+      return { ok: true, result, changed, messages };
+    });
+  }
+
+  /** Runs one operation, answering a refusal or a bug as a reply. */
+  private answer(name: string, run: () => BoardReply): BoardReply {
+    try {
+      return run();
     } catch (err) {
       if (err instanceof BoardError) return { ok: false, code: err.code, message: err.message };
       // The schema is the backstop for a link or a value the operation layer let through.
       const message = err instanceof Error ? err.message : String(err);
       if (/constraint failed/i.test(message)) return { ok: false, code: "invalid", message: `Refused by the board's schema: ${message}` };
       // A bug here is not an outage: answered as such, so no agent retries it for a minute.
-      console.error("board error", { op: op.op, err: message });
+      console.error("board error", { op: name, err: message });
       return { ok: false, code: "invalid", message: `Board error: ${message}` };
     }
   }
 
   /** The board as one document (§11), as far as `by` may read it, for GET /v1/board/export. */
-  async exportBoard(by: Identity): Promise<BoardExportV1> {
+  async exportBoard(by: Reader): Promise<BoardExportV1> {
     return exportBoard(this.ctx.storage.sql, by);
   }
 
   /** A document's projects into the board, all or nothing (§11), for POST /v1/board/import. */
-  async importBoard(by: Identity, doc: unknown): Promise<BoardImportReply> {
+  async importBoard(by: Reader, doc: unknown): Promise<BoardImportReply> {
     try {
       return this.ctx.storage.transactionSync(() => importBoard(this.ctx.storage.sql, by, doc));
     } catch (err) {

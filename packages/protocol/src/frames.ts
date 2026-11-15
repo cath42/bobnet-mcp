@@ -430,7 +430,9 @@ export type ErrorCode = z.infer<typeof ErrorCode>;
 
 export type Identity =
   | { kind: "laptop"; laptop: string }
-  | { kind: "owner"; email: string };
+  | { kind: "owner"; email: string }
+  /** A CI system's service token (ADR 0001 §4, §10): it reports CI runs and nothing else. */
+  | { kind: "ci"; source: string };
 
 export type ServerFrame =
   | { t: "welcome"; v: typeof PROTOCOL_VERSION; identity: Identity }

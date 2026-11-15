@@ -90,6 +90,16 @@ interface ItemRow {
   [k: string]: SqlStorageValue;
 }
 
+/** A CI system, by its token's source (§4, §10): it makes `ci_run` and nothing else. */
+export interface CiCaller {
+  kind: "ci";
+  source: string;
+}
+type Caller = BoardCaller | CiCaller;
+
+/** A CI run's statuses that are final: a later start changes nothing. */
+const CI_ENDED = new Set(["passed", "failed", "cancelled"]);
+
 /** An event as undo reads it. */
 interface UndoneEvent {
   seq: number;
@@ -100,6 +110,20 @@ interface UndoneEvent {
   ref: string | null;
   actor_kind: string;
   actor: string;
+  [k: string]: SqlStorageValue;
+}
+
+interface CiRunRow {
+  pk: number;
+  project: number;
+  status: string;
+  url: string | null;
+  repo: string | null;
+  branch: string | null;
+  sha: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  worker: string | null;
   [k: string]: SqlStorageValue;
 }
 
@@ -592,6 +616,14 @@ export class BoardStore {
     return { result, changed: { project: tx.projectKey ?? "*", seq: tx.seqs.at(-1)!, refs: [...tx.refs] }, messages: tx.messages };
   }
 
+  /** A CI system's report of one run (§10), from POST /v1/runs: the source is its token's. */
+  ciRun(source: string, op: Op<"ci_run">): { result: BoardResults["ci_run"]; changed: { project: string; seq: number; refs: string[] } | null; messages: BoardMessage[] } {
+    const tx = new Tx<Caller>(this.sql, { kind: "ci", source });
+    const result = this.reportCi(tx, source, op);
+    if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null, messages: [] };
+    return { result, changed: { project: tx.projectKey!, seq: tx.seqs.at(-1)!, refs: [...tx.refs] }, messages: [] };
+  }
+
   /**
    * A write with an operation key (§12): once per key. A repeat by the same actor and op answers the
    * first reply, messages included, and writes nothing; keys last a day. A refused write rolls back,
@@ -666,6 +698,8 @@ export class BoardStore {
         return this.push(tx, op);
       case "slot_run":
         return this.slotRun(tx, op);
+      case "ci_run":
+        throw new BoardError("forbidden", "A CI run is reported by its CI system: POST /v1/runs with a CI token");
     }
   }
 
@@ -1674,7 +1708,94 @@ export class BoardStore {
       )
       .one().pk;
     const changes: Change[] = [["repo", null, op.repo], ["branch", null, op.branch], ["sha", null, op.sha], ["worker", null, ctx.worker], ["run", null, run?.id]];
-    return { ref, seq: tx.event("push", "pushes", pk, ref, changes) };
+    const seq = tx.event("push", "pushes", pk, ref, changes);
+    // A CI run on this commit that reported before the push ties now.
+    const untied = this.sql
+      .exec<{ pk: number; source: string; external_id: string }>(
+        "SELECT pk, source, external_id FROM ci_runs WHERE project = ? AND lower(repo) = lower(?) AND sha = ? AND worker IS NULL AND source != 'slot'",
+        p.pk,
+        op.repo,
+        op.sha,
+      )
+      .toArray();
+    for (const c of untied) {
+      const worker = this.tieCi(p, c.pk, op.repo, op.sha);
+      tx.event("push", "ci_runs", c.pk, `${c.source} ${c.external_id}`, [["worker", null, worker]]);
+    }
+    return { ref, seq };
+  }
+
+  /**
+   * A CI run (§10), upserted by its source and id: one post at its start, one at its end, in either
+   * order. Its project is fixed by its first post. An ended status is final, so a late start changes
+   * nothing, but what the run lacked is filled in. It ties to the worker whose push it ran on.
+   */
+  private reportCi(tx: Tx<Caller>, source: string, op: Op<"ci_run">): BoardResults["ci_run"] {
+    const ref = `${source} ${op.external_id}`;
+    const had = this.sql.exec<CiRunRow>("SELECT * FROM ci_runs WHERE source = ? AND external_id = ?", source, op.external_id).toArray()[0];
+    let p: ProjectRow;
+    if (had) {
+      p = this.sql.exec<ProjectRow>("SELECT * FROM projects WHERE pk = ?", had.project).one();
+      if (op.project !== undefined && op.project !== p.key) throw new BoardError("conflict", `Run ${ref} is ${p.key}'s, not ${op.project}'s`);
+    } else p = op.project !== undefined ? this.project(op.project) : this.projectOfRepo(op.repo ?? null);
+    tx.project(p);
+    const fields = ["url", "repo", "branch", "sha", "started_at", "ended_at"] as const;
+    if (!had) {
+      const pk = this.sql
+        .exec<{ pk: number }>(
+          `INSERT INTO ci_runs (source, external_id, project, name, url, repo, branch, sha, status, started_at, ended_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING pk`,
+          source,
+          op.external_id,
+          p.pk,
+          op.name,
+          ...fields.slice(0, 4).map((f) => op[f] ?? null),
+          op.status,
+          op.started_at ?? null,
+          op.ended_at ?? null,
+        )
+        .one().pk;
+      const tied = this.tieCi(p, pk, op.repo ?? null, op.sha ?? null);
+      const changes: Change[] = [["name", null, op.name], ["status", null, op.status], ...fields.map((f): Change => [f, null, op[f]]), ["worker", null, tied]];
+      return { ref, seq: tx.event("ci_run", "ci_runs", pk, ref, changes), tied };
+    }
+    const ended = CI_ENDED.has(had.status);
+    const cols: Record<string, SqlStorageValue> = {};
+    const changes: Change[] = [];
+    if (!ended && op.status !== had.status) (cols.status = op.status), changes.push(["status", had.status, op.status]);
+    for (const f of fields) {
+      const v = op[f];
+      if (v === undefined || v === null || v === had[f] || (ended && had[f] !== null)) continue;
+      cols[f] = v;
+      changes.push([f, had[f], v]);
+    }
+    const keys = Object.keys(cols);
+    if (keys.length > 0) this.sql.exec(`UPDATE ci_runs SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE pk = ?`, ...keys.map((k) => cols[k]!), had.pk);
+    // The push may come before the run or after it, so an untied run looks again each time.
+    const tied = had.worker ?? this.tieCi(p, had.pk, (cols.repo as string | undefined) ?? had.repo, (cols.sha as string | undefined) ?? had.sha);
+    if (had.worker === null && tied !== null) changes.push(["worker", null, tied]);
+    if (changes.length === 0) return { ref, seq: 0, tied };
+    return { ref, seq: tx.event("ci_run", "ci_runs", had.pk, ref, changes), tied };
+  }
+
+  /** Ties a CI run to the worker that pushed its commit, and so its session and tasks (§10). The worker, or null. */
+  private tieCi(p: ProjectRow, ciRun: number, repo: string | null, sha: string | null): string | null {
+    if (repo === null || sha === null) return null;
+    const push = this.sql
+      .exec<{ worker: string; run: number | null }>("SELECT worker, run FROM pushes WHERE project = ? AND lower(repo) = lower(?) AND sha = ?", p.pk, repo, sha)
+      .toArray()[0];
+    if (!push) return null;
+    const run = push.run === null ? undefined : this.sql.exec<RunRow>("SELECT * FROM runs WHERE pk = ?", push.run).one();
+    this.sql.exec("UPDATE ci_runs SET worker = ?, session = ? WHERE pk = ?", push.worker, run?.session ?? null, ciRun);
+    if (run) this.sql.exec("INSERT OR IGNORE INTO ci_run_tasks (project, ci_run, item) SELECT project, ?, item FROM run_tasks WHERE run = ?", ciRun, run.pk);
+    return push.worker;
+  }
+
+  /** The one project whose repos include `repo`, for a CI run that doesn't name its project. */
+  private projectOfRepo(repo: string | null): ProjectRow {
+    const rows = repo === null ? [] : this.sql.exec<ProjectRow>("SELECT p.* FROM project_repos r JOIN projects p ON p.pk = r.project WHERE lower(r.repo) = lower(?)", repo).toArray();
+    if (rows.length === 1) return rows[0]!;
+    throw new BoardError("invalid", repo === null ? "A CI run names its project, or a repo that is one project's" : `${repo} is ${rows.length === 0 ? "no" : "more than one"} project's repo: name the project`);
   }
 
   /** A run-slot run (§10): made at its grant, its status and end updated at its release. */
@@ -1967,11 +2088,11 @@ export class BoardStore {
 
 /** One write's caller, time and events. */
 /** A caller as the history names them: the owner's email, or an agent's address. */
-function whoOf(caller: BoardCaller): string {
-  return caller.kind === "owner" ? caller.email : `${caller.name}@${caller.laptop}`;
+function whoOf(caller: Caller): string {
+  return caller.kind === "owner" ? caller.email : caller.kind === "ci" ? caller.source : `${caller.name}@${caller.laptop}`;
 }
 
-class Tx {
+class Tx<C extends Caller = BoardCaller> {
   readonly at = new Date().toISOString();
   readonly seqs: number[] = [];
   readonly refs = new Set<string>();
@@ -1984,7 +2105,7 @@ class Tx {
 
   constructor(
     private readonly sql: SqlStorage,
-    readonly caller: BoardCaller,
+    readonly caller: C,
   ) {}
 
   /** Who, as the history names them. */

@@ -17,6 +17,9 @@ import {
 import { BoardError } from "./errors.ts";
 import { Rules } from "./rules.ts";
 
+/** Who may export or import (§11): the owner or a laptop, never a CI token. */
+export type Reader = Exclude<Identity, { kind: "ci" }>;
+
 // Export and import (ADR 0001 §11): the whole board as one document, rows with
 // refs instead of pks, in a stable order so the nightly git diff shows only what
 // changed; and that document brought back into projects the board doesn't have.
@@ -48,7 +51,7 @@ function ctxBlob(points: number[]): ArrayBuffer {
  * The board as one document for `by`: the owner gets every project; a laptop gets the projects its
  * read rules cover, and the rules for every project only with at least one of them.
  */
-export function exportBoard(sql: SqlStorage, by: Identity, source: string | null = "BobNet's board"): BoardExportV1 {
+export function exportBoard(sql: SqlStorage, by: Reader, source: string | null = "BobNet's board"): BoardExportV1 {
   const readable = by.kind === "owner" ? null : new Rules(sql).readableByLaptop(by.laptop);
   const all = <T extends Row>(q: string, ...args: unknown[]) => sql.exec<T>(q, ...args).toArray();
   const itemRef = new Map(all<Rows<{ item: number; ref: string }>>("SELECT item, ref FROM item_refs WHERE is_primary = 1").map((r) => [r.item, r.ref]));
@@ -301,7 +304,7 @@ export function exportBoard(sql: SqlStorage, by: Identity, source: string | null
 // ---------- Import ----------
 
 /** Who imports, as the Worker verified them: the owner, or a laptop (its supervisor's import command). */
-export type Importer = Identity;
+export type Importer = Reader;
 
 /** The highest n among ids `<prefix>-n` (and `<prefix>-n.m`), or 0. */
 function highest(refs: Iterable<string>, prefix: string): number {

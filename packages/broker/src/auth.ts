@@ -31,7 +31,20 @@ function laptopTokens(env: Env): Record<string, string> {
   return out;
 }
 
-/** Returns who the request is from, or null if it isn't the owner or a known laptop. */
+// CI_TOKENS and CI_TOKENS_<anything> map a CI system's client ID to its source
+// name (ADR 0001 §4, §10), merged the same way. The source is the token's, never the body's.
+function ciTokens(env: Env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (!/^CI_TOKENS(_\w+)?$/.test(name) || typeof value !== "string") continue;
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed !== "object" || parsed === null) throw new Error(`${name} must be a JSON object`);
+    Object.assign(out, parsed);
+  }
+  return out;
+}
+
+/** Returns who the request is from, or null if it isn't the owner, a known laptop or a known CI system. */
 export async function authenticate(req: Request, env: Env): Promise<Identity | null> {
   const token = req.headers.get("cf-access-jwt-assertion");
   if (!token || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD || !env.OWNER_EMAIL) return null;
@@ -52,7 +65,9 @@ export async function authenticate(req: Request, env: Env): Promise<Identity | n
       console.error("a laptop token maps to the board's reserved id", { commonName });
       return null;
     }
-    return laptop ? { kind: "laptop", laptop } : null;
+    if (laptop) return { kind: "laptop", laptop };
+    const source = ciTokens(env)[commonName];
+    return source ? { kind: "ci", source } : null;
   }
 
   const email = payload["email"];

@@ -379,6 +379,11 @@ export class Broker extends DurableObject<Env> {
     else this.send(ws, { t: "error", rid: frame.rid, code: reply.code, message: reply.message });
   }
 
+  /** A board write that came over HTTP (a CI run, ADR 0001 §10): the owners refetch. */
+  async boardChanged(changed: { project: string; seq: number; refs: string[] }): Promise<void> {
+    this.toOwners({ t: "board_changed", ...changed });
+  }
+
   /**
    * A message the board's write sends (ADR 0001 §7), from its reserved sender, stored and delivered as
    * any message is. A recipient that has never registered gets it when it does.
@@ -710,7 +715,8 @@ export class Broker extends DurableObject<Env> {
   // ---------- Housekeeping ----------
 
   private audit(conn: Conn, action: string, detail: Record<string, unknown>): void {
-    const actor = conn.identity.kind === "laptop" ? `laptop:${conn.identity.laptop}` : `owner:${conn.identity.email}`;
+    const id = conn.identity;
+    const actor = id.kind === "laptop" ? `laptop:${id.laptop}` : id.kind === "owner" ? `owner:${id.email}` : `ci:${id.source}`;
     this.sql.exec(
       "INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)",
       new Date().toISOString(),

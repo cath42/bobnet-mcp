@@ -359,6 +359,23 @@ export const BoardOp = z.discriminatedUnion("op", [
     branch: z.string().min(1).max(200),
     sha,
   }),
+  /**
+   * A CI run from anywhere (§10), posted to /v1/runs with a CI token at its start and its end: upserted
+   * by the token's source and `external_id`. `project` may be left out when `repo` is one project's.
+   */
+  z.object({
+    op: z.literal("ci_run"),
+    project: ProjectKey.optional(),
+    external_id: z.string().min(1).max(100),
+    name: z.string().trim().min(1).max(200),
+    url: z.string().url().max(500).nullable().optional(),
+    repo: z.string().min(1).max(200).nullable().optional(),
+    branch: z.string().min(1).max(200).nullable().optional(),
+    sha: z.string().regex(/^[0-9a-f]{40}$/).nullable().optional(),
+    status: CiStatus,
+    started_at: at.nullable().optional(),
+    ended_at: at.nullable().optional(),
+  }),
   /** A run-slot run (§10), reported at its grant and again at its release; external_id is unique to the laptop's run. */
   z.object({
     op: z.literal("slot_run"),
@@ -645,6 +662,8 @@ export interface BoardResults {
   run_start: BoardWritten & { unknown_tasks: string[] };
   run_end: BoardWritten;
   push: BoardWritten;
+  /** `tied`: the worker whose push the run ran on, once known. */
+  ci_run: BoardWritten & { tied: string | null };
   slot_run: BoardWritten;
 }
 

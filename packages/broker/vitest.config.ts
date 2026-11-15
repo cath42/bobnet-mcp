@@ -25,6 +25,9 @@ export default defineConfig({
           LAPTOP_TOKENS_MBP2: JSON.stringify({ "token-2.access": "mbp-2" }),
           // A token mapped to the board's reserved laptop id, which no laptop may take.
           LAPTOP_TOKENS_RESERVED: JSON.stringify({ "token-3.access": "Board" }),
+          // CI systems' tokens, by source (ADR 0001 §10).
+          CI_TOKENS: JSON.stringify({ "ci-1.access": "github-actions" }),
+          CI_TOKENS_BK: JSON.stringify({ "ci-2.access": "buildkite" }),
           TEST_SIGNING_JWK: JSON.stringify(privateJwk),
         },
         outboundService(req) {

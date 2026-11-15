@@ -1,3 +1,4 @@
+import type { BoardReply, BoardResults } from "@bobnet/protocol";
 import { authenticate } from "./auth.ts";
 
 export { Board } from "./board/board.ts";
@@ -29,6 +30,8 @@ export default {
     if (!identity) return new Response("Unauthorized", { status: 401 });
 
     if (url.pathname === "/v1/ws") {
+      // A CI token reports runs over HTTP and holds no socket (ADR 0001 §4).
+      if (identity.kind === "ci") return new Response("Forbidden", { status: 403 });
       if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
         return new Response("Expected a WebSocket upgrade", { status: 426 });
       }
@@ -46,15 +49,13 @@ export default {
     }
 
     // The board as one document (ADR 0001 §11): out for the nightly backup, in for new projects only.
-    if (url.pathname === "/v1/board/export" || url.pathname === "/v1/board/import") {
-      // The owner, or a laptop as far as its rules go; any other identity (CI's, §4) never gets the board.
-      if (identity.kind !== "owner" && identity.kind !== "laptop") return new Response("Forbidden", { status: 403 });
-    }
-    if (url.pathname === "/v1/board/export") {
+    // The owner, or a laptop as far as its rules go; any other identity (CI's, §4) never gets the board.
+    if ((url.pathname === "/v1/board/export" || url.pathname === "/v1/board/import") && identity.kind === "ci") return new Response("Forbidden", { status: 403 });
+    if (url.pathname === "/v1/board/export" && identity.kind !== "ci") {
       if (req.method !== "GET") return new Response("Method not allowed", { status: 405 });
       return json(await env.BOARD.getByName(BOARD).exportBoard(identity));
     }
-    if (url.pathname === "/v1/board/import") {
+    if (url.pathname === "/v1/board/import" && identity.kind !== "ci") {
       if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
       // A browser's cookie must not import on the owner's behalf from another site.
       if (identity.kind === "owner" && req.headers.get("origin") !== url.origin) return new Response("Forbidden origin", { status: 403 });
@@ -66,6 +67,29 @@ export default {
       }
       const reply = await env.BOARD.getByName(BOARD).importBoard(identity, doc);
       return json(reply, reply.ok ? 200 : reply.code === "conflict" ? 409 : reply.code === "forbidden" ? 403 : 400);
+    }
+
+    // A CI run's start or end, from any CI with a CI token (ADR 0001 §10). The source is the token's.
+    if (url.pathname === "/v1/runs") {
+      if (identity.kind !== "ci") return new Response("Forbidden", { status: 403 });
+      if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ ok: false, code: "invalid", message: "The body is not JSON" }, 400);
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) return json({ ok: false, code: "invalid", message: "The body is a JSON object" }, 400);
+      const { source, op: _op, ...run } = body as Record<string, unknown>;
+      if (source !== undefined && source !== identity.source) {
+        return json({ ok: false, code: "forbidden", message: `This token reports as ${identity.source}, not ${String(source)}` }, 403);
+      }
+      const reply = (await env.BOARD.getByName(BOARD).reportCi(identity.source, run)) as unknown as BoardReply;
+      if (!reply.ok) return json(reply, reply.code === "conflict" ? 409 : reply.code === "forbidden" ? 403 : reply.code === "unavailable" ? 503 : 400);
+      // The owners refetch, as after a board_op.
+      if (reply.changed) await env.BROKER.getByName(NETWORK).boardChanged(reply.changed);
+      const result = reply.result as BoardResults["ci_run"];
+      return json({ ok: true, ref: result.ref, tied: result.tied });
     }
 
     // The dashboard is for the owner only; laptops get the socket and nothing else.
