@@ -1,12 +1,12 @@
-# Review: the rest of BOB-2 (d824e95, cd8c98c, c0dbd0d, 8d7c1c5)
+# Review: the rest of BOB-2 (d824e95, cd8c98c, c0dbd0d, 8d7c1c5, 1518102)
 
-Toad, 2026-11-15. These are Luigi's four lands on v2 (handoff w_2bb286e8). I checked each against
+Toad, 2026-11-15. These are Luigi's four lands on v2 (handoff w_2bb286e8), plus his follow-up 1518102, which Mario added to this review. I checked each against
 the consult I answered for it: c_ef62b5e6, c_07660cc7, c_27511d4c and c_f3e94196 (option i). I read
 the diffs on origin/v2 at 8d7c1c5 and `docs/ci-reporting.md`. The rulings are now in ADR 0001: §5
 (close and undo), §8 (the view reads), §10 (CI, as built). §6 also records Luigi's later consult
 c_81cf334e: a release opens on its first `session_join` (board-writes 6 and 7, 6de7894).
 
-**Verdict: all four signed off, and they are deploy-ready together in one broker deploy, then rc.32.**
+**Verdict: all five signed off, and they are deploy-ready together in one broker deploy, then rc.32.**
 Nothing has to be fixed before the deploy. Finding 1 fixes docs that no deploy ships. Findings 2–4
 are small and can come later.
 
@@ -16,6 +16,7 @@ are small and can come later.
 | cd8c98c | The `waits` and `overview` reads; `ReleaseRecord.backlog` (§8) | Signed off, nothing to fix |
 | c0dbd0d | POST /v1/runs, `CI_TOKENS`, Identity kind `ci`, `reportCi` and the tie (§4, §10) | Signed off; finding 1 (docs), finding 2 (low) |
 | 8d7c1c5 | The gh adapter; `register.projects`; **broker migration 8** (§10) | Signed off; findings 3, 4 (low) |
+| 1518102 | `session_join` opens a planned release; refuses a start under a closed one (§6, c_81cf334e) | Signed off, nothing to fix |
 
 ## d824e95: close_release and undo
 
@@ -58,8 +59,7 @@ them into the ADR:
   `ReleaseRecord.backlog` is optional.
 
 Luigi's open question 1 (no op opens a release) is settled since. Peach's board-writes 6 says a
-release opens on its first session, and Luigi builds it per c_81cf334e (ADR §6). Until that lands,
-the overview's `release` is null for a project whose releases are all `planned`.
+release opens on its first session, and Luigi built it in 1518102 per c_81cf334e (ADR §6, below).
 
 ## c0dbd0d: POST /v1/runs
 
@@ -130,14 +130,31 @@ Also: `GhCiPoll.sent` is in memory. A restart re-reads the last 20 runs and re-p
 are no-op upserts. A report dropped before migration 8 isn't re-sent until its status changes, so
 rc.32 goes out after the deploy (below).
 
+## 1518102: a release opens on its first session
+
+This is c_81cf334e as answered, and as ADR §6 now records it:
+- **The refusal.** The closed-release check comes before the session is looked up or made, so it
+  refuses a rejoin as well as a new session. The undo hint appears only while the close is within
+  `UNDO_MS`.
+- **Opening.** The planned→open write is one `session_join` event on `releases`, in the same `Tx`
+  as `open_since`, and its seq is the reply's. It runs on a rejoin too, which is idempotent: only a
+  `planned` release changes.
+- **Closing.** A planned release can be closed, and undoing the close restores the status it
+  recorded.
+- **Edges, no change.** An `undo` of the `set_release` that put the feature there leaves the release
+  open: the open is the system's write, not Casper's, so his undo doesn't take it back. Casper can
+  close the release if it shouldn't have started. The refusal can only ever hit a Done feature (a
+  close moves the rest out), so a review or retro on a shipped feature is refused once the close is
+  past undo. That is Peach's to decide, and I've asked her.
+
 ## Deploy and release order
 
-All four are broker and supervisor changes in one tree, so there is **one broker deploy** at v2
-≥ 8d7c1c5 (the tip, which also carries this review), then **rc.32**:
+All five are broker and supervisor changes in one tree, so there is **one broker deploy** at v2
+≥ 8731d8e (which carries 1518102 and this review), then **rc.32**:
 
 1. **Broker deploy** (`pnpm run deploy` in `packages/broker`), only when Casper asks for it. It
    drops every connection, as always. Broker migration 8 runs by itself on the DO's start. There is
-   no Board migration in these four, and Board migration 2 is already live since 03:18Z.
+   no Board migration in these five, and Board migration 2 is already live since 03:18Z.
 2. **`CI_TOKENS` is not needed for rc.32**, or for anything in release 1 today. The gh adapter
    reports GitHub Actions without a secret, and without the secret `/v1/runs` simply refuses
    everyone. Add it when a pipeline should post: an Access service token added to the Access app,
@@ -153,7 +170,7 @@ All four are broker and supervisor changes in one tree, so there is **one broker
 1. **Reconnects.** Every agent shows connected again on the dashboard within a minute or two, as
    after the 03:18Z deploy. This is the only check before rc.32.
 2. **Export still version 1.** `GET /v1/board/export` (or the nightly backup) still parses, with
-   `version: 1`. The four lands change no export shape. `ci_runs` rows were already in it.
+   `version: 1`. The five lands change no export shape. `ci_runs` rows were already in it.
 3. **The adapter is quiet** (after poe restarts mbp-1's supervisor on rc.32). The supervisor's log
    shows no "a board report can't be made; dropped" for `ci_run`, and a land still pushes and
    reports. No live CI row can be checked yet. bobnet's repo has no GitHub Actions workflows
