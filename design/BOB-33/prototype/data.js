@@ -11,10 +11,10 @@ window.SAMPLE = {
     { key: "helix", name: "Helix", lead: "Bob", po: "Picard" },
   ],
 
-  // The lead's note: the latest per project (BOB-36).
+  // The lead's note: the latest per project (BOB-36), at most 600 characters. Helix's is near the limit.
   notes: {
     bobnet: { by: "Mario", ago: 292, text: "BOB-30 landed: the nightly backup now pushes board.json to its remote. BOB-31 is in its build; Luigi then Toad's review, so expect its review gate by morning. The broker deploy waits for poe's window at Helix's LAND-52 review close." },
-    helix: { by: "Bob", ago: 32, text: "LAND-52 passed review and is Done. LAND-49's Fixes 2 closed 17 of 20 tasks, but Review 3 sent 49.17 back a third time: the e2e map step fails since the tile server's key rotated. Howard is waiting on your permission to use the new key; until then CI stays red." },
+    helix: { by: "Bob", ago: 32, text: "LAND-52 passed review and is Done, so rehearsal 2 can use the one-step reset. LAND-49's Fixes 2 closed 17 of 20 tasks, but Review 3 sent 49.17 back a third time: the e2e map step fails since the tile server's key rotated, and that is also why CI is red on v2. Howard is waiting on your permission to put the new key in the e2e config; once he has it he reruns e2e and lands 49.17. Marvin's run was lost in the 04:58 restart and is back on 49.21's typecheck. Q-258 (the second company on staging) still holds 49.19 and LAND-49's close." },
   },
 
   // Needs you: the same open waits as the Overview and Waits on you. Open now; "ago" is when it started waiting.
@@ -48,13 +48,11 @@ window.SAMPLE = {
   releases: [
     { p: "helix", ref: "R0", title: "R0 Sign in and connect", ago: 8200 },
   ],
-  deploys: [
-    { p: "bobnet", what: "Broker deployed, version 44945736: carries run_remote", ago: 205 },
-    { p: "bobnet", what: "Broker deployed, version 2be1c07a: the roadmap and gates", ago: 4650 },
-  ],
+  // Deploys aren't recorded (ADR 0005 §7, BOB-41), so the page shows none.
 
   // Closed sessions. dur: minutes the session ran (for usage in a span). need: none | answer | casper.
-  // findings: review blockers and majors, with their theme (BOB-35 records themes at close).
+  // findings: review blockers and majors, and a retro's findings, with their theme (BOB-35: one of sixteen, set at
+  // the close). Closes before themesFrom have theme null: "untagged", never guessed. Retros before it have no findings.
   sessions: [
     { p: "bobnet", f: "BOB-31", kind: "design", label: "Spec", who: "Daisy", ago: 400, dur: 70, need: "none", tokens: 3.1e6, commit: "8864520",
       summary: "Spec and prototype: a cut question opens in place, on the Overview and on Waits on you." },
@@ -73,10 +71,10 @@ window.SAMPLE = {
     { p: "bobnet", f: "BOB-33", kind: "design", label: "Requirements", who: "Peach", ago: 150, dur: 60, need: "answer", tokens: 4.0e6,
       summary: "Requirements for the Status tab; Q-2 to Q-5 asked and answered." },
     { p: "bobnet", f: "BOB-31", kind: "review", label: "Review 1", who: "Toad", ago: 120, dur: 45, need: "none", tokens: 2.4e6, majors: 1, sentBack: 1,
-      findings: [{ sev: "major", theme: "evidence", text: "No phone shot of an open line" }],
+      findings: [{ sev: "major", theme: "tests", text: "No phone shot of an open line" }],
       summary: "One major: the open state has no phone shot. Sent BOB-31.2 back." },
     { p: "helix", f: "LAND-49", kind: "review", label: "Review 3", who: "Bill", ago: 95, dur: 110, need: "answer", tokens: 9.8e6, majors: 2, sentBack: 2,
-      findings: [{ sev: "major", theme: "flaky e2e", text: "e2e map step fails on a cold start (49.17)" }, { sev: "major", theme: "evidence", text: "49.21 has no screenshot for its criterion" }],
+      findings: [{ sev: "major", theme: "performance", text: "e2e map step fails on a cold start (49.17)" }, { sev: "major", theme: "tests", text: "49.21 has no screenshot for its criterion" }],
       summary: "Two majors. Sent back 49.17 (third time) and 49.21. Waits on Q-258 for the second company." },
     { p: "bobnet", f: "BOB-31", kind: "build", label: "Fixes", who: "Luigi", ago: 74, dur: 40, need: "casper", tokens: 2.2e6, commit: "c7a10d3",
       summary: "Added the phone shot of an open line. The review gate is Casper's." },
@@ -94,47 +92,51 @@ window.SAMPLE = {
     { p: "helix", f: "LAND-52", kind: "design", label: "Spec", who: "Picard", ago: 2000, dur: 80, need: "none", tokens: 3.3e6,
       summary: "What rehearsal 1 found, as LAND-52's criteria: reset, script, second company." },
     { p: "bobnet", f: "BOB-5", kind: "retro", label: "Retro", who: "Mario", ago: 2600, dur: 20, need: "none", tokens: 1.1e6,
-      retro: ["stale tip"], summary: "Land ran the whole check on a stale tip again and failed after 9 minutes." },
+      findings: [{ sev: "finding", theme: "tooling", text: "Land ran the whole check on a stale tip again and failed after 9 minutes" }],
+      summary: "Land ran the whole check on a stale tip again and failed after 9 minutes." },
     { p: "bobnet", f: "BOB-5", kind: "review", label: "Review 1", who: "Toad", ago: 4300, dur: 50, need: "none", tokens: 3.0e6, majors: 1, sentBack: 1,
-      findings: [{ sev: "major", theme: "evidence", text: "No phone shot of the answered state" }],
+      findings: [{ sev: "major", theme: "tests", text: "No phone shot of the answered state" }],
       summary: "One major: the answered state has no phone shot." },
     { p: "helix", f: "LAND-49", kind: "review", label: "Review 2", who: "Bill", ago: 2900, dur: 130, need: "none", tokens: 6.1e6, blockers: 1, sentBack: 20,
-      findings: [{ sev: "blocker", theme: "flaky e2e", text: "The demo flow's e2e fails one run in three on the map tiles" }],
+      findings: [{ sev: "blocker", theme: "performance", text: "The demo flow's e2e fails one run in three on the map tiles" }],
       summary: "One blocker, twenty tasks back to Fixes 2." },
     { p: "helix", f: "LAND-49", kind: "build", label: "Fixes 1", who: "Howard", ago: 4400, dur: 190, need: "none", tokens: 13.4e6, commit: "e0b4d55",
       summary: "Rehearsal 1's findings fixed but 49.17; staging seeded for the rehearsal." },
     { p: "bobnet", f: "BOB-3", kind: "retro", label: "Retro", who: "Mario", ago: 5000, dur: 20, need: "none", tokens: 0.9e6,
-      retro: ["stale tip"], summary: "Two lands failed on a stale tip; each cost a full check." },
+      findings: [{ sev: "finding", theme: "tooling", text: "Two lands failed on a stale tip; each cost a full check" }],
+      summary: "Two lands failed on a stale tip; each cost a full check." },
     { p: "bobnet", f: "BOB-3", kind: "review", label: "Review 1", who: "Toad", ago: 7100, dur: 60, need: "none", tokens: 3.2e6, majors: 1, sentBack: 1,
-      findings: [{ sev: "major", theme: "evidence", text: "Roadmap unfolded: no phone shot" }],
+      findings: [{ sev: "major", theme: null, text: "Roadmap unfolded: no phone shot" }],
       summary: "One major: no phone shot of the unfolded roadmap." },
     { p: "helix", f: "LAND-43", kind: "retro", label: "Retro", who: "Bob", ago: 9000, dur: 25, need: "none", tokens: 1.2e6,
-      retro: ["brief named no tasks"], summary: "The brief didn't name the tasks; Howard picked two that Marvin was on." },
+      summary: "The brief didn't name the tasks; Howard picked two that Marvin was on." },
+    { p: "helix", f: "LAND-44", kind: "review", label: "Review 1", who: "Bill", ago: 8100, dur: 90, need: "none", tokens: 4.2e6, blockers: 1, sentBack: 1,
+      findings: [{ sev: "blocker", theme: null, text: "The walk-through's sign-in loops on Safari" }],
+      summary: "One blocker: sign-in loops on Safari." },
     // Older than a week: in Recurring problems only (it looks back 4 weeks).
     { p: "helix", f: "LAND-49", kind: "review", label: "Review 1", who: "Bill", ago: 13000, dur: 120, need: "none", tokens: 5.8e6, majors: 1, sentBack: 1,
-      findings: [{ sev: "major", theme: "flaky e2e", text: "Map tiles time out on a cold start in e2e (49.17)" }], summary: "" },
+      findings: [{ sev: "major", theme: null, text: "Map tiles time out on a cold start in e2e (49.17)" }], summary: "" },
     { p: "bobnet", f: "BOB-1", kind: "retro", label: "Retro", who: "Mario", ago: 12500, dur: 20, need: "none", tokens: 0.8e6,
-      retro: ["stale tip"], summary: "" },
+      summary: "" },
     { p: "helix", f: "LAND-44", kind: "retro", label: "Retro", who: "Bob", ago: 25000, dur: 20, need: "none", tokens: 1.0e6,
-      retro: ["brief named no tasks"], summary: "" },
+      summary: "" },
     { p: "helix", f: "LAND-46", kind: "review", label: "Review 1", who: "Bill", ago: 30000, dur: 90, need: "none", tokens: 4.4e6, majors: 1,
-      findings: [{ sev: "major", theme: "flaky e2e", text: "The whole-flow test retries hide a real flake" }], summary: "" },
+      findings: [{ sev: "major", theme: null, text: "The whole-flow test retries hide a real flake" }], summary: "" },
   ],
 
-  // Lands besides the sessions' own commits: the leads' plan and board commits.
+  // Lands besides the sessions' own commits: the leads' plan and board commits. The page shows lands as a count only.
   lands: [
     { p: "bobnet", sha: "1be42ad", who: "Mario", what: "plan: deploy window = LAND-52 review close", ago: 330 },
     { p: "bobnet", sha: "6389489", who: "Mario", what: "plan: broker deployed 44945736", ago: 200 },
     { p: "helix", sha: "5d10a77", who: "Bob", what: "plan: LAND-49 Fixes 3 next", ago: 90 },
   ],
 
-  // Sent back twice or more (in 4 weeks).
+  // Sent back in two or more closes (looking back 30 days).
   sentBack: [
     { p: "helix", ref: "LAND-49.17", title: "Map tiles load on a cold start in e2e", times: [["Review 1", 13000], ["Review 2", 2900], ["Review 3", 95]] },
   ],
-  // Retro findings that came back: the backlog item it became, if any.
-  retroItems: { "stale tip": { p: "bobnet", ref: "BOB-11", title: "Land refuses a stale tip before the check", status: "Ready", release: null },
-                "brief named no tasks": null },
+  // Themes were first tagged at this close (Thu 12 Nov ~09:32): BOB-35 shipped then, in this sample.
+  themesFrom: 5800,
 
   // What's stuck: open now. Each settles (and leaves) when its source says so.
   stuck: [
@@ -150,6 +152,7 @@ window.SAMPLE = {
   settled: [
     { p: "bobnet", text: "Luigi's run on BOB-31 Build 1 stopped at the context limit; restarted at 02:05 and closed", ago: 172 },
     { p: "helix", text: "Q-257 answered at 23:40; LAND-52 Build 2 went on", ago: 392 },
+    { p: "helix", text: "Marvin's run on LAND-49.21 was lost when the supervisor restarted at 04:58; a new run started at 05:20", ago: 52 },
   ],
 
   // Backlog health: now, not in the span.
@@ -170,15 +173,19 @@ window.SAMPLE = {
     },
   },
 
-  // Usage beyond the sessions above: running agents and leads, as [who, role, project, from ago, to ago, tokens].
+  // Runs besides the sessions above, as [who, project, ended ago, tokens, outcome]. A run counts once, whole, in the
+  // span it ended in (ADR 0005 §2). ended null: running now, from the laptop's snapshot, not on the board yet.
+  // outcome "lost": its end wasn't seen (a supervisor restart), so its tokens are unknown, never zero.
   runs: [
-    ["Mario", "lead", "bobnet", 10080, 0, 58e6], ["Bob", "lead", "helix", 10080, 0, 74e6],
-    ["Daisy", "designer", "bobnet", 25, 0, 1.8e6], ["Howard", "engineer", "helix", 6, 0, 0.6e6],
-    ["Marvin", "tester", "helix", 160, 0, 9.4e6], ["Picard", "product owner", "helix", 120, 60, 2.1e6],
-    ["Luigi", "engineer", "bobnet", 10080, 1440, 61e6], ["Toad", "architect", "bobnet", 10080, 1440, 14e6],
-    ["Peach", "product owner", "bobnet", 10080, 1440, 12e6], ["Daisy", "designer", "bobnet", 10080, 1440, 16e6],
-    ["Howard", "engineer", "helix", 10080, 1440, 88e6], ["Marvin", "tester", "helix", 10080, 1440, 41e6],
-    ["Bill", "reviewer", "helix", 10080, 1440, 19e6], ["Picard", "product owner", "helix", 10080, 1440, 9e6],
+    ["Mario", "bobnet", null, 5.8e6], ["Bob", "helix", null, 7.4e6], ["Daisy", "bobnet", null, 1.8e6],
+    ["Howard", "helix", null, 0.6e6], ["Marvin", "helix", null, 2.2e6],
+    ["Mario", "bobnet", 300, 9.1e6, "done"], ["Bob", "helix", 260, 11.3e6, "done"],
+    ["Picard", "helix", 60, 2.1e6, "done"], ["Marvin", "helix", 74, 0, "lost"],
+    ["Mario", "bobnet", 1500, 21e6, "done"], ["Bob", "helix", 1500, 26e6, "done"],
+    ["Luigi", "bobnet", 3000, 41e6, "done"], ["Toad", "bobnet", 3200, 9e6, "done"],
+    ["Peach", "bobnet", 4000, 8e6, "done"], ["Daisy", "bobnet", 5000, 12e6, "done"],
+    ["Howard", "helix", 3500, 52e6, "done"], ["Marvin", "helix", 2500, 31e6, "done"],
+    ["Bill", "helix", 6000, 11e6, "done"], ["Picard", "helix", 7000, 6e6, "done"], ["Marvin", "helix", 6500, 0, "lost"],
   ],
   roles: { Mario: "lead", Peach: "product owner", Daisy: "designer", Toad: "architect", Luigi: "engineer",
            Bob: "lead", Picard: "product owner", Howard: "engineer", Marvin: "tester", Bill: "reviewer", Bender: "reviewer" },

@@ -5,12 +5,12 @@
 
 const S = window.SAMPLE;
 const KEY = "bobnet.status.proto";
-const START = { anchor: S.lastVisit, span: "visit", device: "returning", broker: "live", open: {}, toast: null };
+const START = { anchor: S.lastVisit, span: "visit", device: "returning", broker: "live", ships: "all", open: {}, toast: null };
 const load = () => { try { return { ...START, ...JSON.parse(sessionStorage.getItem(KEY) ?? "{}") }; } catch { return { ...START }; } };
 const state = load();
 const save = () => sessionStorage.setItem(KEY, JSON.stringify(state));
 
-const WEEK = 7 * 1440, DAY = 1440, FOUR_WEEKS = 4 * WEEK;
+const WEEK = 7 * 1440, DAY = 1440, MONTH = 30 * DAY;
 const DAYS = ["Mon", "Sun", "Sat", "Fri", "Thu", "Wed", "Tue", "Mon"];
 const DATES = [16, 15, 14, 13, 12, 11, 10, 9];
 
@@ -40,14 +40,18 @@ function clock(a) {
 }
 function age(a) {
   if (a < 1) return "just now";
-  if (a < 60) return `${a} min`;
-  if (a < DAY) { const hrs = Math.floor(a / 60), mins = a % 60; return hrs < 3 && mins >= 10 ? `${hrs} h ${mins} min` : `${hrs} h`; }
-  return `${Math.floor(a / DAY)} d`;
+  if (a < 60) return `${a}\u00a0min`;
+  if (a < DAY) { const hrs = Math.floor(a / 60), mins = a % 60; return hrs < 3 && mins >= 10 ? `${hrs}\u00a0h ${mins}\u00a0min` : `${hrs}\u00a0h`; }
+  return `${Math.floor(a / DAY)}\u00a0d`;
 }
 const ago = (a) => (a < 1 ? "just now" : `${age(a)} ago`);
 const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many ?? one + "s"}`;
 const proj = (k) => S.projects.find((p) => p.key === k);
+// The prototype's "ships" switch: BOB-33 ships first; the lead's note (BOB-36) and themes (BOB-35) come later.
+const hasNotes = () => state.ships === "all";
+const hasThemes = () => state.ships === "all";
+const noteOf = (k) => (hasNotes() ? S.notes[k] : null);
 
 /* The span. */
 const firstVisit = () => state.device === "first" && state.anchor == null;
@@ -73,47 +77,52 @@ const settledOf = (ps) => of(S.settled, ps).filter((x) => inSpan(x.ago));
 function doneOf(ps) {
   const sessions = of(S.sessions, ps).filter((s) => inSpan(s.ago) && s.summary).sort((a, b) => a.ago - b.ago);
   const features = of(S.done, ps).filter((d) => inSpan(d.ago)).sort((a, b) => a.ago - b.ago);
-  const lands = [
-    ...sessions.filter((s) => s.commit).map((s) => ({ p: s.p, sha: s.commit, who: s.who, what: `${s.f} ${s.label}`, ago: s.ago })),
-    ...of(S.lands, ps).filter((l) => inSpan(l.ago)),
-  ].sort((a, b) => a.ago - b.ago);
-  const deploys = of(S.deploys, ps).filter((d) => inSpan(d.ago));
+  // Lands are a count only (ADR 0005 §2); deploys aren't recorded (§7).
+  const lands = sessions.filter((s) => s.commit).length + of(S.lands, ps).filter((l) => inSpan(l.ago)).length;
   const releases = of(S.releases, ps).filter((r) => inSpan(r.ago));
-  return { sessions, features, lands, deploys, releases };
+  return { sessions, features, lands, releases };
 }
+// ADR 0005 §4: findings of closes in the span, grouped by theme (one of sixteen) or "untagged"; a theme "came back"
+// when it is in 2 or more sessions over the last 30 days, one of them in the span. Sent back: 2 or more closes in 30 days.
 function recurringOf(ps) {
-  const recent = of(S.sessions, ps).filter((s) => s.ago <= FOUR_WEEKS);
-  const themes = new Map();
-  for (const s of recent) for (const f of s.findings ?? []) {
-    const k = `${s.p}/${f.theme}`;
-    if (!themes.has(k)) themes.set(k, { p: s.p, theme: f.theme, hits: [] });
-    themes.get(k).hits.push({ ...f, s });
+  if (!hasThemes()) return null;
+  const closes = of(S.sessions, ps).filter((s) => s.findings && s.ago <= MONTH);
+  const groups = new Map();
+  for (const s of closes.filter((s) => inSpan(s.ago))) for (const f of s.findings) {
+    const t = f.theme ?? "untagged";
+    if (!groups.has(t)) groups.set(t, { theme: t, hits: [], sessions: new Set() });
+    groups.get(t).hits.push({ ...f, s });
+    groups.get(t).sessions.add(s);
   }
-  const retros = new Map();
-  for (const s of recent) for (const r of s.retro ?? []) {
-    const k = `${s.p}/${r}`;
-    if (!retros.has(k)) retros.set(k, { p: s.p, finding: r, hits: [] });
-    retros.get(k).hits.push(s);
-  }
-  const back = (agos) => agos.length > 1 && agos.some(inSpan);
-  const t = [...themes.values()].filter((x) => x.hits.length > 1).map((x) => ({ ...x, back: back(x.hits.map((h) => h.s.ago)) }));
-  const sb = of(S.sentBack, ps).filter((x) => x.times.length > 1).map((x) => ({ ...x, back: back(x.times.map((t) => t[1])) }));
-  const r = [...retros.values()].filter((x) => x.hits.length > 1).map((x) => ({ ...x, back: back(x.hits.map((s) => s.ago)) }));
-  const all = [...t, ...sb, ...r];
-  return { themes: t, sentBack: sb, retros: r, total: all.length, back: all.filter((x) => x.back).length };
+  const in30 = (t) => new Set(closes.filter((s) => s.findings.some((f) => f.theme === t)).map((s) => `${s.p}/${s.f}/${s.label}`)).size;
+  const themes = [...groups.values()].map((g) => ({ ...g, back: g.theme !== "untagged" && in30(g.theme) > 1, in30: in30(g.theme) }))
+    .sort((x, y) => (x.theme === "untagged") - (y.theme === "untagged") || y.back - x.back || y.hits.length - x.hits.length);
+  const sentBack = of(S.sentBack, ps).map((x) => ({ ...x, times: x.times.filter((t) => t[1] <= MONTH) }))
+    .filter((x) => x.times.length > 1 && x.times.some((t) => inSpan(t[1])));
+  const tagged = themes.filter((t) => t.theme !== "untagged");
+  const untagged = themes.find((t) => t.theme === "untagged");
+  const back = tagged.filter((t) => t.back).length + sentBack.length;
+  return { themes, tagged, untagged, sentBack, back, findings: themes.reduce((n, t) => n + t.hits.length, 0) };
 }
+// ADR 0005 §2: tokens of runs that ended in the span, each run once and whole. A lost run's tokens are unknown,
+// counted apart, never as zero. Running now comes from the laptops' snapshots and isn't in the total.
 function usageOf(ps) {
-  const span = spanAgo();
-  const part = (from, to, n) => (to >= span ? 0 : n * (Math.min(from, span) - to) / (from - to));
   const by = new Map();
-  const add = (who, p, n) => { if (n <= 0) return; const k = `${p}/${who}`; by.set(k, { who, p, n: (by.get(k)?.n ?? 0) + n }); };
-  for (const s of of(S.sessions, ps)) add(s.who, s.p, part(s.ago + s.dur, s.ago, s.tokens));
-  for (const [who, , p, from, to, n] of S.runs) if (ps.includes(p)) add(who, p, part(from, to, n));
+  const row = (who, p) => { const k = `${p}/${who}`; if (!by.has(k)) by.set(k, { who, p, n: 0, lost: 0 }); return by.get(k); };
+  for (const s of of(S.sessions, ps)) if (inSpan(s.ago)) row(s.who, s.p).n += s.tokens;
+  const running = [];
+  for (const [who, p, ended, n, outcome] of S.runs) {
+    if (!ps.includes(p)) continue;
+    if (ended == null) running.push({ who, p, n });
+    else if (inSpan(ended)) { if (outcome === "lost") row(who, p).lost++; else row(who, p).n += n; }
+  }
   const agents = [...by.values()].sort((a, b) => b.n - a.n);
   const heavy = of(S.sessions, ps).filter((s) => inSpan(s.ago) && s.tokens > 2 * S.usual[s.kind])
     .map((s) => ({ ...s, x: s.tokens / S.usual[s.kind] }));
-  return { total: agents.reduce((t, a) => t + a.n, 0), agents, heavy };
+  return { total: agents.reduce((t, a) => t + a.n, 0), lost: agents.reduce((t, a) => t + a.lost, 0), agents, heavy,
+    running: running.sort((a, b) => b.n - a.n) };
 }
+const unknown = (n) => `${plural(n, "run")}' tokens unknown`.replace("1 run'", "1 run's");
 function backlogOf(p) {
   const b = S.backlog[p];
   const thin = b.ready.length < 2 && b.release.left > 0;
@@ -131,14 +140,15 @@ function verdict(ps) {
   parts.push(`${done} done`);
   return { tone, word, sub: parts.join(" · "), done, stuck: stuck.length, ci: ci.length > 0 };
 }
-/* A lead's note is old when newer facts follow it: sessions closed, lands, stuck and needs after it. */
+/* A lead's note is old when newer facts follow it (ADR 0005 §5 `newer`): sessions closed, features Done, releases closed. */
 function newerThanNote(p) {
-  const n = S.notes[p];
-  if (!n) return 0;
+  const n = noteOf(p);
+  if (!n) return { n: 0, words: "" };
   const after = (a) => a < n.ago;
-  return of(S.sessions, [p]).filter((s) => after(s.ago)).length + of(S.lands, [p]).filter((l) => after(l.ago)).length
-    + of(S.deploys, [p]).filter((d) => after(d.ago)).length + of(S.stuck, [p]).filter((s) => after(s.ago)).length
-    + of(S.needs, [p]).filter((x) => after(x.ago)).length;
+  const c = [of(S.sessions, [p]).filter((s) => after(s.ago)).length, of(S.done, [p]).filter((d) => after(d.ago)).length,
+    of(S.releases, [p]).filter((r) => after(r.ago)).length];
+  const words = [c[0] && plural(c[0], "session") + " closed", c[1] && plural(c[1], "feature") + " Done", c[2] && plural(c[2], "release") + " closed"].filter(Boolean).join(", ");
+  return { n: c[0] + c[1] + c[2], words };
 }
 
 /* Small parts. */
@@ -226,7 +236,7 @@ function digest() {
       h("div", { class: "pcards" }, S.projects.map(pcard))),
     h("section", { id: "needs" }, h("h2", null, "Needs you ", h("span", { class: "count" }, String(n.length))),
       n.length ? h("div", { class: "card st-card" }, h("ul", { class: "lines ov-needs st-needs" }, n.map((w) => needLine(w, true))),
-        h("a", { class: "more", href: "#waits" }, "Answer them on Waits on you →"))
+        h("a", { class: "more-t sec-link", href: "#waits" }, "Answer them on Waits on you →"))
         : h("div", { class: "empty-card" }, "Nothing waits on you.")),
     h("div", { class: "caught-foot" },
       h("button", { type: "button", class: "primary", onclick: caughtUp }, "I'm caught up"),
@@ -235,7 +245,7 @@ function digest() {
 
 function pcard(p) {
   const k = p.key, v = verdict([k]), n = needsOf([k]), d = doneOf([k]), rc = recurringOf([k]), bl = backlogOf(k), u = usageOf([k]);
-  const note = S.notes[k], old = newerThanNote(k);
+  const note = noteOf(k), old = newerThanNote(k).n;
   const stuck = stuckOf([k]);
   return h("a", { class: "pcard card", href: `#status/${k}`, dataset: { tone: v.tone } },
     h("div", { class: "top" }, h("span", { class: "name" }, p.name), badge(v.tone === "ok" ? "running" : v.tone === "warn" ? "waiting" : "failed", v.word), h("span", { class: "chev", "aria-hidden": "true" }, "›")),
@@ -244,10 +254,10 @@ function pcard(p) {
       stat("Needs you", n.length, n.some((x) => x.blocking) ? "bad" : n.length ? "warn" : null),
       stat("Done", d.sessions.length, null, d.features.length ? `${plural(d.features.length, "feature")}` : null),
       stat("Stuck", stuck.length, stuck.some((x) => x.sev === "bad") ? "bad" : stuck.length ? "warn" : null),
-      stat("Tokens", tok(u.total), null)),
+      stat("Tokens", tok(u.total), null, u.lost ? `+ ${u.lost} unknown` : null)),
     h("div", { class: "pflags" },
       stuck.filter((x) => x.sev === "bad").map((x) => badge("failed", x.label)),
-      rc.back ? badge("waiting", `${rc.back} recurring came back`) : null,
+      rc?.back ? badge("waiting", `${rc.back} came back`) : null,
       bl.thin ? badge("waiting", "backlog thin") : null,
       bl.nextEmpty ? badge("ready", `${bl.nextEmpty.ref} has nothing Ready`) : null));
 }
@@ -258,7 +268,7 @@ const SECS = ["needs", "done", "stuck", "recurring", "backlog", "usage"];
 function projectPage(k, focus) {
   const p = proj(k);
   if (!p) return h("p", null, "No such project.");
-  const note = S.notes[k];
+  const note = noteOf(k);
   const wide = matchMedia("(min-width: 700px)").matches;
   const isOpen = (sec) => state.open[`${k}/${sec}`] ?? (focus === sec || wide);
   return h("div", { class: "st" },
@@ -274,10 +284,12 @@ function projectPage(k, focus) {
 
 function leadNote(k, n) {
   const old = newerThanNote(k);
-  return h("div", { class: "lead-note card", dataset: { old: String(old > 0) } },
+  return h("div", { class: "lead-note card", dataset: { old: String(old.n > 0) } },
     h("div", { class: "ln-h" }, h("b", null, `${n.by}'s note`), h("span", null, `${S.roles[n.by]} · ${clock(n.ago)}, ${ago(n.ago)}`),
-      old ? h("span", { class: "old" }, `${plural(old, "thing")} happened since`) : null),
-    h("p", null, n.text));
+      old.n ? h("span", { class: "old", title: old.words }, `${plural(old.n, "thing")} since: ${old.words}`) : null),
+    h("p", { class: "ln-t" }, n.text),
+    // Up to 600 characters: on a phone a long note folds to five lines.
+    n.text.length > 280 ? h("button", { type: "button", class: "more-t ln-more", onclick: (e) => { const c = e.target.closest(".lead-note"); c.classList.toggle("full"); e.target.textContent = c.classList.contains("full") ? "Show less" : "Show all"; } }, "Show all") : null);
 }
 
 function section(k, sec, open) {
@@ -314,22 +326,18 @@ const BODY = {
   },
   done(k) {
     const d = doneOf([k]);
-    const parts = [d.features.length && plural(d.features.length, "feature") + " Done", plural(d.sessions.length, "session") + " closed", plural(d.lands.length, "land"),
-      d.deploys.length && plural(d.deploys.length, "deploy"), d.releases.length && plural(d.releases.length, "release") + " closed"].filter(Boolean);
-    const nothing = !d.sessions.length && !d.lands.length && !d.features.length;
+    const parts = [d.features.length && plural(d.features.length, "feature") + " Done", plural(d.sessions.length, "session") + " closed", plural(d.lands, "land"),
+      d.releases.length && plural(d.releases.length, "release") + " closed"].filter(Boolean);
+    const nothing = !d.sessions.length && !d.lands && !d.features.length;
     return {
       title: "What got done", count: String(d.sessions.length), scope: scopeSpan(), tone: null,
       headline: nothing ? `Nothing closed since ${since()}` : parts.join(" · "),
-      el: nothing ? empty(`Nothing closed, landed or deployed since ${since()}.`) : [
-        h("p", { class: "counts-line" }, parts.join(" · ")),
+      el: nothing ? empty(`Nothing closed or landed since ${since()}.`) : [
         d.features.length || d.releases.length ? h("div", { class: "grp" }, h("h3", null, "Moved to Done"),
           h("ul", { class: "rows" }, d.releases.map((r) => h("li", null, badge("done", "release"), h("span", null, rec(r.ref), r.title.replace(/^R\d+ /, "")), h("time", null, clock(r.ago)))),
             d.features.map((f) => h("li", null, badge(f.bug ? "bug" : "done", f.bug ? "bug fixed" : "Done"), h("span", null, rec(f.ref), f.title), h("time", null, clock(f.ago)))))) : null,
         d.sessions.length ? h("div", { class: "grp" }, h("h3", null, "Sessions closed"),
           h("ul", { class: "rows sess" }, more(d.sessions, 5, sessionRow, "sessions"))) : null,
-        d.lands.length || d.deploys.length ? h("div", { class: "grp" }, h("h3", null, "Lands and deploys"),
-          h("ul", { class: "rows lands" }, d.deploys.map((x) => h("li", null, badge("open", "deploy"), h("span", null, x.what), h("time", null, clock(x.ago)))),
-            more(d.lands, 4, (l) => h("li", null, h("code", null, l.sha), h("span", null, h("b", null, l.who), " ", l.what), h("time", null, clock(l.ago))), "lands"))) : null,
       ],
     };
   },
@@ -351,31 +359,31 @@ const BODY = {
   },
   recurring(k) {
     const r = recurringOf([k]);
-    const back = (x) => (x.back ? h("span", { class: "back-tag" }, `came back since ${since()}`) : null);
+    if (!r) return { title: "Recurring problems", count: "–", scope: "", tone: null, headline: "Comes with theme tags (BOB-35)",
+      el: empty("Review findings get a theme when their session closes, from BOB-35 on. Until then this section has nothing to group.") };
+    const sess = (s) => [rec(s.f), ` ${s.label}`];
+    const sev = { blocker: "blocker", major: "major", finding: "retro" };
+    const group = (t) => h("li", { dataset: { untagged: String(t.theme === "untagged") } },
+      h("span", { class: "theme" }, t.theme),
+      h("span", { class: "what" },
+        h("span", null, `${plural(t.hits.length, "finding")} in ${plural(t.sessions.size, "session")} `,
+          t.back ? h("span", { class: "back-tag" }, `came back: ${t.in30} sessions in 30 days`) : null,
+          t.theme === "untagged" ? h("span", { class: "m" }, " Closed without a theme; never guessed.") : null),
+        h("ul", { class: "hits" }, t.hits.sort((a, b) => a.s.ago - b.s.ago).map((x) => h("li", null, sess(x.s), `, ${sev[x.sev]}: ${x.text}`, h("span", { class: "m" }, ` · ${age(x.s.ago)}`))))));
     return {
-      title: "Recurring problems", count: String(r.total), scope: "last 4 weeks", tone: r.back ? "warn" : null,
-      headline: r.total ? `${r.back} came back since ${since()} · ${r.themes.length} review ${r.themes.length === 1 ? "theme" : "themes"}, ${r.sentBack.length} sent back, ${r.retros.length} retro` : "Nothing came up twice",
+      title: "Recurring problems", count: String(r.back), scope: `since ${since()} · repeats: 30 days`, tone: r.back ? "warn" : null,
+      headline: r.findings || r.sentBack.length
+        ? [r.back ? `${r.back} came back` : "Nothing came back", plural(r.findings, "finding"), r.tagged.length && plural(r.tagged.length, "theme"), r.untagged && `${r.untagged.hits.length} untagged`].filter(Boolean).join(" · ")
+        : `No findings since ${since()}`,
       el: [
-        h("div", { class: "grp" }, h("h3", null, "Review blockers and majors, by theme"),
-          r.themes.length ? h("ul", { class: "rows rec" }, r.themes.map((t) => h("li", null,
-            h("span", { class: "theme" }, t.theme),
-            h("span", { class: "what" }, h("span", null, `${t.hits.length} times in 4 weeks `, back(t)),
-              h("ul", { class: "hits" }, t.hits.sort((a, b) => a.s.ago - b.s.ago).map((x) => h("li", null, rec(x.s.f), `${x.s.label}, ${x.sev}: ${x.text}`, h("span", { class: "m" }, ` · ${age(x.s.ago)}`)))))))) : empty("None.")),
+        h("div", { class: "grp" }, h("h3", null, "Blockers, majors and retro findings, by theme"),
+          r.themes.length ? h("ul", { class: "rows rec" }, r.themes.map(group)) : empty(`None since ${since()}.`)),
         h("div", { class: "grp" }, h("h3", null, "Sent back twice or more"),
           r.sentBack.length ? h("ul", { class: "rows rec" }, r.sentBack.map((x) => h("li", null,
             h("span", { class: "times" }, `${x.times.length}×`),
-            h("span", { class: "what" }, h("span", null, rec(x.ref), x.title, " ", back(x)),
+            h("span", { class: "what" }, h("span", null, rec(x.ref), x.title),
               h("span", { class: "m" }, x.times.map(([s, a]) => `${s} (${age(a)})`).join(" · ")))))) : empty("None.")),
-        h("div", { class: "grp" }, h("h3", null, "Retro findings that came back"),
-          r.retros.length ? h("ul", { class: "rows rec" }, r.retros.map((x) => {
-            const item = S.retroItems[x.finding];
-            return h("li", null, h("span", { class: "times" }, `${x.hits.length}×`),
-              h("span", { class: "what" }, h("span", null, x.hits.find((s) => s.summary)?.summary ?? x.finding, " ", back(x)),
-                h("span", { class: "m" }, "In the retros of ", x.hits.map((s, i) => [i ? ", " : "", rec(s.f)])),
-                item ? h("span", { class: "m" }, "Backlog item ", rec(item.ref), `${item.title}: ${item.status}, ${item.release ?? "in no release"}`)
-                  : h("span", { class: "m warn" }, "No backlog item for it yet")));
-          })) : empty("None.")),
-        h("p", { class: "note" }, "Themes are tagged when a review or retro closes (BOB-35)."),
+        h("p", { class: "note" }, "Each finding's theme is one of sixteen, picked by whoever closes the review or retro."),
       ],
     };
   },
@@ -399,18 +407,21 @@ const BODY = {
   },
   usage(k) {
     const u = usageOf([k]);
-    const max = u.agents[0]?.n ?? 1;
+    const max = u.agents[0]?.n || 1;
     return {
       title: "Usage", count: tok(u.total), scope: scopeSpan(), tone: u.heavy.length ? "warn" : null,
-      headline: `${tok(u.total)} tokens${u.heavy.length ? ` · ${plural(u.heavy.length, "heavy session")}` : ""}`,
-      el: u.total < 1 ? empty(`No tokens used since ${since()}.`) : [
-        h("ul", { class: "rows usage" }, u.agents.map((a) => h("li", null,
+      headline: [`${tok(u.total)} tokens`, u.lost && unknown(u.lost), u.heavy.length && plural(u.heavy.length, "heavy session")].filter(Boolean).join(" · "),
+      el: [
+        u.agents.length ? h("ul", { class: "rows usage" }, u.agents.map((a) => h("li", null,
           h("span", { class: "who-u" }, h("b", null, a.who), h("span", { class: "m" }, S.roles[a.who])),
-          h("span", { class: "meter" }, h("i", { style: `width:${Math.max(2, (a.n / max) * 100)}%` })),
-          h("span", { class: "num" }, tok(a.n))))),
+          h("span", { class: "meter" }, a.n ? h("i", { style: `width:${Math.max(2, (a.n / max) * 100)}%` }) : null),
+          h("span", { class: "num" }, a.n ? tok(a.n) : null, a.lost ? h("span", { class: "unk" }, `${a.n ? "+ " : ""}${plural(a.lost, "run")} unknown`) : null)))) : empty(`No runs ended since ${since()}.`),
+        u.lost ? h("p", { class: "note" }, `${unknown(u.lost)}: ${u.lost === 1 ? "it was" : "they were"} running when the supervisor restarted, so ${u.lost === 1 ? "its" : "their"} use was never reported. Not counted as zero.`) : null,
         u.heavy.length ? h("div", { class: "grp" }, h("h3", null, "Heavier than usual"),
           h("ul", { class: "rows" }, u.heavy.map((s) => h("li", { dataset: { sev: "warn" } }, badge("waiting", `${s.x.toFixed(1)}×`),
             h("span", null, rec(s.f), `${s.label} · ${s.who}: ${tok(s.tokens)} tokens, a ${s.kind}'s usual is ${tok(S.usual[s.kind])}`), h("time", null, clock(s.ago)))))) : null,
+        u.running.length ? h("div", { class: "grp" }, h("h3", null, "Running now"), h("p", { class: "note" }, "From the laptops. Counted above when each run ends."),
+          h("ul", { class: "rows running" }, u.running.map((r) => h("li", null, h("span", { class: "dot on" }), h("span", null, h("b", null, r.who), ` ${S.roles[r.who]}`), h("span", { class: "num" }, `${tok(r.n)} so far`))))) : null,
       ],
     };
   },
@@ -442,7 +453,7 @@ function overview() {
         `${d.sessions.length} done, ${verdict(ps).stuck} stuck`, v.ci ? ", CI red on Helix" : ""),
       h("span", { class: "go" }, "Status ›")),
     h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count" }, String(n.length))),
-      h("div", { class: "card" }, h("ul", { class: "lines" }, n.slice(0, 3).map((w) => needLine(w, true))),
+      h("div", { class: "card" }, h("ul", { class: "lines st-needs" }, n.slice(0, 3).map((w) => needLine(w, true))),
         h("p", { class: "more" }, `${n.filter((x) => x.blocking).length} hold work up · ${n.filter((x) => !x.blocking).length} when you have time →`))),
     h("section", null, h("h2", null, "Working now ", h("span", { class: "count" }, "4")),
       h("div", { class: "card" }, h("ul", { class: "lines" },
@@ -464,6 +475,7 @@ function protoBar() {
     h("span", null, h("b", null, "Prototype BOB-33"), " · sample shaped like BobNet's and Helix's boards, Mon 16 Nov 06:12"),
     seg("Device", "device", [["returning", "last visit 23:10"], ["first", "first visit"]]),
     seg("Broker", "broker", [["live", "live"], ["down", "down"]]),
+    seg("Ships", "ships", [["all", "with BOB-35, 36"], ["33", "BOB-33 only"]]),
     h("button", { type: "button", class: "more-t", onclick: () => { sessionStorage.removeItem(KEY); Object.assign(state, structuredClone(START)); render(); } }, "Reset the prototype"));
 }
 

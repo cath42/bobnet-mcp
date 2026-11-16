@@ -22,6 +22,7 @@ const shots = [
   ["s5-caught-up", "status", [(p) => p.locator(".caught-foot button").click()], true],
   ["s6-first-visit", "status", [(p) => p.getByRole("button", { name: "first visit" }).click()], false],
   ["s7-overview-line", "overview", [], false],
+  ["s8-bob33-only", "status/helix", [(p) => p.getByRole("button", { name: "BOB-33 only" }).click()], true],
 ];
 
 const browser = await chromium.launch();
@@ -32,6 +33,7 @@ for (const [w, [width, height]] of Object.entries(widths)) {
     p.on("pageerror", (e) => console.error(`${file}-${w}: ${e.message}`));
     await p.goto(`${page0}#${hash}`);
     for (const s of steps) await s(p);
+    await p.mouse.move(0, 0);
     const out = join(here, `${file}-${w}.png`);
     await p.screenshot({ path: out, fullPage: full });
     await ctx.close();

@@ -61,7 +61,7 @@ main.wide .st { max-width: 1320px; }
 .st-needs a.l-t { text-decoration: none; }
 .st-needs a.l-t:hover { text-decoration: underline; }
 .st-needs li[data-blocking="false"] .l-m { color: var(--muted); }
-.st-needs .age { font-variant-numeric: tabular-nums; }
+.st-needs .age { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .before { margin-left: 8px; font-size: 11.5px; color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
 .caught-foot { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: 13px; color: var(--muted); padding-top: 4px; }
 
@@ -94,7 +94,7 @@ main.wide .st { max-width: 1320px; }
 .sec[open] > .sec-h .t::before { transform: rotate(90deg); }
 .sec-h .n { font-weight: 600; font-variant-numeric: tabular-nums; }
 .sec-h .n[data-tone="bad"] { color: var(--bad); } .sec-h .n[data-tone="warn"] { color: var(--warn); } .sec-h .n[data-tone="ok"] { color: var(--ok); }
-.sec-h .scope { justify-self: end; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+.sec-h .scope { justify-self: end; text-align: right; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 .sec-h .hl { grid-column: 1 / -1; padding-left: 1em; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .sec[open] > .sec-h { border-bottom: 1px solid var(--line); }
 .sec-b { padding: 4px 14px 12px; display: grid; gap: 10px; min-width: 0; }
@@ -143,7 +143,7 @@ main.wide .st { max-width: 1320px; }
 .rows.health li[data-warn="true"] .k { color: var(--warn); font-weight: 600; }
 
 /* Usage. */
-.rows.usage > li { grid-template-columns: 9em minmax(40px, 1fr) 4.5em; align-items: center; }
+.rows.usage > li { grid-template-columns: 9em minmax(40px, 1fr) minmax(4.5em, auto); align-items: center; }
 .rows.usage .who-u { display: grid; }
 .rows.usage .who-u .m { font-size: 12px; }
 .rows.usage .meter { max-width: none; }
@@ -179,10 +179,22 @@ main.wide .st { max-width: 1320px; }
   .pstat b { font-size: 18px; }
   .pstat .lab { font-size: 10.5px; }
   .rows.health > li { grid-template-columns: minmax(0, 1fr); }
-  .rows.usage > li { grid-template-columns: 7.5em minmax(30px, 1fr) 4em; }
+  .rows.usage > li { grid-template-columns: 7.5em minmax(30px, 1fr) minmax(4em, auto); }
   .rows > li.srow { grid-template-columns: minmax(0, 1fr) auto; }
   .srow .kind { grid-column: 1; }
   .srow time { grid-column: 2; grid-row: 1; }
   .srow .what { grid-column: 1 / -1; }
   .proto-bar { font-size: 12px; }
+}
+
+/* ADR 0005: untagged findings, lost runs' unknown tokens, runs still going (from the snapshots). */
+.rows.rec > li[data-untagged="true"] .theme { background: color-mix(in srgb, var(--muted) 14%, transparent); color: var(--muted); }
+.rows.usage .num { display: grid; justify-items: end; }
+.rows.usage .unk { font-size: 11.5px; color: var(--warn); white-space: nowrap; }
+.rows.running > li { grid-template-columns: auto 1fr auto; align-items: center; }
+.rows.running .num { font-variant-numeric: tabular-nums; color: var(--muted); }
+.lead-note .ln-more { display: none; justify-self: start; }
+@media (max-width: 699px) {
+  .lead-note:not(.full) .ln-t { display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+  .lead-note .ln-more { display: inline; }
 }
