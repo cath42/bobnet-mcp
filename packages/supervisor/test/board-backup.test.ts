@@ -31,6 +31,20 @@ function repo(): string {
   return dir;
 }
 
+/** A bare repository the backup's repo pushes to, with its branch tracking it. */
+function withRemote(dir: string, remote = mkdtempSync(join(tmpdir(), "backup-remote-"))): string {
+  execFileSync("git", ["init", "-q", "--bare"], { cwd: remote });
+  execFileSync("git", ["remote", "add", "origin", remote], { cwd: dir });
+  execFileSync("git", ["push", "-q", "-u", "origin", "HEAD"], { cwd: dir });
+  return remote;
+}
+
+/** A logger that keeps its warnings. */
+function warnings(): { log: typeof quiet; warned: Record<string, unknown>[] } {
+  const warned: Record<string, unknown>[] = [];
+  return { log: { ...quiet, warn: (msg, fields) => warned.push({ msg, ...fields }) }, warned };
+}
+
 const log = (dir: string) => execFileSync("git", ["log", "--format=%s"], { cwd: dir, encoding: "utf8" }).trim().split("\n");
 
 describe("the board's nightly backup", () => {
@@ -67,5 +81,56 @@ describe("the board's nightly backup", () => {
     const wrong = new BoardBackup({ repo: dir, at: "03:00", fetchExport: async () => ({ format: "other" }), log: quiet });
     expect(await wrong.run()).toBeNull();
     expect(log(dir)).toEqual(["start"]);
+  });
+
+  it("pushes each commit to the repo's remote", async () => {
+    const dir = repo();
+    const remote = withRemote(dir);
+    const backup = new BoardBackup({ repo: dir, at: "03:00", fetchExport: async () => doc(5), log: quiet });
+    const sha = await backup.run();
+    expect(log(remote)).toEqual(["board backup: 0 projects through event 5", "start"]);
+    expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: remote, encoding: "utf8" }).trim()).toBe(sha);
+  });
+
+  it("pushes nothing on a night that changes nothing", async () => {
+    const dir = repo();
+    const calls: string[][] = [];
+    const real = async (args: string[], cwd: string) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+    const git = (args: string[], cwd: string) => (calls.push(args), real(args, cwd));
+    let next = doc(5);
+    const backup = new BoardBackup({ repo: dir, at: "03:00", fetchExport: async () => next, log: quiet, git });
+    await backup.run();
+    expect(calls.filter(([op]) => op === "push")).toHaveLength(1);
+    next = doc(5, "2026-11-15T03:00:00.000Z");
+    calls.length = 0;
+    expect(await backup.run()).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("keeps the commit and warns when the push fails, and the next night's push carries it", async () => {
+    const dir = repo();
+    const remote = withRemote(dir);
+    const gone = `${remote}-moved`;
+    execFileSync("mv", [remote, gone]);
+    const { log: warnLog, warned } = warnings();
+    let next = doc(5);
+    const backup = new BoardBackup({ repo: dir, at: "03:00", fetchExport: async () => next, log: warnLog });
+    const first = await backup.run();
+    expect(first).toMatch(/^[0-9a-f]{40}$/);
+    expect(log(dir)[0]).toBe("board backup: 0 projects through event 5");
+    expect(warned).toEqual([expect.objectContaining({ msg: "board backup: push failed, the commit is kept", repo: dir, err: expect.any(String) })]);
+    execFileSync("mv", [gone, remote]);
+    next = doc(9, "2026-11-16T03:00:00.000Z");
+    await backup.run();
+    expect(log(remote)).toEqual(["board backup: 0 projects through event 9", "board backup: 0 projects through event 5", "start"]);
+  });
+
+  it("keeps the commit and warns when the repo has no remote", async () => {
+    const dir = repo();
+    const { log: warnLog, warned } = warnings();
+    const backup = new BoardBackup({ repo: dir, at: "03:00", fetchExport: async () => doc(5), log: warnLog });
+    expect(await backup.run()).toMatch(/^[0-9a-f]{40}$/);
+    expect(log(dir)).toEqual(["board backup: 0 projects through event 5", "start"]);
+    expect(warned).toHaveLength(1);
   });
 });

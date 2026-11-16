@@ -5,8 +5,9 @@ import { BoardExportV1, type BoardImportReply } from "@bobnet/protocol";
 import type { Logger } from "@bobnet/client/log";
 
 // The board's nightly backup (ADR 0001 §11): the board's export, written to board.json in a git
-// repository and committed. A backup and an exit route, never a second store: nothing reads it back
-// but an import. A night when only exported_at would change commits nothing.
+// repository, committed and pushed to its remote. A backup and an exit route, never a second store:
+// nothing reads it back but an import. A night when only exported_at would change commits and
+// pushes nothing.
 
 const FILE = "board.json";
 const GIT_TIMEOUT_MS = 30_000;
@@ -81,10 +82,22 @@ export class BoardBackup {
       const sha = (await this.git(["rev-parse", "HEAD"], repo)).trim();
       // A laptop's export holds only what its read rules cover, so a partial backup shows here.
       log.info("board backup: committed", { repo, sha, projects: doc.projects.map((p) => p.key), last_event_seq: doc.last_event_seq });
+      await this.push();
       return sha;
     } catch (err) {
       log.error("board backup failed", { repo, err: (err as Error).message });
       return null;
+    }
+  }
+
+  /** The commit stays local when the push fails (no remote, no network, refused); the next night's push carries it. */
+  private async push(): Promise<void> {
+    const { repo, log } = this.opts;
+    try {
+      await this.git(["push", "--quiet"], repo);
+      log.info("board backup: pushed", { repo });
+    } catch (err) {
+      log.warn("board backup: push failed, the commit is kept", { repo, err: (err as Error).message });
     }
   }
 }
