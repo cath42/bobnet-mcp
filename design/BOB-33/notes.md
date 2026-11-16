@@ -47,11 +47,22 @@ Aligned with ADR 0005: lands as a count, no deploys, untagged themes, tokens unk
 note's 600-character limit and its "N things since" (sessions closed, features Done, releases closed). Dropped:
 a recurring retro finding linking to its backlog item (the board doesn't record that link).
 
+## Decided
+
+Casper, 2026-11-15, in Mario's session, his words: "1. yes they look fine, 2. agreed".
+
+- **All 12 choices above stand as drawn.**
+- **Before BOB-35 ships, Recurring problems stays visible** and says "Comes with theme tags"; it doesn't hide
+  (`s8-bob33-only`).
+- Loading, errors beyond "broker down", and lists past 100 (the read's `more`) are drawn in words in `spec.md`.
+- Toad (consult c_f1c4cbc5, to be recorded in ADR 0005 §2): the read gains what the page shows and §2 lacked:
+  `stuck.settled`, `lost` per agent, a closed session's tokens and finding counts, a Done feature's `type`,
+  `release.ready`, triage `oldest: {ref, at}`. The "next release has nothing Ready" flag is dropped: the page
+  flags the open release when none of its features is Ready.
+
 ## Open questions
 
-- Peach: "done" as closed sessions (3); recurring as the span plus 30 days back (4, ADR 0005 §4, was 4 weeks in
-  the draft); one I'm caught up for all projects (5).
-- Before BOB-35, should Recurring hide instead of saying "Comes with theme tags"?
-- Not covered yet: loading and error states beyond "broker down", and a list past 100 (the read's `more` count).
+- Peach: "done" as closed sessions (3); recurring as the span plus 30 days back (4, ADR 0005 §4); one I'm caught
+  up for all projects (5). Casper accepted them as drawn; Peach's criteria still say what they say.
 
-spec.md for Luigi follows once Casper has reacted.
+The build spec for Luigi: `spec.md`.
