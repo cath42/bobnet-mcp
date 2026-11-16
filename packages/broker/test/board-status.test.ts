@@ -215,6 +215,24 @@ describe("the status read (BOB-37)", () => {
     const h = row(await status(since));
     expect(h.usage.heavy).toEqual([{ session: heavy, tokens: tokens(70), usual: tokens(30) }]);
   });
+
+  it("never judges heavy a session with a lost run, nor compares against one, the 5 included (BOB-42)", async () => {
+    const { f1 } = await helix();
+    for (let n = 1; n <= 4; n++) await session(f1, `old${n}`, { tokens: 10 * n, close: {} });
+    await session(f1, "oldlost", { tokens: 0, close: {} });
+    await sql((db) => db.exec("UPDATE runs SET outcome = 'lost' WHERE session = (SELECT pk FROM sessions WHERE label = 'oldlost')"));
+    await sql((db) => db.exec("UPDATE sessions SET ended_at = ? WHERE label LIKE 'old%'", ago(60 * 24)));
+    const since = await mark();
+    const big = await session(f1, "big", { tokens: 70, close: {} });
+    // Four known to compare: the lost one would make five, and its zero a median of 20.
+    expect(row(await status(since)).usage.heavy).toEqual([]);
+
+    await session(f1, "old5", { tokens: 50, close: {} });
+    await sql((db) => db.exec("UPDATE sessions SET ended_at = ? WHERE label = 'old5'", ago(60 * 24)));
+    await session(f1, "lostbig", { tokens: 500, close: {} });
+    await sql((db) => db.exec("UPDATE runs SET outcome = 'lost' WHERE session = (SELECT pk FROM sessions WHERE label = 'lostbig')"));
+    expect(row(await status(since)).usage.heavy).toEqual([{ session: big, tokens: tokens(70), usual: tokens(30) }]);
+  });
 });
 
 describe("how a run ended (BOB-38)", () => {

@@ -859,9 +859,11 @@ export class BoardStore {
       else addTokens(a.tokens, r), addTokens(total, r);
       agents.set(r.agent, a);
     }
-    const heavy = inSpan.flatMap((s) => {
+    // A session with a lost run has unknown tokens: never heavy, and never in a kind's comparison set.
+    const known = closed.filter((s) => s.lost === 0);
+    const heavy = known.filter((s) => s.ended_at! >= since).flatMap((s) => {
       const from = new Date(new Date(s.ended_at!).getTime() - HEAVY_LOOKBACK_MS).toISOString();
-      const like = closed.filter((o) => o.pk !== s.pk && o.kind === s.kind && o.ended_at! < s.ended_at! && o.ended_at! >= from);
+      const like = known.filter((o) => o.pk !== s.pk && o.kind === s.kind && o.ended_at! < s.ended_at! && o.ended_at! >= from);
       if (like.length < HEAVY_MIN) return [];
       const usual = medianTokens(like.map(tokensOf));
       return sumTokens(tokensOf(s)) > 2 * sumTokens(usual) ? [{ session: this.sessionRef(s.pk)!, tokens: tokensOf(s), usual }] : [];
