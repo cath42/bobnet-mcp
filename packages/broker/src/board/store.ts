@@ -674,7 +674,8 @@ export class BoardStore {
       .toArray();
     const lands = this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM pushes WHERE project = ? AND at >= ?", p.pk, since).one().n;
 
-    // Stuck: runs that failed, stopped or were lost, until a later run starts in their session (or, with none, of their agent).
+    // Stuck: runs that failed, stopped or were lost, until a later run starts in their session (or, with none, of their agent),
+    // or their session is closed, before or after the run's end (ADR 0005 §2). A close at or before the end was never stuck.
     const stuckRuns: StatusStuckRun[] = [];
     const settled: StatusRow["stuck"]["settled"] = [];
     const runs = this.sql
@@ -698,8 +699,15 @@ export class BoardStore {
         reason: r.outcome_reason,
         ended_at: r.ended_at!,
       };
-      if (later === null) stuckRuns.push(entry);
-      else if (later >= since) settled.push({ kind: "runs", entry, settled_at: later });
+      const closed =
+        r.session === null
+          ? null
+          : (this.sql.exec<{ ended_at: string | null }>("SELECT ended_at FROM sessions WHERE pk = ?", r.session).toArray()[0]?.ended_at ?? null);
+      const closedAt = closed === null ? null : closed > r.ended_at! ? closed : r.ended_at!;
+      const at = [later, closedAt].filter((t): t is string => t !== null).sort()[0];
+      if (at === undefined) stuckRuns.push(entry);
+      else if (at === r.ended_at && at === closedAt) continue;
+      else if (at >= since) settled.push({ kind: "runs", entry, settled_at: at });
     }
 
     // CI and slot runs that failed in the span, until a later pass of the same source, name and branch.

@@ -292,6 +292,51 @@ describe("how a run ended (BOB-38)", () => {
     expect(later.stuck.settled).toEqual([]);
   });
 
+  it("settles a stuck run when its session is closed, before or after the run's end, and lists one closed before it nowhere (AC 2, ADR 0005 §2)", async () => {
+    const { f1, f2 } = await helix();
+    const s = (feature: string, label: string) => ({ feature, kind: "build" as const, label });
+    const s1 = s(f1, "1"), s2 = s(f1, "2"), s3 = s(f2, "1"), s4 = s(f2, "2");
+    for (const x of [s1, s2, s3, s4]) await ok(sup("Sup", x), { op: "session_join", project: "helix", session: x });
+    const start = (id: string, x: SessionRef, at: string) => ok(sup("Bill", x, "helix", id), { op: "run_start", project: "helix", id, started_at: at, session: x });
+    const end = (id: string, x: SessionRef, at: string) =>
+      ok(sup("Bill", x, "helix", id), { op: "run_end", project: "helix", id, ended_at: at, tokens: tokens(1), calls: 1, outcome: "stopped", reason: "why" });
+    const close = (x: SessionRef) =>
+      ok({ kind: "agent", name: "Picard", laptop: "mbp-1", supervisor: false, ctx: null }, {
+        op: "close_session",
+        project: "helix",
+        session: x,
+        need: "none",
+        summary: "Closed",
+        handoff: { path: "/h.md", text: "Done." },
+      });
+    const since = ago(60);
+    // (1) Closed after the run's end: settled at the close.
+    await start("w_1", s1, ago(50));
+    await end("w_1", s1, ago(40));
+    await close(s1);
+    // (2) Closed before the run's end (stop-on-close): never stuck, listed nowhere.
+    await start("w_2", s2, ago(50));
+    await close(s2);
+    await end("w_2", s2, await mark());
+    // (3) Open, no later run: stuck.
+    await start("w_3", s3, ago(50));
+    await end("w_3", s3, ago(40));
+    // (4) Open, a later run: settled at that run's start.
+    const later = ago(30);
+    await start("w_4", s4, ago(50));
+    await end("w_4", s4, ago(40));
+    await start("w_5", s4, later);
+
+    const h = row(await status(since));
+    const closed1 = h.done.sessions.find((x) => x.session.label === "1" && x.session.feature === f1)!.ended_at;
+    expect(h.stuck.runs.map((r) => r.id)).toEqual(["w_3"]);
+    const settled = h.stuck.settled.flatMap((x) => (x.kind === "runs" ? [[x.entry.id, x.settled_at]] : []));
+    expect(settled).toEqual([
+      ["w_1", closed1],
+      ["w_4", later],
+    ]);
+  });
+
   it("lists CI and land failures until a later pass of the same run, and answered questions still holding work", async () => {
     const { f1, t1 } = await helix();
     const ci = (id: string, name: string, status: "failed" | "passed", end: number) =>
