@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>BobNet · BOB-33 prototype: Status</title>
+  <link rel="stylesheet" href="../../../packages/broker/public/style.css">
+  <link rel="stylesheet" href="proto.css">
+  <script defer src="data.js"></script>
+  <script defer src="proto.js"></script>
+</head>
+<body>
+  <header>
+    <h1>BobNet</h1>
+    <nav id="tabs">
+      <a href="#overview">Overview</a>
+      <a href="#waits">Waits on you <span class="count" id="waits-count"></span></a>
+      <a href="#status">Status</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="#feature">Feature</a>
+      <a href="#triage">Triage</a>
+      <a href="#usage">Usage</a>
+      <a href="#sessions">Sessions</a>
+    </nav>
+    <button type="button" class="capture-btn">+ Capture</button>
+    <span id="conn" class="conn" data-state="live">live</span>
+  </header>
+  <div id="toast-slot"></div>
+  <main id="view"></main>
+</body>
+</html>
