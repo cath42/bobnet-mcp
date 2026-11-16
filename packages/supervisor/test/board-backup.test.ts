@@ -92,19 +92,25 @@ describe("the board's nightly backup", () => {
     expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: remote, encoding: "utf8" }).trim()).toBe(sha);
   });
 
-  it("pushes nothing on a night that changes nothing", async () => {
+  it("commits nothing on a night that changes nothing, but pushes an earlier commit whose push failed", async () => {
     const dir = repo();
+    const remote = withRemote(dir);
+    const gone = `${remote}-moved`;
+    execFileSync("mv", [remote, gone]);
     const calls: string[][] = [];
     const real = async (args: string[], cwd: string) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
     const git = (args: string[], cwd: string) => (calls.push(args), real(args, cwd));
     let next = doc(5);
     const backup = new BoardBackup({ repo: dir, at: "03:00", fetchExport: async () => next, log: quiet, git });
-    await backup.run();
-    expect(calls.filter(([op]) => op === "push")).toHaveLength(1);
+    const sha = await backup.run();
+    execFileSync("mv", [gone, remote]);
+    expect(log(remote)).toEqual(["start"]);
     next = doc(5, "2026-11-15T03:00:00.000Z");
     calls.length = 0;
     expect(await backup.run()).toBeNull();
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([["push", "--quiet"]]);
+    expect(log(dir)).toEqual(["board backup: 0 projects through event 5", "start"]);
+    expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: remote, encoding: "utf8" }).trim()).toBe(sha);
   });
 
   it("keeps the commit and warns when the push fails, and the next night's push carries it", async () => {
