@@ -381,4 +381,12 @@ export const BOARD_MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX op_keys_at ON op_keys (at);
   `,
+  // 3: how a run ended (ADR 0005 §3), and the status read's time indexes (§2). Old runs keep null: unknown.
+  `
+  ALTER TABLE runs ADD COLUMN outcome TEXT CHECK (outcome IN ('done', 'failed', 'stopped', 'lost'));
+  ALTER TABLE runs ADD COLUMN outcome_reason TEXT CHECK (length(outcome_reason) <= 300);
+  CREATE INDEX events_at ON events (project, at);
+  CREATE INDEX runs_ended ON runs (project, ended_at);
+  CREATE INDEX ci_runs_ended ON ci_runs (project, ended_at);
+  `,
 ];

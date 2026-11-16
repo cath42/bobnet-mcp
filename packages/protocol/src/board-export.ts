@@ -15,6 +15,7 @@ import {
   QuestionRef,
   ReleaseRef,
   ReleaseStatus,
+  RunOutcome,
   SessionRef,
 } from "./board.ts";
 
@@ -144,6 +145,9 @@ const Run = z.object({
   ctx: z.array(count).nullable(),
   remote_url: text.nullable(),
   tasks: z.array(ItemRef),
+  /** How it ended (ADR 0005 §3, §6): optional, so a version 1 file from before it still parses. */
+  outcome: RunOutcome.nullable().optional(),
+  outcome_reason: text.nullable().optional(),
 });
 
 const Push = z.object({ repo: z.string(), branch: z.string(), sha: z.string(), worker: z.string(), run: text.nullable(), at });

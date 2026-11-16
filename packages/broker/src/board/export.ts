@@ -258,6 +258,8 @@ export function exportBoard(sql: SqlStorage, by: Reader, source: string | null =
         ctx: ctxPoints(r["ctx"]),
         remote_url: str(r["remote_url"]),
         tasks: tasksOf("SELECT item FROM run_tasks WHERE run = ?", r["pk"]),
+        outcome: str(r["outcome"]) as ExportProject["runs"][number]["outcome"],
+        outcome_reason: str(r["outcome_reason"]),
       })),
       pushes: all<Row>("SELECT * FROM pushes WHERE project = ? ORDER BY pk", pk).map((x) => ({
         repo: x["repo"] as string,
@@ -595,8 +597,8 @@ function importProject(sql: SqlStorage, p: ExportProject, doc: BoardExport, at: 
   for (const r of p.runs) {
     const pk = sql
       .exec<{ pk: number }>(
-        `INSERT INTO runs (id, project, session, agent, role, laptop, model, effort, started_at, ended_at, resumed, input, output, cache_read, cache_write, calls, ctx, remote_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING pk`,
+        `INSERT INTO runs (id, project, session, agent, role, laptop, model, effort, started_at, ended_at, resumed, input, output, cache_read, cache_write, calls, ctx, remote_url, outcome, outcome_reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING pk`,
         r.id,
         project,
         sessionOf(r.session, `run ${r.id}`),
@@ -615,6 +617,8 @@ function importProject(sql: SqlStorage, p: ExportProject, doc: BoardExport, at: 
         r.calls,
         r.ctx === null ? null : ctxBlob(r.ctx),
         r.remote_url,
+        r.outcome ?? null,
+        r.outcome_reason ?? null,
       )
       .one().pk;
     runPk.set(r.id, pk);

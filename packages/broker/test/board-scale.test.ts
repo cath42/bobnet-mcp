@@ -105,3 +105,69 @@ it("reads a Helix-sized board fast: lists carry counts, a feature loads its task
   // Generous for a CI machine; on mbp-1 each read takes a few ms (the handoff says what was measured).
   for (const [name, t] of Object.entries(ms)) expect(t, name).toBeLessThan(250);
 });
+
+/** A month of work on the Helix-sized board (ADR 0005 §2): 300 sessions, 1,500 runs, 3,000 CI runs, 20,000 events. */
+function aMonth(doc: BoardExportV1, key = "helix", prefix = "LAND"): BoardExportV1 {
+  const p = doc.projects.find((x) => x.key === key)!;
+  const now = Date.now();
+  const back = (min: number) => new Date(now - min * 60_000).toISOString();
+  const month = 30 * 24 * 60;
+  const features = p.items.filter((i) => i.kind === "feature").map((i) => i.ref);
+  const tasks = p.items.filter((i) => i.kind === "task").map((i) => i.ref);
+  const kinds = ["design", "build", "review", "retro"] as const;
+  p.sessions = Array.from({ length: 300 }, (_, n) => {
+    const end = month - n * 140;
+    return {
+      feature: features[n % features.length]!, kind: kinds[n % 4]!, label: String(n), started_at: back(end + 120), ended_at: n % 50 === 49 ? null : back(end),
+      imported: false, need: n % 50 === 49 ? null : ("none" as const), minors_fixed: n % 50 === 49 ? null : 0, summary: n % 50 === 49 ? null : "A summary of up to three hundred characters, as a close has.".repeat(4),
+      handoff_path: null, handoff_text: null, commit_sha: null, closed_by: n % 50 === 49 ? null : "Riker@mbp-1", tasks: [], waits_on: [],
+    };
+  });
+  const ref = (s: (typeof p.sessions)[number]) => ({ feature: s.feature, kind: s.kind, label: s.label });
+  p.runs = Array.from({ length: 1500 }, (_, n) => {
+    const s = p.sessions[n % 300]!;
+    const end = month - (n % 300) * 140 - Math.floor(n / 300) * 5;
+    return {
+      id: `w_${n}`, session: ref(s), agent: ["Bill", "Ann", "Toad", "Daisy"][n % 4]!, role: "builder", laptop: "mbp-1", model: null, effort: null,
+      started_at: back(end + 30), ended_at: back(end), resumed: false, input: 1000, output: 2000, cache_read: 50_000, cache_write: 3000, calls: 40, ctx: null, remote_url: null,
+      tasks: [], outcome: (["done", "done", "done", "failed", "lost"] as const)[n % 5], outcome_reason: n % 5 === 3 ? "Bash exited 1" : null,
+    };
+  });
+  p.ci_runs = Array.from({ length: 3000 }, (_, n) => ({
+    source: n % 3 ? "github-actions" : "slot", external_id: `${key}-${n}`, name: n % 3 ? ["test", "lint", "build"][n % 3]! : "land", url: null, repo: null,
+    branch: "main", sha: null, laptop: n % 3 ? null : "mbp-1", status: n % 7 === 0 ? ("failed" as const) : ("passed" as const), started_at: back(month - n * 14 + 5), ended_at: back(month - n * 14),
+    worker: null, session: null, tasks: [],
+  }));
+  p.events = Array.from({ length: 20_000 }, (_, n) => ({
+    seq: n + 1, at: back(month - n * 2), actor: { kind: "agent" as const, who: "Riker@mbp-1", role: null, worker: null, session: null }, op: "update", table: "items" as const,
+    record: tasks[n % tasks.length]!, ref: tasks[n % tasks.length]!, reason: null, undo_of: null, changes: [{ field: "status", old: "In Progress", new: n % 2 ? "Done" : "In Progress" }],
+  }));
+  p.key = key;
+  p.prefix = prefix;
+  return doc;
+}
+
+it("answers the status read across a Helix-sized board with a month of work, and a second project, in one call (BOB-37 AC 4)", async () => {
+  const helix = aMonth(helixSized());
+  const second = aMonth(helixSized());
+  const other = second.projects[0]!;
+  // The second project is a renamed copy: its own key, prefix and refs.
+  const json = JSON.stringify(other).replaceAll("LAND-", "BOB-").replaceAll("helix-", "bobnet-").replaceAll('"w_', '"b_');
+  const parsed = JSON.parse(json) as typeof other;
+  const bobnet = { ...parsed, key: "bobnet", name: "BobNet", prefix: "BOB", events: parsed.events.map((e) => ({ ...e, seq: e.seq + 20_000 })) };
+  const imported = await board().importBoard({ kind: "laptop", laptop: "mbp-1" }, BoardExportV1.parse({ ...helix, projects: [helix.projects[0], bobnet] }));
+  expect(imported, JSON.stringify(imported)).toMatchObject({ ok: true });
+
+  const week = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
+  const { ms, result } = await timed(() => ok({ op: "status", since: week }));
+  console.log("Status read, Helix-sized board with a month of work and a second project, a week's span, slowest of 3 (ms):", Math.round(ms * 10) / 10);
+  expect(result.projects.map((p) => p.project)).toEqual(["bobnet", "helix"]);
+  const h = result.projects[1]!;
+  expect(h.done.counts.sessions).toBeGreaterThan(60);
+  expect(h.usage.lost).toBeGreaterThan(0);
+  // Each failure passed again later: settled, not stuck.
+  expect(h.stuck.settled.some((x) => x.kind === "ci")).toBe(true);
+  expect(JSON.stringify(result).length).toBeLessThan(1024 * 1024);
+  expect(ms).toBeLessThan(250);
+  // Importing 40,000 events is the slow part, not the read.
+}, 60_000);

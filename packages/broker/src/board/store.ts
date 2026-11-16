@@ -19,11 +19,16 @@ import {
   type ProjectRecord,
   type QuestionRecord,
   type ReleaseRecord,
+  type RunOutcome,
   type RunRecord,
   type CiRunRecord,
   type SessionRecord,
   type SessionRef,
   type SessionSummary,
+  type StatusAnsweredHolding,
+  type StatusRow,
+  type StatusStuckCi,
+  type StatusStuckRun,
   type WaitRecord,
   type TokenTotals,
   parseRecipient,
@@ -44,6 +49,15 @@ const UNDO_MS = 2 * 60 * 1000;
 const ANSWERED_MAX = 50;
 /** How long a write's operation key is kept (§12). */
 const OP_KEY_MS = 24 * 60 * 60 * 1000;
+/** The status read (ADR 0005 §2): its longest span, its lists' cap, when quiet turns stuck (Peach's default). */
+const SPAN_MAX_MS = 31 * 24 * 60 * 60 * 1000;
+const STATUS_MAX = 100;
+const STUCK_MS = 2 * 60 * 60 * 1000;
+/** A heavy session: over twice its kind's median over the 30 days before it, with at least 5 to compare. */
+const HEAVY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+const HEAVY_MIN = 5;
+/** Backlog is thin below this many Ready features with criteria while the open release has work to do. */
+const THIN_READY = 2;
 
 type Op<K extends BoardOp["op"]> = Extract<BoardOp, { op: K }>;
 /** What a write answers: its record and event, and what the operation adds. */
@@ -200,6 +214,8 @@ interface RunRow {
   cache_read: number;
   cache_write: number;
   calls: number;
+  outcome: RunOutcome | null;
+  outcome_reason: string | null;
   [k: string]: SqlStorageValue;
 }
 
@@ -264,6 +280,8 @@ export class BoardStore {
         return this.waits(caller, op);
       case "overview":
         return this.overview(caller, op);
+      case "status":
+        return this.status(caller, op);
     }
   }
 
@@ -584,6 +602,339 @@ export class BoardStore {
         };
       }),
     };
+  }
+
+  /**
+   * What happened over a span (ADR 0005 §2), per project the caller reads: what waits on Casper, what got
+   * done, what is stuck and what settled, backlog health and usage. Derived on read, never stored; each
+   * list stops at 100, and `more` says how many it left out.
+   */
+  private status(caller: BoardCaller, op: Op<"status">): BoardResults["status"] {
+    const now = new Date();
+    const at = now.toISOString();
+    const asked = new Date(op.since).getTime();
+    const since = new Date(Math.min(now.getTime(), Math.max(asked, now.getTime() - SPAN_MAX_MS))).toISOString();
+    return { at, since, projects: this.readableProjects(caller, op.project).map((p) => this.statusRow(p, since, now)) };
+  }
+
+  private statusRow(p: ProjectRow, since: string, now: Date): StatusRow {
+    const more: Record<string, number> = {};
+    const cap = <T>(key: string, list: T[]): T[] => {
+      if (list.length > STATUS_MAX) more[key] = list.length - STATUS_MAX;
+      return list.slice(0, STATUS_MAX);
+    };
+    const stuckBefore = new Date(now.getTime() - STUCK_MS).toISOString();
+    const sessionRefOf = (pk: number | null) => (pk === null ? null : this.sessionRef(pk));
+
+    // What got done: features and bugs moved to Done in the span and still Done, closed sessions, lands, releases.
+    const doneFeatures = this.sql
+      .exec<{ pk: number; title: string; type: ItemSummary["type"]; release: string | null; at: string | null }>(
+        `SELECT i.pk, i.title, i.type,
+           (SELECT ref FROM releases WHERE pk = coalesce(i.release, (SELECT f.release FROM items f WHERE f.pk = i.parent))) AS release,
+           (SELECT max(e.at) FROM events e JOIN event_changes c ON c.event = e.seq WHERE e.tbl = 'items' AND e.pk = i.pk AND c.field = 'status' AND c.new = 'Done') AS at
+         FROM items i WHERE i.project = ? AND (i.kind = 'feature' OR i.type = 'bug') AND i.status = 'Done' AND i.archived_at IS NULL`,
+        p.pk,
+      )
+      .toArray()
+      .filter((f): f is typeof f & { at: string } => f.at !== null && f.at >= since)
+      .sort((a, b) => b.at.localeCompare(a.at) || b.pk - a.pk)
+      .map((f) => ({ ref: this.refOf(f.pk), title: f.title, type: f.type, release: f.release, at: f.at }));
+    // Sessions closed since the span's start, and 30 days before it for what a kind's session usually takes.
+    const closed = this.sql
+      .exec<SessionRow & TokenTotals & { lost: number }>(
+        `SELECT s.*, ${TOKENS.replace(/sum\((\w+)\)/g, "sum(r.$1)")}, coalesce(sum(r.outcome = 'lost'), 0) AS lost
+         FROM sessions s LEFT JOIN runs r ON r.session = s.pk
+         WHERE s.project = ? AND s.ended_at >= ? GROUP BY s.pk ORDER BY s.ended_at DESC, s.pk DESC`,
+        p.pk,
+        new Date(new Date(since).getTime() - HEAVY_LOOKBACK_MS).toISOString(),
+      )
+      .toArray();
+    const inSpan = closed.filter((s) => s.ended_at! >= since);
+    const roles = (session: number) =>
+      this.sql.exec<{ role: string; n: number }>("SELECT role, count(*) AS n FROM session_tasks WHERE session = ? GROUP BY role", session).toArray();
+    const doneSessions = inSpan.map((s) => {
+      const by = new Map(roles(s.pk).map((r) => [r.role, r.n]));
+      return {
+        session: this.sessionRef(s.pk)!,
+        ended_at: s.ended_at!,
+        need: s.need!,
+        summary: s.summary ?? "",
+        closed_by: s.closed_by ?? "",
+        tokens: tokensOf(s),
+        lost: s.lost,
+        counts: { blockers: by.get("blocker") ?? 0, majors: by.get("major") ?? 0, sent_back: by.get("sent_back") ?? 0 },
+      };
+    });
+    const doneReleases = this.sql
+      .exec<{ ref: string; title: string; closed_at: string }>(
+        "SELECT ref, title, closed_at FROM releases WHERE project = ? AND status = 'closed' AND closed_at >= ? ORDER BY closed_at DESC, pk DESC",
+        p.pk,
+        since,
+      )
+      .toArray();
+    const lands = this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM pushes WHERE project = ? AND at >= ?", p.pk, since).one().n;
+
+    // Stuck: runs that failed, stopped or were lost, until a later run starts in their session (or, with none, of their agent).
+    const stuckRuns: StatusStuckRun[] = [];
+    const settled: StatusRow["stuck"]["settled"] = [];
+    const runs = this.sql
+      .exec<RunRow>("SELECT * FROM runs WHERE project = ? AND ended_at >= ? AND outcome IN ('failed', 'stopped', 'lost') ORDER BY ended_at DESC, pk DESC", p.pk, since)
+      .toArray();
+    for (const r of runs) {
+      const later = this.sql
+        .exec<{ at: string | null }>(
+          r.session === null
+            ? "SELECT min(started_at) AS at FROM runs WHERE project = ? AND agent = ? AND pk != ? AND started_at > ?"
+            : "SELECT min(started_at) AS at FROM runs WHERE session = ? AND pk != ? AND started_at > ?",
+          ...(r.session === null ? [p.pk, r.agent, r.pk, r.started_at] : [r.session, r.pk, r.started_at]),
+        )
+        .one().at;
+      const entry: StatusStuckRun = {
+        id: r.id,
+        agent: r.agent,
+        role: r.role,
+        session: sessionRefOf(r.session),
+        outcome: r.outcome as StatusStuckRun["outcome"],
+        reason: r.outcome_reason,
+        ended_at: r.ended_at!,
+      };
+      if (later === null) stuckRuns.push(entry);
+      else if (later >= since) settled.push({ kind: "runs", entry, settled_at: later });
+    }
+
+    // CI and slot runs that failed in the span, until a later pass of the same source, name and branch.
+    const ci = this.sql
+      .exec<CiRunRow>("SELECT * FROM ci_runs WHERE project = ? AND ended_at >= ? AND status IN ('failed', 'passed') ORDER BY ended_at, pk", p.pk, since)
+      .toArray();
+    const stuckCi: StatusStuckCi[] = [];
+    ci.forEach((c, i) => {
+      if (c.status !== "failed") return;
+      const pass = ci.slice(i + 1).find((d) => d.status === "passed" && d.source === c.source && d.name === c.name && d.branch === c.branch && d.ended_at! > c.ended_at!);
+      const entry: StatusStuckCi = {
+        source: c.source,
+        name: c.name,
+        branch: c.branch,
+        sha: c.sha,
+        url: c.url,
+        worker: c.worker,
+        session: sessionRefOf((c["session"] as number | null) ?? null),
+        ended_at: c.ended_at!,
+      };
+      if (pass) settled.push({ kind: "ci", entry, settled_at: pass.ended_at! });
+      else stuckCi.push(entry);
+    });
+    stuckCi.reverse();
+
+    // Open sessions with no live run, quiet for over 2 h.
+    const idleSessions = this.sql
+      .exec<{ pk: number; last: string }>(
+        `SELECT s.pk, max(s.started_at, coalesce((SELECT max(r.ended_at) FROM runs r WHERE r.session = s.pk), '')) AS last
+         FROM sessions s WHERE s.project = ? AND s.ended_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.session = s.pk AND r.ended_at IS NULL)`,
+        p.pk,
+      )
+      .toArray()
+      .filter((s) => s.last < stuckBefore)
+      .sort((a, b) => b.last.localeCompare(a.last))
+      .map((s) => ({ session: this.sessionRef(s.pk)!, since: s.last }));
+
+    // Features In Progress that no session has open, quiet for over 2 h: since their last session ended, or their last status move.
+    const idleFeatures = this.sql
+      .exec<{ pk: number; title: string; last: string | null; updated_at: string }>(
+        `SELECT i.pk, i.title, i.updated_at,
+           coalesce((SELECT max(s.ended_at) FROM sessions s WHERE s.feature = i.pk),
+             (SELECT max(e.at) FROM events e JOIN event_changes c ON c.event = e.seq WHERE e.tbl = 'items' AND e.pk = i.pk AND c.field = 'status')) AS last
+         FROM items i WHERE i.project = ? AND i.kind = 'feature' AND i.status = 'In Progress' AND i.open_since IS NULL AND i.archived_at IS NULL`,
+        p.pk,
+      )
+      .toArray()
+      .map((f) => ({ pk: f.pk, title: f.title, since: f.last ?? f.updated_at }))
+      .filter((f) => f.since < stuckBefore)
+      .sort((a, b) => b.since.localeCompare(a.since))
+      .map((f) => ({ ref: this.refOf(f.pk), title: f.title, since: f.since }));
+
+    // Answered over 2 h ago and still holding: no run on the feature it names since, and not every held item Done.
+    const answeredHolding: StatusAnsweredHolding[] = [];
+    const answered = this.sql
+      .exec<{ pk: number; ref: string; answered_at: string; session: number | null }>(
+        `SELECT q.pk, q.ref, q.answered_at, q.session FROM questions q WHERE q.project = ? AND q.state IN ('answered', 'done')
+           AND (EXISTS (SELECT 1 FROM question_holds h WHERE h.question = q.pk) OR EXISTS (SELECT 1 FROM session_waits_on w WHERE w.question = q.pk))
+         ORDER BY q.answered_at DESC, q.pk DESC`,
+        p.pk,
+      )
+      .toArray();
+    for (const q of answered) {
+      const holding = new Date(new Date(q.answered_at).getTime() + STUCK_MS).toISOString();
+      if (holding > now.toISOString()) continue;
+      const features = this.sql
+        .exec<{ feature: number | null }>(
+          `SELECT CASE WHEN i.kind = 'feature' THEN i.pk ELSE i.parent END AS feature FROM question_holds h JOIN items i ON i.pk = h.item WHERE h.question = ?
+           UNION SELECT s.feature FROM question_holds h JOIN sessions s ON s.pk = h.session WHERE h.question = ?
+           UNION SELECT s.feature FROM session_waits_on w JOIN sessions s ON s.pk = w.session WHERE w.question = ?`,
+          q.pk,
+          q.pk,
+          q.pk,
+        )
+        .toArray()
+        .flatMap((f) => (f.feature === null ? [] : [f.feature]));
+      const ran = features.length
+        ? this.sql
+            .exec<{ at: string | null }>(
+              `SELECT min(r.started_at) AS at FROM runs r JOIN sessions s ON s.pk = r.session WHERE s.feature IN (${features.map(() => "?").join(", ")}) AND r.started_at > ?`,
+              ...features,
+              q.answered_at,
+            )
+            .one().at
+        : null;
+      const held = this.sql
+        .exec<{ pk: number; status: string }>("SELECT i.pk, i.status FROM question_holds h JOIN items i ON i.pk = h.item WHERE h.question = ?", q.pk)
+        .toArray();
+      const allDone =
+        held.length > 0 && held.every((i) => i.status === "Done")
+          ? held
+              .map(
+                (i) =>
+                  this.sql
+                    .exec<{ at: string | null }>(
+                      "SELECT max(e.at) AS at FROM events e JOIN event_changes c ON c.event = e.seq WHERE e.tbl = 'items' AND e.pk = ? AND c.field = 'status' AND c.new = 'Done'",
+                      i.pk,
+                    )
+                    .one().at ?? q.answered_at,
+              )
+              .sort()
+              .at(-1)!
+          : null;
+      const entry: StatusAnsweredHolding = { ref: q.ref, answered_at: q.answered_at, feature: features.length ? this.refOf(features[0]!) : null };
+      const settledAt = [ran, allDone].filter((t): t is string => t !== null).sort()[0];
+      if (settledAt === undefined) answeredHolding.push(entry);
+      else if (settledAt > holding && holding >= since) settled.push({ kind: "answered_holding", entry, settled_at: settledAt });
+    }
+    settled.sort((a, b) => b.settled_at.localeCompare(a.settled_at));
+
+    // Backlog health: Ready features with criteria in next_ready's order, what has none, triage and the open release.
+    const ready = this.sql
+      .exec<SummaryRow>(
+        `${SUMMARY} LEFT JOIN releases rel ON rel.pk = i.release
+         WHERE i.project = ? AND i.kind = 'feature' AND i.status = 'Ready' AND i.open_since IS NULL AND i.archived_at IS NULL AND (rel.status IS NULL OR rel.status != 'closed')
+         ORDER BY rel.pk IS NULL, rel.ord IS NULL, rel.ord, rel.pk, i.ord IS NULL, i.ord, i.pk`,
+        p.pk,
+      )
+      .toArray()
+      .filter((f) => f.ac_total > 0);
+    const noCriteria = this.sql
+      .exec<SummaryRow>(
+        `${SUMMARY} LEFT JOIN releases rel ON rel.pk = i.release
+         WHERE i.project = ? AND i.kind = 'feature' AND i.status != 'Done' AND i.archived_at IS NULL
+         ORDER BY rel.pk IS NULL, rel.ord IS NULL, rel.ord, rel.pk, i.ord IS NULL, i.ord, i.pk`,
+        p.pk,
+      )
+      .toArray()
+      .filter((f) => f.ac_total === 0);
+    const open = this.sql
+      .exec<{ pk: number; ref: string }>("SELECT pk, ref FROM releases WHERE project = ? AND status = 'open' ORDER BY ord IS NULL, ord, pk LIMIT 1", p.pk)
+      .toArray()[0];
+    const release = open
+      ? {
+          ref: open.ref,
+          todo: this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM items WHERE release = ? AND kind = 'feature' AND status != 'Done' AND archived_at IS NULL", open.pk).one().n,
+          ready: ready.filter((f) => f.release_ref === open.ref).length,
+        }
+      : null;
+    const triage = this.sql
+      .exec<{ pk: number; created_at: string }>("SELECT pk, created_at FROM items WHERE project = ? AND kind = 'backlog' AND archived_at IS NULL ORDER BY created_at, pk", p.pk)
+      .toArray();
+
+    // Usage: runs that ended in the span, once each; a lost run's tokens are unknown, so counted apart, never as zero.
+    const ended = this.sql
+      .exec<RunRow>("SELECT * FROM runs WHERE project = ? AND ended_at >= ? ORDER BY ended_at, pk", p.pk, since)
+      .toArray();
+    const agents = new Map<string, { agent: string; role: string; tokens: TokenTotals; runs: number; lost: number }>();
+    const total = zeroTokens();
+    let lost = 0;
+    for (const r of ended) {
+      const a = agents.get(r.agent) ?? { agent: r.agent, role: r.role, tokens: zeroTokens(), runs: 0, lost: 0 };
+      a.role = r.role;
+      a.runs++;
+      if (r.outcome === "lost") a.lost++, lost++;
+      else addTokens(a.tokens, r), addTokens(total, r);
+      agents.set(r.agent, a);
+    }
+    const heavy = inSpan.flatMap((s) => {
+      const from = new Date(new Date(s.ended_at!).getTime() - HEAVY_LOOKBACK_MS).toISOString();
+      const like = closed.filter((o) => o.pk !== s.pk && o.kind === s.kind && o.ended_at! < s.ended_at! && o.ended_at! >= from);
+      if (like.length < HEAVY_MIN) return [];
+      const usual = medianTokens(like.map(tokensOf));
+      return sumTokens(tokensOf(s)) > 2 * sumTokens(usual) ? [{ session: this.sessionRef(s.pk)!, tokens: tokensOf(s), usual }] : [];
+    });
+
+    return {
+      project: p.key,
+      name: p.name,
+      note: null,
+      waits: cap("waits", this.waitsOf(p)),
+      done: {
+        counts: { features: doneFeatures.length, sessions: doneSessions.length, lands, releases: doneReleases.length },
+        features: cap("done.features", doneFeatures),
+        sessions: cap("done.sessions", doneSessions),
+        releases: cap("done.releases", doneReleases),
+      },
+      stuck: {
+        runs: cap("stuck.runs", stuckRuns),
+        ci: cap("stuck.ci", stuckCi),
+        idle_sessions: cap("stuck.idle_sessions", idleSessions),
+        idle_features: cap("stuck.idle_features", idleFeatures),
+        answered_holding: cap("stuck.answered_holding", answeredHolding),
+        settled: cap("stuck.settled", settled),
+      },
+      recurring: null,
+      backlog: {
+        ready: cap(
+          "backlog.ready",
+          ready.map((f) => ({ ref: f.ref, title: f.title, release: f.release_ref, criteria: f.ac_total })),
+        ),
+        sessions_estimate: this.sessionsEstimate(p, ready.length),
+        no_criteria: cap(
+          "backlog.no_criteria",
+          noCriteria.map((f) => ({ ref: f.ref, title: f.title })),
+        ),
+        triage: { count: triage.length, oldest: triage[0] ? { ref: this.refOf(triage[0].pk), at: triage[0].created_at } : null },
+        release,
+        thin: ready.length < THIN_READY && release !== null && release.todo > 0,
+      },
+      usage: {
+        tokens: total,
+        by_agent: cap(
+          "usage.by_agent",
+          [...agents.values()].sort((a, b) => sumTokens(b.tokens) - sumTokens(a.tokens) || b.runs - a.runs || a.agent.localeCompare(b.agent)),
+        ),
+        heavy: cap("usage.heavy", heavy),
+        lost,
+      },
+      more,
+    };
+  }
+
+  /**
+   * About how many sessions the Ready features take: their number times the median sessions per feature
+   * over the project's last 20 Done features that had any; null with fewer than 3 to go by.
+   */
+  private sessionsEstimate(p: ProjectRow, ready: number): number | null {
+    const counts = this.sql
+      .exec<{ n: number }>(
+        `SELECT (SELECT count(*) FROM sessions s WHERE s.feature = i.pk) AS n,
+           coalesce((SELECT max(e.at) FROM events e JOIN event_changes c ON c.event = e.seq WHERE e.tbl = 'items' AND e.pk = i.pk AND c.field = 'status' AND c.new = 'Done'), i.updated_at) AS done_at
+         FROM items i WHERE i.project = ? AND i.kind = 'feature' AND i.status = 'Done' AND i.archived_at IS NULL
+           AND EXISTS (SELECT 1 FROM sessions s WHERE s.feature = i.pk)
+         ORDER BY done_at DESC LIMIT 20`,
+        p.pk,
+      )
+      .toArray()
+      .map((r) => r.n)
+      .sort((a, b) => a - b);
+    if (counts.length < 3) return null;
+    const mid = Math.floor(counts.length / 2);
+    const median = counts.length % 2 ? counts[mid]! : (counts[mid - 1]! + counts[mid]!) / 2;
+    return Math.round(ready * median);
   }
 
   /** A record's events, oldest first, with their changes. */
@@ -1739,8 +2090,11 @@ export class BoardStore {
     if (!run || run.project !== p.pk) throw new BoardError("invalid", `No run ${op.id} in ${p.key}`);
     if (run.ended_at) return { ref: op.id, seq: 0 };
     const t = op.tokens;
+    // How it ended (ADR 0005 §3): left out by an older supervisor, it stays null, unknown. A finished run has no reason.
+    const outcome = op.outcome ?? null;
+    const reason = outcome === null || outcome === "done" ? null : op.reason?.trim() || null;
     this.sql.exec(
-      "UPDATE runs SET ended_at = ?, input = ?, output = ?, cache_read = ?, cache_write = ?, calls = ?, ctx = ? WHERE pk = ?",
+      "UPDATE runs SET ended_at = ?, input = ?, output = ?, cache_read = ?, cache_write = ?, calls = ?, ctx = ?, outcome = ?, outcome_reason = ? WHERE pk = ?",
       op.ended_at,
       t.input,
       t.output,
@@ -1748,6 +2102,8 @@ export class BoardStore {
       t.cache_write,
       op.calls,
       op.ctx.length > 0 ? ctxBlob(op.ctx) : null,
+      outcome,
+      reason,
       run.pk,
     );
     const changes: Change[] = [
@@ -1757,6 +2113,8 @@ export class BoardStore {
       ["cache_read", 0, t.cache_read],
       ["cache_write", 0, t.cache_write],
       ["calls", 0, op.calls],
+      ["outcome", null, outcome],
+      ["outcome_reason", null, reason],
     ];
     return { ref: op.id, seq: tx.event("run_end", "runs", run.pk, op.id, changes) };
   }
@@ -2020,6 +2378,8 @@ export class BoardStore {
       ...(withCtx ? { ctx: ctxPoints(r["ctx"] ?? null) } : {}),
       remote_url: (r["remote_url"] as string | null) ?? null,
       tasks: this.sql.exec<{ item: number }>("SELECT item FROM run_tasks WHERE run = ? ORDER BY item", r.pk).toArray().map((t) => this.refOf(t.item)),
+      outcome: r.outcome ?? null,
+      outcome_reason: r.outcome_reason ?? null,
     };
   }
 
@@ -2404,4 +2764,33 @@ function triage(r: SummaryRow): Partial<ItemSummary> {
   if (r.blocks_use === 1) out.blocks_use = true;
   if (r.parent_hint_ref) out.parent_hint = r.parent_hint_ref;
   return out;
+}
+
+function zeroTokens(): TokenTotals {
+  return { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+}
+
+function tokensOf(r: TokenTotals): TokenTotals {
+  return { input: r.input, output: r.output, cache_read: r.cache_read, cache_write: r.cache_write };
+}
+
+function addTokens(to: TokenTotals, r: TokenTotals): void {
+  to.input += r.input;
+  to.output += r.output;
+  to.cache_read += r.cache_read;
+  to.cache_write += r.cache_write;
+}
+
+/** All four kinds together, as a heavy session is measured. */
+function sumTokens(t: TokenTotals): number {
+  return t.input + t.output + t.cache_read + t.cache_write;
+}
+
+/** The median of totals by their sum: the middle one, or the mean of the middle two. */
+function medianTokens(list: TokenTotals[]): TokenTotals {
+  const sorted = [...list].sort((a, b) => sumTokens(a) - sumTokens(b));
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2) return sorted[mid]!;
+  const [a, b] = [sorted[mid - 1]!, sorted[mid]!];
+  return { input: Math.round((a.input + b.input) / 2), output: Math.round((a.output + b.output) / 2), cache_read: Math.round((a.cache_read + b.cache_read) / 2), cache_write: Math.round((a.cache_write + b.cache_write) / 2) };
 }

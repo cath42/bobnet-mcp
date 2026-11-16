@@ -130,11 +130,17 @@ const ItemFields = z.object({
 export const TokenTotals = z.object({ input: count, output: count, cache_read: count, cache_write: count });
 export type TokenTotals = z.infer<typeof TokenTotals>;
 
+/** How a run ended (ADR 0005 §3): the supervisor's exit states, and `lost` for a run it didn't see end. */
+export const RunOutcome = z.enum(["done", "failed", "stopped", "lost"]);
+export type RunOutcome = z.infer<typeof RunOutcome>;
+
 export const CiStatus = z.enum(["queued", "running", "passed", "failed", "cancelled"]);
 export type CiStatus = z.infer<typeof CiStatus>;
 
 /** The most context-per-call points a run keeps (§9). */
 export const RUN_CTX_MAX = 2000;
+/** A run's end reason as the board keeps it (ADR 0005 §3): the supervisor cuts a longer one. */
+export const RUN_REASON_MAX = 300;
 /** A handoff's text as a close stores it (§6). */
 export const HANDOFF_MAX = 64 * 1024;
 
@@ -181,6 +187,11 @@ export const BoardOp = z.discriminatedUnion("op", [
   z.object({ op: z.literal("waits"), project: ProjectKey.optional(), since: at.optional() }),
   /** One row per project the caller reads, or one: its release, open features, next Ready feature and backlog. */
   z.object({ op: z.literal("overview"), project: ProjectKey.optional() }),
+  /**
+   * What happened over a span (ADR 0005 §2), across every project the caller reads, or one: derived on
+   * read, never stored. `since` is clamped to the last 31 days, and the reply says what it used.
+   */
+  z.object({ op: z.literal("status"), project: ProjectKey.optional(), since: at }),
 
   // Writes
   z.object({
@@ -374,6 +385,10 @@ export const BoardOp = z.discriminatedUnion("op", [
     calls: count,
     /** Context per call, in order. */
     ctx: z.array(z.number().int().nonnegative().max(0xffffffff)).max(RUN_CTX_MAX).default([]),
+    /** How it ended (ADR 0005 §3); left out by a supervisor before it, which reads as unknown. `lost`: tokens unknown, sent as zeros. */
+    outcome: RunOutcome.optional(),
+    /** The error or the stop reason; none for `done`. */
+    reason: z.string().max(RUN_REASON_MAX).nullable().optional(),
   }),
   /** What a land pushed (§10), which ties a CI run on that commit to its worker. */
   z.object({
@@ -417,8 +432,8 @@ export type BoardOp = z.infer<typeof BoardOp>;
 export type BoardOpInput = z.input<typeof BoardOp>;
 export type BoardOpName = BoardOp["op"];
 
-export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview";
-export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview"] satisfies BoardReadName[];
+export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview" | "status";
+export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview", "status"] satisfies BoardReadName[];
 /** The supervisor's own operations, which only its connection makes (§8). */
 export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_remote", "run_end", "push", "slot_run", "ci_run"];
 
@@ -596,6 +611,9 @@ export interface RunRecord {
   /** Its Remote Control session, when it ran with one. */
   remote_url: string | null;
   tasks: string[];
+  /** How it ended (ADR 0005 §3); null while it runs, and for a run that ended before outcomes: unknown. */
+  outcome?: RunOutcome | null;
+  outcome_reason?: string | null;
 }
 
 export interface SessionRecord extends SessionSummary {
@@ -679,6 +697,97 @@ export interface GrantRecord {
   admin: boolean;
 }
 
+/** What a project's status page shows over a span (ADR 0005 §2): derived on read, never stored. */
+export interface StatusRow {
+  project: string;
+  name: string;
+  /** The lead's note (BOB-36): null until it ships, and when there is none. */
+  note: { text: string; author: string; at: string; newer: { sessions: number; features: number; releases: number } } | null;
+  /** waitsOf(p), oldest first: the very list the waits read returns. */
+  waits: WaitRecord[];
+  done: {
+    /** Whole numbers, before any list is cut. */
+    counts: { features: number; sessions: number; lands: number; releases: number };
+    /** Moved to Done in the span and still Done, newest first. */
+    features: Array<{ ref: string; title: string; type: ItemType; release: string | null; at: string }>;
+    sessions: Array<{
+      session: SessionRef;
+      ended_at: string;
+      need: "none" | "answer" | "casper";
+      summary: string;
+      closed_by: string;
+      /** All the session's runs; `lost`: those of them that ended `lost`, whose tokens are unknown. */
+      tokens: TokenTotals;
+      lost: number;
+      counts: { blockers: number; majors: number; sent_back: number };
+    }>;
+    releases: Array<{ ref: string; title: string; closed_at: string }>;
+  };
+  stuck: {
+    runs: StatusStuckRun[];
+    ci: StatusStuckCi[];
+    idle_sessions: Array<{ session: SessionRef; since: string }>;
+    idle_features: Array<{ ref: string; title: string; since: string }>;
+    answered_holding: StatusAnsweredHolding[];
+    /** Stuck and settled, both in the span, newest settled first; `entry` as its list shows it. */
+    settled: Array<
+      | { kind: "runs"; entry: StatusStuckRun; settled_at: string }
+      | { kind: "ci"; entry: StatusStuckCi; settled_at: string }
+      | { kind: "answered_holding"; entry: StatusAnsweredHolding; settled_at: string }
+    >;
+  };
+  /** BOB-35's theme groups: null until it ships. */
+  recurring: unknown | null;
+  backlog: {
+    /** Ready features with criteria, in next_ready's order. */
+    ready: Array<{ ref: string; title: string; release: string | null; criteria: number }>;
+    sessions_estimate: number | null;
+    /** Features not Done, not archived, with no criteria. */
+    no_criteria: Array<{ ref: string; title: string }>;
+    triage: { count: number; oldest: { ref: string; at: string } | null };
+    /** The open release: its features not Done, and those Ready with criteria. */
+    release: { ref: string; todo: number; ready: number } | null;
+    thin: boolean;
+  };
+  usage: {
+    /** Runs that ended in the span, lost ones left out. */
+    tokens: TokenTotals;
+    by_agent: Array<{ agent: string; role: string; tokens: TokenTotals; runs: number; lost: number }>;
+    heavy: Array<{ session: SessionRef; tokens: TokenTotals; usual: TokenTotals }>;
+    /** Runs that ended in the span with tokens unknown. */
+    lost: number;
+  };
+  /** How many more each cut list had, by its path ("done.sessions"): only lists past 100. */
+  more: Record<string, number>;
+}
+
+export interface StatusStuckRun {
+  id: string;
+  agent: string;
+  role: string;
+  session: SessionRef | null;
+  outcome: "failed" | "stopped" | "lost";
+  reason: string | null;
+  ended_at: string;
+}
+
+export interface StatusStuckCi {
+  source: string;
+  name: string;
+  branch: string | null;
+  sha: string | null;
+  url: string | null;
+  worker: string | null;
+  session: SessionRef | null;
+  ended_at: string;
+}
+
+export interface StatusAnsweredHolding {
+  ref: string;
+  answered_at: string;
+  feature: string | null;
+}
+
 // ---------- Results ----------
 
 export interface BoardWritten {
@@ -695,6 +804,8 @@ export interface BoardResults {
   /** Oldest first; `answered` newest first, 50 at most. */
   waits: { waits: WaitRecord[]; answered: AnsweredRecord[] };
   overview: { projects: OverviewRow[] };
+  /** `at`: the Board's now; `since`: the span's start as it used it. */
+  status: { at: string; since: string; projects: StatusRow[] };
   create_project: BoardWritten;
   create_release: BoardWritten;
   create: BoardWritten;
