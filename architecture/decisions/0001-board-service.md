@@ -402,6 +402,9 @@ reads join `projects`, `list`, `get` and `grants` in `BOARD_READS` (`BoardReadNa
     last status→In Review event, or `updated_at` for an imported item;
   - backlog bugs with `blocks_use` that are neither archived nor Done (`bug`).
 
+  A question's or action's wait carries its `context` whole (null when it has none or it is blank);
+  a review gate's and a bug's carry null (BOB-31, `reviews/2026-11-15-bob31-wait-context-ruling.md`).
+
   `blocking` is defined once, in `store.ts` `waitsOf`, and both reads use it. It means the wait
   holds up a named task, session or feature (notes 22): a question with holds or a waiting session,
   any review gate (it holds its own item), any such bug. A wait's `feature` is found in this order:
