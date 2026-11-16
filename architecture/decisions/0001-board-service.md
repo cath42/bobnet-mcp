@@ -595,8 +595,15 @@ is `running` or `queued`. This is derived, not a worker state.
   `docs/board-export-v1.md`. A new version is a new number, and the importer reads every version
   it knows.
 - **Nightly backup:** the supervisor on mbp-1, with `board_backup: {repo, at}` in its config, fetches
-  the export, writes `board.json` and commits it. It is a backup and an exit route, never a second
-  store: nothing reads it back except an import. A full backup needs a `'*'` project `read` row for
+  the export, writes `board.json`, commits it and pushes it to the repo's remote. It is a backup and
+  an exit route, never a second store: nothing reads it back except an import. The push (BOB-30,
+  amended 2026-11-15) is a plain `git push` to the branch's upstream: the repo is set up with one
+  (cloned, or pushed once with `-u`), and the supervisor never configures a remote. The export holds
+  every project's text (no credentials), so that remote is private; BobNet's is
+  `cath42/bobnet-board-backup`. A failed push (no remote, no upstream, no network, refused) is a
+  warning with git's error, never a failed backup: the commit stays local, and every night pushes,
+  including a night when the board didn't change, so what the remote lacks goes out with the next
+  push that succeeds. A night whose fetch fails pushes nothing. A full backup needs a `'*'` project `read` row for
   an agent on the backing-up laptop (mbp-1); without one the backup holds only what that laptop's
   rules cover, and its log names the projects it got.
 - **`POST /v1/board/import`** takes the same shape and imports into projects that don't exist yet. It
