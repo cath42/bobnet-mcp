@@ -3,6 +3,15 @@
 Updated 2026-11-15 ~03:00Z. Live: broker at v2.0.0-rc.29 (v2 e12cdc8, version 41cbc1dc, live
 02:33:23Z); mbp-1's supervisor on rc.29 since 02:42:28Z (pid 48318); ubu1 on rc.29.
 
+## Now (2026-11-16 ~03:50Z, session stop; handoff w_06568f95.md)
+- Live: broker 47d5483 (44945736); mbp-1 on rc.35. rc.36 cut (08f0c6e, BOB-30 backup push), installed; poe
+  restarts onto it with the staged board_backup config (03:00, /Users/ct/Code/bobnet-board-backup) at the
+  LAND-53 design close.
+- BOB-31 signed off (96aed95, e08ea07): broker deploy in poe's window, same gap (Casper's go: via poe).
+- Done today: BOB-3, BOB-10, BOB-27 (stale bug). BOB-4 waits on Casper's look (AC 5, 6).
+- Next feature: BOB-33 Status tab (reqs 537c7f7; then BOB-35, BOB-36). Daisy prototype + Toad design in flight.
+- Backlog to order (Peach): BOB-32, BOB-34.
+
 ## Release 1: drive to finished and deployed (Casper's standing go, 2026-11-14 22:25)
 No approvals for deploys or releases; ask Casper only real product calls or failures needing his hands.
 - 04:31:57Z mbp-1 supervisor on rc.32 (pid 71790). Checks PASS on mbp-1: every supervisor peer
