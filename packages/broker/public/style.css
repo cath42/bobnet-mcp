@@ -571,3 +571,204 @@ pre.handoff { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wra
   .tasks li .ac { grid-column: 3; grid-row: 1; }
   .tasks li .on-it { grid-column: 1 / -1; grid-row: 3; }
 }
+
+/* ---------- Status: catch up after hours away (BOB-33, design/BOB-33/spec.md) ---------- */
+
+.st { display: grid; gap: 18px; }
+main.wide .st { max-width: 1320px; }
+
+
+/* The Status tab says when something is new since this device's last visit. */
+#tabs a[data-new="true"]::after { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: 2px; }
+
+/* The span: what the page looks back over, the chips that widen it, I'm caught up. */
+.span-bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; }
+.span-bar .when { display: grid; margin-right: auto; min-width: 0; }
+.span-bar .when b { font-size: 16px; }
+.span-bar .when span { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.span-bar .seg button { min-height: 36px; white-space: nowrap; }
+.span-bar .caught { min-height: 36px; }
+.span-note { flex-basis: 100%; margin: 0; font-size: 12.5px; color: var(--muted); }
+
+/* The two answers. */
+.answers { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.ans { display: grid; gap: 1px; align-content: start; background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--ok); border-radius: var(--radius); padding: 10px 14px; color: inherit; text-decoration: none; min-width: 0; }
+.ans:hover { border-color: var(--muted); }
+.ans .lab { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.ans b { font-size: 24px; line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--ok); }
+.ans .sub { font-size: 13px; color: var(--muted); }
+.ans[data-tone="warn"] { border-left-color: var(--warn); } .ans[data-tone="warn"] b { color: var(--warn); }
+.ans[data-tone="bad"] { border-left-color: var(--bad); } .ans[data-tone="bad"] b { color: var(--bad); }
+
+/* All projects: one card per project. */
+.pcards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.pcard { color: inherit; text-decoration: none; gap: 10px; border-left: 4px solid var(--ok); }
+.pcard[data-tone="warn"] { border-left-color: var(--warn); }
+.pcard[data-tone="bad"] { border-left-color: var(--bad); }
+.pcard:hover { border-color: var(--muted); }
+.pcard .top { justify-content: flex-start; }
+.pcard .name { font-size: 17px; }
+.pcard .chev { margin-left: auto; font-size: 22px; line-height: 1; color: var(--muted); }
+.pnote { margin: 0; font-size: 13.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pnote b { font-weight: 600; }
+.pnote[data-old="true"] b { color: var(--warn); }
+.pstats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+.pstat { display: grid; gap: 0; min-width: 0; }
+.pstat .lab { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+.pstat b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.pstat .s { font-size: 12px; color: var(--muted); }
+.pstat[data-tone="bad"] b { color: var(--bad); }
+.pstat[data-tone="warn"] b { color: var(--warn); }
+.pflags { display: flex; flex-wrap: wrap; gap: 6px; }
+.pflags:empty { display: none; }
+
+/* Needs you lines: as the Overview's, the whole line opens the item on Waits on you. */
+.st-card { padding: 4px 14px 10px; }
+.st-needs li.need { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; }
+.st-needs li.need .badge { grid-row: span 2; }
+.st-needs a.l-t { text-decoration: none; }
+.st-needs a.l-t:hover { text-decoration: underline; }
+.st-needs li[data-blocking="false"] .l-m { color: var(--muted); }
+.st-needs .age { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.before { margin-left: 8px; font-size: 11.5px; color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+.caught-foot { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: 13px; color: var(--muted); padding-top: 4px; }
+
+/* One project's page. */
+.p-head { display: grid; gap: 4px; }
+.back { color: var(--accent); text-decoration: none; font-size: 14px; }
+.p-name { margin: 0; font-size: 22px; text-transform: none; letter-spacing: 0; color: var(--text); }
+.p-name .muted { font-size: 13px; font-weight: 400; }
+
+/* The lead's note, above the facts; old when newer facts follow it. */
+.lead-note { border-left: 3px solid var(--accent); gap: 4px; }
+.lead-note .ln-h { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; font-size: 13px; color: var(--muted); }
+.lead-note .ln-h b { color: var(--text); font-size: 14px; }
+.lead-note .old { color: var(--warn); font-weight: 600; }
+.lead-note p { margin: 0; font-size: 15px; line-height: 1.5; }
+.lead-note[data-old="true"] { border-left-color: var(--warn); }
+.lead-note[data-old="true"] p { color: var(--muted); }
+
+/* The six sections: a headline you can read folded, the facts when open. */
+.secs { display: grid; gap: 10px; }
+@media (min-width: 1100px) { .secs { display: block; columns: 2; column-gap: 14px; } .secs .sec { break-inside: avoid; margin-bottom: 14px; } }
+.sec { padding: 0; gap: 0; border-left: 4px solid var(--line); }
+.sec[data-tone="bad"] { border-left-color: var(--bad); }
+.sec[data-tone="warn"] { border-left-color: var(--warn); }
+.sec[data-tone="ok"] { border-left-color: var(--ok); }
+.sec-h { list-style: none; margin: 0; padding: 12px 14px; display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 2px 10px; align-items: baseline; color: var(--text); font-size: 14px; min-height: 44px; }
+.sec-h::-webkit-details-marker { display: none; }
+.sec-h .t { font-weight: 600; font-size: 15px; }
+.sec-h .t::before { content: "\203a"; display: inline-block; width: 1em; color: var(--muted); transition: transform .15s; }
+.sec[open] > .sec-h .t::before { transform: rotate(90deg); }
+.sec-h .n { font-weight: 600; font-variant-numeric: tabular-nums; }
+.sec-h .n[data-tone="bad"] { color: var(--bad); } .sec-h .n[data-tone="warn"] { color: var(--warn); } .sec-h .n[data-tone="ok"] { color: var(--ok); }
+.sec-h .scope { justify-self: end; text-align: right; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.sec-h .hl { grid-column: 1 / -1; padding-left: 1em; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.sec[open] > .sec-h { border-bottom: 1px solid var(--line); }
+.sec-b { padding: 4px 14px 12px; display: grid; gap: 10px; min-width: 0; }
+.sec-b .counts-line { margin: 6px 0 0; }
+.sec-b .grp { display: grid; gap: 4px; min-width: 0; }
+.sec-b h3 { margin: 6px 0 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.sec-b .note { margin: 0; }
+.sec-link { justify-self: start; padding-left: 0; }
+.st-empty { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
+.st-empty.ok { color: var(--ok); }
+
+/* Rows: a mark, what, when. */
+.rows { list-style: none; margin: 0; padding: 0; display: grid; }
+.rows > li, .rows .rest > li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 10px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; min-width: 0; }
+.rows > li:first-child { border-top: 0; }
+.rows .rest { display: contents; }
+.rows .rest[hidden] { display: none; }
+.rows time { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+.rows time .before { display: block; margin: 2px 0 0; }
+.rows .what { display: grid; gap: 2px; min-width: 0; }
+.rows .m { font-size: 12.5px; color: var(--muted); display: block; }
+.rows .m.warn { color: var(--warn); }
+.rows .more-t { justify-self: start; padding-left: 0; }
+.rows code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--muted); }
+.rows.stuck > li[data-sev="bad"] .what > span:first-child { font-weight: 600; }
+
+/* A closed session: its kind in its colour, outcome, summary. */
+.srow .kind { min-width: 4.2em; }
+.srow .outcome { gap: 2px 10px; font-size: 12.5px; color: var(--muted); }
+.srow .outcome .need[data-need="none"] { color: var(--muted); font-weight: 400; }
+.srow .tk.heavy { color: var(--warn); font-weight: 600; }
+.srow .sum { font-size: 13.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* Recurring problems. */
+.rows.rec > li { grid-template-columns: minmax(4.5em, auto) minmax(0, 1fr); }
+.theme { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 6px; background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); white-space: nowrap; justify-self: start; }
+.times { font-size: 18px; font-weight: 600; color: var(--warn); font-variant-numeric: tabular-nums; }
+.back-tag { font-size: 11.5px; font-weight: 600; color: var(--warn); white-space: nowrap; }
+.hits { list-style: none; margin: 2px 0 0; padding: 0; display: grid; gap: 2px; font-size: 13px; color: var(--muted); }
+.hits .id { font-size: 12.5px; }
+
+/* Backlog health. */
+.thin { margin: 6px 0 0; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--warn) 10%, var(--surface)); color: var(--warn); font-weight: 600; font-size: 14px; }
+.rows.health > li { grid-template-columns: 9.5em minmax(0, 1fr); }
+.rows.health .k { color: var(--muted); font-size: 13px; }
+.rows.health li[data-warn="true"] .k { color: var(--warn); font-weight: 600; }
+
+/* Usage. */
+.rows.usage > li { grid-template-columns: 9em minmax(40px, 1fr) minmax(4.5em, auto); align-items: center; }
+.rows.usage .who-u { display: grid; }
+.rows.usage .who-u .m { font-size: 12px; }
+.rows.usage .meter { max-width: none; }
+
+/* Stuck items settled in the span. */
+.settled summary { margin: 4px 0 0; font-size: 13px; }
+.settled .rows li { color: var(--muted); }
+
+/* The Overview's one line. */
+.st-line { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; color: var(--text); text-decoration: none; font-size: 14px; grid-column: 1 / -1; border-left-color: var(--ok); }
+.st-line[data-tone="warn"] { border-left-color: var(--warn); }
+.st-line[data-tone="bad"] { border-left-color: var(--bad); }
+.st-line .go { margin-left: auto; color: var(--accent); font-weight: 600; white-space: nowrap; }
+
+/* A toast that stays (I'm caught up's Undo) closes with ×. */
+.toast .close-t { margin-left: auto; border: 0; background: transparent; min-height: 28px; padding: 0 6px; color: var(--muted); font-size: 18px; }
+
+@media (max-width: 760px) {
+  .st { gap: 14px; }
+  .span-bar { padding: 10px 12px; }
+  .span-bar .when { flex-basis: 100%; }
+  .span-bar .seg { flex: 1 1 auto; }
+  .span-bar .seg button { flex: 1; min-height: 40px; }
+  .span-bar .caught { display: none; } /* On a phone it sits at the end of the digest, after reading. */
+  .caught-foot button { width: 100%; min-height: 48px; font-size: 16px; }
+  .caught-foot span { width: 100%; text-align: center; }
+  .ans { padding: 10px 12px; }
+  .ans b { font-size: 21px; }
+  .pstats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .pstat b { font-size: 18px; }
+  .pstat .lab { font-size: 10.5px; }
+  .rows.health > li { grid-template-columns: minmax(0, 1fr); }
+  .rows.usage > li { grid-template-columns: 7.5em minmax(30px, 1fr) minmax(4em, auto); }
+  .rows > li.srow { grid-template-columns: minmax(0, 1fr) auto; }
+  .srow .kind { grid-column: 1; }
+  .srow time { grid-column: 2; grid-row: 1; }
+  .srow .what { grid-column: 1 / -1; }
+}
+
+/* ADR 0005: untagged findings, lost runs' unknown tokens, runs still going (from the snapshots). */
+.rows.rec > li[data-untagged="true"] .theme { background: color-mix(in srgb, var(--muted) 14%, transparent); color: var(--muted); }
+.rows.usage .num { display: grid; justify-items: end; }
+.rows.usage .unk { font-size: 11.5px; color: var(--warn); white-space: nowrap; }
+.rows.running > li { grid-template-columns: auto 1fr auto; align-items: center; }
+.rows.running .num { font-variant-numeric: tabular-nums; color: var(--muted); }
+.lead-note .ln-more { display: none; justify-self: start; }
+@media (max-width: 699px) {
+  .lead-note:not(.full) .ln-t { display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+  .lead-note .ln-more { display: inline; }
+}
+
+/* As built: the loading answers, a muted old-board card, a cut list's line, I'm caught up at the end only on a phone. */
+.ans[data-tone="none"] { border-left-color: var(--line); } .ans[data-tone="none"] b { color: var(--muted); }
+.pcard.old { border-left-color: var(--idle); }
+.note.cut { margin: 4px 0 0; font-size: 12.5px; }
+.rows > li.show-all { display: block; }
+.caught-foot { display: none; }
+@media (max-width: 760px) { .caught-foot { display: flex; } }
+.ov > .st-line { margin: 0; }
+.rows .m a { color: var(--accent); }

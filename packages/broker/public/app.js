@@ -87,13 +87,16 @@ const actionToasts = new Map();
 let toastTimer = null;
 
 /** A toast; with `undo`, an Undo button that takes the change back. */
-function toast(text, ok = true, undo = null) {
+function toast(text, ok = true, undo = null, keep = false) {
   const el = $("toast");
-  el.replaceChildren(text, undo ? button("Undo", "undo", () => { el.hidden = true; undo(); }) : "");
+  // `keep`: it stays until closed or the next tab change (BOB-33: I'm caught up's Undo).
+  el.replaceChildren(text, undo ? button("Undo", "undo", () => { el.hidden = true; undo(); }) : "", keep ? button("×", "close-t", () => (el.hidden = true)) : "");
+  el.querySelector(".close-t")?.setAttribute("aria-label", "Close");
   el.dataset.ok = String(ok);
+  el.dataset.keep = String(keep);
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), 8000);
+  if (!keep) toastTimer = setTimeout(() => (el.hidden = true), 8000);
 }
 
 /** Sends a dashboard action to a laptop's supervisor; the button stays disabled until it's settled. True once sent. With `done`, its result's toast. */
@@ -906,6 +909,8 @@ async function loadProjects() {
   for (const key of backlogs.keys()) loadBacklog(key);
   // What waits on Casper counts on the tab, on every view (waiting-on-casper 3).
   if (svc.projects.length || ov.rows) loadOverview();
+  // The Status tab's dot and the Overview's line read from the start, on every view.
+  loadStatus();
   scheduleRender();
 }
 
@@ -1238,6 +1243,7 @@ function viewOverview() {
   return [
     ov.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, ov.error)) : null,
     h("div", { class: "ov" },
+      statusLine(),
       h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count", id: "needs-count" }, waitCount() || "")),
         h("div", { class: "card" },
           !ov.waits && !perms.length ? h("p", { class: "muted", style: "margin:0" }, "Reading the board…")
@@ -1498,7 +1504,7 @@ function waitItem(w) {
   const [st, label] = WAIT_KIND[w.kind];
   const id = waitId(w), verb = ANSWER_VERB[w.kind], open = state.answering?.id === id;
   const closed = w.waiting_sessions.map((ss) => `${ss.feature === w.feature ? stepName(ss) : `${ss.feature} ${stepName(ss)}`}`);
-  return h("li", { dataset: { blocking: String(w.blocking), kind: w.kind, ref: w.ref } },
+  return h("li", { id: `w-${id}`, dataset: { blocking: String(w.blocking), kind: w.kind, ref: w.ref } },
     h("div", { class: "top" }, badge(st, label), h("span", { class: "id" }, w.ref),
       h("span", { class: "muted" }, projectName(w.project), w.feature && w.feature !== w.ref ? [" · ", h("a", { href: featureHref(w.project, w.feature) }, w.feature)] : null),
       h("span", { class: "age" }, waitAge(w.since))),
@@ -1529,7 +1535,7 @@ function permItem(p) {
   const w = workers().find((x) => x.id === p.worker_id);
   const ss = w && sessionOf(w);
   const id = permId(p), open = state.answering?.id === id;
-  return h("li", { dataset: { blocking: "true", kind: "permission", ref: p.id } },
+  return h("li", { id: `w-${id}`, dataset: { blocking: "true", kind: "permission", ref: p.id } },
     h("div", { class: "top" }, badge("permission"),
       h("span", { class: "muted" }, w ? projectName(w.project) : p.laptop, ss ? [" · ", h("a", { href: featureHref(w.project, ss.feature) }, ss.feature)] : null),
       h("span", { class: "age" }, waitAge(p.created_at))),
@@ -1630,6 +1636,483 @@ function legacyRow(key) {
   return h("div", { class: "card prow", dataset: { project: key } },
     h("div", { class: "pc pname" }, h("a", { href: "#roadmap", onclick: () => (state.project = key) }, key), h("span", { class: "muted" }, laptopsOf(key).join(" · "))),
     h("div", { class: "pc legacy" }, h("span", { class: "muted" }, "Its board is still on Backlog.md, not in the service yet: its roadmap shows where it stands.")));
+}
+
+// ---------- Status: catch up after hours away (BOB-33; design/BOB-33/spec.md, ADR 0005) ----------
+
+/** This device's last visit, the broker's `at` when Casper said he was caught up: one for every project (ADR 0005 §1). */
+const STATUS_MARK = "bobnet.status.lastVisit";
+/** Sections he opened or folded, per project and section, for the tab's life. */
+const STATUS_OPEN = "bobnet.status.open";
+const SPAN_MS = { "24h": 86_400_000, week: 7 * 86_400_000 };
+/** The read on the marker (`base`: the dot, the Overview's line, the visit span) and, while a chip is pressed, its span's. */
+const stv = { base: null, baseFor: null, wide: null, error: null, errorAt: null, loading: false, again: false, last: 0, timer: null, span: null, showAll: new Set(), scrollFor: null };
+let connDownAt = null;
+
+const markOf = () => { try { return localStorage.getItem(STATUS_MARK); } catch { return null; } };
+function setMark(at) {
+  try { at ? localStorage.setItem(STATUS_MARK, at) : localStorage.removeItem(STATUS_MARK); } catch {}
+}
+const stOpen = () => { try { return JSON.parse(sessionStorage.getItem(STATUS_OPEN) ?? "{}"); } catch { return {}; } };
+function setStOpen(key, open) {
+  const all = stOpen();
+  all[key] = open;
+  try { sessionStorage.setItem(STATUS_OPEN, JSON.stringify(all)); } catch {}
+}
+/** The span pressed: since the visit, 24 h or a week. With no marker, the visit is the last 24 hours. */
+function stSpan() {
+  const span = stv.span ?? "visit";
+  return span === "visit" && !markOf() ? "24h" : span;
+}
+/** Whether the span is the marker read's: the visit, or a first visit's 24 hours. */
+const onBase = () => stSpan() === "visit" || (stSpan() === "24h" && !markOf());
+function stReply() {
+  if (onBase()) return stv.base;
+  return stv.wide?.span === stSpan() ? stv.wide.reply : null;
+}
+
+/** One read for the whole tab, two while a chip is pressed (ADR 0005 §2); what shows stays until the reply. */
+async function loadStatus() {
+  if (stv.loading) return void (stv.again = true);
+  stv.loading = true;
+  stv.last = Date.now();
+  const mark = markOf(), span = stSpan();
+  try {
+    const base = await boardOp({ op: "status", since: mark ?? new Date(brokerNow() - SPAN_MS["24h"]).toISOString() });
+    if (!Array.isArray(base?.projects)) throw new Error("The board's answer has no status in it.");
+    const wide = onBase() ? null : await boardOp({ op: "status", since: new Date(Date.parse(base.at) - SPAN_MS[span]).toISOString() });
+    Object.assign(stv, { base, baseFor: mark, wide: wide ? { span, reply: wide } : null, error: null });
+  } catch (err) {
+    Object.assign(stv, { error: err.message, errorAt: new Date(brokerNow()).toISOString() });
+  } finally {
+    stv.loading = false;
+  }
+  scheduleRender();
+  if (stv.again) {
+    stv.again = false;
+    await loadStatus();
+  }
+}
+/** On board_changed: at most once per 5 s while Status or the Overview shows; otherwise the minute's tick keeps the dot. */
+function statusChanged() {
+  const v = viewName();
+  if (v !== "status" && v !== "overview") return;
+  clearTimeout(stv.timer);
+  const wait = stv.last + 5000 - Date.now();
+  if (wait <= 0) loadStatus();
+  else stv.timer = setTimeout(loadStatus, wait);
+}
+
+/** Times as the page says them: "23:10" today, "Sun 23:10" this week, "Mon 9 Nov" before. */
+const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const pad2 = (n) => String(n).padStart(2, "0");
+function stClock(iso) {
+  const d = new Date(iso), now = new Date(brokerNow());
+  const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const midnightOf = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const back = Math.round((midnightOf(now) - midnightOf(d)) / 86_400_000);
+  if (back <= 0) return hm;
+  if (back < 7) return `${WD[d.getDay()]} ${hm}`;
+  return `${WD[d.getDay()]} ${d.getDate()} ${MON[d.getMonth()]}`;
+}
+/** "7 h", "2 h 15 min" under 3 h, "3 d": non-breaking. */
+function stAge(iso) {
+  const m = Math.max(0, Math.floor((brokerNow() - Date.parse(iso)) / 60_000));
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min`;
+  if (m < 1440) { const hrs = Math.floor(m / 60), mins = m % 60; return hrs < 3 && mins >= 10 ? `${hrs} h ${mins} min` : `${hrs} h`; }
+  return `${Math.floor(m / 1440)} d`;
+}
+const stAgo = (iso) => (stAge(iso) === "just now" ? "just now" : `${stAge(iso)} ago`);
+/** A list's whole length: what came and what the board left out past 100. */
+const whole = (row, path, list) => list.length + (row.more?.[path] ?? 0);
+const sessName = (ss) => `${ss.feature} ${stepName(ss)}`;
+const workerName = (id) => workers().find((w) => w.id === id)?.name ?? id;
+const permProject = (p) => workers().find((w) => w.id === p.worker_id)?.project ?? null;
+
+/** What's stuck in a row, as the page lists it: bad first, then newest (spec: What's stuck). */
+function stuckOf(row) {
+  const s = row.stuck;
+  const items = [
+    ...s.runs.map((r) => stuckRun(r)),
+    ...s.ci.map((c) => stuckCi(c)),
+    ...s.idle_sessions.map((x) => ({ tone: "warn", label: "Nobody on it", ref: x.session.feature, text: `${sessName(x.session)} is open with no agent for ${stAge(x.since)}`, meta: null, at: x.since })),
+    ...s.idle_features.map((x) => ({ tone: "warn", label: "No run", ref: x.ref, text: `${x.ref} is In Progress with no open run for ${stAge(x.since)}`, meta: x.title, at: x.since })),
+    ...s.answered_holding.map((x) => stuckAnswered(x)),
+  ];
+  return items.sort((a, b) => (a.tone === b.tone ? b.at.localeCompare(a.at) : a.tone === "bad" ? -1 : 1));
+}
+function stuckRun(r) {
+  const on = r.session ? sessName(r.session) : "other work";
+  const said = { failed: ["Run failed", "bad", "failed"], stopped: ["Run stopped", "warn", "was stopped"], lost: ["Run lost", "warn", "was lost"] }[r.outcome];
+  return { tone: said[1], label: said[0], ref: r.session?.feature ?? null, text: `${r.agent}'s run on ${on} ${said[2]}`,
+    meta: r.outcome === "lost" ? "Running when the supervisor restarted; nobody has started it again." : r.reason, at: r.ended_at };
+}
+function stuckCi(c) {
+  const land = c.source === "slot" && c.name === "land";
+  const sha = c.sha ? (c.url ? h("a", { href: c.url, target: "_blank", rel: "noopener" }, c.sha.slice(0, 8)) : c.sha.slice(0, 8)) : null;
+  const who = c.worker ? workerName(c.worker) : null;
+  return land
+    ? { tone: "bad", label: "Land failed", ref: c.session?.feature ?? null, text: `${who ?? "A"}'s land failed`, meta: [[c.name, c.branch].filter(Boolean).join(" · "), sha ? [" · ", sha] : null], at: c.ended_at }
+    : { tone: "bad", label: "CI red", ref: c.session?.feature ?? null, text: `${c.name} failed${c.branch ? ` on ${c.branch}` : ""}`, meta: [who, sha ? [who ? " · " : "", sha] : null], at: c.ended_at, ci: true };
+}
+const stuckAnswered = (x) => ({ tone: "warn", label: "Answered, still holding", ref: x.feature, text: `${x.ref} was answered ${stAgo(x.answered_at)}; nothing has started${x.feature ? ` on ${x.feature}` : ""}`, meta: null, at: x.answered_at });
+const settledOf = (x) => (x.kind === "runs" ? stuckRun(x.entry) : x.kind === "ci" ? stuckCi(x.entry) : stuckAnswered(x.entry));
+/** How many are stuck, whole. */
+const stuckCount = (row) => ["runs", "ci", "idle_sessions", "idle_features", "answered_holding"].reduce((n, k) => n + whole(row, `stuck.${k}`, row.stuck[k]), 0);
+
+/** Needs you: the board's waits and his permissions from the snapshots, oldest first; a permission holds work up. */
+function needsOf(rows, all) {
+  const keys = new Set(rows.map((r) => r.project));
+  const waits = rows.flatMap((r) => r.waits.map((w) => ({ w, since: w.since, blocking: w.blocking })));
+  const perms = humanPerms().filter((p) => all || keys.has(permProject(p))).map((p) => ({ p, since: p.created_at, blocking: true }));
+  const list = [...waits, ...perms].sort((a, b) => a.since.localeCompare(b.since));
+  const more = rows.reduce((n, r) => n + (r.more?.waits ?? 0), 0);
+  return { list, count: list.length + more, more, blocking: list.filter((x) => x.blocking).length };
+}
+function verdict(rows) {
+  const stuck = rows.flatMap(stuckOf);
+  const count = rows.reduce((n, r) => n + stuckCount(r), 0);
+  const tone = stuck.some((x) => x.tone === "bad") ? "bad" : count ? "warn" : "ok";
+  const ci = rows.filter((r) => stuckOf(r).some((x) => x.ci)).map((r) => r.name);
+  const done = rows.reduce((n, r) => n + r.done.counts.sessions, 0);
+  const sub = [ci.length ? `CI red${rows.length > 1 ? ` on ${ci.join(", ")}` : ""}` : null, count ? `${count} stuck` : null, `${done} done`].filter(Boolean).join(" · ");
+  return { tone, word: { bad: "Needs a look", warn: "Mostly OK", ok: "Going OK" }[tone], sub, done, stuck: count, ci };
+}
+/** The dot on the tab: anything closed, Done or stuck since this device's marker (spec: The dot on the tab). */
+function statusNew() {
+  const r = stv.base;
+  if (!r || (markOf() && stv.baseFor !== markOf())) return false;
+  return r.projects.some((p) => p.done.counts.sessions + p.done.counts.features + p.done.counts.releases > 0 || stuckOf(p).some((x) => x.at >= r.since));
+}
+
+function caughtUp() {
+  const reply = stReply() ?? stv.base;
+  if (!reply) return;
+  const before = { mark: markOf(), span: stv.span };
+  setMark(reply.at);
+  stv.span = "visit";
+  toast(`Caught up at ${stClock(reply.at)}. This device's next visit starts from here.`, true, () => {
+    setMark(before.mark);
+    stv.span = before.span;
+    loadStatus();
+    render();
+  }, true);
+  loadStatus();
+  render();
+  window.scrollTo(0, 0);
+}
+
+function spanBar(reply, caught) {
+  const mark = markOf(), span = stSpan();
+  const since = reply?.since ?? (mark && span === "visit" ? mark : new Date(brokerNow() - SPAN_MS[span === "visit" ? "24h" : span]).toISOString());
+  const fresh = mark && brokerNow() - Date.parse(mark) < 60_000;
+  const [head, sub] = span === "visit" ? ["Since your last visit", fresh ? `${stClock(mark)}, just now` : `${stClock(mark)}, ${stAgo(mark)}`]
+    : [span === "week" ? "The last week" : "The last 24 hours", `since ${stClock(since)}`];
+  const chipBtn = (key, text) => h("button", { type: "button", "aria-pressed": String(span === key), onclick: () => { stv.span = key; stv.showAll.clear(); render(); if (!onBase()) loadStatus(); } }, text);
+  const asked = mark && span === "visit" ? Date.parse(mark) : null;
+  const clamped = reply && asked !== null && Date.parse(reply.since) > asked + 60_000;
+  return h("div", { class: "span-bar" },
+    h("div", { class: "when" }, h("b", null, head), h("span", null, sub)),
+    h("div", { class: "seg span-chips", role: "group", "aria-label": "Look back over" },
+      mark ? chipBtn("visit", fresh ? "Since now" : `Since ${stClock(mark)}`) : null, chipBtn("24h", "24 h"), chipBtn("week", "A week")),
+    caught ? h("button", { type: "button", class: "primary caught", disabled: !(stReply() ?? stv.base) || null, onclick: caughtUp }, "I'm caught up") : null,
+    clamped ? h("p", { class: "span-note" }, `Your last visit was ${stAge(mark)} ago; this shows the last 31 days.`)
+      : !mark ? h("p", { class: "span-note" }, "First visit on this device, so the last 24 hours. From now on it starts at your last “I'm caught up”.")
+      : span !== "visit" ? h("p", { class: "span-note" }, `Widened. Your last visit stays at ${stClock(mark)}.`)
+      : caught ? h("p", { class: "span-note" }, "Opening this page doesn't move it; only I'm caught up does.") : null);
+}
+
+function answers(rows, needsHref, okHref, all) {
+  if (!rows) {
+    return h("div", { class: "answers" },
+      h("div", { class: "ans", dataset: { tone: "none" } }, h("span", { class: "lab" }, "Needs you"), h("b", null, "…"), h("span", { class: "sub" }, "Reading the board…")),
+      h("div", { class: "ans", dataset: { tone: "none" } }, h("span", { class: "lab" }, "Is it going OK?"), h("b", null, "…"), h("span", { class: "sub" }, "Reading the board…")));
+  }
+  const n = needsOf(rows, all), v = verdict(rows);
+  const ntone = n.blocking ? "bad" : n.count ? "warn" : "ok";
+  return h("div", { class: "answers" },
+    h("a", { class: "ans", href: needsHref, dataset: { tone: ntone } },
+      h("span", { class: "lab" }, "Needs you"),
+      h("b", null, n.count ? String(n.count) : "Nothing"),
+      h("span", { class: "sub" }, n.count ? `${n.blocking} hold${n.blocking === 1 ? "s" : ""} work up · oldest ${stAge(n.list[0]?.since ?? new Date().toISOString())}` : "Nothing waits on you")),
+    h("a", { class: "ans", href: okHref, dataset: { tone: v.tone },
+      onclick: all ? (e) => { e.preventDefault(); document.querySelector(".pcards")?.scrollIntoView({ behavior: "smooth" }); } : null },
+      h("span", { class: "lab" }, "Is it going OK?"),
+      h("b", null, v.word),
+      h("span", { class: "sub" }, v.sub)));
+}
+
+/** A Needs you line, as the Overview's: it opens Waits on you at the item, where he answers (choice 12). */
+function needLine(x, since, withProject) {
+  const id = x.p ? permId(x.p) : waitId(x.w);
+  const go = () => (scrollAfter = `w-${id}`);
+  let badgeEl, text, meta;
+  if (x.p) {
+    const w = workers().find((y) => y.id === x.p.worker_id);
+    const ss = w && sessionOf(w);
+    badgeEl = badge("permission");
+    text = permText(x.p);
+    meta = [withProject ? (w ? projectName(w.project) : x.p.laptop) : null, ss?.feature, `holds up ${x.p.name}${ss ? ` (${declaredStep(w)})` : ""}`];
+  } else {
+    const [st, label] = WAIT_KIND[x.w.kind];
+    badgeEl = badge(st, label);
+    text = x.w.text;
+    meta = [withProject ? projectName(x.w.project) : null, x.w.feature, x.w.kind === "bug" ? "blocks use" : x.w.blocking ? `holds up ${heldNames(x.w)}` : "when you have time"];
+  }
+  return h("li", { class: "hold need", dataset: { blocking: String(x.blocking), id } }, badgeEl,
+    h("a", { class: "l-t", href: "#waits", onclick: go }, text),
+    h("span", { class: "l-m" }, meta.filter(Boolean).join(" · "), " · ", h("span", { class: "age" }, stAge(x.since)),
+      x.since < since ? h("span", { class: "before" }, `from before ${stClock(since)}`) : null));
+}
+const cutLine = (n, newer, link) => h("p", { class: "note cut" }, `and ${n} more, ${newer ? "newer" : "older"}. The board lists ${newer ? "the oldest" : "the newest"} 100.`, link ? [" ", link] : null);
+
+function statusBanners(reply) {
+  if ($("conn").dataset.state === "down") {
+    return h("div", { class: "banner down" }, `Can't reach the broker since ${stClock(connDownAt ?? new Date().toISOString())}. This is what this device read then; I'm caught up still works.`);
+  }
+  if (!stv.error) return null;
+  return h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, reply ? `Showing what it said at ${stClock(reply.at)}.` : stv.error));
+}
+
+function viewStatus() {
+  if (svc.projects && !stv.base && !stv.loading && !stv.error) loadStatus();
+  const [, k, sec] = location.hash.slice(1).split("/");
+  const reply = stReply();
+  if (k && k !== "needs") return statusProject(k, sec, reply);
+  const rows = reply?.projects ?? null;
+  const keys = new Set((reply?.projects ?? []).map((r) => r.project));
+  const legacy = reply ? [...new Set(projects().map((e) => e.board.project))].filter((x) => !keys.has(x)) : [];
+  const n = rows ? needsOf(rows, true) : null;
+  return [
+    statusBanners(reply),
+    h("div", { class: "st" },
+      spanBar(reply, true),
+      answers(rows, "#status/needs", "#status", true),
+      !rows ? h("div", { class: "empty-card" }, "Reading the board…")
+        : [
+          h("section", null, h("h2", null, "Projects ", h("span", { class: "count" }, String(rows.length + legacy.length))),
+            rows.length || legacy.length ? h("div", { class: "pcards" }, rows.map(pcard), legacy.map(legacyCard)) : h("div", { class: "empty-card" }, "No project's board on BobNet yet.")),
+          h("section", { id: "status-needs" }, h("h2", null, "Needs you ", h("span", { class: "count" }, String(n.count))),
+            n.count ? h("div", { class: "card st-card" }, h("ul", { class: "lines ov-needs st-needs" }, n.list.map((x) => needLine(x, reply.since, true))),
+              n.more ? cutLine(n.more, true, h("a", { href: "#waits" }, "on Waits on you")) : null,
+              h("a", { class: "more-t sec-link", href: "#waits" }, "Answer them on Waits on you →"))
+              : h("div", { class: "empty-card" }, "Nothing waits on you.")),
+        ],
+      h("div", { class: "caught-foot" },
+        h("button", { type: "button", class: "primary", disabled: !reply || null, onclick: caughtUp }, "I'm caught up"),
+        reply ? h("span", null, `Next time, this page starts at ${stClock(reply.at)}.`) : null)),
+  ];
+}
+
+function pcard(row) {
+  const v = verdict([row]), n = needsOf([row], false), stuck = stuckOf(row), u = row.usage, b = row.backlog;
+  const stat = (lab, val, tone, sub) => h("div", { class: "pstat", dataset: { tone } }, h("span", { class: "lab" }, lab), h("b", null, String(val)), sub ? h("span", { class: "s" }, sub) : null);
+  return h("a", { class: "pcard card", href: `#status/${row.project}`, dataset: { tone: v.tone, project: row.project } },
+    h("div", { class: "top" }, h("span", { class: "name" }, row.name), badge(v.tone === "ok" ? "running" : v.tone === "warn" ? "waiting" : "failed", v.word), h("span", { class: "chev", "aria-hidden": "true" }, "›")),
+    h("div", { class: "pstats" },
+      stat("Needs you", n.count, n.blocking ? "bad" : n.count ? "warn" : null),
+      stat("Done", row.done.counts.sessions, null, row.done.counts.features ? plural(row.done.counts.features, "feature") : null),
+      stat("Stuck", v.stuck, stuck.some((x) => x.tone === "bad") ? "bad" : v.stuck ? "warn" : null),
+      stat("Tokens", fmtTokens(totalTokens(u.tokens)), null, u.lost ? `+ ${u.lost} unknown` : null)),
+    h("div", { class: "pflags" },
+      stuck.filter((x) => x.tone === "bad").map((x) => badge("failed", x.label)),
+      b.thin ? badge("waiting", "backlog thin") : null,
+      b.release && b.release.ready === 0 && b.release.todo > 0 ? badge("ready", `${b.release.ref} has nothing Ready`) : null));
+}
+const OLD_BOARD = "Its board is still on Backlog.md; Status starts when it moves to BobNet.";
+const legacyCard = (key) => h("div", { class: "pcard card old", dataset: { project: key } }, h("div", { class: "top" }, h("span", { class: "name" }, key)), h("p", { class: "muted", style: "margin:0" }, OLD_BOARD));
+
+const SECTIONS = ["needs", "done", "stuck", "recurring", "backlog", "usage"];
+function statusProject(k, focus, reply) {
+  const back = h("a", { class: "back", href: "#status" }, "‹ All projects");
+  const row = reply?.projects.find((r) => r.project === k);
+  if (reply && !row) {
+    const old = projects().some((e) => e.board.project === k);
+    return [statusBanners(reply), h("div", { class: "st" }, h("div", { class: "p-head" }, back, h("h2", { class: "p-name" }, k)),
+      h("div", { class: "empty-card" }, old ? OLD_BOARD : `No project ${k} on BobNet, or you can't read its board.`))];
+  }
+  const p = svc.projects?.find((x) => x.key === k);
+  const who = [p?.lead ? `lead ${shortName(p.lead)}` : null, p?.po ? `PO ${shortName(p.po)}` : null].filter(Boolean).join(" · ");
+  const wide = window.matchMedia?.("(min-width: 700px)").matches ?? true;
+  const opened = stOpen();
+  return [
+    statusBanners(reply),
+    h("div", { class: "st" },
+      h("div", { class: "p-head" }, back, h("h2", { class: "p-name" }, row?.name ?? p?.name ?? k, who ? [" ", h("span", { class: "muted" }, who)] : null)),
+      spanBar(reply, false),
+      answers(row ? [row] : null, `#status/${k}/needs`, `#status/${k}/stuck`, false),
+      row ? h("div", { class: "secs" }, SECTIONS.map((s) => statusSection(k, s, SECTION[s](row, reply), opened[`${k}/${s}`], focus === s || wide)))
+        : h("div", { class: "empty-card" }, "Reading the board…"),
+      h("p", { class: "note foot-note" }, "I'm caught up is on ", h("a", { href: "#status" }, "All projects"), ": this device keeps one last visit for every project.")),
+  ];
+}
+
+/** A section's card: open as he left it, else by width (open from 700 px) or because the route names it. */
+function statusSection(k, sec, body, kept, dflt) {
+  const d = h("details", { class: "sec card", id: `sec-${sec}`, open: (kept ?? dflt) || null, dataset: { sec, tone: body.tone ?? null } },
+    h("summary", { class: "sec-h" },
+      h("span", { class: "t" }, body.title),
+      h("span", { class: "n", dataset: { tone: body.tone ?? null } }, body.count),
+      h("span", { class: "scope" }, body.scope),
+      h("span", { class: "hl" }, body.headline)),
+    h("div", { class: "sec-b" }, body.el));
+  // Kept only where he went against the default, so a phone turned to a tablet still opens the rest.
+  d.addEventListener("toggle", () => setStOpen(`${k}/${sec}`, d.open === dflt ? undefined : d.open));
+  return d;
+}
+
+const stEmpty = (text, ok) => h("p", { class: `st-empty${ok ? " ok" : ""}` }, text);
+const featLink = (k, ref, label = ref) => h("a", { class: "id", href: featureHref(k, ref) }, label);
+/** A session opens on its feature's page, at its step. */
+const sessLink = (k, ss) => h("a", { class: "id", href: featureHref(k, ss.feature), onclick: () => (scrollAfter = stepId(ss)) }, ss.feature);
+
+const SECTION = {
+  needs(row, reply) {
+    const n = needsOf([row], false);
+    return {
+      title: "Needs you", count: String(n.count), scope: "open now", tone: n.blocking ? "bad" : n.count ? "warn" : "ok",
+      headline: n.count ? `${n.blocking} hold${n.blocking === 1 ? "s" : ""} work up · oldest ${stAge(n.list[0].since)}` : "Nothing waits on you",
+      el: n.count ? [h("ul", { class: "lines ov-needs st-needs" }, n.list.map((x) => needLine(x, reply.since, false))),
+        n.more ? cutLine(n.more, true, h("a", { href: "#waits" }, "on Waits on you")) : null,
+        h("a", { class: "more-t sec-link", href: "#waits" }, "Answer on Waits on you →")] : stEmpty("Nothing waits on you.", true),
+    };
+  },
+  done(row, reply) {
+    const k = row.project, d = row.done, c = d.counts, from = stClock(reply.since);
+    const parts = [c.features && `${plural(c.features, "feature")} Done`, `${plural(c.sessions, "session")} closed`, c.lands && plural(c.lands, "land"), c.releases && `${plural(c.releases, "release")} closed`].filter(Boolean);
+    const nothing = !c.sessions && !c.lands && !c.features && !c.releases;
+    const heavy = new Set(row.usage.heavy.map((x) => sessionKey(x.session)));
+    const all = stv.showAll.has(`${k}/sessions`);
+    const sessions = all ? d.sessions : d.sessions.slice(0, 5);
+    return {
+      title: "What got done", count: String(c.sessions), scope: `since ${from}`, tone: null,
+      headline: nothing ? `Nothing closed since ${from}` : parts.join(" · "),
+      el: nothing ? stEmpty(`Nothing closed or landed since ${from}.`) : [
+        d.features.length || d.releases.length ? h("div", { class: "grp" }, h("h3", null, "Moved to Done"),
+          h("ul", { class: "rows" },
+            d.releases.map((r) => h("li", null, badge("done", "release"), h("span", null, h("a", { class: "id", href: `#roadmap/${k}` }, r.ref), r.title.replace(/^R\d+ /, "")), h("time", null, stClock(r.closed_at)))),
+            d.features.map((f) => h("li", null, badge(f.type === "bug" ? "bug" : "done", f.type === "bug" ? "bug fixed" : "Done"), h("span", null, featLink(k, f.ref), f.title), h("time", null, stClock(f.at))))),
+          whole(row, "done.features", d.features) > d.features.length ? cutLine(row.more["done.features"], false, h("a", { href: `#roadmap/${k}` }, "on the Roadmap")) : null) : null,
+        d.sessions.length ? h("div", { class: "grp" }, h("h3", null, "Sessions closed"),
+          h("ul", { class: "rows sess" }, sessions.map((s) => sessionRow(k, s, heavy.has(sessionKey(s.session)))),
+            d.sessions.length > 5 ? h("li", { class: "show-all" }, h("button", { type: "button", class: "more-t", onclick: () => { all ? stv.showAll.delete(`${k}/sessions`) : stv.showAll.add(`${k}/sessions`); render(); } },
+              all ? "Show fewer" : `Show all ${whole(row, "done.sessions", d.sessions)} sessions`)) : null),
+          all && row.more?.["done.sessions"] ? cutLine(row.more["done.sessions"], false, h("a", { href: featureHref(k, d.sessions.at(-1).session.feature) }, "on its feature's page")) : null) : null,
+      ],
+    };
+  },
+  stuck(row, reply) {
+    const s = stuckOf(row), n = stuckCount(row), from = stClock(reply.since);
+    const settled = row.stuck.settled;
+    const cut = n - s.length;
+    return {
+      title: "What's stuck", count: String(n), scope: "open now", tone: s.some((x) => x.tone === "bad") ? "bad" : n ? "warn" : "ok",
+      headline: n ? [...new Set(s.map((x) => x.label))].join(" · ") : "Nothing stuck",
+      el: [
+        s.length ? h("ul", { class: "rows stuck" }, s.map((x) => h("li", { dataset: { sev: x.tone } },
+          badge(x.tone === "bad" ? "failed" : "waiting", x.label),
+          h("span", { class: "what" }, h("span", null, x.ref ? featLink(row.project, x.ref) : null, x.text), x.meta ? h("span", { class: "m" }, x.meta) : null),
+          h("time", null, `since ${stClock(x.at)}`, x.at < reply.since ? h("span", { class: "before" }, `before ${from}`) : null)))) : stEmpty("Nothing stuck.", true),
+        cut > 0 ? cutLine(cut, false, null) : null,
+        settled.length ? h("details", { class: "settled" }, h("summary", null, `Settled since ${from}: ${whole(row, "stuck.settled", settled)}`),
+          h("ul", { class: "rows" }, settled.map((x) => { const e = settledOf(x); return h("li", null, badge("done", "settled"), h("span", null, e.ref ? featLink(row.project, e.ref) : null, e.text), h("time", null, stClock(x.settled_at))); })),
+          row.more?.["stuck.settled"] ? cutLine(row.more["stuck.settled"], false, null) : null) : null,
+      ],
+    };
+  },
+  // BOB-35 fills row.recurring; until then the section shows and says so (Casper, 2026-11-15).
+  recurring() {
+    return { title: "Recurring problems", count: "–", scope: "", tone: null, headline: "Comes with theme tags (BOB-35)",
+      el: stEmpty("Review findings get a theme when their session closes, from BOB-35 on. Until then this section has nothing to group.") };
+  },
+  backlog(row) {
+    const k = row.project, b = row.backlog, rel = b.release;
+    const ready = whole(row, "backlog.ready", b.ready), none = whole(row, "backlog.no_criteria", b.no_criteria);
+    const about = b.sessions_estimate === null ? "" : `, about ${plural(b.sessions_estimate, "session")}`;
+    const nothingReady = rel && rel.ready === 0 && rel.todo > 0;
+    return {
+      title: "Backlog health", count: b.thin ? "thin" : "OK", scope: "now", tone: b.thin || nothingReady ? "warn" : "ok",
+      headline: `${plural(ready, "Ready feature")} with criteria${about} · ${b.triage.count} in triage`,
+      el: [
+        b.thin ? h("p", { class: "thin" }, `Thin: fewer than 2 Ready features with criteria, and ${rel.ref} has ${rel.todo} more to do.`) : null,
+        h("ul", { class: "rows health" },
+          h("li", null, h("span", { class: "k" }, "Ready, with criteria"), h("span", null, `${plural(ready, "feature")}${b.sessions_estimate === null ? "" : `, about ${plural(b.sessions_estimate, "session")} of work`}`,
+            b.ready.length ? h("span", { class: "m" }, b.ready.map((f, i) => [i ? ", " : "", featLink(k, f.ref), `${f.criteria} criteria`])) : null,
+            row.more?.["backlog.ready"] ? cutLine(row.more["backlog.ready"], false, h("a", { href: `#roadmap/${k}` }, "on the Roadmap")) : null)),
+          h("li", null, h("span", { class: "k" }, "No criteria yet"),
+            none ? h("span", null, plural(none, "feature"), h("span", { class: "m" }, b.no_criteria.map((f, i) => [i ? " · " : "", featLink(k, f.ref), f.title])),
+              row.more?.["backlog.no_criteria"] ? cutLine(row.more["backlog.no_criteria"], false, h("a", { href: `#roadmap/${k}` }, "on the Roadmap")) : null) : h("span", null, "None")),
+          h("li", null, h("span", { class: "k" }, "In triage"), h("span", null, b.triage.count
+            ? [`${plural(b.triage.count, "item")}, the oldest ${stAge(b.triage.oldest.at)} `, h("a", { class: "id", href: `#triage/${k}` }, b.triage.oldest.ref)] : "Nothing to triage")),
+          h("li", { dataset: { warn: String(Boolean(nothingReady)) } }, h("span", { class: "k" }, "Open release"), rel
+            ? h("span", null, h("a", { class: "id", href: `#roadmap/${k}` }, rel.ref), `${plural(rel.todo, "feature")} to do`, nothingReady ? ", nothing Ready" : "")
+            : h("span", null, "No open release"))),
+      ],
+    };
+  },
+  usage(row, reply) {
+    const u = row.usage, from = stClock(reply.since), total = totalTokens(u.tokens);
+    const max = Math.max(1, ...u.by_agent.map((a) => totalTokens(a.tokens)));
+    const unknown = (n) => (n === 1 ? "1 run's tokens unknown" : `${n} runs' tokens unknown`);
+    const live = running().filter((w) => w.project === row.project).sort((a, b) => workerTokens(b) - workerTokens(a));
+    const kindOf = (ss) => ss.kind;
+    return {
+      title: "Usage", count: fmtTokens(total), scope: `since ${from}`, tone: u.heavy.length ? "warn" : null,
+      headline: [`${fmtTokens(total)} tokens`, u.lost ? unknown(u.lost) : null, u.heavy.length ? plural(u.heavy.length, "heavy session") : null].filter(Boolean).join(" · "),
+      el: [
+        u.by_agent.length ? h("ul", { class: "rows usage" }, u.by_agent.map((a) => {
+          const n = totalTokens(a.tokens);
+          return h("li", null,
+            h("span", { class: "who-u" }, h("b", null, a.agent), h("span", { class: "m" }, a.role)),
+            h("span", { class: "meter" }, n ? h("i", { style: `width:${Math.max(2, (n / max) * 100)}%` }) : null),
+            h("span", { class: "num" }, n ? fmtTokens(n) : null, a.lost ? h("span", { class: "unk" }, `${n ? "+ " : ""}${plural(a.lost, "run")} unknown`) : null));
+        })) : stEmpty(`No runs ended since ${from}.`),
+        u.lost ? h("p", { class: "note" }, `${unknown(u.lost)}: ${u.lost === 1 ? "it was" : "they were"} running when the supervisor restarted, so ${u.lost === 1 ? "its" : "their"} use was never reported. Not counted as zero.`) : null,
+        u.heavy.length ? h("div", { class: "grp" }, h("h3", null, "Heavier than usual"),
+          h("ul", { class: "rows" }, u.heavy.map((x) => h("li", { dataset: { sev: "warn" } }, badge("waiting", `${(totalTokens(x.tokens) / Math.max(1, totalTokens(x.usual))).toFixed(1)}×`),
+            h("span", null, sessLink(row.project, x.session), `${stepName(x.session)}: ${fmtTokens(totalTokens(x.tokens))} tokens, a ${kindOf(x.session)}'s usual is ${fmtTokens(totalTokens(x.usual))}`))))) : null,
+        live.length ? h("div", { class: "grp" }, h("h3", null, "Running now"), h("p", { class: "note" }, "From the laptops. Counted above when each run ends."),
+          h("ul", { class: "rows running" }, live.map((w) => h("li", null, h("span", { class: "dot on" }), h("span", null, h("b", null, w.name), ` ${w.role}`), h("span", { class: "num" }, `${fmtTokens(workerTokens(w))} so far`))))) : null,
+      ],
+    };
+  },
+};
+
+function sessionRow(k, s, heavy) {
+  const c = s.counts;
+  const finds = [c.blockers && plural(c.blockers, "blocker"), c.majors && plural(c.majors, "major"), c.sent_back && `${c.sent_back} sent back`].filter(Boolean);
+  return h("li", { class: "srow", style: `--k: var(--k-${s.session.kind})` },
+    h("span", { class: "kind" }, s.session.kind),
+    h("span", { class: "what" },
+      h("span", null, sessLink(k, s.session), h("b", null, stepName(s.session)), s.closed_by ? ` · ${askedBy(s.closed_by)}` : ""),
+      h("span", { class: "outcome" }, h("span", { class: "need", dataset: { need: s.need } }, s.need === "casper" ? "needs you" : s.need === "answer" ? "waited on an answer" : "need none"),
+        finds.length ? h("span", null, finds.join(", ")) : null,
+        h("span", { class: `tk${heavy ? " heavy" : ""}` }, `${fmtTokens(totalTokens(s.tokens))} tokens`),
+        s.lost ? h("span", { class: "tk heavy" }, `+ ${plural(s.lost, "run")} unknown`) : null),
+      s.summary ? h("span", { class: "sum" }, s.summary) : null),
+    h("time", null, stClock(s.ended_at)));
+}
+
+/** The Overview's one line (BOB-40): the marker read's done and stuck, linking to Status; not drawn while loading or on an error. */
+function statusLine() {
+  const r = stv.base;
+  if (!r || stv.error) return null;
+  const mark = markOf();
+  const v = verdict(r.projects);
+  return h("a", { class: "st-line banner", href: "#status", dataset: { tone: v.tone } },
+    h("span", null, h("b", null, `Since ${stClock(mark ?? r.since)}`), mark ? ` (${stAgo(mark)})` : "", ": ",
+      `${v.done} done, ${v.stuck} stuck`, v.ci.length ? `, CI red on ${v.ci.join(", ")}` : ""),
+    h("span", { class: "go" }, "Status ›"));
+}
+
+/** After a draw: #status/needs and #status/<project>/<section> land on what they name, once per route. */
+function statusScroll() {
+  if (viewName() !== "status" || stv.scrollFor === location.hash || !stReply()) return;
+  stv.scrollFor = location.hash;
+  const [, k, sec] = location.hash.slice(1).split("/");
+  const el = k === "needs" ? $("status-needs") : sec ? $(`sec-${sec}`) : null;
+  el?.scrollIntoView({ block: "start" });
 }
 
 // ---------- Triage: a project's backlog items, bugs first (capture 4, 5; spec: Triage) ----------
@@ -2159,7 +2642,7 @@ function viewSessions() {
 // ---------- Views ----------
 
 // Now left the tabs (BOB-5 as built 3): "#now" opens the Overview, as any unknown view does.
-const VIEWS = { overview: viewOverview, waits: viewWaits, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions };
+const VIEWS = { overview: viewOverview, waits: viewWaits, status: viewStatus, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions };
 const viewName = () => (VIEWS[location.hash.slice(1).split("/")[0]] ? location.hash.slice(1).split("/")[0] : "overview");
 
 function render() {
@@ -2167,6 +2650,7 @@ function render() {
   for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${v}`);
   // Nothing waits: the count leaves the tab.
   $("waits-count").textContent = waitCount() || "";
+  $("tabs").querySelector('a[href="#status"]').dataset.new = String(statusNew());
   const keys = [...new Set([...projects().map((e) => e.board.project), ...(svc.projects ?? []).map((p) => p.key)])];
   const shown = v === "roadmap" ? (roadmapRoute()?.key ?? current()?.project) : v === "triage" ? triageRoute()?.key : current()?.project;
   const pick = $("project");
@@ -2174,12 +2658,13 @@ function render() {
   pick.replaceChildren(...keys.map((k) => h("option", { value: k, selected: k === shown || null }, k)));
   // Capture always has a project (Casper, 2026-11-13): only once the service has one.
   $("capture-open").hidden = !svc.projects?.length;
-  $("view").classList.toggle("wide", v === "overview" || v === "feature" || v === "roadmap");
+  $("view").classList.toggle("wide", v === "overview" || v === "feature" || v === "roadmap" || v === "status");
   // The answer box he is typing in keeps its focus and caret across a draw.
   const box = document.activeElement?.closest?.("form.answer") ? document.activeElement : null;
   const at = box?.selectionStart;
   $("view").replaceChildren(...VIEWS[v]().filter(Boolean));
   measureNeeds();
+  statusScroll();
   if (box) {
     const again = $("view").querySelector("form.answer textarea");
     again?.focus();
@@ -2209,10 +2694,17 @@ $("project").addEventListener("change", (e) => {
 });
 /** An element to bring into view after the next view change: the Overview's context link lands on it (BOB-31). */
 let scrollAfter = null;
+let lastView = viewName();
 window.addEventListener("hashchange", () => {
   holdRender = false;
+  // A toast that stays (I'm caught up's) goes with the tab it was made on.
+  if (viewName() !== lastView && $("toast").dataset.keep === "true") $("toast").hidden = true;
+  lastView = viewName();
+  stv.scrollFor = null;
   render();
   window.scrollTo(0, 0);
+  stv.scrollFor = null;
+  statusScroll();
   if (scrollAfter) $(scrollAfter)?.closest("li")?.scrollIntoView({ block: "start" });
   scrollAfter = null;
 });
@@ -2233,6 +2725,7 @@ setInterval(() => {
 // ---------- Socket ----------
 
 function setConn(st) {
+  if (st === "down" && $("conn").dataset.state !== "down") connDownAt = new Date().toISOString();
   $("conn").dataset.state = st;
   $("conn").textContent = st === "live" ? "live" : st === "down" ? "reconnecting" : "connecting";
 }
@@ -2327,6 +2820,7 @@ function connect() {
           for (const id of feats.keys()) if (id.startsWith(`${f.project}/`)) loadFeature(f.project, id.slice(f.project.length + 1));
         }
         if (ov.rows) loadOverview();
+        statusChanged();
         break;
       case "update":
         state.updates = [f.item, ...state.updates].slice(0, UPDATES_MAX);
@@ -2355,3 +2849,5 @@ connect();
 // Keepalive, and a full refresh every minute for the 24-hour counts.
 setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send('{"t":"ping"}'), 30_000);
 setInterval(() => ws?.readyState === WebSocket.OPEN && (dashboardRid = request("dashboard")), 60_000);
+// The Status tab's dot, on any view (ADR 0005 §2: every 60 s when Status and the Overview aren't showing).
+setInterval(() => ws?.readyState === WebSocket.OPEN && svc.projects && loadStatus(), 60_000);

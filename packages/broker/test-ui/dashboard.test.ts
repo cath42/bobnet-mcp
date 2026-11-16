@@ -119,7 +119,7 @@ describe("Now's parts on the Overview (BOB-5 as built 3)", () => {
   it("connects to its own host, shows live once rendered, and opens the Overview on #now, Now gone from the tabs", () => {
     expect(FakeSocket.last.url).toMatch(/\/v1\/ws$/);
     expect($("conn").dataset["state"]).toBe("live");
-    expect([...$("tabs").querySelectorAll("a")].map((a) => a.textContent!.replace(/\d+$/, "").trim())).toEqual(["Overview", "Waits on you", "Roadmap", "Feature", "Triage", "Usage", "Sessions"]);
+    expect([...$("tabs").querySelectorAll("a")].map((a) => a.textContent!.replace(/\d+$/, "").trim())).toEqual(["Overview", "Waits on you", "Status", "Roadmap", "Feature", "Triage", "Usage", "Sessions"]);
     expect($("tabs").querySelector("[aria-current]")!.getAttribute("href")).toBe("#overview");
     expect($("working").textContent).toContain("records-agent");
     expect(view().textContent).not.toMatch(/\$\d/);
@@ -1926,6 +1926,210 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
     expect(view().querySelectorAll(".steps > li.step")[3]!.querySelector('.ctxp .seg [aria-pressed="true"]')!.textContent).toBe("Luigi");
     FakeSocket.last.frame({ t: "report", laptop: "mbp-2", at: iso(0), snapshot: { ...snapshot, workers: [], pending: [] } });
   });
+});
+
+describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
+  const answered = new Set<unknown>();
+  const statusOps = () =>
+    FakeSocket.last.sent.filter((f) => f["t"] === "board_op" && (f["op"] as { op: string }).op === "status" && !answered.has(f["rid"])) as Array<{ rid: string; op: { since: string } }>;
+  const tk = (n: number) => ({ input: 0, output: 0, cache_read: n, cache_write: 0 });
+  const ss = (feature: string, kind: string, label: string) => ({ feature, kind, label });
+  const statusRow = (over: Record<string, unknown> = {}) => ({
+    project: "bobnet", name: "BobNet", note: null, recurring: null,
+    waits: [{ project: "bobnet", kind: "question", ref: "Q-6", feature: "BOB-9", text: "Keep BOB-9 in R1?", recommended: null, context: null, holds: { items: ["BOB-9"], sessions: [] },
+      waiting_sessions: [], needed_before: null, asked_by: "Mario@mbp-1", since: iso(60 * 30), blocking: true }],
+    done: {
+      counts: { features: 1, sessions: 2, lands: 3, releases: 0 },
+      features: [{ ref: "BOB-27", title: "Waits shows a closed bug as stale", type: "bug", release: "R1", at: iso(100) }],
+      sessions: [
+        { session: ss("BOB-31", "build", "a"), ended_at: iso(80), need: "none", summary: "A cut question opens in place.", closed_by: "Mario@mbp-1", tokens: tk(6_200_000), lost: 1, counts: { blockers: 1, majors: 2, sent_back: 1 } },
+        { session: ss("BOB-30", "review", "1"), ended_at: iso(160), need: "answer", summary: "Signed off.", closed_by: "Mario@mbp-1", tokens: tk(2_100_000), lost: 0, counts: { blockers: 0, majors: 0, sent_back: 0 } },
+      ],
+      releases: [],
+    },
+    stuck: {
+      runs: [{ id: "w_x", agent: "Luigi", role: "engineer", session: ss("BOB-33", "build", "a"), outcome: "failed", reason: "pnpm test exited 1", ended_at: iso(50) }],
+      ci: [], idle_sessions: [{ session: ss("BOB-32", "build", "1"), since: iso(300) }], idle_features: [], answered_holding: [],
+      settled: [{ kind: "ci", entry: { source: "github-actions", name: "test", branch: "v2", sha: null, url: null, worker: null, session: null, ended_at: iso(90) }, settled_at: iso(70) }],
+    },
+    backlog: { ready: [{ ref: "BOB-9", title: "Move Helix", release: "R2", criteria: 8 }], sessions_estimate: 3, no_criteria: [], triage: { count: 20, oldest: { ref: "BOB-11", at: iso(2 * 1440) } },
+      release: { ref: "R2", todo: 4, ready: 0 }, thin: true },
+    usage: { tokens: tk(8_300_000), by_agent: [{ agent: "Luigi", role: "engineer", tokens: tk(8_300_000), runs: 3, lost: 0 }, { agent: "Toad", role: "architect", tokens: tk(0), runs: 1, lost: 1 }], heavy: [], lost: 1 },
+    more: {},
+    ...over,
+  });
+  const reply = (since: string, rows = [statusRow()]) => ({ at: now.toISOString(), since, projects: rows });
+  /** Answers every status read pending, each with its own since. */
+  const answerStatus = async (rows?: unknown[]) => {
+    for (const f of statusOps()) {
+      answered.add(f.rid);
+      FakeSocket.last.frame({ t: "ok", rid: f.rid, result: reply(f.op.since, rows as never) });
+    }
+    await settle();
+  };
+  const statusTab = () => $("tabs").querySelector('a[href="#status"]') as HTMLElement;
+
+  beforeAll(() => localStorage.removeItem("bobnet.status.lastVisit"));
+
+  it("is the third tab; a first visit reads the last 24 hours, in one read for every project", async () => {
+    await answerStatus();
+    await go("#status");
+    expect([...$("tabs").querySelectorAll("a")].map((a) => a.getAttribute("href"))[2]).toBe("#status");
+    expect(statusTab().hasAttribute("aria-current")).toBe(true);
+    expect(view().querySelector(".span-bar .when")!.textContent).toMatch(/^The last 24 hours/);
+    expect(view().querySelector(".span-note")!.textContent).toMatch(/^First visit on this device/);
+    // The first visit has no "Since" chip: 24 h is pressed.
+    expect([...view().querySelectorAll(".span-chips button")].map((b) => [b.textContent, b.getAttribute("aria-pressed")])).toEqual([["24 h", "true"], ["A week", "false"]]);
+    await answerStatus();
+    const ops = FakeSocket.last.sent.filter((f) => f["t"] === "board_op" && (f["op"] as { op: string }).op === "status");
+    const since = Date.parse((ops.at(-1)!["op"] as { since: string }).since);
+    expect(Math.abs(now.getTime() - 86_400_000 - since)).toBeLessThan(120_000);
+    expect(ops.at(-1)!["op"]).not.toHaveProperty("project");
+  });
+
+  it("answers on top: Needs you and Is it going OK?, then one card per project, an old board's muted, and Needs you across projects (c2, c3)", async () => {
+    const answers = [...view().querySelectorAll(".answers .ans")];
+    expect(answers.map((a) => a.querySelector("b")!.textContent)).toEqual(["1", "Needs a look"]);
+    expect(answers[0]!.querySelector(".sub")!.textContent).toBe("1 holds work up · oldest 1\u00a0d");
+    expect(answers[1]!.querySelector(".sub")!.textContent).toBe("2 stuck · 2 done");
+    expect(answers[0]!.getAttribute("href")).toBe("#status/needs");
+    const card = view().querySelector('.pcard[data-project="bobnet"]')!;
+    expect(card.getAttribute("href")).toBe("#status/bobnet");
+    expect([...card.querySelectorAll(".pstat")].map((s) => s.textContent)).toEqual(["Needs you1", "Done21 feature", "Stuck2", "Tokens8.3M+ 1 unknown"]);
+    expect([...card.querySelectorAll(".pflags .badge")].map((b) => b.textContent)).toEqual(["Run failed", "backlog thin", "R2 has nothing Ready"]);
+    // helix is reported by a laptop and isn't on the service: its card says so and isn't a link.
+    const old = view().querySelector('.pcard.old[data-project="helix"]')!;
+    expect(old.tagName).toBe("DIV");
+    expect(old.textContent).toContain("Its board is still on Backlog.md; Status starts when it moves to BobNet.");
+    const needs = $("status-needs");
+    expect(needs.querySelector("li .l-t")!.getAttribute("href")).toBe("#waits");
+    expect(needs.querySelector("li .l-m")!.textContent).toContain("BobNet · BOB-9 · holds up");
+    expect(needs.querySelector("li .before")!.textContent).toMatch(/^from before /);
+    // Read only: no answer button here.
+    expect(needs.querySelector("button")).toBeNull();
+    // The dot: something closed since this device's marker.
+    expect(statusTab().dataset["new"]).toBe("true");
+    expect(view().textContent).not.toMatch(/\$\d/);
+  });
+
+  it("opens a project's six sections from one read; Recurring says it comes with theme tags, and there is no lead's note (c3, s8)", async () => {
+    const before = statusOps().length + answered.size;
+    await go("#status/bobnet");
+    // A project page is a slice of the same reply: no read of its own.
+    expect(statusOps().length + answered.size).toBe(before);
+    const secs = [...view().querySelectorAll("details.sec")];
+    expect(secs.map((d) => d.id)).toEqual(["sec-needs", "sec-done", "sec-stuck", "sec-recurring", "sec-backlog", "sec-usage"]);
+    expect(view().querySelector(".lead-note")).toBeNull();
+    const rec = $("sec-recurring");
+    expect(rec.querySelector(".n")!.textContent).toBe("–");
+    expect(rec.querySelector(".hl")!.textContent).toBe("Comes with theme tags (BOB-35)");
+    expect($("sec-done").querySelector(".hl")!.textContent).toBe("1 feature Done · 2 sessions closed · 3 lands");
+    expect($("sec-done").textContent).toContain("bug fixed");
+    expect($("sec-done").querySelector(".srow")!.textContent).toContain("1 blocker, 2 majors, 1 sent back");
+    expect($("sec-done").querySelector(".srow")!.textContent).toContain("+ 1 run unknown");
+    expect($("sec-done").querySelector('a.id[href="#feature/bobnet/BOB-27"]')).not.toBeNull();
+    expect($("sec-stuck").querySelector(".hl")!.textContent).toBe("Run failed · Nobody on it");
+    expect($("sec-stuck").querySelector("li .what")!.textContent).toContain("Luigi's run on BOB-33 build a failed");
+    expect($("sec-stuck").querySelector(".settled summary")!.textContent).toMatch(/^Settled since .*: 1$/);
+    expect($("sec-backlog").querySelector(".thin")!.textContent).toBe("Thin: fewer than 2 Ready features with criteria, and R2 has 4 more to do.");
+    expect($("sec-backlog").querySelector('li[data-warn="true"]')!.textContent).toContain("nothing Ready");
+    // Usage in tokens; a run whose tokens were never reported is unknown, not zero.
+    const usage = $("sec-usage");
+    expect(usage.querySelector(".hl")!.textContent).toBe("8.3M tokens · 1 run's tokens unknown");
+    expect([...usage.querySelectorAll(".rows.usage li")][1]!.querySelector(".num")!.textContent).toBe("1 run unknown");
+    expect(usage.textContent).toContain("Not counted as zero.");
+    expect(view().querySelector(".foot-note")!.textContent).toContain("I'm caught up is on All projects");
+    expect(view().querySelector(".span-bar .caught")).toBeNull();
+  });
+
+  it("says when a project isn't on BobNet, and a list cut at 100 says how many more", async () => {
+    await go("#status/nowhere");
+    expect(view().textContent).toContain("No project nowhere on BobNet, or you can't read its board.");
+    await go("#status/helix");
+    expect(view().textContent).toContain("Its board is still on Backlog.md; Status starts when it moves to BobNet.");
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 99, refs: [] });
+    await new Promise((r) => setTimeout(r, 5200));
+    const hundred = Array.from({ length: 100 }, (_, i) => ({ ...statusRow().done.sessions[1]!, session: ss("BOB-30", "review", String(i + 1)), ended_at: iso(10 + i) }));
+    const cut = statusRow({ done: { ...statusRow().done, counts: { features: 1, sessions: 112, lands: 3, releases: 0 }, sessions: hundred }, more: { "done.sessions": 12 } });
+    await answerStatus([cut]);
+    await go("#status/bobnet");
+    expect($("sec-done").querySelector(".hl")!.textContent).toContain("112 sessions closed");
+    expect($("sec-done").querySelectorAll(".srow")).toHaveLength(5);
+    expect($("sec-done").querySelector(".show-all button")!.textContent).toBe("Show all 112 sessions");
+    ($("sec-done").querySelector(".show-all button") as HTMLButtonElement).click();
+    await settle();
+    expect($("sec-done").querySelectorAll(".srow")).toHaveLength(100);
+    expect($("sec-done").querySelector(".note.cut")!.textContent).toMatch(/^and 12 more, older\. The board lists the newest 100\./);
+  }, 10_000);
+
+  it("refetches on board_changed at most once per 5 s while Status shows (c4)", async () => {
+    await answerStatus();
+    const count = () => FakeSocket.last.sent.filter((f) => f["t"] === "board_op" && (f["op"] as { op: string }).op === "status").length;
+    await new Promise((r) => setTimeout(r, 5100));
+    const n = count();
+    for (let i = 0; i < 3; i++) FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 100 + i, refs: [] });
+    await settle();
+    expect(count()).toBe(n + 1);
+    await answerStatus();
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 200, refs: [] });
+    await settle();
+    // Inside the 5 s: it waits, then reads once.
+    expect(count()).toBe(n + 1);
+    await new Promise((r) => setTimeout(r, 5000));
+    expect(count()).toBe(n + 2);
+    await answerStatus();
+  }, 15_000);
+
+  it("moves the marker only on I'm caught up, to the broker's at, with Undo; a chip widens without moving it (c1)", async () => {
+    await go("#status");
+    expect(localStorage.getItem("bobnet.status.lastVisit")).toBeNull();
+    const caught = view().querySelector(".span-bar .caught") as HTMLButtonElement;
+    caught.click();
+    await settle();
+    expect(localStorage.getItem("bobnet.status.lastVisit")).toBe(now.toISOString());
+    expect($("toast").textContent).toMatch(/^Caught up at \d\d:\d\d\. This device's next visit starts from here\.Undo×$/);
+    // The next read starts at the marker; quiet, the dot goes.
+    expect(statusOps().at(-1)!.op.since).toBe(now.toISOString());
+    await answerStatus([statusRow({ done: { counts: { features: 0, sessions: 0, lands: 0, releases: 0 }, features: [], sessions: [], releases: [] }, stuck: { ...statusRow().stuck, runs: [], idle_sessions: [], settled: [] } })]);
+    expect(statusTab().dataset["new"]).toBe("false");
+    expect(view().querySelector(".span-bar .when b")!.textContent).toBe("Since your last visit");
+    // A chip reads its span too and leaves the marker alone.
+    ([...view().querySelectorAll(".span-chips button")].find((b) => b.textContent === "A week") as HTMLButtonElement).click();
+    await settle();
+    // The marker's read first, then the week's, from the reply's at.
+    await answerStatus();
+    expect(Date.parse(statusOps().at(-1)?.op.since ?? "")).toBeLessThan(now.getTime() - 6 * 86_400_000);
+    await answerStatus();
+    expect(view().querySelector(".span-note")!.textContent).toMatch(/^Widened\. Your last visit stays at/);
+    expect(localStorage.getItem("bobnet.status.lastVisit")).toBe(now.toISOString());
+    // Undo puts the old marker back: none, a first visit.
+    ($("toast").querySelector(".undo") as HTMLButtonElement).click();
+    await settle();
+    expect(localStorage.getItem("bobnet.status.lastVisit")).toBeNull();
+    await answerStatus();
+  });
+
+  it("puts one line on the Overview above Needs you, from the same read, and none on a read error (BOB-40)", async () => {
+    await go("#overview");
+    const line = view().querySelector(".ov > a.st-line") as HTMLAnchorElement;
+    expect(line.getAttribute("href")).toBe("#status");
+    expect(line.nextElementSibling!.classList.contains("ov-needs")).toBe(true);
+    expect(line.dataset["tone"]).toBe("bad");
+    expect(line.textContent).toMatch(/^Since .+: 2 done, 2 stuckStatus ›$/);
+    // A read the board refuses: no line on the Overview, the banner on Status with what it said last.
+    await new Promise((r) => setTimeout(r, 5100));
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 300, refs: [] });
+    await settle();
+    for (const f of statusOps()) {
+      answered.add(f.rid);
+      FakeSocket.last.frame({ t: "error", rid: f.rid, code: "invalid", message: "Invalid operation" });
+    }
+    await settle();
+    expect(view().querySelector(".st-line")).toBeNull();
+    await go("#status");
+    expect(view().querySelector(".banner.down")!.textContent).toMatch(/^Board unavailableShowing what it said at \d\d:\d\d\.$/);
+    expect(view().querySelector(".pcard")).not.toBeNull();
+  }, 10_000);
 });
 
 describe("a reload (BOB-31)", () => {
