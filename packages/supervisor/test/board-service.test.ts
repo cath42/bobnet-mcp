@@ -120,6 +120,47 @@ describe("a run's reports", () => {
     expect(store.outbox()).toEqual([]);
   });
 
+  it("says how it ended: done with no reason, failed with its error, stopped with its reason (ADR 0005 §3)", async () => {
+    const { sup, broker, sessions } = await setup();
+    const done = await sup.spawnJoined(spawn);
+    await until(() => sessions.length === 1);
+    sessions[0]!.finish();
+    await until(() => ops(broker, "run_end").length === 1);
+    const failed = await sup.spawnJoined({ ...spawn, session: { ...spawn.session, label: "2" } });
+    await until(() => sessions.length === 2);
+    sessions[1]!.fail();
+    await until(() => ops(broker, "run_end").length === 2);
+    const stopped = await sup.spawnJoined({ ...spawn, session: { ...spawn.session, label: "3" } });
+    await until(() => sessions.length === 3);
+    // Stopped mid-turn: it gets its last turn for the handoff, then ends.
+    const stopping = sup.stop(stopped.id);
+    await until(() => sessions[2]!.inputs.length === 2);
+    sessions[2]!.turnDone("handoff written");
+    await stopping;
+    await until(() => ops(broker, "run_end").length === 3);
+    const ends = ops(broker, "run_end").map((o) => o.op as Extract<BoardOpInput, { op: "run_end" }>);
+    expect(ends.map((e) => [e.id, e.outcome, e.reason])).toEqual([
+      [done.id, "done", undefined],
+      [failed.id, "failed", expect.any(String)],
+      [stopped.id, "stopped", "stopped by the orchestrator"],
+    ]);
+    expect(ends[1]!.reason!.length).toBeGreaterThan(0);
+  });
+
+  it("ends a run the supervisor didn't see end as lost at its next start, tokens unknown, through the outbox (ADR 0005 §3)", async () => {
+    const first = await setup();
+    const w = await first.sup.spawnJoined(spawn);
+    await until(() => ops(first.broker, "run_start").length === 1);
+    // The supervisor dies with the worker running; a new one starts on the same store.
+    const second = await setup();
+    await until(() => ops(second.broker, "run_end").length === 1);
+    expect(ops(second.broker, "run_end")[0]).toMatchObject({
+      as: "Luigi",
+      ctx: { worker: w.id },
+      op: { op: "run_end", project: "bobnet", id: w.id, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, calls: 0, outcome: "lost", reason: "supervisor restarted" },
+    });
+  });
+
   it("gives its run the Remote Control link once the worker has it, after its start; nothing when it has none", async () => {
     const { sup, broker } = await setup();
     const w = await sup.spawnJoined(spawn);

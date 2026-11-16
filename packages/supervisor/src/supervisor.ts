@@ -16,6 +16,7 @@ import {
   type LaptopSnapshot,
   type PeerInfo,
   RUN_CTX_MAX,
+  RUN_REASON_MAX,
   type ServerFrame,
   type SessionRef,
   type TokenCounts,
@@ -267,8 +268,14 @@ export class Supervisor {
     }
     const orphaned = this.store.workers({ states: ACTIVE_STATES });
     for (const w of orphaned) {
-      this.store.updateWorker(w.id, { state: "failed", error: "supervisor restarted", ended_at: new Date().toISOString() });
+      const ended_at = new Date().toISOString();
+      this.store.updateWorker(w.id, { state: "failed", error: "supervisor restarted", ended_at });
       this.store.audit("supervisor", "orphaned", w.id, {});
+      // Its end was never seen, so its board run would stay open for good (ADR 0005 §3): it ends lost, its
+      // tokens unknown, since usage is kept only at exit. The zeros are sent because the op needs them.
+      if (this.config.projects.get(w.project)?.roles.has(w.role)) {
+        this.boardReport(this.store.worker(w.id)!, { op: "run_end", project: w.project, id: w.id, ended_at, tokens: ZERO_USAGE.tokens, calls: 0, outcome: "lost", reason: "supervisor restarted" });
+      }
     }
     const orphanedRequests = this.store.requests(["open"]);
     for (const r of orphanedRequests) {
@@ -1491,6 +1498,9 @@ export class Supervisor {
         tokens: this.ownUsage(ended).tokens,
         calls: run.ctx.length,
         ctx: downsample(run.ctx, RUN_CTX_MAX),
+        // How it ended (ADR 0005 §3): the error or the stop reason, cut to what the board keeps.
+        outcome: outcome.state,
+        ...(outcome.state === "done" ? {} : { reason: (outcome.state === "failed" ? outcome.error : outcome.reason).slice(0, RUN_REASON_MAX) }),
       });
     }
     this.remoteEvent(this.store.worker(id)!, { event: "exit", state: outcome.state, checkpoint, ...(outcome.state === "done" ? {} : { error: outcome.state === "failed" ? outcome.error : outcome.reason }) });
