@@ -13,7 +13,9 @@ they land, and cut releases.
    item, the files to read and the done line; it doesn't restate the item.
 3. Luigi builds. Daisy designs before a visible change is built; Luigi builds from that spec.
 4. Review each land: read the diff on `origin/v2`. A finding goes back to its author as a task.
-5. Tell Peach when an item lands, to accept it against its criteria.
+5. Tell Peach when an item lands, to accept it against its criteria. A bug's fix too, the day it is
+   live: Peach checks "It no longer happens" with the commit and closes it, so nothing stale stays on
+   Casper's Waits on you (BOB-27 sat there for hours after its fix was live).
 
 ## Releases
 
