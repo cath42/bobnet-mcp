@@ -29,6 +29,8 @@ const state = {
   /** Waits on you: the project picked, and the one answer form open with what Casper has put in it so far (notes 40). */
   waitsProject: "all",
   answering: null,
+  /** Needs you lines shown whole, and Waits items with their context open ("ctx:" + id): kept for the tab's life (BOB-31). */
+  whole: new Set(),
   last: 10,
 };
 /** Updates kept in the page: the broker's snapshot plus what arrives live. */
@@ -39,6 +41,21 @@ let rid = 0;
 let backoff = 1000;
 
 const $ = (id) => document.getElementById(id);
+
+/** What is open survives a redraw, a tab switch and a reload, in sessionStorage; a new tab starts folded (BOB-31). */
+const WHOLE = "bobnet.open";
+function loadWhole() {
+  try { return new Set(JSON.parse(sessionStorage.getItem(WHOLE) ?? "[]")); } catch { return new Set(); }
+}
+function saveWhole() {
+  try { sessionStorage.setItem(WHOLE, JSON.stringify([...state.whole])); } catch {}
+}
+state.whole = loadWhole();
+function toggleWhole(id) {
+  state.whole.has(id) ? state.whole.delete(id) : state.whole.add(id);
+  saveWhole();
+  render();
+}
 
 /** Builds an element; string children become text nodes, never HTML. */
 function h(tag, attrs, ...children) {
@@ -1114,6 +1131,17 @@ function closeRelease(key, data, r) {
 
 /** The service's overview rows and what waits on Casper: read on the Overview, refetched on board_changed. */
 const ov = { rows: null, waits: null, answered: [], error: null, loading: false, again: false };
+/** Ids no longer waiting leave what is open; a permission's only once a laptop has reported, so a reload keeps it. */
+function pruneWhole() {
+  const live = new Set([...(ov.waits ?? []).map(waitId), ...humanPerms().map(permId)]);
+  const reported = state.laptops.size > 0;
+  const before = state.whole.size;
+  for (const id of state.whole) {
+    const of = id.replace(/^ctx:/, "");
+    if (!live.has(of) && (reported || !of.startsWith("perm/"))) state.whole.delete(id);
+  }
+  if (state.whole.size !== before) saveWhole();
+}
 /** Casper's day starts at his midnight, which only the dashboard knows: "Answered from here today" counts from it. */
 const midnight = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.toISOString(); };
 
@@ -1123,6 +1151,7 @@ async function loadOverview() {
   try {
     const [o, w] = await Promise.all([boardOp({ op: "overview" }), boardOp({ op: "waits", since: midnight() })]);
     Object.assign(ov, { rows: o.projects, waits: w.waits, answered: w.answered ?? [], error: null });
+    pruneWhole();
   } catch (err) {
     Object.assign(ov, { rows: ov.rows ?? [], waits: ov.waits ?? [], error: err.message });
   } finally {
@@ -1256,23 +1285,56 @@ const queuedLine = () => { const q = workers().filter((w) => w.state === "queued
 
 function waitLine(w) {
   const [st, label] = WAIT_KIND[w.kind];
-  const id = waitId(w), verb = ANSWER_VERB[w.kind];
-  return h("li", { class: `hold${verb ? " can" : ""}` }, badge(st, label),
-    h("span", { class: "l-t", title: w.text }, w.text),
-    verb ? h("span", { class: "acts" }, answerToggle(id, verb)) : null,
-    h("span", { class: "l-m" }, `${projectName(w.project)}${w.feature ? ` · ${w.feature}` : ""} · ${w.kind === "bug" ? "blocks use" : `holds up ${heldNames(w)}`}`),
-    state.answering?.id === id ? answerForm(w) : null);
+  const id = waitId(w);
+  const whole = [
+    w.recommended ? h("div", { class: "rec" }, h("b", null, "Recommended "), w.recommended.text) : null,
+    // The context stays on Waits on you, where it opens: it can be pages long (BOB-31 spec).
+    w.context ? h("a", { href: "#waits", class: "more-t", onclick: () => { state.whole.add(`ctx:${id}`); saveWhole(); scrollAfter = `c-${id}`; } }, "Its context, on Waits on you →") : null,
+  ];
+  return needsLine(id, w.ref, badge(st, label), w.text, whole,
+    `${projectName(w.project)}${w.feature ? ` · ${w.feature}` : ""} · ${w.kind === "bug" ? "blocks use" : `holds up ${heldNames(w)}`}`,
+    ANSWER_VERB[w.kind], state.answering?.id === id ? answerForm(w) : null);
 }
 
 function permissionLine(p) {
   const w = workers().find((x) => x.id === p.worker_id);
   const ss = w && sessionOf(w);
   const id = permId(p);
-  return h("li", { class: "hold can" }, badge("permission"),
-    h("span", { class: "l-t", title: p.preview }, permText(p)),
-    h("span", { class: "acts" }, answerToggle(id, ANSWER_VERB.permission)),
-    h("span", { class: "l-m" }, `${w ? projectName(w.project) : p.laptop}${ss ? ` · ${ss.feature}` : ""} · holds up ${p.name}${ss ? ` (${declaredStep(w)})` : ""}`),
-    state.answering?.id === id ? permissionForm(p) : null);
+  return needsLine(id, `${p.name}'s ${p.kind === "question" ? "question" : "request"}`, badge("permission"), permText(p), [],
+    `${w ? projectName(w.project) : p.laptop}${ss ? ` · ${ss.feature}` : ""} · holds up ${p.name}${ss ? ` (${declaredStep(w)})` : ""}`,
+    ANSWER_VERB.permission, state.answering?.id === id ? permissionForm(p) : null);
+}
+
+/**
+ * A Needs you line (BOB-31): its text folded to one line (two on a phone), or open whole with what opens under it.
+ * Show all is drawn hidden and shown only when the text is measured as cut (measureNeeds); an open line always has Show less.
+ */
+function needsLine(id, name, badgeEl, text, whole, meta, verb, form) {
+  const open = state.whole.has(id);
+  whole = whole.filter(Boolean);
+  return h("li", { class: `hold${open ? " open" : ""}`, dataset: { id } }, badgeEl,
+    h("span", { class: "l-t", id: `t-${id}`, title: open ? null : text, onclick: (e) => {
+      // The cut text opens it too (the big target on a phone), but not while he is selecting it to copy.
+      if (open || !e.currentTarget.hasAttribute("data-cut") || String(getSelection() ?? "")) return;
+      toggleWhole(id);
+    } }, text),
+    open && whole.length ? h("div", { class: "whole" }, whole) : null,
+    h("span", { class: "l-m" }, meta),
+    h("span", { class: "acts" },
+      h("button", { type: "button", class: "more-t", hidden: !open || null, "aria-expanded": String(open), "aria-controls": `t-${id}`,
+        "aria-label": `${open ? "Show less" : "Show all"} of ${name}`, onclick: (e) => { e.stopPropagation(); toggleWhole(id); } }, open ? "Show less" : "Show all"),
+      verb ? answerToggle(id, verb) : null),
+    form);
+}
+
+/** After each draw and on resize: a folded line whose text overflows its one line (two on a phone) is cut, and gets Show all. */
+function measureNeeds() {
+  for (const li of document.querySelectorAll("#needs > li:not(.open)")) {
+    const t = li.querySelector(".l-t");
+    const cut = t.scrollWidth > t.clientWidth + 1 || t.scrollHeight > t.clientHeight + 1;
+    t.toggleAttribute("data-cut", cut);
+    li.querySelector(".acts .more-t").hidden = !cut;
+  }
 }
 
 // ---------- Waits on you: what waits on Casper, across projects, and his answers from here (spec: Waits on you; notes 22-24, 35, 40-43) ----------
@@ -1308,13 +1370,8 @@ async function loadQuestion(key, ref) {
     questions.set(id, { error: err.message });
   }
   // The options come in under the box he may be typing in: draw them now, and give him the box back.
-  const typing = document.activeElement?.closest?.("form.answer") ? document.activeElement : null;
-  if (!typing) return scheduleRender();
-  const at = typing.selectionStart;
+  if (!document.activeElement?.closest?.("form.answer")) return scheduleRender();
   render();
-  const box = $("view").querySelector("form.answer textarea");
-  box?.focus();
-  if (box && at !== undefined) box.setSelectionRange(at, at);
 }
 
 /** The button that opens an item's answer form; one form is open at a time (notes 40). */
@@ -1323,6 +1380,8 @@ function answerToggle(id, verb) {
   return h("button", { type: "button", class: "answer-btn", "aria-expanded": String(open), onclick: (e) => {
     e.stopPropagation();
     state.answering = open ? null : { id, pick: null, words: "" };
+    // He answers what he has read: the form opens the line whole too (BOB-31).
+    if (!open) { state.whole.add(id); saveWhole(); }
     render();
     if (!open) $("view").querySelector("form.answer")?.querySelector("input, textarea")?.focus();
   } }, open ? "Close" : verb);
@@ -1445,6 +1504,7 @@ function waitItem(w) {
       h("span", { class: "age" }, waitAge(w.since))),
     h("div", { class: "q" }, w.text),
     w.recommended ? h("div", { class: "rec" }, "Recommended: ", w.recommended.text) : null,
+    contextRow(w, id),
     h("div", { class: "meta" },
       w.blocking ? h("span", { class: "holds" }, w.kind === "bug" ? "Blocks use" : `Holds up ${heldNames(w)}`) : null,
       w.blocking ? null : neededBefore(w),
@@ -1453,6 +1513,16 @@ function waitItem(w) {
       waitLink(w),
       verb && !open ? answerToggle(id, verb) : null),
     open ? answerForm(w) : null);
+}
+
+/** Show context / Hide context, and the asker's context whole under it; none without one (BOB-31). An older broker sends no field. */
+function contextRow(w, id) {
+  const context = w.context ?? null;
+  if (!context) return null;
+  const open = state.whole.has(`ctx:${id}`);
+  return h("div", { class: "ctx-row" },
+    h("button", { type: "button", class: "more-t", "aria-expanded": String(open), "aria-controls": `c-${id}`, onclick: () => toggleWhole(`ctx:${id}`) }, open ? "Hide context" : "Show context"),
+    open ? h("div", { class: "ctx", id: `c-${id}` }, context) : null);
 }
 
 function permItem(p) {
@@ -2105,7 +2175,16 @@ function render() {
   // Capture always has a project (Casper, 2026-11-13): only once the service has one.
   $("capture-open").hidden = !svc.projects?.length;
   $("view").classList.toggle("wide", v === "overview" || v === "feature" || v === "roadmap");
+  // The answer box he is typing in keeps its focus and caret across a draw.
+  const box = document.activeElement?.closest?.("form.answer") ? document.activeElement : null;
+  const at = box?.selectionStart;
   $("view").replaceChildren(...VIEWS[v]().filter(Boolean));
+  measureNeeds();
+  if (box) {
+    const again = $("view").querySelector("form.answer textarea");
+    again?.focus();
+    if (again && at !== undefined && at !== null) again.setSelectionRange(at, at);
+  }
 }
 
 /** Live frames re-render at most a few times a second, and not while a chart is pointed at or a menu is open. */
@@ -2128,13 +2207,19 @@ $("project").addEventListener("change", (e) => {
   if (viewName() === "triage" && location.hash.includes("/")) location.hash = "triage";
   render();
 });
+/** An element to bring into view after the next view change: the Overview's context link lands on it (BOB-31). */
+let scrollAfter = null;
 window.addEventListener("hashchange", () => {
   holdRender = false;
   render();
   window.scrollTo(0, 0);
+  if (scrollAfter) $(scrollAfter)?.closest("li")?.scrollIntoView({ block: "start" });
+  scrollAfter = null;
 });
 let lastWidth = window.innerWidth;
 window.addEventListener("resize", () => {
+  // A phone turning cuts or uncuts a line: measured again at once.
+  measureNeeds();
   if (Math.abs(window.innerWidth - lastWidth) < 20) return;
   lastWidth = window.innerWidth;
   scheduleRender();

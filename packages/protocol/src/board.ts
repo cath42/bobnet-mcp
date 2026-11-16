@@ -476,6 +476,8 @@ export interface WaitRecord {
   /** The question's text, or the item's title. */
   text: string;
   recommended: { key: string; text: string } | null;
+  /** The question's or action's context, whole (≤ 16 KB); null when it has none, and for a review gate or a bug. */
+  context: string | null;
   holds: { items: string[]; sessions: SessionRef[] };
   waiting_sessions: SessionRef[];
   needed_before: QuestionRecord["needed_before"];

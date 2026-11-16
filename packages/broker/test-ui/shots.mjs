@@ -1,4 +1,4 @@
-// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5) and its follow-ups (the CI line under Working now) at phone, tablet and desktop
+// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5) and its follow-ups (the CI line under Working now), a cut question opened (BOB-31) at phone, tablet and desktop
 // widths, against a fake broker in the page holding a copy of BobNet's board (2026-11-14; its backlog
 // 2026-11-15). The page is public/ as served.
 //   node test-ui/shots.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob7-*.png, bob8-*.png, bob10-*.png, bob3-*.png)
@@ -170,6 +170,23 @@ function fakeBroker() {
       };
     }));
   }
+  // BOB-31's shots: Daisy's sample (design/BOB-31/prototype): BobNet's Q-1 as asked, with a context added; a short question;
+  // a review gate; an action with line breaks and a context. The permission is below, with the workers.
+  if (window.BOB31) {
+    const q = (ref, kind, project, feature, text, blocking, over = {}) => ({ project, kind, ref, feature, text, recommended: null, context: null,
+      holds: { items: blocking ? [feature] : [], sessions: [] }, waiting_sessions: [], needed_before: null, asked_by: "Mario@mbp-1", since: iso(120), blocking, ...over });
+    const fixture = "Accept the scale test + a phone shot on a Helix-sized fixture now; BOB-3 can close";
+    waits.splice(0, waits.length,
+      q("Q-1", "question", "bobnet", "BOB-3", "BOB-3 AC 8 says a Helix-sized board stays fast on a phone, checked on Helix's board. Helix's board isn't in the service until BOB-9 (at Picard's date). Accept the broker's Helix-sized scale test (reads 3-14 ms) plus a phone shot on a Helix-sized fixture now, or hold AC 8 (and so BOB-3) until BOB-9?", true, {
+        recommended: { key: "fixture", text: fixture },
+        context: "The scale test seeds 700 tasks, 30 features and 3 releases (Helix's size at 282cca2fe) and reads the roadmap, a feature and triage 50 times each: 3-14 ms per read on the broker.\nThe phone shot would be the roadmap at 390 px on that fixture, unfolded.\nBOB-9 moves Helix's board in at Picard's date, which isn't set." }),
+      q("Q-7", "question", "bobnet", "BOB-29", "Ship BOB-29 before BOB-30?", true, { recommended: { key: "yes", text: "Yes, BOB-29 first" }, asked_by: "Peach@mbp-1", since: iso(40) }),
+      q("BOB-5", "review_gate", "bobnet", "BOB-5", "Overview: Now leaves the tabs", true, { asked_by: null, since: iso(60 * 24) }),
+      q("A-12", "action", "helix", "LAND-52", "Sign the Mapbox terms for the commercial plan on the company account, so the tiles keep working once Helix leaves the free tier.\nThe link is in Helix's lead/questions.md under A-12.", false, {
+        needed_before: { text: "release 2" }, asked_by: "Picard@mbp-1", since: iso(60 * 24 * 3), context: "Free tier: 50,000 map loads a month. Helix used 41,200 in October." }));
+    options.set("Q-1", [{ key: "fixture", text: fixture, recommended: true }, { key: "hold", text: "Hold AC 8 until Helix's real board is in the service (BOB-9)", recommended: false }]);
+    options.set("Q-7", [{ key: "yes", text: "Yes, BOB-29 first", recommended: true }, { key: "no", text: "No, BOB-30 first", recommended: false }]);
+  }
   const answered = [];
   const overviewRow = (p = project) => {
     const bd = boardOf(p.key);
@@ -237,13 +254,15 @@ function fakeBroker() {
       { ...worker, id: "w_m", name: "Mario", role: "lead", session: null, task: "lead", tokens: 5_600_000 },
       { ...worker, id: "w_pe", name: "Peach", role: "po", session: null, task: "accept", state: "queued", tokens: 0 });
   }
-  if (window.BOB5) {
+  if (window.BOB5 || window.BOB31) {
     others.splice(0, others.length,
       { ...worker, id: "w_ho", name: "Howard", project: "helix", role: "builder", session: "LAND-49 build Fixes", task: "LAND-49", task_refs: ["LAND-49.14"], state: "waiting-approval", tokens: 1_400_000 },
       { ...worker, id: "w_ma", name: "Marvin", project: "helix", role: "qa", session: "LAND-49 build Fixes", task: "LAND-49", task_refs: ["LAND-49.19"], tokens: 2_200_000 },
       { ...worker, id: "w_m", name: "Mario", role: "lead", session: null, task: "lead", tokens: 5_600_000 });
   }
-  const pending = window.BOB5 ? [{ id: "r_5", worker_id: "w_ho", name: "Howard", kind: "approval", tool: "Bash", tier: "human", created_at: iso(14), preview: "kill 33987" }] : window.BOB4 ? [{ id: "r_2", worker_id: "w_da", name: "Daisy", kind: "approval", tool: "Bash", tier: "lead", created_at: iso(2), preview: "git push origin HEAD" }] : window.BOB3 ? [{ id: "r_1", worker_id: "w_9453f36a", name: "Toad", kind: "approval", tool: "Bash", tier: "human", created_at: iso(2), preview: "git log --oneline v2..origin/v2" }] : [];
+  const pending = window.BOB31 ? [{ id: "r_412", worker_id: "w_ho", name: "Howard", kind: "question", tool: "AskUserQuestion", tier: "human", created_at: iso(6),
+    preview: "The e2e run on staging fails on the map tiles because the tile server's key rotated last night. Should I point the e2e config at the new key from the team vault, or skip the map step in e2e until Picard has checked the rotation with the ops channel?" }]
+    : window.BOB5 ? [{ id: "r_5", worker_id: "w_ho", name: "Howard", kind: "approval", tool: "Bash", tier: "human", created_at: iso(14), preview: "kill 33987" }] : window.BOB4 ? [{ id: "r_2", worker_id: "w_da", name: "Daisy", kind: "approval", tool: "Bash", tier: "lead", created_at: iso(2), preview: "git push origin HEAD" }] : window.BOB3 ? [{ id: "r_1", worker_id: "w_9453f36a", name: "Toad", kind: "approval", tool: "Bash", tier: "human", created_at: iso(2), preview: "git log --oneline v2..origin/v2" }] : [];
   const dashboard = { peers: [], laptops: [{ laptop: "mbp-1", at: iso(0), snapshot: { supervisor: { started_at: iso(600), concurrency: 3, active: 1, queued: 0 }, workers: others, pending, usage: [] } }], boards: [], updates: [], traffic: [] };
   // Now's CI banner, now a line under Working now (BOB-5 as built 3): one run in progress, one failed.
   if (window.CI) dashboard.boards.push({ laptop: "mbp-1", at: iso(0), board: { project: "bobnet", ref: "f90256f0", backlog: null, sessions: [], runs: [], baseline: null, commits: [],
@@ -255,6 +274,8 @@ function fakeBroker() {
     constructor() {
       super();
       setTimeout(() => this.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } }));
+      // BOB-31: the laptop reports every 2 s, as live: the page draws again under what is open and what is typed.
+      if (window.BOB31) setInterval(() => this.frame({ t: "report", laptop: "mbp-1", at: new Date().toISOString(), snapshot: dashboard.laptops[0].snapshot }), 2000);
     }
     frame(f) { this.dispatchEvent(Object.assign(new Event("message"), { data: JSON.stringify(f) })); }
     send(data) {
@@ -271,7 +292,8 @@ const widths = { 390: [390, 844], 1024: [1024, 768], 1440: [1440, 900] };
 const words = "The roadmap jumps to the top on my phone when I move a feature. Happens every time, on the train too.";
 const capture = [(p) => p.click("#capture-open"), (p) => p.fill("#cap-text", words), (p) => p.getByRole("button", { name: "Bug", exact: true }).click(),
   (p) => p.getByRole("button", { name: "production" }).click(), (p) => p.check("#cap-blocks")];
-// [file, hash, steps, full page?, what to wait for after the steps]
+const q1 = (p) => p.locator('#needs li[data-id="bobnet/Q-1"]');
+// [file, hash, steps, full page?, what to wait for after the steps, element to shoot, colour scheme]
 const all = [
   ["bob7-roadmap", "roadmap/bobnet", [], true],
   ["bob7-gates-edit", "roadmap/bobnet/edit", [], true],
@@ -316,23 +338,32 @@ const all = [
   ["bob5-overview-answer", "overview", [(p) => p.locator("#needs li", { hasText: "two companies" }).getByRole("button", { name: "Answer" }).click()], false],
   ["bob5-capture-blocks-use", "triage/bobnet", capture, false],
   ["bob5-ci-line", "overview", [(p) => p.locator(".ov-now").scrollIntoViewIfNeeded()], false],
+  // BOB-31 (design/BOB-31/spec.md): Needs you folded with Show all where cut; Q-1 open and the permission opened by a tap on its text;
+  // the same dark; answering Q-1 after redraws; Waits on you with Q-1's context open and A-12's line breaks.
+  ["bob31-c1-needs-cut", "overview", [], false, null, ".ov-needs"],
+  ["bob31-c1-needs-open", "overview", [(p) => q1(p).getByRole("button", { name: "Show all of Q-1" }).click(), (p) => p.locator('#needs li[data-id^="perm/"] .l-t').click()], false, null, ".ov-needs"],
+  ["bob31-c1-needs-open-dark", "overview", [(p) => q1(p).getByRole("button", { name: "Show all of Q-1" }).click(), (p) => p.locator('#needs li[data-id^="perm/"] .l-t').click()], false, null, ".ov-needs", "dark"],
+  ["bob31-c2-needs-answering", "overview", [(p) => q1(p).getByRole("button", { name: "Answer" }).click(), (p) => q1(p).locator(".opt-row").first().click(),
+    (p) => q1(p).locator("textarea").fill("Fixture is fine, and note it on BOB-9 so"), (p) => p.waitForTimeout(5500)], false, null, ".ov-needs"],
+  ["bob31-c1-waits-context", "waits", [(p) => p.getByRole("button", { name: "Show context" }).first().click()], true],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 
 const shots = all.filter(([name]) => name.startsWith(process.argv[2] ?? ""));
 const browser = await chromium.launch();
 try {
-  for (const [name, hash, steps, full, until] of shots) {
+  for (const [name, hash, steps, full, until, el, scheme] of shots) {
     for (const [w, [width, height]] of Object.entries(widths)) {
-      const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2 });
-      if (name.startsWith("bob3")) await page.addInitScript(() => (window.BOB3 = true));
+      const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2, colorScheme: scheme ?? "light" });
+      if (name.startsWith("bob31")) await page.addInitScript(() => (window.BOB31 = true));
+      if (name.startsWith("bob3") && !name.startsWith("bob31")) await page.addInitScript(() => (window.BOB3 = true));
       if (name.startsWith("bob4")) await page.addInitScript(() => (window.BOB4 = true));
       if (name.startsWith("bob5")) {
         await page.addInitScript(() => (window.BOB5 = true));
         if (name === "bob5-ci-line") await page.addInitScript(() => (window.CI = true));
         await page.addInitScript({ path: join(here, "../../../design/BOB-1/sample/records.js") });
       }
-      if (name.startsWith("bob3acc") || name.startsWith("bob5")) {
+      if (name.startsWith("bob3acc") || name.startsWith("bob5") || name.startsWith("bob31")) {
         await page.addInitScript(() => (window.TWO = true));
         await page.addInitScript({ path: join(here, "../../../design/BOB-1/sample/helix.js") });
       }
@@ -349,7 +380,10 @@ try {
         await page.addStyleTag({ content: "header { position: static !important; } #toast { display: none !important; }" });
         await page.evaluate(() => window.scrollTo(0, 0));
       }
-      await page.screenshot({ path: join(out, `${name}-${w}.png`), fullPage: full });
+      // An element shot: the header out of its way.
+      if (el) await page.addStyleTag({ content: "header { position: static !important; } #toast { display: none !important; }" });
+      if (el) await page.locator(el).screenshot({ path: join(out, `${name}-${w}.png`) });
+      else await page.screenshot({ path: join(out, `${name}-${w}.png`), fullPage: full });
       await page.close();
     }
   }

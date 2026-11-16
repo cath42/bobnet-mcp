@@ -310,13 +310,29 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
 .lines .l-m { font-size: 12.5px; color: var(--muted); }
 .ov-needs li.hold { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; }
 .ov-needs li.hold .badge { grid-row: span 2; }
-.ov-needs li.hold.can { grid-template-columns: auto minmax(0, 1fr) auto; }
-.ov-needs li.hold.can .l-m { grid-column: 2 / -1; }
+/* Every Needs you line has the acts column: Show all and the answer button at the end of the line (BOB-31) */
+.ov-needs li.hold { grid-template-columns: auto minmax(0, 1fr) auto; }
+.ov-needs li.hold .acts { grid-row: 1; grid-column: 3; }
+.ov-needs li.hold .l-m, .ov-needs li.hold .whole { grid-column: 2 / -1; }
+.ov-needs .acts:not(:has(> :not([hidden]))) { display: none; }
 .ov-needs .l-t { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ov-needs .l-m { color: var(--bad); }
 .ov-needs .acts { display: flex; gap: 6px; align-items: center; }
 .ov-needs .acts .hint { font-size: 12.5px; }
 .ov-needs .acts button { min-height: 32px; padding: 2px 10px; }
+/* A cut line opens from its text too; open, the whole text with its own line breaks, the acts under it at the line's end */
+.ov-needs .l-t[data-cut] { cursor: pointer; }
+.ov-needs li.open .l-t { white-space: pre-line; display: block; overflow: visible; -webkit-line-clamp: unset; overflow-wrap: anywhere; }
+.ov-needs li.hold.open .l-t { grid-column: 2 / -1; }
+.ov-needs li.hold.open .acts { grid-row: auto; grid-column: 2 / -1; justify-self: end; }
+/* Show all / Show less, Show context: a text button in the accent colour */
+.more-t { border: 0; background: transparent; color: var(--accent); padding: 2px 6px; min-height: 32px; font-size: 13px; white-space: nowrap; }
+.more-t:hover { text-decoration: underline; }
+a.more-t { text-decoration: none; justify-self: start; padding: 0; min-height: 0; }
+/* What opens under the text: the recommendation, and the link to the asker's context */
+.whole { display: grid; gap: 6px; font-size: 13.5px; min-width: 0; padding: 2px 0; }
+.whole .rec b { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.whole .rec { color: var(--text); white-space: pre-line; overflow-wrap: anywhere; }
 .ov .more { margin: 0; font-size: 13px; color: var(--muted); padding-top: 8px; border-top: 1px solid var(--line); }
 .now-list .a-btn { display: grid; gap: 2px 10px; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; }
 .now-list .l-path { grid-column: 1 / -1; grid-row: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 14px; }
@@ -343,9 +359,10 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
   .prow .pc .lab { grid-row: 1; padding-top: 2px; }
   .now-list .l-path { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .ov-needs .l-t { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .ov-needs li.hold.can { grid-template-columns: auto minmax(0, 1fr); }
-  .ov-needs li.hold.can .acts { grid-column: 1 / -1; grid-row: 3; }
-  .ov-needs li.hold.can .acts button { flex: 1; min-height: 44px; }
+  .ov-needs li.hold { grid-template-columns: auto minmax(0, 1fr); }
+  .ov-needs li.hold .acts, .ov-needs li.hold.open .acts { grid-row: auto; grid-column: 1 / -1; justify-self: stretch; }
+  .ov-needs li.hold .acts button { flex: 1; min-height: 44px; }
+  .ov-needs li.hold .acts button.more-t { border: 1px solid var(--line); background: var(--surface); font-size: 14px; }
 }
 /* Waits on you: two groups, oldest first; answering inside an item (spec: Waits on you; notes 22, 35, 40-43) */
 .ov a.more { display: block; color: var(--accent); text-decoration: none; }
@@ -358,6 +375,12 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
 .waits li .age { margin-left: auto; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .waits li .q { font-weight: 600; }
 .waits li .rec { font-size: 13px; }
+/* The asker's line breaks are kept; the context opens under the recommendation (BOB-31) */
+.waits li .q, .waits li .rec { white-space: pre-line; overflow-wrap: anywhere; }
+.waits li .ctx-row { display: grid; gap: 6px; justify-items: start; }
+.waits li .ctx-row button.more-t { padding-left: 0; }
+.waits li .ctx { white-space: pre-line; overflow-wrap: anywhere; border-left: 3px solid var(--line); padding: 2px 10px; color: var(--text); font-size: 13.5px; }
+.waits > li { scroll-margin-top: 72px; }
 .waits li .meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 14px; align-items: center; }
 .waits li .meta a, .waits li .top a { color: var(--accent); }
 .waits li .holds { color: var(--bad); }
@@ -385,6 +408,7 @@ form.answer .who-gets { margin-right: auto; font-size: 12.5px; color: var(--mute
   form.answer .who-gets { flex-basis: 100%; }
   .waits li .meta .answer-btn { width: 100%; min-height: 44px; margin: 4px 0 0; }
   .ov-needs .acts .answer-btn { min-height: 44px; }
+  .waits li .ctx-row button.more-t { min-height: 44px; }
 }
 /* A feature in the service: its head card */
 .feature-head h2 { margin: 0; font-size: 18px; text-transform: none; letter-spacing: 0; color: var(--text); }

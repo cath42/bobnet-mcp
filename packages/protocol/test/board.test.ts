@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BoardOp, ClientFrame, ItemRef, PeerAddress } from "../src/index.ts";
+import { BoardOp, ClientFrame, ItemRef, PeerAddress, type WaitRecord } from "../src/index.ts";
 
 describe("BoardOp", () => {
   it("parses an item's create with its criteria, defaulting each to an acceptance criterion", () => {
@@ -103,5 +103,18 @@ describe("board_op frame", () => {
 
   it("is sent without a peer by the owner's socket", () => {
     expect(ClientFrame.safeParse({ t: "board_op", rid: "1", op: { op: "projects" } }).success).toBe(true);
+  });
+});
+
+describe("WaitRecord (BOB-31)", () => {
+  it("carries a question's or action's context, null for a review gate or a bug; the ask op takes it up to 16 KB", () => {
+    const wait = (kind: WaitRecord["kind"], context: string | null): WaitRecord => ({
+      project: "helix", kind, ref: "Q-1", feature: null, text: "Ship it?", recommended: null, context, holds: { items: [], sessions: [] },
+      waiting_sessions: [], needed_before: null, asked_by: null, since: "2026-11-15T00:00:00.000Z", blocking: false,
+    });
+    expect(wait("question", "Line one\nLine two").context).toBe("Line one\nLine two");
+    expect(wait("review_gate", null).context).toBeNull();
+    expect(BoardOp.safeParse({ op: "ask", project: "helix", text: "Ship it?", context: "x".repeat(16 * 1024) }).success).toBe(true);
+    expect(BoardOp.safeParse({ op: "ask", project: "helix", text: "Ship it?", context: "x".repeat(16 * 1024 + 1) }).success).toBe(false);
   });
 });

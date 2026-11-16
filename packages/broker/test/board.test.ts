@@ -1278,6 +1278,30 @@ describe("the views' reads: waits, overview, the roadmap's counts (ADR 0001 §7,
     expect((await waits()).answered.map((a) => a.ref)).toEqual(["Q-1"]);
   });
 
+  it("carries a question's or action's context whole; none or blank is null, and a review gate's and a bug's are null (BOB-31)", async () => {
+    const { t2 } = await helix();
+    await helixRules();
+    const picard = agent("Picard");
+    const context = `First line.\nSecond line.\n${"x".repeat(16 * 1024 - 30)}`;
+    await ok(picard, { op: "ask", project: "helix", text: "Which chart?", context });
+    await ok(picard, { op: "ask", project: "helix", kind: "action", text: "Add the token", context: "On the vault." });
+    await ok(picard, { op: "ask", project: "helix", text: "Ship it?" });
+    await ok(picard, { op: "ask", project: "helix", text: "Blank?", context: "  \n " });
+    await ok(owner, { op: "criteria", project: "helix", ref: t2, change: { action: "add", text: "Casper accepts", casper_gate: true } });
+    await ok(owner, { op: "update", project: "helix", ref: t2, set: { status: "In Review" } });
+    await ok(agent("Bill"), { op: "capture", project: "helix", capture_id: uuid(7), title: "Crashes", type: "bug", blocks_use: true });
+    const { waits: list } = await waits();
+    expect(list.map((w) => [w.ref, w.context])).toEqual([
+      ["Q-1", context],
+      ["A-1", "On the vault."],
+      ["Q-2", null],
+      ["Q-3", null],
+      [t2, null],
+      [expect.any(String), null],
+    ]);
+    expect(list.map((w) => w.kind)).toEqual(["question", "action", "question", "question", "review_gate", "bug"]);
+  });
+
   it("covers the projects the caller reads, or the one it names", async () => {
     await helix();
     await helixRules();

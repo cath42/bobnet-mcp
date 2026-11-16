@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const html = readFileSync(join(import.meta.dirname, "../public/index.html"), "utf8");
 
@@ -1079,9 +1079,10 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     expect(lines.map((l) => l.querySelector(".badge")!.textContent)).toEqual(["question", "question", "bug · blocks use", "permission"]);
     expect(lines[3]!.textContent).toContain("records-agent wants Bash");
     // Each answerable line has its one button; the form opens in place (notes 40).
-    expect([...lines[3]!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Allow or deny"]);
-    expect([...lines[0]!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Answer"]);
-    expect(lines[2]!.querySelector("button")).toBeNull();
+    // A line that fits shows no Show all (BOB-31).
+    expect([...lines[3]!.querySelectorAll("button:not([hidden])")].map((b) => b.textContent)).toEqual(["Allow or deny"]);
+    expect([...lines[0]!.querySelectorAll("button:not([hidden])")].map((b) => b.textContent)).toEqual(["Answer"]);
+    expect(lines[2]!.querySelector("button:not([hidden])")).toBeNull();
     expect(lines[0]!.querySelector(".l-t")!.textContent).toBe("Which roadmap order wins?");
     // Holds-up wording (spec, BOB-3 gap 5): its own feature's session by who is in it, another's with its feature,
     // BOB-3 counted once with its session, two named then "+N more"; a session with nobody in it by kind and label.
@@ -1419,6 +1420,190 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     });
   });
 
+  describe("a cut question opens in place (BOB-31)", () => {
+    const long = "BOB-3 AC 8 says a Helix-sized board stays fast on a phone, checked on Helix's board.\nAccept the scale test now, or hold AC 8 until BOB-9?";
+    const context = "The scale test seeds 700 tasks.\nThe phone shot would be the roadmap at 390 px.";
+    const q1 = wait("Q-1", "question", long, true, { recommended: { key: "fixture", text: "Accept the scale test now" }, context });
+    const q7 = wait("Q-7", "question", "Ship BOB-29 first?", true, { context: null });
+    const a12 = wait("A-12", "action", "Sign the Mapbox terms.\nThe link is in lead/questions.md.", false, { feature: null, context: "Free tier: 50,000 loads a month." });
+    const gate = wait("BOB-5", "review_gate", "Overview: Now leaves the tabs", true, { feature: "BOB-5", context: null });
+    // An older broker sends no context at all: no button, no failure.
+    const old = wait("Q-8", "question", "From an older broker?", false);
+    const perm = { id: "r_4", worker_id: "w_1", name: "records-agent", kind: "question", tool: "AskUserQuestion", tier: "human", created_at: iso(2),
+      preview: "The e2e run on staging fails on the map tiles because the key rotated. Point e2e at the new key, or skip the map step?" };
+    const answerWith = async (ws: unknown[]) => {
+      for (const f of pending("overview", true)) reply(f, { projects: [row] });
+      for (const f of pending("waits", true)) reply(f, { waits: ws, answered: [] });
+      await settle();
+    };
+    const line = (id: string) => $("needs").querySelector(`li[data-id="${id}"]`)!;
+    const more = (id: string) => line(id).querySelector(".acts .more-t") as HTMLButtonElement;
+    const shown = (id: string) => [...line(id).querySelectorAll("button:not([hidden])")].map((b) => b.textContent);
+    const report = (pend: unknown[]) => {
+      const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+      snap.workers = [worker({ state: "waiting-answer" })] as never;
+      snap.pending = pend as never;
+      FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    };
+    // happy-dom lays nothing out: a line's text is as wide as its characters, 7 px each, in a 300 px column.
+    const lt = (el: Element) => el.classList.contains("l-t");
+    beforeAll(async () => {
+      Object.defineProperty(HTMLElement.prototype, "scrollWidth", { configurable: true, get() { return lt(this) ? this.textContent!.length * 7 : 0; } });
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get() { return lt(this) ? 300 : 0; } });
+      sessionStorage.removeItem("bobnet.open");
+      report([perm]);
+      await go("#overview");
+      await answerWith([q1, q7, gate, a12, old]);
+    });
+    afterAll(async () => {
+      delete (HTMLElement.prototype as { scrollWidth?: number }).scrollWidth;
+      delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+      report([]);
+      sessionStorage.removeItem("bobnet.open");
+      await answerWith([]);
+    });
+
+    it("shows Show all on a cut line and none on one that fits", () => {
+      expect(shown("bobnet/Q-1")).toEqual(["Show all", "Answer"]);
+      expect(shown("perm/mbp-1/r_4")).toEqual(["Show all", "Allow or deny"]);
+      expect(shown("bobnet/Q-7")).toEqual(["Answer"]);
+      expect(shown("bobnet/BOB-5")).toEqual([]);
+      expect(line("bobnet/Q-1").querySelector(".l-t")!.hasAttribute("data-cut")).toBe(true);
+      expect(line("bobnet/Q-7").querySelector(".l-t")!.hasAttribute("data-cut")).toBe(false);
+      expect(line("bobnet/Q-1").querySelector(".whole")).toBeNull();
+    });
+
+    it("opens to the whole text, its line breaks kept, the recommendation and the context link; Show less folds it", async () => {
+      const b = more("bobnet/Q-1");
+      // A button the keyboard reaches; Enter on it is a click.
+      expect(b.tagName).toBe("BUTTON");
+      expect(b.getAttribute("type")).toBe("button");
+      expect(b.getAttribute("tabindex")).toBeNull();
+      expect([b.getAttribute("aria-expanded"), b.getAttribute("aria-controls"), b.getAttribute("aria-label")]).toEqual(["false", "t-bobnet/Q-1", "Show all of Q-1"]);
+      expect(line("bobnet/Q-1").querySelector(".l-t")!.getAttribute("title")).toBe(long);
+      b.focus();
+      b.click();
+      expect(line("bobnet/Q-1").classList.contains("open")).toBe(true);
+      const t = line("bobnet/Q-1").querySelector(".l-t")!;
+      expect(t.id).toBe("t-bobnet/Q-1");
+      expect(t.textContent).toBe(long);
+      expect(t.textContent).toContain("\n");
+      expect(t.hasAttribute("title")).toBe(false);
+      const whole = line("bobnet/Q-1").querySelector(".whole")!;
+      expect(whole.querySelector(".rec")!.textContent).toBe("Recommended Accept the scale test now");
+      expect(whole.querySelector("a")!.textContent).toBe("Its context, on Waits on you →");
+      expect(whole.querySelector("a")!.getAttribute("href")).toBe("#waits");
+      // The context itself stays off the Overview.
+      expect(view().querySelector(".ov-needs")!.textContent).not.toContain("700 tasks");
+      expect(shown("bobnet/Q-1")).toEqual(["Show less", "Answer"]);
+      expect([more("bobnet/Q-1").getAttribute("aria-expanded"), more("bobnet/Q-1").getAttribute("aria-label")]).toEqual(["true", "Show less of Q-1"]);
+      // DOM order: badge, text, what opened, meta, acts.
+      expect([...line("bobnet/Q-1").children].map((c) => c.className)).toEqual(["badge", "l-t", "whole", "l-m", "acts"]);
+      // A short question with no recommendation or context opens to nothing more than its text.
+      more("bobnet/Q-1").click();
+      expect(line("bobnet/Q-1").classList.contains("open")).toBe(false);
+      expect(line("bobnet/Q-1").querySelector(".whole")).toBeNull();
+      expect(shown("bobnet/Q-1")).toEqual(["Show all", "Answer"]);
+    });
+
+    it("opens from a tap on the cut text, but not while text is selected, and not on a line that fits", () => {
+      const sel = vi.spyOn(globalThis, "getSelection").mockReturnValue({ toString: () => "map tiles" } as Selection);
+      (line("perm/mbp-1/r_4").querySelector(".l-t") as HTMLElement).click();
+      expect(line("perm/mbp-1/r_4").classList.contains("open")).toBe(false);
+      sel.mockRestore();
+      (line("perm/mbp-1/r_4").querySelector(".l-t") as HTMLElement).click();
+      expect(line("perm/mbp-1/r_4").classList.contains("open")).toBe(true);
+      expect(line("perm/mbp-1/r_4").querySelector(".l-t")!.textContent).toBe(`records-agent asks: ${perm.preview}`);
+      expect(more("perm/mbp-1/r_4").getAttribute("aria-label")).toBe("Show less of records-agent's question");
+      (line("bobnet/Q-7").querySelector(".l-t") as HTMLElement).click();
+      expect(line("bobnet/Q-7").classList.contains("open")).toBe(false);
+      more("perm/mbp-1/r_4").click();
+    });
+
+    it("opens the line when Answer is pressed; a redraw and a Show less keep the pick, the words and the caret", async () => {
+      (line("bobnet/Q-1").querySelector(".answer-btn") as HTMLButtonElement).click();
+      reply(pending("get")[0]!, { question: { ref: "Q-1", options: [{ key: "fixture", text: "Accept the scale test now", recommended: true }, { key: "hold", text: "Hold AC 8", recommended: false }] } });
+      await settle();
+      expect(line("bobnet/Q-1").classList.contains("open")).toBe(true);
+      const box = () => line("bobnet/Q-1").querySelector("form.answer textarea") as HTMLTextAreaElement;
+      const radio = line("bobnet/Q-1").querySelector('input[value="hold"]') as HTMLInputElement;
+      radio.checked = true;
+      radio.dispatchEvent(new Event("change"));
+      box().value = "Fixture is fine, and note it on BOB-9";
+      box().dispatchEvent(new Event("input"));
+      box().focus();
+      box().setSelectionRange(8, 8);
+      // A live frame while he types: the words stay.
+      report([perm]);
+      await settle();
+      expect(box().value).toBe("Fixture is fine, and note it on BOB-9");
+      // Show less redraws at once: the line folds, the form, the pick, the words and the caret stay.
+      more("bobnet/Q-1").click();
+      expect(line("bobnet/Q-1").classList.contains("open")).toBe(false);
+      expect(box().value).toBe("Fixture is fine, and note it on BOB-9");
+      expect(document.activeElement).toBe(box());
+      expect(box().selectionStart).toBe(8);
+      expect((line("bobnet/Q-1").querySelector('input[value="hold"]') as HTMLInputElement).checked).toBe(true);
+      // Closing the form leaves the line as it is; Show all opens it again, the form untouched.
+      more("bobnet/Q-1").click();
+      expect(box().value).toBe("Fixture is fine, and note it on BOB-9");
+      (line("bobnet/Q-1").querySelector(".answer-btn") as HTMLButtonElement).click();
+      expect(line("bobnet/Q-1").querySelector("form.answer")).toBeNull();
+      expect(line("bobnet/Q-1").classList.contains("open")).toBe(true);
+    });
+
+    it("keeps what is open across redraws, a tab switch and in sessionStorage, and drops ids no longer waiting", async () => {
+      expect(JSON.parse(sessionStorage.getItem("bobnet.open")!)).toEqual(["bobnet/Q-1"]);
+      FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 7, refs: [] });
+      await answerWith([q1, q7, gate, a12, old]);
+      expect(line("bobnet/Q-1").classList.contains("open")).toBe(true);
+      await go("#waits");
+      await go("#overview");
+      expect(line("bobnet/Q-1").classList.contains("open")).toBe(true);
+      // Answered elsewhere: it leaves the waits, and what is open forgets it.
+      FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 8, refs: ["Q-1"] });
+      await answerWith([q7, gate, a12, old]);
+      expect(JSON.parse(sessionStorage.getItem("bobnet.open")!)).toEqual([]);
+      FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 9, refs: [] });
+      await answerWith([q1, q7, gate, a12, old]);
+      expect(line("bobnet/Q-1").classList.contains("open")).toBe(false);
+    });
+
+    it("on Waits on you keeps the line breaks and shows Show context / Hide context only where there is a context", async () => {
+      await go("#waits");
+      const it = (ref: string) => view().querySelector(`.waits li[data-ref="${ref}"]`)!;
+      expect(it("Q-1").querySelector(".q")!.textContent).toBe(long);
+      expect(it("A-12").querySelector(".q")!.textContent).toBe("Sign the Mapbox terms.\nThe link is in lead/questions.md.");
+      for (const ref of ["Q-7", "BOB-5", "Q-8"]) expect(it(ref).querySelector(".ctx-row")).toBeNull();
+      const b = () => it("A-12").querySelector(".ctx-row button") as HTMLButtonElement;
+      expect([b().textContent, b().getAttribute("aria-expanded"), b().getAttribute("aria-controls")]).toEqual(["Show context", "false", "c-bobnet/A-12"]);
+      expect(it("A-12").querySelector(".ctx")).toBeNull();
+      b().click();
+      expect([b().textContent, b().getAttribute("aria-expanded")]).toEqual(["Hide context", "true"]);
+      expect(it("A-12").querySelector(".ctx")!.id).toBe("c-bobnet/A-12");
+      expect(it("A-12").querySelector(".ctx")!.textContent).toBe("Free tier: 50,000 loads a month.");
+      // Above the meta line.
+      expect([...it("A-12").children].map((c) => c.className)).toEqual(["top", "q", "ctx-row", "meta"]);
+      b().click();
+      expect(it("A-12").querySelector(".ctx")).toBeNull();
+      expect(b().textContent).toBe("Show context");
+    });
+
+    it("lands the Overview's context link on Waits on you with that context open and scrolled into view", async () => {
+      await go("#overview");
+      more("bobnet/Q-1").click();
+      const into = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+      (line("bobnet/Q-1").querySelector(".whole a") as HTMLAnchorElement).click();
+      await go("#waits");
+      const it = view().querySelector('.waits li[data-ref="Q-1"]')!;
+      expect(it.querySelector(".ctx")!.textContent).toBe(context);
+      expect(it.querySelector(".ctx-row button")!.textContent).toBe("Hide context");
+      expect(into.mock.contexts.map((li) => (li as HTMLElement).dataset["ref"])).toEqual(["Q-1"]);
+      into.mockRestore();
+      await go("#overview");
+    });
+  });
+
   it("opens the triage list on a release from the roadmap's counts line (BOB-3 #6)", async () => {
     await go("#roadmap/bobnet");
     await answerOverview();
@@ -1720,7 +1905,8 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
   it("opens an agent's line on the Overview too: quiet in its state, a lead's permission as waiting on Mario with Allow and Deny, the queued named", async () => {
     await go("#overview");
     const line = (name: string) => [...$("working").querySelectorAll(".a-line")].find((li) => li.querySelector(".l-who b")!.textContent === name)!;
-    expect(line("Toad").querySelector(".l-m")!.textContent).toBe("quiet 23 min · 1.5M tokens");
+    // 23 min before the suite started; the suite itself takes a minute or more.
+    expect(line("Toad").querySelector(".l-m")!.textContent).toBe(`quiet ${Math.floor((Date.now() - Date.parse(toad.last_event_at as string)) / 60_000)} min · 1.5M tokens`);
     expect(line("Toad").querySelector(".a-st")!.classList.contains("warn")).toBe(true);
     expect(line("Daisy").querySelector(".l-m")!.textContent).toBe("waiting on Mario · 1.5M tokens");
     expect(line("Daisy").querySelector(".a-st")!.classList.contains("muted")).toBe(true);
@@ -1739,5 +1925,37 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
     expect(location.hash).toBe("#feature/bobnet/BOB-4");
     expect(view().querySelectorAll(".steps > li.step")[3]!.querySelector('.ctxp .seg [aria-pressed="true"]')!.textContent).toBe("Luigi");
     FakeSocket.last.frame({ t: "report", laptop: "mbp-2", at: iso(0), snapshot: { ...snapshot, workers: [], pending: [] } });
+  });
+});
+
+describe("a reload (BOB-31)", () => {
+  it("opens again what was open in this tab: the page reads it from sessionStorage", async () => {
+    await go("#overview");
+    sessionStorage.setItem("bobnet.open", JSON.stringify(["bobnet/Q-1", "ctx:bobnet/Q-1"]));
+    // A fresh page: the dashboard loads again, over a new socket.
+    vi.resetModules();
+    await import("../public/app.js");
+    const ws = FakeSocket.last;
+    ws.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
+    const project = { key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] };
+    const q1 = { project: "bobnet", kind: "question", ref: "Q-1", feature: "BOB-3", text: "A long question, and its second line.\nAccept now, or hold?", recommended: null, context: "Why.",
+      holds: { items: [], sessions: [] }, waiting_sessions: [], needed_before: null, asked_by: "Mario@mbp-1", since: iso(60), blocking: true };
+    const done = new Set<unknown>();
+    const answer = () => {
+      for (const f of ws.sent.filter((x) => !done.has(x["rid"]))) {
+        done.add(f["rid"]);
+        const op = (f["op"] as { op?: string } | undefined)?.op;
+        const result = f["t"] === "dashboard" ? dashboard : op === "projects" ? { projects: [project] } : op === "overview" ? { projects: [] } : op === "waits" ? { waits: [q1], answered: [] } : {};
+        ws.frame({ t: "ok", rid: f["rid"], result });
+      }
+    };
+    for (let i = 0; i < 4; i++) {
+      answer();
+      await settle();
+    }
+    const li = $("needs").querySelector('li[data-id="bobnet/Q-1"]')!;
+    expect(li.classList.contains("open")).toBe(true);
+    expect(li.querySelector(".acts .more-t")!.textContent).toBe("Show less");
+    expect(JSON.parse(sessionStorage.getItem("bobnet.open")!)).toEqual(["bobnet/Q-1", "ctx:bobnet/Q-1"]);
   });
 });

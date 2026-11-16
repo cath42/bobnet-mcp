@@ -492,6 +492,8 @@ export class BoardStore {
         feature: q.session?.feature ?? (held ? this.featureRef(held.item) : null) ?? q.holds_sessions[0]?.feature ?? waiting[0]?.feature ?? null,
         text: q.text,
         recommended: recommended ? { key: recommended.key, text: recommended.text } : null,
+        // Blank is none (BOB-31 ruling): the dashboard offers Show context exactly when there is one.
+        context: q.context?.trim() ? q.context : null,
         holds: { items: q.holds, sessions: q.holds_sessions },
         waiting_sessions: waiting,
         needed_before: q.needed_before,
@@ -536,6 +538,7 @@ export class BoardStore {
       feature: this.featureRef(row.pk),
       text: row.title,
       recommended: null,
+      context: null,
       holds: { items: [], sessions: [] },
       waiting_sessions: [],
       needed_before: null,
