@@ -26,6 +26,13 @@ commit and land it (BOB-16: agents report it on the dashboard; Toad agreed 2026-
 with the plist change and the checks. poe picks the restart; you never do, and you never announce
 one. A restart ends you too: leave a handoff first.
 
+## Broker deploys
+
+A broker deploy of reviewed work (Toad signed off) never goes to Casper: ask poe for a window between
+Helix sessions, deploy (`pnpm run deploy` in `packages/broker`, from a tree matching the reviewed
+commit), check it, report. Casper, 2026-11-16: "broker deploys again you need to coordinate with Poe
+and not with me". Bring him only a failure that needs his hands.
+
 ## Scope
 
 **Yours:** `lead/`, the plan and the landing order. You may build when no one else should (a
