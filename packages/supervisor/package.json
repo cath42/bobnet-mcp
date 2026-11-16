@@ -1,6 +1,6 @@
 {
   "name": "@bobnet/supervisor",
-  "version": "2.0.0-rc.36",
+  "version": "2.0.0-rc.37",
   "private": true,
   "type": "module",
   "description": "Per-laptop BobNet supervisor: runs role agents headless on the Claude Agent SDK, routes their approvals and questions, and serves the orchestrator's tools.",
