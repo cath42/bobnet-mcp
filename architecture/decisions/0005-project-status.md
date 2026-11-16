@@ -7,7 +7,9 @@
   reads, and projects still on Backlog.md; §5's `newer` is split by kind. Amended 2026-11-16 (Toad,
   review of BOB-33 build A, `reviews/2026-11-16-bob33-build-a.md`): §2 records `more`, the clamp to
   now, bugs in done, `by_agent`'s role, what `sessions_estimate` counts, `heavy` without lost runs,
-  and the measured cost; §6 says what a supervisor ahead of its broker does to the data.
+  and the measured cost; §6 says what a supervisor ahead of its broker does to the data. Amended
+  2026-11-16 (Toad, poe on rc.37, consult c_287e2022): §2's stuck runs settle when their session
+  is closed, before or after the run's end.
 - **For:** `product/requirements/project-status.md` (537c7f7), Casper's Q-2 to Q-5. It extends ADR
   0001 (§2 schema, §5 grants, §6 close, §8 reads, §9 runs, §11 export) and doesn't change any of
   its rules.
@@ -109,8 +111,24 @@ what settles it (requirement 5: when the source says it is settled, it leaves):
   `closed_at` in the span. **Deploys are not recorded** and the page shows none (§7).
 - **Stuck:**
   - *runs*: a run that ended in the span with `outcome` `failed`, `stopped` or `lost` (§3). Settled
-    when a later run starts in the same session; a run with no session is settled by a later run of
-    the same agent in the project. A run with no outcome (before §3) is never listed.
+    when a later run starts in the same session, or when its session is closed (`sessions.ended_at`
+    not null), whichever order the close and the run's end came in; a run with no session is
+    settled by a later run of the same agent in the project. A run with no outcome (before §3) is
+    never listed. The close settles it at `max(sessions.ended_at, runs.ended_at)`, and a later
+    run's `started_at` at that time if it comes first: a closed session has nothing left to retry.
+    The order matters because a lead's session ends with `close_session` and then the supervisor
+    stopping the lead (stop-on-close), so its run ends `stopped` *after* the close; a rule that
+    needed the close to come after the run's end left every such run stuck for the whole span
+    (poe, live on rc.37; Mario's m_7ae33e63). A run whose session closed at or before its end was
+    never stuck, and isn't listed under *settled* either: otherwise every stop-on-close would show
+    there as something that cleared. The rule reads the session's state now, so a session whose
+    `ended_at` went back to null would make the run stuck again; nothing reopens a session today
+    (`closeSession` refuses a closed one, `store.ts` ~1715), so that is the rule, not a path.
+    Broker only (`statusOf`, `store.ts` ~676): no protocol change, no migration (`sessions.ended_at`
+    and `runs.session` exist). Tests: a stopped run in a session closed after the run's end is
+    settled, listed under *settled* at the close; one in a session closed before the run's end
+    (poe's case) is settled at the run's end and listed nowhere; one in an open session with no
+    later run is stuck; one in an open session with a later run is settled at that run's start.
   - *ci*: a `ci_runs` row (slot runs included) that `failed` in the span, with no later `passed`
     row of the same `source`, `name` and `branch`. Settled by that pass. This is also the top
     screen's "red CI".
@@ -123,7 +141,8 @@ what settles it (requirement 5: when the source says it is settled, it leaves):
     `answered_at` and not every held item is Done. Settled by a run on that feature.
   - *settled*: what was stuck in the span and has settled in it, so the page can say what cleared
     while he was away. Three kinds, each with a stored time it turned stuck and a stored time it
-    settled: `runs` (the run's `ended_at`; settled at the later run's `started_at`), `ci` (the failed
+    settled: `runs` (the run's `ended_at`; settled at the later run's `started_at` or its
+    session's close, as above), `ci` (the failed
     row's `ended_at`; the pass's `ended_at`) and `answered_holding` (`answered_at` + 2 h; the run's
     `started_at`, or the last held item's move to Done). Both times are in the span. `kind` names
     the list, `entry` is the entry that list would have shown, newest `settled_at` first. Idle
