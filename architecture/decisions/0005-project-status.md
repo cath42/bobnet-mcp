@@ -2,7 +2,9 @@
 
 - **Status:** accepted (Toad, 2026-11-15) for BOB-33 (tasks BOB-37 status read, BOB-38 run outcome),
   BOB-35 (theme tags) and BOB-36 (the lead's note). The rulings, one per item:
-  `reviews/2026-11-15-bob33-status-rulings.md`.
+  `reviews/2026-11-15-bob33-status-rulings.md`. Amended 2026-11-15 (Toad): §2 gains what Daisy's
+  spec draws (consult c_f1c4cbc5, `design/BOB-33/spec.md` "What the read gains"), when the dashboard
+  reads, and projects still on Backlog.md; §5's `newer` is split by kind.
 - **For:** `product/requirements/project-status.md` (537c7f7), Casper's Q-2 to Q-5. It extends ADR
   0001 (§2 schema, §5 grants, §6 close, §8 reads, §9 runs, §11 export) and doesn't change any of
   its rules.
@@ -35,7 +37,9 @@ across devices, it is a per-device-key setting (ADR 0003), not a board record.
 `overview` (ADR 0001 §8) it is derived on read, stores nothing, and is not an MCP tool. **One call
 covers every project the caller reads**, or the one named; a project it can't read is left out. The
 Status tab makes one call for the digest and every project page; tapping a project doesn't read
-again. `since` is clamped to at most 31 days back, and the reply says what it used.
+again. `since` is clamped to at most 31 days back, and the reply says what it used. A project still
+on Backlog.md (not on the service) has no row: the Board doesn't know it. The dashboard names such
+projects from the laptops' snapshots, as the Overview does, and says Status starts when they move.
 
 ```
 status {project?, since} → {
@@ -48,8 +52,10 @@ StatusRow {
   waits: WaitRecord[],             // waitsOf(p), the very list the waits read returns
   done: {
     counts: { features, sessions, lands, releases },
-    features: [{ ref, title, release, at }],            // moved to Done in the span and still Done
-    sessions: [{ session, ended_at, need, summary, closed_by }],
+    features: [{ ref, title, type, release, at }],      // moved to Done in the span and still Done
+    sessions: [{ session, ended_at, need, summary, closed_by,
+                 tokens: TokenTotals, lost,              // all the session's runs; lost: its runs in `lost`
+                 counts: { blockers, majors, sent_back } }],
     releases: [{ ref, title, closed_at }],
   },
   stuck: {
@@ -58,19 +64,20 @@ StatusRow {
     idle_sessions: [{ session, since }],               // open, no live run, quiet over 2 h
     idle_features: [{ ref, title, since }],            // In Progress, not open, over 2 h
     answered_holding: [{ ref, answered_at, feature }], // answered over 2 h ago, no run on its work since
+    settled: [{ kind, entry, settled_at }],            // stuck and settled, both in the span
   },
   recurring: Recurring | null,     // §4; null until BOB-35 ships
   backlog: {
     ready: [{ ref, title, release, criteria }],        // Ready features with criteria, next_ready's order
     sessions_estimate: number | null,
     no_criteria: [{ ref, title }],                     // features not Done, not archived, no criteria
-    triage: { count, oldest },
-    release: { ref, todo } | null,                     // the open release and its features not Done
+    triage: { count, oldest: { ref, at } | null },
+    release: { ref, todo, ready } | null,              // the open release: its features not Done, and Ready
     thin: boolean,
   },
   usage: {
     tokens: TokenTotals,                               // runs that ended in the span
-    by_agent: [{ agent, role, tokens: TokenTotals, runs }],
+    by_agent: [{ agent, role, tokens: TokenTotals, runs, lost }],
     heavy: [{ session, kind, tokens: TokenTotals, usual: TokenTotals }],
     lost: number,                                      // runs that ended in the span with tokens unknown (§3)
   },
@@ -87,7 +94,10 @@ what settles it (requirement 5: when the source says it is settled, it leaves):
   the dashboard comparing a wait's `since` with `since`.
 - **Done.** A feature counts when its last `status` event to `Done` (an `items` event with an
   `event_changes` row `status → Done`) is in the span and it is still Done; one moved back drops
-  out. Sessions: `ended_at` in the span. Lands: `pushes.at` in the span, a count. Releases:
+  out; `type` lets the page say "bug fixed". Sessions: `ended_at` in the span, with `tokens` the
+  sum of all the session's runs (all four kinds, the same total `heavy` compares), `lost` how many
+  of them ended `lost` and so aren't in `tokens`, and `counts` its close's `session_tasks` rows by
+  `role`. The kind is in the `SessionRef`. Lands: `pushes.at` in the span, a count. Releases:
   `closed_at` in the span. **Deploys are not recorded** and the page shows none (§7).
 - **Stuck:**
   - *runs*: a run that ended in the span with `outcome` `failed`, `stopped` or `lost` (§3). Settled
@@ -103,17 +113,37 @@ what settles it (requirement 5: when the source says it is settled, it leaves):
   - *answered and still holding*: a question `answered` more than 2 h ago, that holds items or
     sessions or that a session waits on, where no run has started on the feature those name since
     `answered_at` and not every held item is Done. Settled by a run on that feature.
+  - *settled*: what was stuck in the span and has settled in it, so the page can say what cleared
+    while he was away. Three kinds, each with a stored time it turned stuck and a stored time it
+    settled: `runs` (the run's `ended_at`; settled at the later run's `started_at`), `ci` (the failed
+    row's `ended_at`; the pass's `ended_at`) and `answered_holding` (`answered_at` + 2 h; the run's
+    `started_at`, or the last held item's move to Done). Both times are in the span. `kind` names
+    the list, `entry` is the entry that list would have shown, newest `settled_at` first. Idle
+    sessions and idle features aren't listed: they turn stuck in a gap between records, and finding
+    past gaps means walking every session's runs, for what is mostly someone getting back to work.
   - "2 h" is Peach's default and a constant in the store, not a parameter.
 - **Backlog health.** `ready` is the overview's `next_ready` with criteria counted, those with at
   least one. `sessions_estimate` is `ready.length` × the median number of sessions per feature over
   the project's last 20 Done features, rounded; null with fewer than 3. `thin` is fewer than 2 Ready
-  features with criteria while `release.todo` > 0 (Peach's default).
+  features with criteria while `release.todo` > 0 (Peach's default). `release.ready` counts the open
+  release's features that are Ready with criteria, counted as `ready` is; the page flags "nothing
+  Ready" when it is 0 and `todo` > 0. Only the open release is flagged, not the next. `triage.oldest`
+  is the backlog item in triage created first, with its `created_at`; null when triage is empty.
 - **Usage.** Tokens of runs whose `ended_at` is in the span, so a run counts once, in the span it
   ended. A live run is not on the board yet (ADR 0001 §9: its truth is the snapshot), so the read
   leaves it out; the dashboard may show it from snapshots, labelled as running. `heavy` is a session
   closed in the span whose total tokens (all four kinds) are more than twice the median of the
   project's sessions of its kind closed in the 30 days before, when there are at least 5 to compare;
-  `usual` is that median. Tokens only, never money.
+  `usual` is that median. `by_agent[].runs` counts the agent's runs that ended in the span, `lost`
+  how many of those are `lost`, and `tokens` sums the others; an agent with only lost runs is listed
+  with zero tokens and its `lost`. `usage.lost` stays the project's total. Tokens only, never money.
+
+**When the dashboard reads.** One call serves the whole tab, so the dashboard reads on
+`board_changed` for any project, at most once per 5 s and only while Status or the Overview shows;
+otherwise every 60 s, for the dot on the tab. The dot and the Overview's line read with `since` = the
+device's marker; while a chip is pressed the tab reads its span as well, so two reads, never more. A
+refetch keeps what is on screen until the reply. At most twelve reads a minute per open dashboard,
+each under 250 ms on a Helix-sized board, is well within what the Board object serves.
 
 **Cost on a Helix-sized board.** Per project the read runs about a dozen bounded queries; none
 walks a whole table that grows without end. Three tables grow with time and get an index on their
@@ -226,9 +256,10 @@ its first time was last week. Each group lists its sessions, which the page link
 - **Which tool:** no new MCP tool (every tool costs context on every call, ADR 0001 §8).
   `board_write` gains the operation `note {text}`, a `BoardOp` `note {project, text}`. It is
   idempotent by its operation key, like every write (ADR 0001 §12).
-- **How the latest is read:** `StatusRow.note` is `{ text, author, at, newer }` or null. `newer`
-  counts the facts after `at` in that project: sessions closed, features moved to Done, releases
-  closed. The page marks the note old when `newer` > 0 ("3 things since"); with no note, nothing.
+- **How the latest is read:** `StatusRow.note` is `{ text, author, at, newer }` or null. `newer` is
+  `{ sessions, features, releases }`, the facts after `at` in that project: sessions closed,
+  features moved to Done, releases closed. The page marks the note old when any is above 0 and
+  says which ("4 things since: 4 sessions closed"); with no note, nothing.
   `board_get` doesn't return it, and no other read does.
 
 ### 6. Rollout
