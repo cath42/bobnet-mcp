@@ -4,7 +4,7 @@
 run the whole time. Each project's lead and product owner, to see what the team's last stretch
 looked like.
 
-**State: Settled by Casper (2026-11-16), split into BOB-33, BOB-35 and BOB-36.** His words: he wants "an
+**State: Settled by Casper (2026-11-16), split into BOB-33, BOB-35 and BOB-36. Prototype accepted 2026-11-15, all 12 choices ("1. yes they look fine, 2. agreed"); spec `design/BOB-33/spec.md`, ADR 0005 §1 to §4.** His words: he wants "an
 update on the status of the project, any blockers/questions, progress, issues, retro problems
 reocurring, any other challenges or upcoming backlog is weak or undefined". His picks: **Q-2** "tab";
 **Q-3** "last_visit and yes the widen to 24 hours or a week are important, i like the 'im caught up'
@@ -26,14 +26,16 @@ project for its page.
 ## Criteria (Casper's picks applied)
 
 Built in three steps: **BOB-33** the tab with sections 1, 2, 3, 5 and 6 (everything the board already
-records, plus run outcome), **BOB-35** the theme tags and section 4 Recurring problems, **BOB-36** the
+records, plus run outcome) and section 4 **visible but empty**, reading "Comes with theme tags" (Casper: it
+stays visible, it doesn't hide), **BOB-35** the theme tags and section 4 Recurring problems, **BOB-36** the
 lead's note. Criteria 1 to 5 and 7 are BOB-33's, 6 is BOB-36's, section 4 is BOB-35's. Sections are
 numbered as Casper listed them.
 
 1. **The span.** The page opens on "since <time of your last visit on this device>, <n> h ago", with
    chips to widen it: **24 h** and **a week**. The last visit is kept per device (in the browser) and
-   moves only when Casper taps **"I'm caught up"**, never by opening or refreshing the page. After the
-   tap the page reads "caught up" and the span restarts from that moment. First visit on a device:
+   moves only when Casper taps **"I'm caught up"**, never by opening, refreshing, widening or opening a project page. There is **one marker per device for all
+   projects**, and I'm caught up sits on All projects only. After the tap the page reads "caught up", the span
+   restarts from that moment and a toast offers **Undo**. First visit on a device:
    24 h. Widening is for this view only and does not move the marker. *Evidence: test (span, chips,
    marker moves only on the tap); screenshot on phone.* (Q-3)
 2. **Phone first.** The top screen, without scrolling, says whether anything needs Casper (count,
@@ -49,16 +51,22 @@ numbered as Casper listed them.
       each with what it holds up and its age. Anything older than the span says so. (BOB-34 makes the
       list itself free of stale items; this section shows the same list.)
    2. **What got done:** a count line on top (features Done, sessions closed, lands, releases closed),
-      then features moved to Done and sessions closed in the span with their one-line summaries.
+      then features moved to Done and sessions closed in the span with their one-line summaries. **"Done" counts
+      closed sessions** (Casper, choice 3); features Done and releases closed are listed beside them. Lands are
+      a count only. No deploys (ADR 0005 §7).
    3. **What's stuck:** runs that failed or were stopped, lands and CI runs that failed, open sessions
       with no agent on them for more than 2 h, features In Progress with no open run, questions
-      answered but still holding work up.
+      answered but still holding work up. Items that were stuck and settled inside the span are listed under
+      a folded "Settled since" line.
    4. **Recurring problems** (BOB-35): review blockers and majors grouped by theme, features sent
       back more than once, a retro finding that comes back (same theme in 2 or more sessions). Each
-      group lists its sessions. Needs theme tags (below).
+      group lists its sessions. Needs theme tags (below). Findings group over the span; "came back" and
+      "sent back more than once" look back **the span plus 30 days** (Casper, choice 4). Until BOB-35 ships
+      the section shows folded as **"Comes with theme tags"**, with nothing to group.
    5. **Backlog health:** Ready features with criteria written, and how many sessions of work that is
       ("3 Ready features, about 5 sessions"); features without criteria; backlog items in triage with
-      the oldest age; a release with nothing Ready next. A project is flagged **thin** when it has
+      the oldest age; the **open release** flagged "nothing Ready" when it has 0 Ready features with criteria and something
+      still to do (the next release is not flagged). A project is flagged **thin** when it has
       fewer than 2 Ready features with criteria and the open release has more to do.
    6. **Usage:** tokens in the span by project and by agent, and sessions much heavier than their
       kind's usual, flagged. Tokens, never money.
