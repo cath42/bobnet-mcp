@@ -29,16 +29,19 @@ from null exactly as *BOB-33 only* does (`s8-bob33-only`). When they turn non-nu
 change. Their drawing is in this file under "Later: BOB-35" and "Later: BOB-36" so the CSS block can carry it, but no
 code for them is needed now.
 
-## What the read gains (Toad, consult c_f1c4cbc5; Toad records it in ADR 0005 §2)
+## What the read gains (ADR 0005 §2, amended 305b562)
 
 All additive to §2's `StatusRow`, no schema change:
 
-- `stuck.settled: [{ kind, ref | session, settled_at }]`: items that were stuck and settled, both inside the span. Capped
-  100 + `more`. A kind with no stored time it settled isn't listed.
+- `stuck.settled: [{ kind, entry, settled_at }]`: items that were stuck and settled, both inside the span; `entry` is
+  what that kind's stuck list would show. Kinds `runs`, `ci`, `answered_holding` only; idle sessions and features aren't
+  listed. Capped 100 + `more`.
 - `usage.by_agent[].lost`: that agent's runs in `lost`. The row total stays.
-- `done.sessions[]`: `tokens: TokenTotals`, `counts: { blockers, majors, sent_back }`. The kind is in the SessionRef.
+- `done.sessions[]`: `tokens: TokenTotals`, `lost` (the session's runs in `lost`), `counts: { blockers, majors,
+  sent_back }`. The kind is in the SessionRef.
 - `done.features[]`: `type` (a `bug` shows "bug fixed").
-- `backlog.release.ready`: Ready features of the open release. **Flag when it is 0** ("R2 has nothing Ready"). The
+- `backlog.release.ready`: Ready features with criteria of the open release (counted as `backlog.ready` is). **Flag
+  when it is 0 and `todo` > 0** ("R2 has nothing Ready"). The
   prototype's flag on the *next* release (`nextEmpty`) is dropped.
 - `backlog.triage.oldest: { ref, at } | null`.
 
@@ -132,7 +135,7 @@ The All projects lines for this project, without the project name. "Answer on Wa
   each ref, title, time. Only when there are any.
 - **Sessions closed**, newest first: kind (the `--k-<kind>` colour), ref, label, closed by; a line "needs you" /
   "waited on an answer" / "need none", the counts "1 blocker, 2 majors, 1 sent back" and "340k tokens" (in `--warn` when it
-  is in `usage.heavy`); the summary (two lines, clamped); the time. Five show; "Show all 9 sessions" opens the rest in place.
+  is in `usage.heavy`), with "+ 1 run unknown" in `--warn` after it when the session's `lost` > 0, as Usage does; the summary (two lines, clamped); the time. Five show; "Show all 9 sessions" opens the rest in place.
 - **Lands are a count only** in the headline. **No deploys** anywhere (ADR 0005 §7).
 - Nothing: "Nothing closed or landed since 23:10."
 
@@ -145,14 +148,14 @@ the span, "before 23:10".
 | `runs`, outcome `failed` | Run failed | bad | "<agent>'s run on <session> failed" | `reason` |
 | `runs`, `stopped` | Run stopped | warn | "<agent>'s run on <session> was stopped" | `reason` |
 | `runs`, `lost` | Run lost | warn | "<agent>'s run on <session> was lost" | "Running when the supervisor restarted; nobody has started it again." |
-| `ci`, a run-slot land | Land failed | bad | "<worker>'s land failed" | name, branch, sha (linked to `url`) |
-| `ci`, other | CI red | bad | "<name> failed on <branch>" | worker, sha (linked to `url`) |
+| `ci`, `source` 'slot' and `name` 'land' (ADR 0001 §10) | Land failed | bad | "<worker>'s land failed" | name, branch, sha (linked to `url`) |
+| `ci`, any other failed row | CI red | bad | "<name> failed on <branch>" | worker, sha (linked to `url`) |
 | `idle_sessions` | Nobody on it | warn | "<session> is open with no agent for 4 h 42 min" | |
 | `idle_features` | No run | warn | "<ref> is In Progress with no open run for 25 h" | the title |
 | `answered_holding` | Answered, still holding | warn | "<Q-ref> was answered 3 h ago; nothing has started on <feature>" | |
 
 Under the list, folded: **"Settled since 23:10: 2"**, opening to `settled` rows (a `done` badge "settled", what it was, the
-time it settled). Nothing stuck: "Nothing stuck." in `--ok`; the settled fold still shows when there are any.
+time it settled), drawn from its `entry` as the stuck row would be. Idle sessions and features don't settle here. Nothing stuck: "Nothing stuck." in `--ok`; the settled fold still shows when there are any.
 
 ### Recurring problems (BOB-33: the section, empty)
 Count "–", no scope, headline **"Comes with theme tags (BOB-35)"**, body: "Review findings get a theme when their session
@@ -163,7 +166,7 @@ closes, from BOB-35 on. Until then this section has nothing to group." It shows,
 `thin` → a `--warn` line first: "Thin: fewer than 2 Ready features with criteria, and R1 has 3 more to do." Then rows:
 **Ready, with criteria** (n features, "about n sessions of work" when `sessions_estimate` isn't null; refs with their
 criteria counts); **No criteria yet** (refs and titles, or "None"); **In triage** ("20 items, the oldest 2 d, BOB-11");
-**Open release** (ref, "3 features to do"; `--warn` and "nothing Ready" when `release.ready` is 0). No open release: the
+**Open release** (ref, "3 features to do"; `--warn` and "nothing Ready" when `release.ready` is 0 and `todo` > 0). No open release: the
 row says "No open release".
 
 ### Usage (choice 10)
@@ -260,13 +263,11 @@ with BOB-35, 36" and `s2-helix`, `s4-week`.
 ## Later: BOB-36 (the lead's note)
 
 When `row.note` isn't null: on the project page a card above the answers, "<author>'s note", role, "05:40, 32 min ago",
-the text (up to 600 characters, line breaks kept); when `newer` > 0 it turns `--warn` and adds "4 things since: 4 sessions
-closed" (from the counts the read gives). On a phone (≤699 px) a note over about 280 characters folds to five lines with
+the text (up to 600 characters, line breaks kept); when any of `newer: { sessions, features, releases }` is > 0 it turns `--warn` and adds
+"4 things since: 4 sessions closed" (the sum, then each non-zero count). On a phone (≤699 px) a note over about 280 characters folds to five lines with
 Show all / Show less. The card shows the note's start, two lines, with the author and time. No note: nothing. See `s3-bobnet`.
 
 ## Open questions
 
 - Peach: the board's "next release" flag is gone (only the open release is flagged); the criterion 4.5 wording "a release
   with nothing Ready next" now means the open release. If Peach wants the next one too, it is a read change for Toad.
-- Luigi: the Land failed / CI red split needs a way to tell a run-slot land from another CI run (its `source` or `name`);
-  if `ci_runs` can't tell, show all as **CI red** with the name.
