@@ -46,6 +46,7 @@ has the largest board (~700 task files, 3 releases, ~29 features). Picard's writ
 | 7 | Capture backlog items without structuring them | [capture.md](capture.md) | Agreed |
 | 8 | Bugs | [bugs.md](bugs.md) | Agreed |
 | 9 | Moving boards off Backlog.md | [migration.md](migration.md) | Agreed |
+| 10 | Project status: catch up after hours away | [project-status.md](project-status.md) | Draft (BOB-33) |
 
 State: Open (questions before criteria), Draft (being written), Agreed (Casper agreed it), Deferred.
 
