@@ -47,6 +47,7 @@ has the largest board (~700 task files, 3 releases, ~29 features). Picard's writ
 | 8 | Bugs | [bugs.md](bugs.md) | Agreed |
 | 9 | Moving boards off Backlog.md | [migration.md](migration.md) | Agreed |
 | 10 | Project status: catch up after hours away | [project-status.md](project-status.md) | Settled, split BOB-33, BOB-35, BOB-36 |
+| 11 | One orchestrator across laptops (BOB-44) | [remote-orchestration.md](remote-orchestration.md) | Draft, questions with Casper |
 
 State: Open (questions before criteria), Draft (being written), Agreed (Casper agreed it), Deferred.
 
