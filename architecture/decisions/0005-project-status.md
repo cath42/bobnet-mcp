@@ -4,7 +4,10 @@
   BOB-35 (theme tags) and BOB-36 (the lead's note). The rulings, one per item:
   `reviews/2026-11-15-bob33-status-rulings.md`. Amended 2026-11-15 (Toad): §2 gains what Daisy's
   spec draws (consult c_f1c4cbc5, `design/BOB-33/spec.md` "What the read gains"), when the dashboard
-  reads, and projects still on Backlog.md; §5's `newer` is split by kind.
+  reads, and projects still on Backlog.md; §5's `newer` is split by kind. Amended 2026-11-16 (Toad,
+  review of BOB-33 build A, `reviews/2026-11-16-bob33-build-a.md`): §2 records `more`, the clamp to
+  now, bugs in done, `by_agent`'s role, what `sessions_estimate` counts, `heavy` without lost runs,
+  and the measured cost; §6 says what a supervisor ahead of its broker does to the data.
 - **For:** `product/requirements/project-status.md` (537c7f7), Casper's Q-2 to Q-5. It extends ADR
   0001 (§2 schema, §5 grants, §6 close, §8 reads, §9 runs, §11 export) and doesn't change any of
   its rules.
@@ -37,7 +40,8 @@ across devices, it is a per-device-key setting (ADR 0003), not a board record.
 `overview` (ADR 0001 §8) it is derived on read, stores nothing, and is not an MCP tool. **One call
 covers every project the caller reads**, or the one named; a project it can't read is left out. The
 Status tab makes one call for the digest and every project page; tapping a project doesn't read
-again. `since` is clamped to at most 31 days back, and the reply says what it used. A project still
+again. `since` is clamped to at most 31 days back and to no later than now, and the reply says
+what it used. A project still
 on Backlog.md (not on the service) has no row: the Board doesn't know it. The dashboard names such
 projects from the laptops' snapshots, as the Overview does, and says Status starts when they move.
 
@@ -81,11 +85,14 @@ StatusRow {
     heavy: [{ session, kind, tokens: TokenTotals, usual: TokenTotals }],
     lost: number,                                      // runs that ended in the span with tokens unknown (§3)
   },
+  more: { [path]: number },        // only lists past 100: path → how many were left out
 }
 ```
 
-Every list is newest first except `waits` (oldest first, as on Waits), capped at 100 with a `more`
-count beside it. Each entry carries the ref the dashboard links to. **What each part means**, and
+Every list is newest first except `waits` (oldest first, as on Waits), capped at 100. What a cut
+left out is in the row's one `more` map, keyed by the list's path (`"waits"`, `"done.sessions"`,
+`"stuck.settled"`, `"usage.by_agent"`, ...), present only for a list that was cut; the dashboard
+adds it to the list's length. `done.counts` are whole numbers, before any cut. Each entry carries the ref the dashboard links to. **What each part means**, and
 what settles it (requirement 5: when the source says it is settled, it leaves):
 
 - **Needs you** is `waitsOf(p)`, the function behind `waits` and `overview.waits_on_you`, so the
@@ -94,7 +101,8 @@ what settles it (requirement 5: when the source says it is settled, it leaves):
   the dashboard comparing a wait's `since` with `since`.
 - **Done.** A feature counts when its last `status` event to `Done` (an `items` event with an
   `event_changes` row `status → Done`) is in the span and it is still Done; one moved back drops
-  out; `type` lets the page say "bug fixed". Sessions: `ended_at` in the span, with `tokens` the
+  out. Bugs count too, of any kind (a task or a backlog item of type `bug`), in the list and in
+  `counts.features`; `type` lets the page say "bug fixed". Sessions: `ended_at` in the span, with `tokens` the
   sum of all the session's runs (all four kinds, the same total `heavy` compares), `lost` how many
   of them ended `lost` and so aren't in `tokens`, and `counts` its close's `session_tasks` rows by
   `role`. The kind is in the `SessionRef`. Lands: `pushes.at` in the span, a count. Releases:
@@ -124,7 +132,8 @@ what settles it (requirement 5: when the source says it is settled, it leaves):
   - "2 h" is Peach's default and a constant in the store, not a parameter.
 - **Backlog health.** `ready` is the overview's `next_ready` with criteria counted, those with at
   least one. `sessions_estimate` is `ready.length` × the median number of sessions per feature over
-  the project's last 20 Done features, rounded; null with fewer than 3. `thin` is fewer than 2 Ready
+  the project's last 20 Done features that had at least one session (by their last move to Done),
+  rounded; null with fewer than 3. Features imported Done with no sessions would pull it to 0. `thin` is fewer than 2 Ready
   features with criteria while `release.todo` > 0 (Peach's default). `release.ready` counts the open
   release's features that are Ready with criteria, counted as `ready` is; the page flags "nothing
   Ready" when it is 0 and `todo` > 0. Only the open release is flagged, not the next. `triage.oldest`
@@ -134,9 +143,12 @@ what settles it (requirement 5: when the source says it is settled, it leaves):
   leaves it out; the dashboard may show it from snapshots, labelled as running. `heavy` is a session
   closed in the span whose total tokens (all four kinds) are more than twice the median of the
   project's sessions of its kind closed in the 30 days before, when there are at least 5 to compare;
-  `usual` is that median. `by_agent[].runs` counts the agent's runs that ended in the span, `lost`
-  how many of those are `lost`, and `tokens` sums the others; an agent with only lost runs is listed
-  with zero tokens and its `lost`. `usage.lost` stays the project's total. Tokens only, never money.
+  `usual` is that median. A session with a lost run has a total that is partly unknown, so it is
+  never judged heavy and is left out of every comparison set, the 5 included (BOB-42). `by_agent[].runs`
+  counts the agent's runs that ended in the span, `lost` how many of those are `lost`, and `tokens`
+  sums the others; an agent with only lost runs is listed with zero tokens and its `lost`, and the
+  page shows "N runs unknown", never 0. `role` is that of the agent's latest run in the span.
+  `usage.lost` stays the project's total. Tokens only, never money.
 
 **When the dashboard reads.** One call serves the whole tab, so the dashboard reads on
 `board_changed` for any project, at most once per 5 s and only while Status or the Overview shows;
@@ -154,6 +166,11 @@ next to `board-scale.test.ts`: the Helix-sized board plus a month of work (300 s
 3,000 CI runs, 20,000 events, a second project), and `status` across every project with a week's span
 stays under the file's 250 ms, slowest of three, like the other reads. The reply is well inside the
 socket's limits: a week of Helix is about 100 session summaries of at most 300 characters.
+Measured at BOB-33's review (mbp-1, slowest of three): 32 ms for a week, 100 ms for the full 31 days,
+and 94 ms with every run carrying 400 context points. One walk isn't bounded by the span:
+*answered and still holding* checks every answered question with holds the project ever had, three
+or four small queries each. The scale test has no questions yet (BOB-43); if they push the read past
+about 100 ms, skip questions whose held items were all Done before the span.
 
 ### 3. How a run ended (BOB-38)
 
@@ -272,7 +289,8 @@ serves its read. Each step needs Casper to ask for that deploy.
    page works at once; failed runs appear once step 2 is live, and until then runs read as unknown.
 2. **BOB-33: supervisor release** (Mario), after step 1: `run_end` sends `outcome` and `reason`, and
    the startup sweep sends `lost`. An old broker would strip the optional fields (supervisor ops
-   aren't strict), so the order is for the data, not for safety.
+   aren't strict), so the order is for the data, not for safety: a sweep's `lost` sent through an old
+   broker is stored with no outcome and zero tokens, which later reads as a run that used none.
 3. **BOB-35: broker deploy**, then the release. Migration 4: `session_tasks.theme`,
    `session_findings`. The broker first: `close_session` isn't strict, so an old broker given
    `themes` would answer `ok` and drop them unseen. Then the release with the new `close_session`
