@@ -81,12 +81,18 @@ Run today in this worktree: `packages/supervisor/test/backlog-import.test.ts` 18
 Note on AC 5's text: it names LAND-49 (six sessions, file says Ready). At the cut-over commit LAND-49 is Done,
 so the derivation has nothing to open; the criterion's rule holds.
 
+## Later evidence (same day)
+
+- **AC 4: checked.** Casper's look (via Mario, ~20:55 his time): Waits on you lists the 9 (Q-214, 215, 257, 259,
+  261, A-6, 15, 17, 20), none blocking (each source says "Blocking: No" or has no flag, kept in context).
+  Roadmap R0/R1/R2 seen.
+- **AC 8: checked.** Mario's `board_get helix LAND-42 history:true`: one event, seq 1124, 2026-11-17T02:47:03Z,
+  op import by import@mbp-1, "imported from Backlog.md at helix-navigator 7d074bceac54 (bobnet-board v1)",
+  nothing before it; earlier history is in git.
+- BOB-46 (Usage order) passes on rc.38: Casper confirmed LAND-54 is there.
+
 ## What stays open
 
-- **AC 4** (open Q-214, 215, 257, 259, 261 and A-6, 15, 17, 20 show on Waits on you) and **AC 8** (history
-  starts at the move; Roadmap R0/R1/R2): Casper's dashboard look, through Mario.
-- **AC 7**: the helix repo's cut-over commits (Picard, Bob).
-- **DoD 1**: lands with this file's landing (typecheck and test pass). **DoD 2**: when the rows above close.
-- **DoD 3**: Toad signed off (`architecture/reviews/2026-11-16-bob9-migration-4.md`, ADR 0006). **DoD 4**:
-  needed a broker deploy and the rc.38 restart; both done (Mario's handoff, 02:46Z deploy from f0e7f8f; mbp-1
-  restarted onto rc.38 with `board: service`; ubu1 through poe@ubu1).
+- **AC 7**: the helix repo's cut-over commits (Picard, Bob). **DoD 2** closes with it.
+- DoD 1, 3, 4 checked: landed; Toad signed off (`architecture/reviews/2026-11-16-bob9-migration-4.md`, ADR 0006);
+  the broker deploy (02:46Z, f0e7f8f) and the rc.38 restart are done (mbp-1; ubu1 through poe@ubu1).
