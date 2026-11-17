@@ -1810,7 +1810,8 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
     (line().querySelector(".a-btn") as HTMLElement).click();
     expect(line().classList.contains("open")).toBe(true);
     const row = line().querySelector(".a-detail")!;
-    expect(row.querySelector(".muted")!.textContent).toBe(`opus · high · mbp-2 · worked 25m · context 9k · 2 calls`);
+    // worked: 25m at the fixture's `now`, more once a slow suite has run past a minute
+    expect(row.querySelector(".muted")!.textContent).toMatch(/^opus · high · mbp-2 · worked 2\dm · context 9k · 2 calls$/);
     expect(row.querySelector(`a[href="${remote}"]`)!.textContent).toBe("Open in Claude ↗");
     expect([...row.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Context per call", "Stop", "Reset"]);
     const asked: string[] = [];
