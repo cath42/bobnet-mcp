@@ -22,19 +22,21 @@ then roles). It follows and stops only what it spawned; the worker's events come
    `stop_worker`, `list_workers` act on this laptop only.
 2. **No answering.** A remote requester "answers no request": a remote worker's permission
    requests and questions wait for whoever is on the target laptop (the other poe, or Casper).
-   With one poe there is none. This is the core of the feature.
+   With one poe there is none. This is the core of the feature. (Q-6 settled: poe answers them.)
 3. **No view of it.** The remote worker is not in the orchestrator's `list_workers`,
    `pending_requests` or run-slot view.
-4. **Handoff files are laptop-local.** The orchestrator cannot read what a remote worker wrote.
+4. **Handoff files are laptop-local.** The orchestrator cannot read what a remote worker wrote. It
+   does not need to (Q-7 settled): it talks to the agents there; criterion 5 carries the result.
 
 ## Criteria (Draft; Toad's ADR settles the shape)
 
 1. The orchestrator spawns, follows (status, tail, summary), and stops a worker on a named laptop
    with the tools it uses for its own: a `laptop` argument, default this laptop. Old callers are
    unchanged. *Evidence: test between two supervisors on one broker.*
-2. The orchestrator sees a remote worker's permission requests and questions and answers them, only
-   for workers it spawned there, and only when the target's config allows answering. *Evidence: test;
-   a refused answer for another worker's request.*
+2. The orchestrator sees a remote worker's permission requests and questions and answers them
+   exactly as it does a local worker's, only for workers it spawned there, and only where the target's
+   existing `remote` allowlist lets it. No separate rule set and no per-laptop answer switch beyond
+   that allowlist. *Evidence: test; a refused answer for another worker's request.*
 3. A target laptop's own limits apply: its run slot, its usage, its config. The orchestrator's laptop
    does not count. A full or offline target refuses at once, with the reason; a spawn is never queued
    for later. *Evidence: test.*
@@ -57,15 +59,31 @@ then roles). It follows and stops only what it spawned; the worker's events come
   denied.
 - Local spawns and the one-poe-per-laptop setup keep working, so Casper may switch gradually.
 
-## Split out (not in this feature, ask Casper before any)
+## Casper's refinement of Q-6 and Q-7 (2026-11-16 ~22:55, via poe, verbatim)
 
-- Reading a remote laptop's files (handoffs, logs) over the broker.
-- Cloning a repo to a laptop that lacks it.
+> "Q6 you do, poe no different than local sessions q7 cloning repos is an agents job, we spawn agents,
+> the agents can perform actions we ask them to including cloning repos, but correct this isnt to clone
+> repos or read files on another machine, we won't need to, we can spawn and talk to agents on that
+> machine"
+
+**Reading (Peach's; poe to check):**
+- Q-6: poe answers a remote worker's requests and questions exactly as a local one's. No separate rule
+  set, and no per-laptop default-off answer switch beyond the target's existing `remote` allowlist
+  (sender, project, roles), which stays the authority (criterion 6).
+- Q-7: cloning a repo is a task given to a worker on that laptop, not a BobNet feature. BobNet has no
+  cross-machine file reads either; poe talks to the agents there. Criterion 4's "repos must already
+  exist" is then a fact about the spawn, not a gap to fill.
+
+## Split out (not in this feature)
+
 - A lock so two laptops don't land at once (Toad is checking ADR 0002 for a race on the shared `v2`).
 - Which laptop's supervisor hosts the orchestrator, and a failover when it is down.
 
+Dropped by Casper's words, not split out: reading a remote laptop's files over the broker, and cloning a
+repo to a laptop that lacks it (the latter is a task for a worker).
+
 ## Open questions
 
-For Casper: Q-6 (who answers a remote worker's requests), Q-7 (repo cloning and remote file reads left out).
+Answered: Q-6 and Q-7 (above).
 For Toad (ADR 0006): wire shape (the existing message vs a `worker_cmd` frame), the auth of answers,
 `list_workers` across laptops, the landing race.

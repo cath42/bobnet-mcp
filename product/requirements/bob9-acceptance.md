@@ -91,8 +91,31 @@ so the derivation has nothing to open; the criterion's rule holds.
   nothing before it; earlier history is in git.
 - BOB-46 (Usage order) passes on rc.38: Casper confirmed LAND-54 is there.
 
-## What stays open
+## Closing evidence (2026-11-16, UTC 2026-11-17)
 
-- **AC 7**: the helix repo's cut-over commits (Picard, Bob). **DoD 2** closes with it.
-- DoD 1, 3, 4 checked: landed; Toad signed off (`architecture/reviews/2026-11-16-bob9-migration-4.md`, ADR 0006);
-  the broker deploy (02:46Z, f0e7f8f) and the rc.38 restart are done (mbp-1; ubu1 through poe@ubu1).
+- **AC 1 live co-sign**: Picard read the live board and co-signed
+  (`product/roadmap/bob9-ac1-live-read.md` in helix-navigator, commit `7a1ae682`): 42 features, 3 archived,
+  104 + 6 backlog, 25 rules, and my nine samples match. He did not read the 898 total or the task and question
+  counts (no list tool for them); imported Q and A carry `asked_by` unknown and the import time as `created_at`.
+  That closes the caveat on AC 1.
+- **AC 7: checked.** Helix's cut-over commits on helix-navigator `main` (Bob, 2026-11-16). I read these with
+  `gh api repos/cath42/helix-navigator/commits/<sha>` (read only), all eight:
+
+  | Commit | Who | What |
+  |---|---|---|
+  | `963b70de` | Riker | `session/CLAUDE.md` on the board tools, close via `close_session` |
+  | `9a6a5f99` | Bob | `lead/questions.md` frozen with a pointer; `lead/CLAUDE.md`, land-build, design, review skills on `board_*` (5 files) |
+  | `ff3123b6` | Calvin | `design/CLAUDE.md` reads tasks from the board service |
+  | `0be97f7e` | Bender | `ops/CLAUDE.md` reads tasks from the board service |
+  | `2c12bcf3` | Bill | ADR 0115 accepted (Casper, Q-278 (a)); root `CLAUDE.md`, OWNERS, six workspace `CLAUDE.md` (12 files) |
+  | `7a1ae682` | Picard | `product/backlog` and `backlog.config.yml` removed (297 files removed of 300), `product/BOARD.md`, the AC 1 co-sign |
+  | `845d11bd` | Bill | OWNERS row for the retired config dropped |
+  | `bffb1c01` | Homer | `.mcp.json` drops the backlog server, last |
+
+  All within 2026-11-17 02:59Z to 04:38Z; one cut-over, the Backlog.md folder gone with a pointer, CLAUDE.md and
+  skills on the tools the same day, nothing written to both.
+- **DoD 2: checked**: AC 1 to 8 pass, evidence above.
+
+## Result
+
+All eight criteria and the four DoD items are checked. BOB-9 is Done.
