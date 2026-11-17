@@ -101,5 +101,17 @@
     "sessions": false,
     "questions": false,
     "admin": false
+  },
+  {
+    "project": "athletic",
+    "agent": "Reviewer",
+    "laptop": "ubu1",
+    "role": "read",
+    "read": true,
+    "items": "none",
+    "fields": [],
+    "sessions": false,
+    "questions": false,
+    "admin": false
   }
 ]

@@ -22,14 +22,14 @@ no code change needed.
    Backlog.md milestones first (the roadmap file's R2.x numbering is not a board release).
 3. Assignee and priority dropped, references to notes: OK?
 4. The grants draft `athletic-grants.json` (here): Ledecky writes all items (all fields, sessions, questions);
-   Phelps has sessions and questions; the six builders read; all on ubu1; no admin. Confirm the agent names as
-   they register on BobNet. Mario@mbp-1's `*` read row (backup) is already on the board.
+   Phelps has sessions and questions; the six builders and Reviewer read; all on ubu1; no admin. Names as registered on ubu1 (poe, list_peers 02:48Z).
+   Mario@mbp-1's `*` read row (backup) is already on the board.
 5. Open questions for Casper that live outside the board (if any): list them, they become Q-n/A-n by hand
    (the import has no questions file for Athletic).
 Ledecky writes the OK (or the fixes' commit hash) to `~/.local/state/bobnet/handoffs/athletic/env-board-ok.md`.
 
 ## Order
-1. poe@ubu1: Athletic's current session runs to its close; then no session starts and nothing writes
+1. Frozen since the ENV-16 build close (20:12, Phelps stopped; poe@ubu1 holds athletic): no session starts and nothing writes
    requirements/board/ (the freeze). poe@ubu1 sends Mario the frozen origin/main commit.
 2. Mario: final dry run at that commit, 0 problems; Ledecky OKs; `--post --grants athletic-grants.json` from mbp-1
    (needs only the commit on GitHub; a fresh clone is enough). Expect `{"ok":true,"projects":[{"key":"athletic",...}]}`.
