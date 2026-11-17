@@ -389,4 +389,19 @@ export const BOARD_MIGRATIONS: readonly string[] = [
   CREATE INDEX runs_ended ON runs (project, ended_at);
   CREATE INDEX ci_runs_ended ON ci_runs (project, ended_at);
   `,
+  // 4: BobNet's own project gives up draft prefix DRAFT, which its BOB-14 import took but no id of its
+  // has (ADR 0006), so Helix's import can bring its DRAFT-n ids. Kept if any id of bobnet's, aliases
+  // included, is a DRAFT- one. The change is in the history, as the board's: no op edits a project.
+  `
+  INSERT INTO events (at, project, actor_kind, actor, op, tbl, pk, ref, reason)
+  SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), pk, 'board', 'migration 4', 'update_project', 'projects', pk, key, 'draft prefix freed for Helix''s import (ADR 0006)'
+  FROM projects
+  WHERE key = 'bobnet' AND draft_prefix = 'DRAFT' AND NOT EXISTS (SELECT 1 FROM item_refs WHERE project = projects.pk AND ref LIKE 'DRAFT-%');
+  INSERT INTO event_changes (event, field, old, new)
+  SELECT last_insert_rowid(), 'draft_prefix', draft_prefix, NULL
+  FROM projects
+  WHERE key = 'bobnet' AND draft_prefix = 'DRAFT' AND NOT EXISTS (SELECT 1 FROM item_refs WHERE project = projects.pk AND ref LIKE 'DRAFT-%');
+  UPDATE projects SET draft_prefix = NULL
+  WHERE key = 'bobnet' AND draft_prefix = 'DRAFT' AND NOT EXISTS (SELECT 1 FROM item_refs WHERE project = projects.pk AND ref LIKE 'DRAFT-%');
+  `,
 ];

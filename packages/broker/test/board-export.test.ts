@@ -1,6 +1,7 @@
 import { BoardExportV1, type BoardCaller, type BoardCtx, type BoardOpInput, type BoardReply, type BoardResults, type ExportItem, type ExportProject } from "@bobnet/protocol";
 import type { Reader } from "../src/board/export.ts";
-import { reset } from "cloudflare:test";
+import { BOARD_MIGRATIONS } from "../src/board/schema.ts";
+import { reset, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import backlogImport from "./fixtures/backlog-import.json";
@@ -281,5 +282,41 @@ describe("import (ADR 0001 §11)", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, projects: [{ key: "bobnet" }] });
     expect((await post(await ownerToken(), JSON.stringify(document()), { origin: ORIGIN })).status).toBe(409);
+  });
+});
+
+describe("board migration 4: bobnet frees draft prefix DRAFT (ADR 0006)", () => {
+  // BobNet as its BOB-14 import left it: draft prefix DRAFT; then migration 4 run again over it.
+  const bobnet = (items: Array<Partial<ExportItem> & { ref: string }>) => imported(document({ draft_prefix: "DRAFT", next: { item: 9, release: 1, question: 1, action: 1 } }, items));
+  const migrate4 = () => runInDurableObject(board(), (_, state) => void state.storage.sql.exec(BOARD_MIGRATIONS[3]!));
+  const draftPrefix = async () => (await ok(owner, { op: "projects" })).projects.find((p) => p.key === "bobnet")!.draft_prefix;
+  const helixDoc = () => document({ key: "helix", name: "Helix", prefix: "LAND", draft_prefix: "DRAFT", next: { item: 3, release: 1, question: 1, action: 1 } }, [{ ref: "LAND-1" }, { ref: "DRAFT-2" }]);
+
+  it("clears it when no id of bobnet's is a DRAFT- one, with an event saying so; Helix's import then brings DRAFT-n", async () => {
+    expect(await bobnet([{ ref: "BOB-1" }, { ref: "BOB-2", aliases: ["OLD-3"] }])).toMatchObject({ ok: true });
+    expect(await imported(helixDoc())).toMatchObject({ ok: false, code: "conflict", message: "helix: a project with prefix DRAFT exists; an import brings new projects only" });
+    await migrate4();
+    expect(await draftPrefix()).toBeNull();
+    const changes = await runInDurableObject(board(), (_, state) =>
+      state.storage.sql
+        .exec("SELECT e.actor_kind, e.actor, e.op, e.tbl, e.ref, c.field, c.old, c.new FROM events e JOIN event_changes c ON c.event = e.seq WHERE e.op = 'update_project'")
+        .toArray(),
+    );
+    expect(changes).toEqual([{ actor_kind: "board", actor: "migration 4", op: "update_project", tbl: "projects", ref: "bobnet", field: "draft_prefix", old: "DRAFT", new: null }]);
+    expect(await imported(helixDoc())).toMatchObject({ ok: true, projects: [{ key: "helix" }] });
+    expect((await ok(owner, { op: "get", project: "helix", ref: "DRAFT-2" })).item).toMatchObject({ ref: "DRAFT-2" });
+    expect((await ok(owner, { op: "projects" })).projects.find((p) => p.key === "helix")!.draft_prefix).toBe("DRAFT");
+  });
+
+  it("keeps it when an item of bobnet's is a DRAFT- one, or has had a DRAFT- id, and writes nothing", async () => {
+    expect(await bobnet([{ ref: "BOB-1" }, { ref: "DRAFT-2" }])).toMatchObject({ ok: true });
+    await migrate4();
+    expect(await draftPrefix()).toBe("DRAFT");
+    await reset();
+    expect(await bobnet([{ ref: "BOB-1", aliases: ["DRAFT-4"] }])).toMatchObject({ ok: true });
+    await migrate4();
+    expect(await draftPrefix()).toBe("DRAFT");
+    const n = await runInDurableObject(board(), (_, state) => state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM events WHERE op = 'update_project'").one().n);
+    expect(n).toBe(0);
   });
 });
