@@ -39,3 +39,10 @@ A1 lands first and alone: a supervisor that answers replies takes both laptops d
 - After B: Casper may retire poe@ubu1.
 - The spike (architecture/spikes/bob44-two-laptops.md) may change a task; Toad folds it into the ADR, I re-cut
   if needed before build A starts.
+
+## Criteria after the spike
+
+Task criteria were updated from Toad's spike fold in ADR 0007 (v2 c5ecfd0): BOB-59, 60, 62, 63, 64, 65 edited or
+added. Build A acceptance (real broker: a spawn with a session on a boarded ubu1 project, a real `exit` with handoff
+text) sits on BOB-65; build B acceptance (the §4 check, needing the `bob44-probe` rule on ubu1) on BOB-69. The board
+is the source for the text.
