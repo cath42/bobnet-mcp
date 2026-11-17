@@ -6,7 +6,7 @@ prefix ENV) runs only on ubu1: Phelps lead, Ledecky PO, builders Franklin, Dress
 poe@ubu1 owns its sessions and ubu1's config. Tool: `bobnet-supervisor import-backlog` (packages/supervisor),
 no code change needed.
 
-## Dry run, 2026-11-17 (athletic origin/main 81283fcdc15d, shallow clone /tmp/athletic-ro; nothing posted)
+## Dry run, 2026-11-17 (athletic origin/main 81283fcdc15d, the frozen commit (poe@ubu1, 02:59Z); shallow clone /tmp/athletic-ro; nothing posted)
 `node src/bin.ts import-backlog --repo /tmp/athletic-ro --ref HEAD --dir requirements/board --project athletic
 --name Envision --prefix ENV` -> /tmp/athletic-import/report.md, board.json.
 (mbp-1's ~/Code/athletic is a stale clone from 2026-09-20 without the board; the dry run reads a fresh clone.)
@@ -34,7 +34,9 @@ Ledecky writes the OK (or the fixes' commit hash) to `~/.local/state/bobnet/hand
 2. Mario: final dry run at that commit, 0 problems; Ledecky OKs; `--post --grants athletic-grants.json` from mbp-1
    (needs only the commit on GitHub; a fresh clone is enough). Expect `{"ok":true,"projects":[{"key":"athletic",...}]}`.
 3. Config (poe@ubu1 stages, Casper's config): in ubu1's `athletic` project entry, remove its `backlog:` block if it
-   has one and add `board: service`. No release (ubu1 runs a supervisor with board: service). Restart ubu1's
+   has one (it does: line 15, `backlog: { dir: requirements/board }`) and add `board: service`; drop `backlog` from
+   every role's `mcp:` list in the same edit (yaml first, then .mcp.json's entry: a role naming a server .mcp.json
+   lacks stops the supervisor's start, config.ts:459). No release (ubu1 runs a supervisor with board: service). Restart ubu1's
    supervisor (poe@ubu1's timing). mbp-1 needs no change (Athletic has no roles there).
 4. Athletic repo cut-over, the same day (Ledecky, Phelps): remove requirements/board/ with a pointer to the
    service; root CLAUDE.md § The board, requirements/CLAUDE.md, backlog.config.yml, .mcp.json's backlog entry
