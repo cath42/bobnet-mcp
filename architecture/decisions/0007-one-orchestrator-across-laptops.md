@@ -1,10 +1,12 @@
 # 0007. One orchestrator across laptops
 
-- **Status:** proposed (Toad, 2026-11-17), for BOB-44 (session `BOB-44 design A`). To be checked by
-  Luigi (as its builder) and Bill@mbp-1 (an architect outside BobNet), and by the two-laptop spike
-  (`architecture/spikes/bob44-two-laptops.md`, §13) before Casper accepts it.
+- **Status:** proposed (Toad, 2026-11-17), for BOB-44 (session `BOB-44 design A`). Revised the same
+  day after two reviews: Luigi's as its builder (`architecture/reviews/2026-11-17-adr0007-luigi.md`)
+  and Bill@mbp-1's as an architect outside BobNet (`architecture/reviews/2026-11-17-adr0007-bill.md`);
+  every finding is settled in `architecture/reviews/2026-11-17-adr0007-disposition.md`. The two-laptop
+  spike (§13) hasn't run yet; it is folded in before Casper accepts this.
 - **For:** BOB-44 and `product/requirements/remote-orchestration.md` (criteria 1-7, Casper's Q-6 and
-  Q-7). Amends ADR 0004 §1 and §3 (Consequences).
+  Q-7). Amends ADR 0004 §1, §3 and §4 (Consequences).
 
 ## Context
 
@@ -17,9 +19,9 @@ What exists, from the code:
   request (`remote.ts:12-30`, read at `supervisor.ts:768-785`). Ops `spawn`, `status`, `stop`,
   `list`. The broker stamps the sender (ADR 0004 §2), and the target's `remote` allowlist decides:
   sender address, then project, then roles (`config.ts:214-224`, `supervisor.ts:787-822`). A
-  requester follows and stops only what it spawned (`spawned_by`). Each request is answered once,
-  redelivery included (`store.remoteReply`, `supervisor.ts:771`), and audited on the target
-  (`:783`). The worker's Remote Control URL and its end come back as messages
+  requester follows and stops only what it spawned (`spawned_by`). A request is answered once its
+  reply is recorded (`store.remoteReply`, `supervisor.ts:771`, recorded at `:782`), and audited on
+  the target (`:783`). The worker's Remote Control URL and its end come back as messages
   (`remoteEvent`, `:850-853`, called at `:970` and `:1506`).
 - **No tool.** poe writes that JSON by hand. `spawn_worker`, `list_workers`, `worker_status`,
   `tail_worker`, `worker_summary`, `stop_worker`, `pending_requests`, `answer_request`, `run_slots`
@@ -36,6 +38,11 @@ What exists, from the code:
   peer list carries each peer's client package and version (`frames.ts:79`, set by the supervisor at
   `bin.ts:74`). A body is at most 16 KiB (`frames.ts:25`), and the broker refuses one that looks
   like a credential (`broker.ts:635-638`).
+- **What the wire can't lean on as it is** (both reviews): the outbox prefixes every body with
+  `(sent …)` and keeps no `in_reply_to` or TTL (`supervisor.ts:1667`, `store.ts:95-110`), and stops at
+  the first failed row for good (`:1665-1673`); the broker refuses an `in_reply_to` naming a message
+  its hourly sweep has deleted (`broker.ts:302-304, 739-742`); a message is acked only after
+  `onRemote` ends (`:726`), so a reconnect during a slow spawn redelivers it.
 
 ## Decision
 
@@ -54,22 +61,24 @@ poe@mbp-1 ──MCP (127.0.0.1)──▶ supervisor@mbp-1 ──message──▶
   `supervisor@mbp-1`. The target's `remote` allowlist keys on that address, unchanged in form
   (`config.ts:217-223`); Casper adds `supervisor@mbp-1: { spawn: { athletic: [reviewer] } }` to
   ubu1's `supervisor.yaml`.
-- Why the supervisor: the state the feature needs (remote workers, their open requests, the outbox
-  for a poe that is away) must outlive a poe session, and live state is the supervisor's (ADR 0004
-  §1); a channel client owns only the session's identity and digest. And it narrows who can ask: only
-  the supervisor process sends as `supervisor`, and only a holder of its MCP token
-  (`mcp.ts:270-276`) makes it send, while any agent on mbp-1 can send as itself. Neither is a
+- Why the supervisor: the state the feature needs (remote workers, their open requests, what it
+  sent, notices for a poe that is away) must outlive a poe session, and live state is the
+  supervisor's (ADR 0004 §1); a channel client owns only the session's identity and digest. And it
+  narrows who can ask: only the supervisor process sends as `supervisor`, and only a holder of its MCP
+  token (`mcp.ts:270-276`) makes it send, while any agent on mbp-1 can send as itself. Neither is a
   boundary against a hostile process (ADR 0004 §4: a laptop speaks for every name on it); it is the
   usual guard against mistakes.
 - **Only the orchestrator.** `laptop` other than this one is the MCP caller's (the interactive
   orchestrator's). A lead's tools (`lead-tools.ts:14`, `handlers` with `lead`) refuse it in this
-  version: "only the orchestrator spawns on another laptop". The requester puts its orchestrator's
-  name in the request as `by` (`"poe"`: the project's `orchestrator`, else the laptop's, as `notify`
-  picks it, `supervisor.ts:1600`), for the target's audit and the dashboard (§7); the target
-  authorises on the stamped sender alone, never on `by`.
+  version, and never list or answer remote requests (§5). The requester puts its orchestrator's
+  name in every `spawn` as `by` (required: `"poe"`, the project's `orchestrator`, else the laptop's,
+  as `notify` picks it, `supervisor.ts:1600`). The target authorises on the stamped sender alone,
+  never on `by`; it keeps `by` with the worker for the audit, the dashboard (§7) and the worker's
+  own messages (§3).
 - **Target address:** `<the requester's own name>@<laptop>`, i.e. `supervisor@ubu1` with both on the
-  default name (`config.ts:188`). A laptop whose supervisor has another name isn't reachable by the
-  tools in this version; hand-written JSON still is.
+  default name (`config.ts:188`). The peer list doesn't mark a supervisor (`broker.ts:661-674`), so a
+  laptop whose supervisor has another name isn't reachable by the tools in this version; the tool's
+  offline refusal (§3) names the address it tried. Hand-written JSON still reaches any name.
 - Hand-written requests from an agent (today's way) keep working, exactly as today (§9).
 
 ### 2. The wire: remote.ts's message ops, extended
@@ -86,60 +95,100 @@ definition).
 
   | Op | Fields | Does | Who may |
   |---|---|---|---|
-  | `spawn` | today's (`remote.ts:15-25`) | spawns now or refuses (§3) | the allowlist, for that project and role |
+  | `spawn` | today's (`remote.ts:15-25`) and `by`; `as: "lead"` refused | spawns now or refuses (§3) | the allowlist, for that project and role |
   | `status` | `id` | `remoteView` (`supervisor.ts:824`) | the spawner |
   | `stop` | `id` | stops with a last turn for the handoff, as local | the spawner |
-  | `list` | `all?`, `limit?`, `since?` | the sender's workers, with their open requests | any allowlisted sender, its own only |
+  | `list` | `ids?`, `reqs?` | the sender's workers named by id or by the spawn message that made them, else its live ones; each with its open and orphaned requests | any allowlisted sender, its own only |
   | `tail` | `id`, `n` | as `tail_worker`, cut to fit the body | the spawner |
-  | `summary` | `id` | as `worker_summary` | the spawner |
-  | `request` | `id` (a request id) | as `request_detail` | the spawner of the request's worker |
+  | `summary` | `id` | as `worker_summary`, with `handoff_text` once ended (§6) | the spawner |
+  | `request` | `id` (a request id) | as `request_detail`, cut to fit | the spawner of the request's worker |
   | `answer` | `id` (a request id), `decision`, `message?`, `answers?`, `user_decided`, `resume` | as `answer_request` (§4) | the spawner of the request's worker |
-  | `slots` | none | as `run_slots` | any allowlisted sender |
 
-  Not in this version: `reset` (stop, then spawn), `take_slot`, `free_slot`, `order_run_queue`
-  (they queue interactive agents on the target, which has its own orchestrator for them).
-- **Replies.** One per request, sent with `in_reply_to` the request's message id (as today,
-  `supervisor.ts:784`): `{ v: 2, re: <op>, ok, ... }` or `{ v: 2, re, ok: false, error }`. A `v: 2`
-  reply names its op as `re`, never `op`.
-- **Events**, requester-bound, unasked: `{ v: 2, event, worker, ... }`, with `event` one of
-  `remote_control` (url), `request` (a request opened, §4), `settled` (a request answered, expired or
-  dismissed, and by whom), `resumed` (an orphaned request's answer resumed the worker as a new id),
-  `exit` (§6).
+  Not in this version: `slots` (the target's run slot; poe needs it for no criterion), `reset`,
+  `take_slot`, `free_slot`, `order_run_queue` (they queue interactive agents on the target, which has
+  its own orchestrator for them).
+- **Replies.** One per request: `{ v: 2, re: <op>, req: <the request's message id>, ok, ... }` or
+  `{ v: 2, re, req, ok: false, error }`. The requester matches a reply on `req`, never on the
+  envelope. It is sent with `in_reply_to` the request's id, as today (`supervisor.ts:784`), for the
+  dashboard's thread; if the broker refuses that because the request has expired and been swept
+  (`unknown_message`, `broker.ts:302-304`), it is resent once without it.
+- **Events**, requester-bound, unasked: `{ v: 2, event, worker, spawn_req, ... }`, `spawn_req` the
+  message id of the `spawn` that made the worker (kept with it on the target). `event` is one of
+  `remote_control` (url, or the error it runs without), `request` (a request opened, §4), `settled`
+  (a request answered, expired, dismissed or orphaned, and by whom), `resumed` (an orphaned request's
+  answer resumed the worker as a new id), `exit` (§6).
 - **A supervisor never answers an answer.** It treats a message as a request only if it has an `op`,
   has no `in_reply_to`, and carries neither `re` nor `event`; anything else is a reply or an event
-  (matched to what it sent, else logged and dropped). Today's replies carry `op`
+  (matched to what it sent, §7, else logged and dropped). Today's replies carry `op`
   (`supervisor.ts:777`) and `readRequest` would read one as a malformed request and answer it
-  (`remote.ts:44-50`); between two supervisors that is an endless exchange. The build has a test of
-  two supervisors on one broker that shows it can't happen.
-- **Durable events.** Events and replies go through the outbox (`store.addOutbox`, as `notify` does,
-  `supervisor.ts:1599-1607`), so a broker outage loses none and keeps their order. Today `toRemote`
-  only logs a failure (`:843-847`).
-- **Deadlines.** A request is sent with `ttl_seconds`: 30 for `spawn`, 20 for the rest. The broker
-  drops it undelivered when it expires, so a request never runs late (§3). The requester waits for the
-  reply up to the deadline plus 30 s; a `spawn` that joins a board session can take up to a minute
-  (`supervisor.ts:394-407`), so its reply wait is 90 s. Without a reply, the tool fails saying the
-  request may or may not have run, and `list_workers` with `laptop` shows which.
-- **Size.** A body is at most 16 KiB. `tail` and `request` cut to fit and say `truncated: true`; the
-  handoff text is §6's. **A credential-looking body** is refused by the broker (`broker.ts:635-638`);
-  the target then resends without the field that holds it, with `withheld: "looks like a
-  credential"`. The orchestrator denies, or asks Casper, who sees it on the dashboard.
+  (`remote.ts:44-50`); between two supervisors that is an endless exchange. A resent reply without
+  `in_reply_to` still carries `re`. The build's first test, two supervisors on one fake network (see
+  Consequences), shows the exchange can't start.
+- **Delivery: a `remote` outbox.** Every `v: 2` reply and event is put in the outbox first and then
+  flushed, never sent directly, so they leave in the order they were made. A new outbox kind `remote`
+  keeps `to`, the body verbatim (no `(sent …)` prefix), `in_reply_to` and `ttl_seconds`. A row the
+  broker refuses for good (`secret_detected`, `unknown_peer`, `bad_frame`, too long) is logged,
+  audited `remote:undeliverable` and dropped, as `flushBoardReports` does (`supervisor.ts:1685-1706`);
+  a broker that can't be reached keeps it and all behind it. Kind `message` (`notify`'s) gets the same
+  final-code rule: today one refused row holds up every notice behind it (`:1665-1673`).
+- **Order isn't relied on.** Delivery after an outage is ordered by the broker's `created_at`, `id`
+  (`broker.ts:620-624`), not strictly the send order, and a resend changes it. The requester's copies
+  change only forward (§7), so an event that arrives late does no harm.
+- **Deadlines.** A request is sent with `ttl_seconds`: 30 for `spawn`, 20 for the rest; the broker
+  drops it undelivered when it expires, so a request never starts late (§3). TTLs are durations the
+  broker applies on its own clock, and the requester's waits are local durations: clock skew between
+  laptops doesn't move them. The requester waits up to the TTL plus 30 s; a `spawn` that joins a board
+  session can take up to a minute (`supervisor.ts:394-407`), so its wait is 90 s. Without a reply, the
+  requester sends `list` with the request's id in `reqs`; the tool then reports the worker if it
+  exists, and only else fails saying the request may or may not have run. A reply that arrives later
+  still counts (§7).
+- **Replies and events expire in a day** (`ttl_seconds: 86400`), not the default 30 days
+  (`frames.ts:30`): what they carry (previews, tails, handoff text) shouldn't sit at the broker
+  longer than it is useful. A requester away for longer recovers by reconciling (§7), which doesn't
+  need them.
+- **Idempotent on the target.** Before any work, the target records the request's message id in
+  `remote_requests` as in progress (reply null). A redelivery that finds it in progress is acked and
+  ignored; one that finds it done resends the stored reply, as today. At start, a row still in
+  progress (the target died mid-request) gets the reply "the target restarted while handling it; list
+  shows whether it ran", which is sent.
+- **Size.** The whole serialised body is at most 16 KiB (`frames.ts:25`), escaping included: `tail`
+  and `request` cut to fit and say `truncated: true`; `exit` is §6's.
+- **Credentials.** The target runs `findSecret` (`protocol/src/secrets.ts:17`, the broker's own check)
+  on each text field before it enqueues, and replaces a matching span with `[withheld: looks like a
+  credential]`, so the rest of a preview or a handoff still goes. If the broker refuses the body
+  anyway (detectors of two versions), the row is final (above), and a short `{ event: "withheld",
+  worker }` goes in its place. The orchestrator asks the role on the target, or Casper, who sees the
+  request on the dashboard.
 
 ### 3. A spawn on the target: its limits, now or not at all
 
 - **The target's config decides everything:** the allowlist (as today), `admit`'s checks (model,
   effort caps, sandbox, tasks, session; `supervisor.ts:411-449`), its policy, its run slot, its
   usage. The requester's laptop counts for nothing.
-- **Never queued.** Where a local spawn would queue (`queuedBecause`, `supervisor.ts:452-458`), a
-  `v: 2` spawn is refused at once with that reason ("athletic/reviewer already has a worker running",
-  "3 workers running, the laptop's limit"). No row is made.
-- **Offline refuses at once.** The requester checks the peer list first: if `supervisor@ubu1` isn't
-  online, the tool refuses with "ubu1's supervisor is offline (last seen …)" and sends nothing. If it
-  goes offline between the check and the send, the send's result names it in `queued_for`, and the
-  tool refuses the same way. The request then expires at the broker within 30 s; only a target that
-  reconnects inside those 30 s runs it, and its reply then reaches the requester's view (§7) and a
-  note to poe ("spawned after all").
+- **Never queued, and never refused after a join.** Where a local spawn would queue
+  (`queuedBecause`, `supervisor.ts:452-458`), a `v: 2` spawn is refused at once with that reason
+  ("athletic/reviewer already has a worker running", "3 workers running, the laptop's limit"). The
+  check runs synchronously before the board's `session_join` and reserves the role and a place under
+  `concurrency` until the worker's row is made or the spawn fails, so nothing can take them during the
+  join. A failed join frees them. No row is made for a refusal.
+- **A retry is safe.** A role runs one worker per laptop, so a retried `spawn` of a worker that did
+  start is refused as busy; with §2's `list` after a timeout, poe sees the first. No idempotency key.
+- **Offline refuses at once,** usually. The requester checks the peer list first: if
+  `supervisor@ubu1` isn't online, the tool refuses with "ubu1's supervisor is offline (last seen …)"
+  and sends nothing. If it goes offline between the check and the send, the send's result names it in
+  `queued_for`, and the tool refuses the same way. A laptop that sleeps can look online while the
+  broker still holds its half-open socket (`online` is a live socket, `broker.ts:670,698`): then the
+  request is `delivered_to` it, expires unread, and the tool says "may or may not have run" after its
+  wait (§2). Only a target that reconnects inside the 30 s runs it; its reply then reaches the
+  requester's copies (§7) and a note to poe ("spawned after all").
 - **Never a path.** The remote `spawn` has no `handoff` and no `resume_session`, and its schema
   refuses unknown keys (`remote.ts:14-25`). Repos and worktrees must exist on the target (Q-7).
+- **No remote leads.** A `v: 2` spawn with `as: "lead"` is refused: a lead's own workers have the
+  lead as spawner and would be answered on the target, outside §4.
+- **The worker's own messages.** Bare names resolve on the sender's laptop (`address.ts:30-36`), so a
+  worker on ubu1 that writes to "poe" reaches poe@ubu1. A `v: 2` worker's preamble names its
+  orchestrator as `<by>@<the requester's laptop>` (`systemAppend`, `supervisor.ts:2081-2084`), and
+  poe's briefs for remote workers use full addresses.
 - **The board.** The worker joins its session and reports its run from the target, as its role on
   that laptop. A grant may be bound to a laptop (`board/rules.ts:45-52`): a role spawned on ubu1
   needs a grant that covers ubu1 (the spike checks BobNet's and Athletic's, §13).
@@ -149,7 +198,11 @@ definition).
 - **Routing.** A request (approval or question) of a worker spawned by a `v: 2` spawn is announced to
   its spawner, never to the target's orchestrator: `announce` (`supervisor.ts:1571`) sends a
   `request` event (id, worker, kind, tool, tier, rule, preview, created_at) instead of a `notify`.
-  Workers spawned locally, or by a request without `v`, are announced as today.
+  Workers spawned locally, or by a request without `v`, are announced as today. A worker is a `v: 2`
+  one when its row has `remote_by` (§7); that one column is the only test.
+- **The target's other notices about a `v: 2` worker** become events to its spawner too, and none goes
+  to the target's orchestrator: its end (`supervisor.ts:1520`, as `exit`), Remote Control failing
+  (`:973`, as `remote_control` with the error), and the restart notice (`:309-314`, below).
 - **The requester shows it as its own.** It keeps a copy of the request (§7), adds it to
   `pending_requests` with `laptop: "ubu1"`, and tells poe as for a local one, through `notify`:
   "Reviewer@ubu1 needs approval for Bash (r_…, ubu1, …). See pending_requests and answer with
@@ -161,19 +214,35 @@ definition).
   the sender; the request is open or orphaned. Then `answer` runs as for a local one
   (`supervisor.ts:562-590`, `router.ts`): a `human`-tier request needs `user_decided`, a question
   takes `answer` or `deny`, an approval `allow` or `deny`. A refusal is a `v: 2` reply with the reason.
+- **What that grants, said plainly** (for Casper to accept knowingly): `user_decided` is the caller's
+  assertion, locally too (`mcp.ts:214`), so a `remote` entry for `supervisor@mbp-1` lets whoever holds
+  mbp-1's MCP token make ubu1's human-tier decisions for the workers it spawned. And `spawned_by` is
+  the supervisor, so any orchestrator on mbp-1 may answer or stop any worker mbp-1 spawned on ubu1.
+  Both are what a local orchestrator may do today, and ADR 0004 §4's line (a laptop speaks for every
+  name on it); `config.ts:214-218`'s comment says so.
 - **Audit on the target.** Every remote answer, allowed or refused, is a row: actor the sender
   address, action `remote:answer` or `remote:refused`, the worker, `{ message, request, decision, by
   }`. `answer` adds its own `answer:<decision>` row with `decided_by` (`router.ts:133`).
-- **One answerer.** On the target, `pending_requests` leaves out requests of workers a `v: 2`
-  requester spawned, and `answer_request` refuses them: "r_… is supervisor@mbp-1's worker's; it
-  answers". The dashboard still shows them, and Casper, the owner, may answer any request there, as
-  today (`supervisor.ts:869`); the requester learns of it from the `settled` event.
+- **One answerer.** On the target, `pending_requests` leaves out requests of `v: 2` workers, and
+  `answer_request` refuses them: "r_… is supervisor@mbp-1's worker's; it answers". The dashboard still
+  shows them, and Casper, the owner, may answer any request there, as today (`supervisor.ts:869`); the
+  requester learns of it from the `settled` event.
+- **Every settle is told, from one place.** A request's state changes in six places: `router.answer`
+  (`router.ts:126`), the timeout (`:171`), the dismiss (`supervisor.ts:566`), `expireOrphans`
+  (`:606`), `markOrphaned` at start (`:282`), and a worker stopped while waiting (`router.ts:190-199`),
+  which today leaves the row `open` until a restart. The target wraps `store.settleRequest` and
+  `store.markOrphaned` with one hook that sends `settled` for a `v: 2` worker's request, and the abort
+  path settles its row (`expired`, decided by `stop`), for every worker, local ones too.
 - **When nobody answers,** the target's timeout denies, as for a local request (`router.ts:169-186`),
-  and a `settled` event (by `timeout`) clears the requester's copy.
-- **An orphaned request** (the target restarted) is answered the same way. With `resume`, the target
-  resumes the session as a new worker with the same `spawned_by` (`supervisor.ts:576-588`) and sends
-  `resumed` (old id, new id). That resume continues an admitted worker: it follows the target's local
-  rule and may queue, unlike a new spawn.
+  and `settled` (by `timeout`) clears the requester's copy.
+- **A target restart.** At start, for each `v: 2` worker it fails (`supervisor.ts:269-280`) the target
+  sends `exit` (failed, "supervisor restarted", with the handoff text if the file exists, §6), and for
+  each of their requests it orphans, `settled` with state `orphaned`, so the copy says "answering
+  resumes the worker". They go through the outbox, which flushes when the target is connected.
+- **An orphaned request** is answered the same way. With `resume`, the target resumes the session as a
+  new worker with the same `spawned_by` and `remote_by` (`supervisor.ts:576-588` copies both) and
+  sends `resumed` (old id, new id). That resume continues an admitted worker: it follows the target's
+  local rule and may queue, unlike a new spawn.
 
 ### 5. The tools, with `laptop`
 
@@ -181,16 +250,16 @@ Old callers are unchanged: without `laptop`, every tool acts on this laptop as t
 
 | Tool | With `laptop` |
 |---|---|
-| `spawn_worker` | `laptop` names the target; `handoff` and `resume_session` are refused with it |
-| `list_workers` | `laptop: "ubu1"`: the workers this supervisor spawned there; `laptop: "all"`: local and every laptop's, each row with `laptop`. Remote rows come from the copy (§7), with `as_of` |
-| `worker_status`, `tail_worker`, `worker_summary`, `stop_worker` | an id this supervisor spawned elsewhere resolves to its laptop; `laptop` is optional and, if given, must match. `status` and `summary` are asked live; offline, `status` answers from the copy with `as_of` and says so |
-| `pending_requests` | always local and remote together, each row with `laptop` (remote ones from the copy) |
+| `spawn_worker` | `laptop` names the target; `handoff`, `resume_session` and `as: "lead"` are refused with it |
+| `list_workers` | `laptop: "ubu1"`: the workers this supervisor spawned there; `laptop: "*"` (`all` is a valid laptop name): local and every laptop's, each row with `laptop`. Remote rows come from the copies (§7), with `as_of` |
+| `worker_status`, `tail_worker`, `worker_summary`, `stop_worker` | an id this supervisor spawned elsewhere resolves to its laptop; `laptop` is optional and, if given, must match. `status` and `summary` are asked live; offline, they answer from the copy with `as_of` and say so |
+| `pending_requests` | local and remote together, each row with `laptop` (remote ones from the copies) |
 | `request_detail`, `answer_request` | a request id from another laptop resolves the same way; `answer_request`'s result is the target's |
-| `run_slots` | `laptop`: the target's slot, read live |
-| `reset_worker`, `take_slot`, `free_slot`, `order_run_queue` | refuse `laptop` other than this one |
+| `run_slots`, `reset_worker`, `take_slot`, `free_slot`, `order_run_queue` | refuse `laptop` other than this one |
 
-A lead's tools refuse `laptop` other than its own (§1). Ids are random; if a worker or request id
-matches on two laptops, the tool asks for `laptop`.
+A lead's tools (`handlers(sup, { lead })`, `mcp.ts:162`) refuse `laptop` other than its own, list no
+remote rows, and refuse a remote request id (§1). Ids are random; if a worker or request id matches on
+two laptops, the tool asks for `laptop`.
 
 ### 6. The result comes back as text
 
@@ -198,50 +267,69 @@ matches on two laptops, the tool asks for `laptop`.
   checkpoint, error or stop reason, the land outcomes, and **the handoff file's text**, read by the
   target from its own file. The handoff is what the role wrote for whoever comes next; poe reads it
   as text, not as a path (Q-7, criterion 5).
-- **Size:** up to 12,000 characters, the rest cut with `handoff_truncated: true` and the file's
-  length. Today's handoffs on mbp-1: median 1.3 KB, 90th percentile 3.4 KB, 2 of 948 over 12 KB. A
-  cut one is the role's to summarise: poe asks the role.
+- **Size, on the whole body.** The error is cut to 500 characters; the handoff then gets whatever the
+  serialised body has left under 16 KiB, with a margin, and is cut with `handoff_truncated: true` and
+  the file's length. Today's handoffs on mbp-1: median 1.3 KB, 90th percentile 3.4 KB, 2 of 948 over
+  12 KB. A cut or withheld (§2) handoff is the role's to summarise: poe spawns the role on the target
+  and asks.
 - The requester keeps it with the worker's copy (§7), tells poe as for a local end ("… done: …;
-  handoff in worker_summary"), and `worker_summary` returns it as `handoff_text`. No file read
-  crosses laptops: the target reads its own file, and only the text crosses.
+  handoff in worker_summary"), and `worker_summary` returns it as `handoff_text`. The `summary` op
+  returns it too, so a requester whose `exit` event expired (§2) still gets it. No file read crosses
+  laptops: the target reads its own file, and only the text crosses.
 
 ### 7. Who owns what (ADR 0004 §1)
 
 - **The target owns** the worker, its run, its requests and their answers, its audit, its usage:
   everything, as for a local worker. Its report to the broker and the board shows the worker on the
   target: a worker's laptop is where it runs, the supervisor that reports it.
+- **What the target adds:** two columns on its worker row, `remote_by` (the `by` of a `v: 2` spawn;
+  set marks the worker as `v: 2`, §4) and `spawn_req` (the spawn's message id, §2); none for local
+  workers.
 - **What the dashboard needs** (criterion 7; Daisy's `design/BOB-44/laptop-mark.md`, 0f8a182), two
   additive fields, null by default:
   - `remote_from` on `WorkerSnapshot` (`frames.ts:93-123`): the authorised sender address of a
-    remote spawn (`spawned_by`, `supervisor@mbp-1`), and `remote_by` beside it: the `by` it stated
-    (`poe`). The dashboard writes the spawner as `poe@mbp-1` (`remote_by` at `remote_from`'s
-    laptop), or `remote_from` when `remote_by` is null. A local spawn's `"orchestrator"` or a lead's
-    worker id is never sent. The target keeps `by` with the worker (one column) for this.
+    remote spawn (`spawned_by`, `supervisor@mbp-1`), and `remote_by` beside it (`poe`). The dashboard
+    writes the spawner as `poe@mbp-1` (`remote_by` at `remote_from`'s laptop), or `remote_from` when
+    `remote_by` is null. A local spawn's `"orchestrator"` or a lead's worker id is never sent.
   - `laptop` on `StatusStuckRun` (`board.ts:764`; ADR 0005 §2): the run's `RunRecord.laptop`.
-- **The requester holds copies:** per remote worker (laptop, id, the last `remoteView`, `as_of`, the
-  handoff text when ended) and per open remote request (laptop, id, worker, the preview fields,
-  state), in its SQLite. Copies change only from the target's replies and events, never from the
-  requester's own writes: an answer that the target accepted clears the copy when its `settled` event
-  arrives, not before. A copy is shown with `as_of`.
-- **Reconciling.** When the target's supervisor comes online (a presence `joined`), the requester
-  sends `list` (with open requests) and replaces its copies for that laptop. A worker it no longer
-  lists is marked `unknown`, not dropped.
-- **Only the target speaks for its workers.** An event or reply is accepted only from the laptop the
-  worker runs on (the sender's laptop and the supervisor's name), only for a worker this supervisor
-  spawned there.
+- **The requester's three tables**, in its SQLite:
+  - `remote_sent`: one row per op it sent (message id, laptop, op, worker or request id, deadline,
+    outcome), written before the send, so a reply that lands after a timeout or a restart is matched.
+  - `remote_workers`: per remote worker (laptop, id, `spawn_req`, the last `remoteView`, `as_of`, the
+    handoff text when ended).
+  - `remote_asks`: per remote request (laptop, id, worker, the preview fields, state).
+  (`remote_requests` is taken: the target's inbound dedupe, `store.ts:102`.)
+- **Copies change only from the target, and only forward.** A copy changes from the target's replies
+  and events, never from the requester's own writes: an answer the target accepted clears the copy
+  when `settled` arrives, not before. A worker copy's ended state is final; a request copy's settled
+  state is final, and an event for an unknown request makes its copy in the event's state, so a
+  `request` that arrives after its `settled` changes nothing. The requester handles a remote message
+  synchronously (no `await` between reading a copy and writing it). A copy is shown with `as_of`.
+- **Unknown workers are learnt, not dropped.** An event or reply is accepted only from the target
+  supervisor's address (the worker's laptop and the supervisor's name). Since the target sends events
+  only to a worker's spawner, an event for a worker the requester has no copy of (its spawn reply was
+  late or lost) makes the copy, tied to the spawn poe was told of by `spawn_req`, and the requester
+  asks `status` to fill it.
+- **Reconciling.** The requester sends `list`, with `ids` (its copies not ended) and `reqs` (its
+  spawns with no reply), and replaces its copies for that laptop: on its own start, on each connect to
+  the broker, when a target's supervisor `joined`, and every 5 minutes while any copy is not ended
+  (presence reaches a connection only across a shared or empty team, `broker.ts:676-690`). An id asked
+  for and not returned is marked `unknown`, not dropped. A copy newly seen ended without its handoff
+  text gets it with `summary`.
 
 ### 8. When something dies
 
 - **poe ends.** Nothing on either supervisor waits for poe. The requester keeps the copies; its
-  notices to poe wait in the outbox and go when poe is back (`supervisor.ts:716`). A new poe sees
-  every remote worker and request through the tools. Meanwhile the target's timeout denies what is
-  open (`router.ts:169-186`), and the remote workers run to their end.
+  notices to poe are queued by the broker for poe's return (30 days, `frames.ts:30`), and wait in the
+  outbox only while the broker itself can't be reached. A new poe sees every remote worker and request
+  through the tools. Meanwhile the target's timeout denies what is open (`router.ts:169-186`), and the
+  remote workers run to their end.
 - **The requester's supervisor is down** (mbp-1 asleep, or restarted). The target's events wait at the
-  broker and in the target's outbox, and arrive when it is back; then it reconciles (§7). Requests
-  time out as denied on the target meanwhile. The workers run to their end; nothing on the target
-  depends on the requester being up except answers.
-- **The target is down.** The tools refuse new requests at once (§3), and show copies with `as_of`.
-  Its workers stop with it, as local workers do on a restart, and its orphaned requests are §4's.
+  broker and in the target's outbox, and arrive when it is back; it reconciles on start and connect
+  (§7). Requests time out as denied on the target meanwhile. The workers run to their end; nothing on
+  the target depends on the requester being up except answers.
+- **The target is down.** The tools refuse new requests (§3), and show copies with `as_of`. Its
+  workers stop with it, as local workers do on a restart; at its start it tells the spawner (§4).
 - **No failover.** A worker's spawner is fixed (`spawned_by`). Another orchestrator taking over
   remote workers is split out (requirements, "Split out"). Casper on the dashboard can still answer
   and stop any worker on the target.
@@ -251,15 +339,21 @@ matches on two laptops, the tool asks for `laptop`.
 The live pair is mixed during rollout (ubu1 on rc.37, mbp-1 on rc.38 today).
 
 - **A new requester, an old target.** The requester reads the target's supervisor version from the
-  peer list (`client`, `frames.ts:79`). Below the release that brings this ADR, the tool refuses at
-  once: "ubu1's supervisor runs 2.0.0-rc.37; the remote tools need rc.N there". If the version is
-  unknown or the check is wrong, the old target rejects the `v: 2` body as a bad request and does
-  nothing, so nothing half-happens.
+  peer list (`client`, `frames.ts:79`) and compares it with a small `x.y.z[-rc.n]` comparison in
+  `protocol` (there is none today). Below the release that brings this ADR, the tool refuses at once:
+  "ubu1's supervisor runs 2.0.0-rc.37; the remote tools need rc.N there". If the version is missing or
+  doesn't parse, the request is sent anyway: the old target rejects the `v: 2` body as a bad request
+  and runs nothing, so nothing half-happens.
 - **An old requester, a new target.** An old requester has no tools; its agents' hand-written
   requests have no `v` and are served exactly as today: queued when full, requests to the target's
   orchestrator, no answering.
-- **Rollout:** a release on both laptops and a restart of both supervisors (poe's). Either order is
-  safe. The remote tools need no broker change. The laptop mark (criterion 7) needs a broker deploy
+- **A target rolled back** below rc.N keeps its rows but serves them as today: requests of its `v: 2`
+  workers go to its own orchestrator, and its events come without `v` (`{ event, worker }`). The
+  requester accepts a `v`-less `exit` or `remote_control` from a target for a worker it has a copy of,
+  and the version check refuses new requests.
+- **Rollout:** a release on both laptops and a restart of both supervisors (poe's), each when its
+  `list_workers` is empty, since a restart fails running workers (`supervisor.ts:269`). Either order
+  is safe. The remote tools need no broker change. The laptop mark (criterion 7) needs a broker deploy
   for its dashboard and `StatusStuckRun.laptop`, in any order with the supervisors: an old supervisor
   sends no `remote_from` and the mark shows no spawner; an old broker drops the field.
 - **Switching gradually** (requirements, "Must not break"): poe@ubu1 keeps running ubu1's local
@@ -279,35 +373,72 @@ Settled by ADR 0002; no new lock.
   project's line. Helix's land is integrated and has no race (ADR 0002 §1).
 - A cross-laptop lease on the broker would make every land depend on the broker being up (today a
   land needs only GitHub) and would need expiry for a laptop that sleeps mid-land. It is split out
-  as a backlog chore, to be built only if the audit shows `land:stale` outcomes whose winner landed
-  from another laptop more than rarely.
+  as a backlog chore, to be built only if `land:stale` outcomes beaten from another laptop are more
+  than rare. Measured from the two laptops' audits: a `land:stale` (`supervisor.ts:1222,1249`) is
+  beaten from the other laptop when that laptop has a `land:ok` on the same line between the loser's
+  start and its stale result. The audit holds no laptop of the winner; the pair of audits does.
 
 ### 11. Not in this decision
 
-- Remote spawns by a lead (§1), remote `reset` and slot queueing (§2), failover of a spawner (§8),
-  a cross-laptop land lease (§10).
+- Remote spawns by a lead (§1), remote leads (§3), remote `slots`, `reset` and slot queueing (§2),
+  failover of a spawner (§8), a cross-laptop land lease (§10), a supervisor on another name (§1).
 - A role hosted on two laptops at once. Bare names on the broker are resolved per laptop; this ADR
-  assumes a project's roles run on the laptop that holds the project. Spawning a project's roles on
-  two laptops is a later decision.
+  assumes a project's roles run on the laptop that holds the project, and the worker's own messages
+  to its orchestrator use a full address (§3). Spawning a project's roles on two laptops is a later
+  decision.
 - Reading files or cloning repos across laptops: dropped by Casper (Q-7); a worker on that laptop
   does it as a task.
+
+### 12. Build order
+
+Luigi costs this at ≈11.5 engineer-days, the reviews' fixes included. Most of it is what the
+criteria need to hold in the field (a reply never lost, a spawn never doubled, a copy never stuck);
+dropping it would leave rare, random field bugs, so the first cut is smaller by order, not by
+corners. Suggested cut, for Mario and Peach to set:
+
+- **Build A: poe drives ubu1, poe@ubu1 still answers** (criteria 1, 3, 4, 5, 6 for spawn). The fake
+  network and the loop test, first; the protocol schemas and the version comparison; the `remote`
+  outbox with final codes (both kinds) and `findSecret` before enqueue; the target's in-progress
+  dedupe, reservation, `remote_by`/`spawn_req`, `req` replies and their resend; `exit` with the
+  handoff and the restart exits; the requester's three tables, the tools for spawn, follow and stop
+  with `laptop`, and reconciling. In A, a `v: 2` worker's requests are still announced on the target
+  (today's routing), so A ships alone and changes nothing for poe@ubu1.
+- **Build B: one answerer, and the mark** (criteria 2, 6 for answers, 7). The `request`, `settled`
+  and `resumed` events, the settle hook and the abort settle, the `request` and `answer` ops with
+  their auth and audit, the one-answerer filter, `pending_requests`/`request_detail`/`answer_request`
+  with remote ids, the target's other notices as events, the worker's preamble (§3); then
+  `remote_from`/`remote_by`, `StatusStuckRun.laptop` and Daisy's mark (a broker deploy).
+
+After B, Casper may retire poe@ubu1.
 
 ## Consequences
 
 - **ADR 0004 is amended:** §3's row "Another laptop's orchestrator" becomes "another laptop's
   supervisor, for its orchestrator": spawn the roles its `remote` entry names; follow, stop and
   answer the requests of only what it spawned. §1's supervisor row adds "copies of the workers and
-  requests it spawned elsewhere".
-- `remote.ts:4-9` and `config.ts:214-218` stop saying a requester "answers no request".
-- The remote schemas move to `packages/protocol`; `v: 2` is an additive change, and `v`-less requests
-  keep their meaning until a release says otherwise.
-- The requester gets two tables (remote workers, remote requests); the target gets no new table:
-  `spawned_by` and the request rows already hold what it needs, plus a column for `by` (§7).
+  requests it spawned elsewhere, and what it sent". §4 adds: what crosses the broker now includes tool
+  inputs and previews, transcript tails and handoff text, kept a day (§2); `findSecret` is a
+  heuristic, so a credential in them can still reach the broker's storage.
+- `remote.ts:4-9` and `config.ts:214-218` stop saying the requester is "another laptop's
+  orchestrator" that "answers no request"; the config comment says what an entry grants (§4).
+- The remote schemas and a version comparison move to `packages/protocol`; `v: 2` is an additive
+  change, and `v`-less requests keep their meaning until a release says otherwise.
+- The requester gets three tables (`remote_sent`, `remote_workers`, `remote_asks`); the target gets
+  two columns on its worker row (`remote_by`, `spawn_req`) and an in-progress state in
+  `remote_requests`. The outbox gets a kind `remote` with `in_reply_to` and `ttl_seconds`.
+- Two fixes reach local behaviour too: the outbox drops a row the broker refuses for good, and a
+  worker stopped while waiting settles its request.
 - `WorkerSnapshot` gains `remote_from` and `remote_by`, `StatusStuckRun` gains `laptop` (§7), additive.
 - ubu1's `supervisor.yaml` needs a `remote` entry for `supervisor@mbp-1`, and the board may need
   grants for ubu1 (§3). Both are Casper's or Peach's, not the build's.
-- Testing: two supervisors on one test broker cover criteria 1-6 without two laptops; the spike (§13)
-  covers what only the real broker and two real laptops show.
+- **Testing.** `FakeBroker` is one laptop (`test/fakes.ts:154-205`) and the broker's tests run in
+  workerd, where the supervisor can't. The build adds a `FakeNetwork` in `supervisor/test`: several
+  supervisors, routing by `name@laptop`, `delivered_to`/`queued_for`, TTL expiry, the `in_reply_to`
+  check with a sweep the test controls, redelivery of unacked messages on reconnect, presence with the
+  team rule, and the `findSecret` refusal. Criteria 1-6 are tested there, with the loop test first.
+  Broker e2e tests pin the four behaviours the fake copies: expiry, `delivered_to`/`queued_for`, a
+  refused `in_reply_to` to a swept message, and the order of pending delivery. The spike (§13) covers
+  what only the real broker and two laptops show.
 
 ## Alternatives considered
 
@@ -320,22 +451,34 @@ Settled by ADR 0002; no new lock.
   notices would live in poe's session and die with it. Rejected (§1).
 - **Requests answered by whoever is on the target,** today's behaviour. With one poe there is nobody.
   Rejected by Q-6.
+- **Point the target's orchestrator at the one poe** (`orchestrator: poe@mbp-1` in ubu1's config;
+  Bill). Config only, and every notice from ubu1 would reach poe@mbp-1. But poe@mbp-1 can't answer
+  what it is told: its `answer_request` acts on mbp-1, and a worker ubu1 spawned locally isn't its own
+  to answer remotely, so those requests would time out unseen by anyone who could. Notices as text
+  give no `pending_requests` either. Rejected as the mechanism; once poe@ubu1 is retired every ubu1
+  worker comes from a `v: 2` spawn and nothing goes to ubu1's orchestrator (§4).
+- **A per-worker `seq` on events** (Luigi), applied only in order. Copies that change only forward
+  (§7) need no sequence and survive a resend; rejected as more state for the same result.
+- **An idempotency `key` on `spawn`** (Bill). One worker per role per laptop already refuses a retry
+  of a running worker, and the requester's `list` after a timeout shows the first (§3). Rejected.
 - **No copies: `pending_requests` asks every laptop live.** One round trip per laptop per call, and an
   offline laptop's requests vanish from the view instead of showing as last known. The `request` event
   has to reach the requester anyway to wake poe. Rejected.
 - **A broker-side lease on the line** (§10). Split out, with its reasons.
 
-## Spike to confirm
+## 13. Spike to confirm
 
-Luigi's spike (`architecture/spikes/bob44-two-laptops.md`) uses today's code: hand-written JSON from an
-agent on mbp-1 to `supervisor@ubu1`, on an existing ubu1 project and a harmless role. It must not send
-requests from mbp-1's supervisor (§2: today's replies would loop between two supervisors). It must
-show, with times and the audit rows:
+Luigi's spike (`architecture/spikes/bob44-two-laptops.md`; not run yet: it waits on Casper's OK for
+ubu1's `remote` entry) uses today's code: hand-written JSON from an agent on mbp-1 to
+`supervisor@ubu1`, on an existing ubu1 project and a harmless role. It must not send requests from
+mbp-1's supervisor (§2: today's replies would loop between two supervisors), and it never takes the
+broker down (production). It must show, with times and the audit rows:
 
 1. **Round trip.** `spawn`, `status`, `list`, `stop` from mbp-1 reach ubu1 and their replies come back
    with `in_reply_to`; the time of each (sets §2's deadlines).
 2. **Delivery receipt.** The send's result names `supervisor@ubu1` in `delivered_to` when it is online;
-   a send with `ttl_seconds: 20` to an offline name is `queued_for` and gone after 20 s (§3).
+   a send with `ttl_seconds: 20` to an offline name is `queued_for` and gone after 20 s (§3). And how
+   long ubu1, put to sleep, still shows `online` (§3's half-open socket).
 3. **Version visible.** The peer list shows `supervisor@ubu1` with `client.package` and
    `client.version` (§9).
 4. **Today's request routing.** A permission request and a question of the remote worker: where they
@@ -347,7 +490,16 @@ show, with times and the audit rows:
 7. **A refusal.** A spawn of a role not in the entry is refused with the reason and leaves a
    `remote:refused` row in ubu1's audit (criterion 6).
 8. **A path.** A spawn with `handoff` is refused as a bad request (criterion 4).
-9. **Clocks.** The skew between mbp-1, ubu1 and the broker's `created_at`, so §2's deadlines hold.
+9. **A swept reply.** A hand-written send with `in_reply_to` a message sent with `ttl_seconds: 20`,
+   made after the next hourly sweep, is refused `unknown_message` (§2's resend).
+10. **A bare name.** The remote worker sends to "poe": which poe receives it (§3's preamble).
+11. **A target restart,** only if poe@ubu1 agrees to restart ubu1's supervisor with the spike's worker
+    running: what the sender hears (today: nothing; §4's restart exits).
+
+Not on the real broker, covered by the `FakeNetwork` tests instead: a broker outage with queued
+events (the broker is production), and a redelivery during a slow spawn (it needs a forced
+reconnect). Clocks are dropped from the spike: TTLs and waits are durations (§2), and skew moves only
+how `as_of` reads.
 
 What it finds is folded into this ADR before it is accepted: a result that contradicts a section
 changes that section or says why not.
