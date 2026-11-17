@@ -3,8 +3,10 @@
 - **Status:** proposed (Toad, 2026-11-17), for BOB-44 (session `BOB-44 design A`). Revised the same
   day after two reviews: Luigi's as its builder (`architecture/reviews/2026-11-17-adr0007-luigi.md`)
   and Bill@mbp-1's as an architect outside BobNet (`architecture/reviews/2026-11-17-adr0007-bill.md`);
-  every finding is settled in `architecture/reviews/2026-11-17-adr0007-disposition.md`. The two-laptop
-  spike (§13) hasn't run yet; it is folded in before Casper accepts this.
+  every finding is settled in `architecture/reviews/2026-11-17-adr0007-disposition.md`. Luigi's
+  two-laptop spike ran the same day against ubu1 on rc.37 (`architecture/spikes/bob44-two-laptops.md`,
+  c4b9fc6) and is folded in (§13 has each item's result); §4 is still unproven on the real broker
+  and build B checks it there (§13).
 - **For:** BOB-44 and `product/requirements/remote-orchestration.md` (criteria 1-7, Casper's Q-6 and
   Q-7). Amends ADR 0004 §1, §3 and §4 (Consequences).
 
@@ -97,7 +99,7 @@ definition).
   |---|---|---|---|
   | `spawn` | today's (`remote.ts:15-25`) and `by`; `as: "lead"` refused | spawns now or refuses (§3) | the allowlist, for that project and role |
   | `status` | `id` | `remoteView` (`supervisor.ts:824`) | the spawner |
-  | `stop` | `id` | stops with a last turn for the handoff, as local | the spawner |
+  | `stop` | `id` | stops with a last turn for the handoff, as local; a worker already ended is `ok` with `already_ended: true` and its view | the spawner |
   | `list` | `ids?`, `reqs?` | the sender's workers named by id or by the spawn message that made them, else its live ones; each with its open and orphaned requests | any allowlisted sender, its own only |
   | `tail` | `id`, `n` | as `tail_worker`, cut to fit the body | the spawner |
   | `summary` | `id` | as `worker_summary`, with `handoff_text` once ended (§6) | the spawner |
@@ -121,9 +123,15 @@ definition).
   has no `in_reply_to`, and carries neither `re` nor `event`; anything else is a reply or an event
   (matched to what it sent, §7, else logged and dropped). Today's replies carry `op`
   (`supervisor.ts:777`) and `readRequest` would read one as a malformed request and answer it
-  (`remote.ts:44-50`); between two supervisors that is an endless exchange. A resent reply without
-  `in_reply_to` still carries `re`. The build's first test, two supervisors on one fake network (see
-  Consequences), shows the exchange can't start.
+  (`remote.ts:44-50`); between two supervisors that is an endless exchange. The spike saw it on rc.37's
+  real bodies: a refusal `{"ok":false,"op":"spawn",…}` would be read back as a request, fail `.strict()`
+  on `ok`, and be answered `{"ok":false,"op":"invalid",…}`, which has `op` too (§13). A resent reply
+  without `in_reply_to` still carries `re`. The build's first test, two supervisors on one fake
+  network (see Consequences), shows the exchange can't start, fed those exact bodies.
+- **A malformed request's reply** names what was sent: its `re` is the request's `op` when the body has
+  a string `op`, else `"invalid"`, and its error names each bad key by its path, or `body` for one at
+  the root. Today it says `op: "invalid"` for any malformed body and labels a root key `op`
+  (`"op Unrecognized key: \"handoff\""`, from `remote.ts:49`'s `|| "op"`; §13 item 8).
 - **Delivery: a `remote` outbox.** Every `v: 2` reply and event is put in the outbox first and then
   flushed, never sent directly, so they leave in the order they were made. A new outbox kind `remote`
   keeps `to`, the body verbatim (no `(sent …)` prefix), `in_reply_to` and `ttl_seconds`. A row the
@@ -141,7 +149,9 @@ definition).
   session can take up to a minute (`supervisor.ts:394-407`), so its wait is 90 s. Without a reply, the
   requester sends `list` with the request's id in `reqs`; the tool then reports the worker if it
   exists, and only else fails saying the request may or may not have run. A reply that arrives later
-  still counts (§7).
+  still counts (§7). Measured on the real broker: every reply within ~2 s, a spawn without a session
+  started ~1 s after the send (§13 item 1), so the margins are wide; a board join's time wasn't
+  measured, and the 90 s stays.
 - **Replies and events expire in a day** (`ttl_seconds: 86400`), not the default 30 days
   (`frames.ts:30`): what they carry (previews, tails, handoff text) shouldn't sit at the broker
   longer than it is useful. A requester away for longer recovers by reconciling (§7), which doesn't
@@ -175,8 +185,10 @@ definition).
   start is refused as busy; with §2's `list` after a timeout, poe sees the first. No idempotency key.
 - **Offline refuses at once,** usually. The requester checks the peer list first: if
   `supervisor@ubu1` isn't online, the tool refuses with "ubu1's supervisor is offline (last seen …)"
-  and sends nothing. If it goes offline between the check and the send, the send's result names it in
-  `queued_for`, and the tool refuses the same way. A laptop that sleeps can look online while the
+  and sends nothing. The peer list isn't filtered by team (`broker.ts:661-674`), so this holds
+  although the two supervisors are on different teams (§7, §13 item 3). If it goes offline between
+  the check and the send, the send's result names it in `queued_for`, and the tool refuses the same
+  way. A laptop that sleeps can look online while the
   broker still holds its half-open socket (`online` is a live socket, `broker.ts:670,698`): then the
   request is `delivered_to` it, expires unread, and the tool says "may or may not have run" after its
   wait (§2). Only a target that reconnects inside the 30 s runs it; its reply then reaches the
@@ -186,12 +198,17 @@ definition).
 - **No remote leads.** A `v: 2` spawn with `as: "lead"` is refused: a lead's own workers have the
   lead as spawner and would be answered on the target, outside §4.
 - **The worker's own messages.** Bare names resolve on the sender's laptop (`address.ts:30-36`), so a
-  worker on ubu1 that writes to "poe" reaches poe@ubu1. A `v: 2` worker's preamble names its
-  orchestrator as `<by>@<the requester's laptop>` (`systemAppend`, `supervisor.ts:2081-2084`), and
-  poe's briefs for remote workers use full addresses.
-- **The board.** The worker joins its session and reports its run from the target, as its role on
-  that laptop. A grant may be bound to a laptop (`board/rules.ts:45-52`): a role spawned on ubu1
-  needs a grant that covers ubu1 (the spike checks BobNet's and Athletic's, §13).
+  worker on ubu1 that writes to "poe" reaches poe@ubu1 (seen, §13 item 10). A `v: 2` worker's
+  preamble names its orchestrator as `<by>@<the requester's laptop>` (`systemAppend`,
+  `supervisor.ts:2081-2084`), and poe's briefs for remote workers use full addresses.
+- **The board.** A remote spawn on a project with a board needs `tasks` (and `session` when it has
+  one), as a local one does: the target's `admit` refuses it otherwise, before anything else
+  (`supervisor.ts:411-449`; seen on ubu1, §13 item 6). The requester passes `tasks` and `session`
+  through unchanged and relays the target's refusal word for word; it never checks them itself, since
+  the board is the target's to ask. The worker joins its session and reports its run from the
+  target, as its role on that laptop. A grant may be bound to a laptop (`board/rules.ts:45-52`): a
+  role spawned on ubu1 needs a grant that covers ubu1. The spike didn't test the join (§13 item 6);
+  build A's first real spawn with a session does.
 
 ### 4. Requests and questions: to the spawner, answered as local
 
@@ -243,6 +260,34 @@ definition).
   new worker with the same `spawned_by` and `remote_by` (`supervisor.ts:576-588` copies both) and
   sends `resumed` (old id, new id). That resume continues an admitted worker: it follows the target's
   local rule and may queue, unlike a new spawn.
+- **Proven where.** The `FakeNetwork` tests carry this section (Consequences). The spike couldn't
+  raise a request on ubu1 (§13 item 4), so build B's acceptance checks it once on the real broker,
+  with a rule that makes a harmless call escalate. In auto mode a worker's call reaches the router only
+  when the preflight sends it there: a policy rule with `decision: escalate` turns it into `ask`
+  before the classifier (`policy.ts:274-279`, `supervisor.ts:1058-1083`); anything else the classifier
+  settles, or the role's sandbox, hooks or tool list refuse (each seen on athletic/reviewer, §13
+  item 4). Casper's config on ubu1, staged by poe@ubu1, first in `policy.yaml`'s rules:
+
+  ```yaml
+  - id: bob44-probe
+    roles: [reviewer]
+    projects: [athletic]
+    tools: [Bash]
+    command: "^echo bob44-probe$"
+    decision: escalate
+    tier: orchestrator
+    reason: BOB-44 real-broker check
+  ```
+
+  Policy loads at start (`bin.ts:62`), so the rule needs a restart of ubu1's supervisor (poe@ubu1's,
+  with its `list_workers` empty) to come in and another to go out; the `remote` entry then keys on
+  `supervisor@mbp-1`. poe@mbp-1 spawns athletic/reviewer on ubu1 with `laptop` and a task that runs
+  `echo bob44-probe` twice, and the check shows: the request reaches poe@mbp-1 (its
+  `pending_requests`, `laptop: "ubu1"`) and not poe@ubu1 (nothing announced; ubu1's
+  `pending_requests` leaves it out); `answer_request` allow runs the first call and deny refuses the
+  second; each `settled` clears the copy; ubu1's audit has two `remote:answer` rows. A question
+  (`AskUserQuestion`) takes the same path from the router on and stays with the fake: it isn't
+  available to athletic/reviewer (§13 item 4).
 
 ### 5. The tools, with `laptop`
 
@@ -250,12 +295,17 @@ Old callers are unchanged: without `laptop`, every tool acts on this laptop as t
 
 | Tool | With `laptop` |
 |---|---|
-| `spawn_worker` | `laptop` names the target; `handoff`, `resume_session` and `as: "lead"` are refused with it |
+| `spawn_worker` | `laptop` names the target; `tasks`, `session`, `model`, `effort` pass through unchanged and the target's refusal comes back word for word (§3); `handoff`, `resume_session` and `as: "lead"` are refused with it |
 | `list_workers` | `laptop: "ubu1"`: the workers this supervisor spawned there; `laptop: "*"` (`all` is a valid laptop name): local and every laptop's, each row with `laptop`. Remote rows come from the copies (§7), with `as_of` |
 | `worker_status`, `tail_worker`, `worker_summary`, `stop_worker` | an id this supervisor spawned elsewhere resolves to its laptop; `laptop` is optional and, if given, must match. `status` and `summary` are asked live; offline, they answer from the copy with `as_of` and say so |
 | `pending_requests` | local and remote together, each row with `laptop` (remote ones from the copies) |
 | `request_detail`, `answer_request` | a request id from another laptop resolves the same way; `answer_request`'s result is the target's |
 | `run_slots`, `reset_worker`, `take_slot`, `free_slot`, `order_run_queue` | refuse `laptop` other than this one |
+
+A stop that races the worker's own end is common (the spike's two stops both found the worker
+ended, one by about a second; today that is an error, "is done, not running", `supervisor.ts:467`).
+With `laptop`, `stop_worker` reports it as ended, with the state and checkpoint from the `stop`
+reply, and updates the copy; it isn't an error.
 
 A lead's tools (`handlers(sup, { lead })`, `mcp.ts:162`) refuse `laptop` other than its own, list no
 remote rows, and refuse a remote request id (§1). Ids are random; if a worker or request id matches on
@@ -266,7 +316,10 @@ two laptops, the tool asks for `laptop`.
 - The `exit` event carries what the local end notice does (`supervisor.ts:1506-1520`): state,
   checkpoint, error or stop reason, the land outcomes, and **the handoff file's text**, read by the
   target from its own file. The handoff is what the role wrote for whoever comes next; poe reads it
-  as text, not as a path (Q-7, criterion 5).
+  as text, not as a path (Q-7, criterion 5). With no file, or an empty one, `handoff_text` is null
+  and the requester's notice says "no handoff file": a project's own write hook may refuse the
+  handoff path to a worker that otherwise ran fine (the spike's spawn 4 said so, unverified, §13
+  item 5).
 - **Size, on the whole body.** The error is cut to 500 characters; the handoff then gets whatever the
   serialised body has left under 16 KiB, with a margin, and is cut with `handoff_truncated: true` and
   the file's length. Today's handoffs on mbp-1: median 1.3 KB, 90th percentile 3.4 KB, 2 of 948 over
@@ -303,8 +356,10 @@ two laptops, the tool asks for `laptop`.
   and events, never from the requester's own writes: an answer the target accepted clears the copy
   when `settled` arrives, not before. A worker copy's ended state is final; a request copy's settled
   state is final, and an event for an unknown request makes its copy in the event's state, so a
-  `request` that arrives after its `settled` changes nothing. The requester handles a remote message
-  synchronously (no `await` between reading a copy and writing it). A copy is shown with `as_of`.
+  `request` that arrives after its `settled` changes nothing. A copy's `remote_url` is set from the
+  `remote_control` event or a view that has one and never cleared by a null: the spawn reply has none
+  yet, and `remoteView` drops it once the worker ends (`supervisor.ts:839`, §13). The requester
+  handles a remote message synchronously (no `await` between reading a copy and writing it). A copy is shown with `as_of`.
 - **Unknown workers are learnt, not dropped.** An event or reply is accepted only from the target
   supervisor's address (the worker's laptop and the supervisor's name). Since the target sends events
   only to a worker's spawner, an event for a worker the requester has no copy of (its spawn reply was
@@ -312,8 +367,13 @@ two laptops, the tool asks for `laptop`.
   asks `status` to fill it.
 - **Reconciling.** The requester sends `list`, with `ids` (its copies not ended) and `reqs` (its
   spawns with no reply), and replaces its copies for that laptop: on its own start, on each connect to
-  the broker, when a target's supervisor `joined`, and every 5 minutes while any copy is not ended
-  (presence reaches a connection only across a shared or empty team, `broker.ts:676-690`). An id asked
+  the broker, and every 5 minutes while any copy is not ended. Not on a target's `joined`: presence
+  reaches a connection only if it hosts a peer on the subject's team or one with no team
+  (`broker.ts:676-690`), and the live supervisors aren't on one team (`portfolio` on ubu1, `land` on
+  mbp-1; §13 item 3), so mbp-1's supervisor never hears ubu1's join. Nothing needs it: a target that
+  restarts sends its exits and orphans through its outbox (§4), and the timer covers the rest. Giving
+  supervisors no team would make the join heard, but it is a config and presence change for every
+  peer on the connection, not this feature's. An id asked
   for and not returned is marked `unknown`, not dropped. A copy newly seen ended without its handoff
   text gets it with `summary`.
 
@@ -402,12 +462,15 @@ corners. Suggested cut, for Mario and Peach to set:
   dedupe, reservation, `remote_by`/`spawn_req`, `req` replies and their resend; `exit` with the
   handoff and the restart exits; the requester's three tables, the tools for spawn, follow and stop
   with `laptop`, and reconciling. In A, a `v: 2` worker's requests are still announced on the target
-  (today's routing), so A ships alone and changes nothing for poe@ubu1.
+  (today's routing), so A ships alone and changes nothing for poe@ubu1. Its acceptance on the real
+  broker: a spawn with a session on a boarded ubu1 project (the join and run report, §3) and the
+  handoff text of a real `exit` (§6), the two spike items that needed it (§13).
 - **Build B: one answerer, and the mark** (criteria 2, 6 for answers, 7). The `request`, `settled`
   and `resumed` events, the settle hook and the abort settle, the `request` and `answer` ops with
   their auth and audit, the one-answerer filter, `pending_requests`/`request_detail`/`answer_request`
   with remote ids, the target's other notices as events, the worker's preamble (§3); then
-  `remote_from`/`remote_by`, `StatusStuckRun.laptop` and Daisy's mark (a broker deploy).
+  `remote_from`/`remote_by`, `StatusStuckRun.laptop` and Daisy's mark (a broker deploy). Its
+  acceptance on the real broker: §4's check with the `bob44-probe` rule (§4, "Proven where").
 
 After B, Casper may retire poe@ubu1.
 
@@ -437,8 +500,9 @@ After B, Casper may retire poe@ubu1.
   check with a sweep the test controls, redelivery of unacked messages on reconnect, presence with the
   team rule, and the `findSecret` refusal. Criteria 1-6 are tested there, with the loop test first.
   Broker e2e tests pin the four behaviours the fake copies: expiry, `delivered_to`/`queued_for`, a
-  refused `in_reply_to` to a swept message, and the order of pending delivery. The spike (§13) covers
-  what only the real broker and two laptops show.
+  refused `in_reply_to` to a swept message, and the order of pending delivery. The spike (§13) showed
+  what today's code does on the real broker across two laptops; what it couldn't show is either in
+  the fake or in a build's acceptance (§12).
 
 ## Alternatives considered
 
@@ -466,40 +530,61 @@ After B, Casper may retire poe@ubu1.
   has to reach the requester anyway to wake poe. Rejected.
 - **A broker-side lease on the line** (§10). Split out, with its reasons.
 
-## 13. Spike to confirm
+## 13. The spike: what it showed
 
-Luigi's spike (`architecture/spikes/bob44-two-laptops.md`; not run yet: it waits on Casper's OK for
-ubu1's `remote` entry) uses today's code: hand-written JSON from an agent on mbp-1 to
-`supervisor@ubu1`, on an existing ubu1 project and a harmless role. It must not send requests from
-mbp-1's supervisor (§2: today's replies would loop between two supervisors), and it never takes the
-broker down (production). It must show, with times and the audit rows:
+Luigi ran it on 2026-11-17 (`architecture/spikes/bob44-two-laptops.md`, c4b9fc6): 18 hand-written
+requests from `Luigi@mbp-1` to `supervisor@ubu1` on rc.37, under a temporary `remote` entry for
+athletic/reviewer (Casper's OK, staged by poe@ubu1, removed after), and four spawns. No request came
+from mbp-1's supervisor, so today's replies couldn't loop (§2). Item by item:
 
-1. **Round trip.** `spawn`, `status`, `list`, `stop` from mbp-1 reach ubu1 and their replies come back
-   with `in_reply_to`; the time of each (sets §2's deadlines).
-2. **Delivery receipt.** The send's result names `supervisor@ubu1` in `delivered_to` when it is online;
-   a send with `ttl_seconds: 20` to an offline name is `queued_for` and gone after 20 s (§3). And how
-   long ubu1, put to sleep, still shows `online` (§3's half-open socket).
-3. **Version visible.** The peer list shows `supervisor@ubu1` with `client.package` and
-   `client.version` (§9).
-4. **Today's request routing.** A permission request and a question of the remote worker: where they
-   are announced (poe@ubu1, per §4's premise), their id format, and that nothing reaches mbp-1.
-5. **The end.** The `exit` event reaches the sender with state and checkpoint; the handoff file's size
-   on ubu1 (§6).
-6. **The board from ubu1.** The worker's `session_join` and run reports on its project's board are
-   accepted for a role running on ubu1, or which grant refuses them (§3).
-7. **A refusal.** A spawn of a role not in the entry is refused with the reason and leaves a
-   `remote:refused` row in ubu1's audit (criterion 6).
-8. **A path.** A spawn with `handoff` is refused as a bad request (criterion 4).
-9. **A swept reply.** A hand-written send with `in_reply_to` a message sent with `ttl_seconds: 20`,
-   made after the next hourly sweep, is refused `unknown_message` (§2's resend).
-10. **A bare name.** The remote worker sends to "poe": which poe receives it (§3's preamble).
-11. **A target restart,** only if poe@ubu1 agrees to restart ubu1's supervisor with the spike's worker
-    running: what the sender hears (today: nothing; §4's restart exits).
+1. **Round trip: confirmed** for `spawn`, `status`, `list`, each reply with `in_reply_to`, all within
+   ~2 s; a spawn without a session started ~1 s after the send. `stop` went both ways, but both stops
+   found the worker already ended, so stopping a running remote worker wasn't seen. Changes: §2's
+   deadlines stand (wide margins); §2's `stop` op and §5's `stop_worker` treat an ended worker as
+   ended, not an error.
+2. **Delivery receipt: half.** `delivered_to: ["supervisor@ubu1"]` on all 18 sends. The TTL half
+   couldn't be tried: the `send_message` tool has no `ttl_seconds`. The half-open socket wasn't tried.
+   Both go to the fake (below); §3 is unchanged.
+3. **Version visible: confirmed** (`client: { package: "@bobnet/supervisor", version: "2.0.0-rc.37",
+   protocol: 1 }`). Seen too: `supervisor@ubu1` is on team `portfolio`, `supervisor@mbp-1` on `land`.
+   Changes: §7 no longer reconciles on a target's `joined`, which mbp-1 never hears; §3's offline check
+   is unaffected (the peer list isn't filtered by team).
+4. **Today's request routing: not shown.** athletic/reviewer never raised a request in four tries: the
+   OS sandbox blocked `curl`, `dangerouslyDisableSandbox` is off for the role, WebFetch and
+   AskUserQuestion aren't available to it, and a Write outside its worktree was denied by Athletic's
+   write-scope hook and its Bash fallback by the auto-mode classifier. Nothing reached mbp-1. By the
+   code, it would be announced to athletic's orchestrator on ubu1 (`supervisor.ts:1571-1600`).
+   Changes: §4 gains "Proven where": the fake carries it, and build B's acceptance checks it on the
+   real broker with a `policy.yaml` rule that escalates `echo bob44-probe` (Casper's config, staged by
+   poe@ubu1, a restart of ubu1's supervisor in and out).
+5. **The end: confirmed, with gaps.** Every `exit` came with `state` and `checkpoint`, no
+   `in_reply_to`, and no `ended_at`, error, handoff text or `spawn_req` (§6 and §2 add them). The
+   handoff size on ubu1 wasn't measured (no remote file read; poe@ubu1 can `wc -c` them). Spawn 4's
+   checkpoint says Athletic's write-scope hook refused its handoff too (unverified). Changes: §6's
+   `exit` says "no handoff file" rather than sending empty text; build A's acceptance reads a real
+   handoff.
+6. **The board from ubu1: not tested** (no session; board writes were out of scope). Seen: ubu1
+   refuses a spawn on athletic without `tasks` before anything else. Changes: §3 and §5 pass `tasks`
+   and `session` through and relay the refusal; build A's acceptance makes the join.
+7. **A refusal: confirmed,** with the reason and the allowed roles ("Luigi@mbp-1 may not spawn
+   athletic/phelps; it may spawn athletic/reviewer"). The `remote:refused` row is written by the code
+   (`supervisor.ts:783`); nobody looked at ubu1's audit. No change.
+8. **A path: confirmed:** `handoff` is refused as a bad request. Its reply said `op: "invalid"` and
+   labelled the root key `op`. Changes: §2's malformed-request reply.
+9. **A swept reply: not testable today** (it needs `ttl_seconds` on a send, item 2). The fake's
+   controlled sweep and the broker's e2e test carry it (Consequences); §2 is unchanged.
+10. **A bare name: confirmed:** the ubu1 worker's message to "poe" reached poe@ubu1. §3's preamble
+    stands.
+11. **A target restart: not done.** The fake carries it; §4's restart exits are unchanged.
 
-Not on the real broker, covered by the `FakeNetwork` tests instead: a broker outage with queued
-events (the broker is production), and a redelivery during a slow spawn (it needs a forced
-reconnect). Clocks are dropped from the spike: TTLs and waits are durations (§2), and skew moves only
-how `as_of` reads.
+Seen besides: `remoteView` has `remote_url: null` in the spawn reply and after the end, so only the
+`remote_control` event and a running `status` carry it (§7 now keeps it); `status` of an id that isn't
+the sender's says so without saying whether it exists (as wanted); worker names repeat across laptops
+(`Reviewer@mbp-1` in sandbox, `Reviewer@ubu1` in athletic). Daisy's mark shows a laptop only when a
+project spans laptops, so in a list of several projects two such names read alike: Daisy's to weigh
+(`design/BOB-44/laptop-mark.md`), not this ADR's.
 
-What it finds is folded into this ADR before it is accepted: a result that contradicts a section
-changes that section or says why not.
+**Left for the `FakeNetwork`** (Consequences) besides a broker outage and a redelivery during a slow
+spawn: TTL expiry and the swept reply (items 2, 9), a stop of a running remote worker (item 1), the
+target's restart (item 11), and the question kind (item 4). **Left for a build's acceptance on the real
+broker:** the board join and a real handoff (build A), and §4 (build B), as in §12.
