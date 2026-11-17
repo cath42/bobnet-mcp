@@ -227,6 +227,55 @@ describe("the orchestrator's usage", () => {
     expect(sessionAt(ss, "2026-10-31T14:55:00Z", now)).toBe("LAND-41 review 1");
     expect(sessionAt(ss, "2026-10-31T17:00:00Z", now)).toBe("LAND-41 review 1");
     expect(sessionAt(ss, "2026-10-31T13:00:00Z", now)).toBeNull();
+
+    // A session declared once early spans the others: it takes a call only after its later spawn.
+    const early = [
+      { name: "LAND-54 design", kind: "design", started_at: "2026-11-15T02:12:00Z", ended_at: null, spawned: ["2026-11-15T02:12:00Z", "2026-11-16T20:00:00Z"] },
+      { name: "LAND-53 review", kind: "review", started_at: "2026-11-16T17:21:00Z", ended_at: "2026-11-16T19:00:00Z", spawned: ["2026-11-16T17:21:00Z"] },
+    ];
+    expect(sessionAt(early, "2026-11-16T18:00:00Z", "2026-11-16T22:00:00Z")).toBe("LAND-53 review");
+    expect(sessionAt(early, "2026-11-16T19:30:00Z", "2026-11-16T22:00:00Z")).toBe("LAND-54 design");
+    expect(sessionAt(early, "2026-11-16T20:30:00Z", "2026-11-16T22:00:00Z")).toBe("LAND-54 design");
+  });
+
+  it("orders sessions by their latest spawn: one declared early and worked in after others comes last, keeps its runs and takes the calls after its later spawn", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "bobnet-order-"));
+    execFileSync("git", ["-C", repo, "init", "-q", "-b", "main"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=R", "-c", "user.email=r@x", "commit", "-q", "--allow-empty", "-m", "init"]);
+    const root = join(repo, "transcripts"), folder = transcriptFolder(root, "/work/bob");
+    mkdirSync(folder, { recursive: true });
+    // One call in LAND-53 review, before LAND-54 design's later spawn; one after it.
+    writeFileSync(join(folder, "s1.jsonl"), [call("c1", "2026-11-16T18:30:00Z", 5), call("c2", "2026-11-16T20:30:00Z", 5)].join("\n") + "\n");
+
+    const store = new Store(":memory:");
+    const spawn = (feature: string, kind: string, created: string, ended: string | null) => {
+      const w = store.createWorker({ project: "helix", role: "bill", task: "brief", handoff: null, priority: 1, resume_session: null, declared_session: JSON.stringify({ feature, kind }) });
+      store.updateWorker(w.id, { state: ended ? "done" : "running", created_at: created, started_at: created, ended_at: ended });
+      return w;
+    };
+    const first = spawn("LAND-54", "design", "2026-11-15T02:12:00Z", "2026-11-15T02:20:00Z");
+    spawn("LAND-52", "review", "2026-11-16T10:00:00Z", "2026-11-16T11:00:00Z");
+    spawn("LAND-53", "design", "2026-11-16T12:00:00Z", "2026-11-16T13:00:00Z");
+    spawn("LAND-53", "build", "2026-11-16T14:00:00Z", "2026-11-16T16:00:00Z");
+    spawn("LAND-53", "review", "2026-11-16T17:21:00Z", "2026-11-16T19:00:00Z");
+    const later = spawn("LAND-54", "design", "2026-11-16T20:00:00Z", "2026-11-16T21:00:00Z");
+    const config = parseSupervisorConfig(`orchestrator: Bob\nprojects:\n  helix:\n    path: ${repo}\n    orchestrator_dir: /work/bob\n    roles:\n      bill: { dir: ${repo} }\n`, (d) => d);
+    const sent: ProjectBoard[] = [];
+    const boards = new Boards(
+      { projects: config.projects, store, log: quiet, send: async (x) => void sent.push(x), liveCtx: () => undefined, ownTokens: () => ({ input: 10, output: 5, cache_read: 1000, cache_write: 0 }), nameOf: () => "bill-agent", transcriptsDir: root },
+      async (cmd, args, cwd) => {
+        if (cmd === "gh") throw new Error("gh: not found");
+        return execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      },
+    );
+    await boards.refresh();
+    const board = sent[0]!;
+    expect(board.sessions.map((s) => s.name)).toEqual(["LAND-52 review", "LAND-53 design", "LAND-53 build", "LAND-53 review", "LAND-54 design"]);
+    // Its start is still its first worker's.
+    expect(board.sessions.at(-1)!.started_at).toBe("2026-11-15T02:12:00Z");
+    expect(board.runs.filter((r) => r.session === "LAND-54 design").map((r) => r.id)).toEqual([first.id, later.id, "orchestrator:LAND-54 design"]);
+    expect(board.sessions.find((s) => s.name === "LAND-53 review")!.orchestrator).toMatchObject({ calls: 1 });
+    expect(board.sessions.at(-1)!.orchestrator).toMatchObject({ calls: 1 });
   });
 
   it("shows on the board in the sessions it worked in, as a run beside its workers, and the rest as Other work", async () => {

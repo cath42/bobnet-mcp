@@ -179,13 +179,18 @@ export function transcriptCalls(jsonl: string, subagent = false): TranscriptCall
 /** Claude Code's transcript folder for a working folder: every character but a letter or digit becomes "-". */
 export const transcriptFolder = (root: string, dir: string) => join(root, dir.replace(/[^A-Za-z0-9]/g, "-"));
 
-/** The session whose span holds `at`, the latest started if spans overlap; "Other work" has none. */
-export function sessionAt(sessions: Array<{ name: string; kind: string; started_at: string; ended_at: string | null }>, at: string, now: string): string | null {
-  for (let i = sessions.length - 1; i >= 0; i--) {
-    const s = sessions[i]!;
-    if (s.kind !== "other" && s.started_at <= at && at <= (s.ended_at ?? now)) return s.name;
+/**
+ * The session whose span holds `at`; if spans overlap, the one with the latest worker spawned at or
+ * before `at` (`spawned`, its workers' created_at; its start if not given). "Other work" has none.
+ */
+export function sessionAt(sessions: Array<{ name: string; kind: string; started_at: string; ended_at: string | null; spawned?: readonly string[] }>, at: string, now: string): string | null {
+  let best: { name: string; last: string } | null = null;
+  for (const s of sessions) {
+    if (s.kind === "other" || s.started_at > at || at > (s.ended_at ?? now)) continue;
+    const last = (s.spawned ?? [s.started_at]).filter((t) => t <= at).sort().at(-1) ?? s.started_at;
+    if (!best || last >= best.last) best = { name: s.name, last };
   }
-  return null;
+  return best?.name ?? null;
 }
 
 // ---------- Backlog (Backlog.md: Markdown files with YAML front matter) ----------
@@ -513,6 +518,7 @@ export class Boards {
       e.ws.push(w);
       bySession.set(s.name, e);
     }
+    const spawned = new Map([...bySession].map(([name, { ws }]) => [name, ws.map((w) => w.created_at).sort()]));
     const sessionList = [...bySession.values()]
       .map(({ s, ws }) => {
         const tokens = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
@@ -525,16 +531,18 @@ export class Boards {
         const ended = ws.every((w) => w.ended_at) ? ws.map((w) => w.ended_at!).sort().at(-1)! : null;
         return { name: s.name, kind: s.kind, started_at: ws[0]!.created_at, ended_at: ended, workers: ws.length, calls, tokens, orchestrator: null as ProjectBoard["sessions"][number]["orchestrator"] };
       })
-      .sort((a, b) => a.started_at.localeCompare(b.started_at))
+      // By latest activity, its latest worker's spawn, not its first: a session declared once early and
+      // worked in after others comes last, so it is the current one and keeps its runs.
+      .sort((a, b) => spawned.get(a.name)!.at(-1)!.localeCompare(spawned.get(b.name)!.at(-1)!))
       // One place kept for the orchestrator's "Other work".
       .slice(-199);
 
-    // The orchestrator's calls go to the session whose span holds them; the rest to "Other work".
+    // The orchestrator's calls go to the session whose span holds them, the one spawned into latest; the rest to "Other work".
     const orch = new Map<string, TranscriptCall[]>();
     if (p.orchestratorDir) {
       const now = new Date().toISOString();
       for (const c of await this.orchestratorCalls(p.orchestratorDir)) {
-        const name = sessionAt(sessionList, c.at, now) ?? "Other work";
+        const name = sessionAt(sessionList.map((s) => ({ ...s, spawned: spawned.get(s.name)! })), c.at, now) ?? "Other work";
         orch.set(name, [...(orch.get(name) ?? []), c]);
       }
     }
