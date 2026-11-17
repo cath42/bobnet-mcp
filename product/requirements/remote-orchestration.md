@@ -28,7 +28,7 @@ then roles). It follows and stops only what it spawned; the worker's events come
 4. **Handoff files are laptop-local.** The orchestrator cannot read what a remote worker wrote. It
    does not need to (Q-7 settled): it talks to the agents there; criterion 5 carries the result.
 
-## Criteria (Draft; Toad's ADR settles the shape)
+## Criteria (Ready; Toad's ADR 0007 settles the shape, not the criteria)
 
 1. The orchestrator spawns, follows (status, tail, summary), and stops a worker on a named laptop
    with the tools it uses for its own: a `laptop` argument, default this laptop. Old callers are
@@ -85,5 +85,5 @@ repo to a laptop that lacks it (the latter is a task for a worker).
 ## Open questions
 
 Answered: Q-6 and Q-7 (above).
-For Toad (ADR 0006): wire shape (the existing message vs a `worker_cmd` frame), the auth of answers,
+For Toad (ADR 0007): wire shape (the existing message vs a `worker_cmd` frame), the auth of answers,
 `list_workers` across laptops, the landing race.
