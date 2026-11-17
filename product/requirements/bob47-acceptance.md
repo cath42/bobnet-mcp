@@ -70,7 +70,8 @@ that I can see from here.
 
 ## AC 4: Roadmap and item pages on phone and desktop
 
-A dashboard look: Casper's. **Open.** Mario carries it to Casper.
+A dashboard look: Casper's. Casper looked at Athletic on the dashboard and said "Looks good" (verbatim; poe@ubu1
+to Mario, message m_e9b82f95, 2026-11-17 ~13:30Z; recorded on board action A-1). **AC 4: checked** on his words.
 
 ## AC 5: grants
 
@@ -112,11 +113,10 @@ the same cut-over in two commits, with no write to the old files in between.
 ## Definition of done
 
 1. Landed: this file; `pnpm -r typecheck` and `pnpm -r test` run by land.
-2. Acceptance criteria: AC 1, 2, 3, 5, 6, 7 checked with the evidence above; **AC 4 open (Casper)**.
+2. Acceptance criteria: AC 1 to 7 all checked with the evidence above (AC 4 on Casper's "Looks good"). BOB-47 Done.
 3. Architect sign-off: not applicable (no protocol, store or code change).
 4. No release. ubu1's config got `board: service` and a supervisor restart (03:45:24Z, poe@ubu1).
 
 ## Open
 
-- AC 4: Casper's dashboard look on phone and desktop (Roadmap with no release; features and tasks open with criteria).
-- Co-sign: Ledecky for the live read (Peach may not read athletic's board).
+- Co-sign: Ledecky for the live read (Peach may not read athletic's board). Not a criterion.
