@@ -1,6 +1,6 @@
 # 0007. One orchestrator across laptops
 
-- **Status:** proposed (Toad, 2026-11-17), for BOB-44 (session `BOB-44 design A`). Revised the same
+- **Status:** accepted (Casper, 2026-11-17, on Q-9 option "accept", dashboard 2026-11-17T23:48Z; to poe@mbp-1: "Accepted lets go"); proposed (Toad, 2026-11-17), for BOB-44 (session `BOB-44 design A`). Revised the same
   day after two reviews: Luigi's as its builder (`architecture/reviews/2026-11-17-adr0007-luigi.md`)
   and Bill@mbp-1's as an architect outside BobNet (`architecture/reviews/2026-11-17-adr0007-bill.md`);
   every finding is settled in `architecture/reviews/2026-11-17-adr0007-disposition.md`. Luigi's
