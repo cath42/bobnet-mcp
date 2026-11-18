@@ -443,12 +443,13 @@ projects:
 });
 
 describe("consult", () => {
-  async function consultSetup(concurrency = 1) {
+  // A consult that is answered gets a timeout a loaded run can't hit; the one that times out, a short one.
+  async function consultSetup(concurrency = 1, timeoutMinutes = 0.2) {
     const text = `
 orchestrator: Bob
 concurrency: ${concurrency}
 state_dir: ${dir}
-consult_timeout_minutes: 0.01
+consult_timeout_minutes: ${timeoutMinutes}
 projects:
   helix:
     path: /work/helix
@@ -507,7 +508,7 @@ projects:
   });
 
   it("times out, refuses self and non-consultable roles, and isn't stopped by a hold", async () => {
-    const { sup, sessions } = await consultSetup();
+    const { sup, sessions } = await consultSetup(1, 0.01);
     const homer = sup.spawn({ project: "helix", role: "homer", task: "build" });
     await until(() => sessions.length === 1);
     expect(() => sup.consult(homer.id, "homer", "q")).toThrow(/own role/);
