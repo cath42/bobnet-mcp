@@ -8,7 +8,8 @@ import type { BrokerLink } from "../src/supervisor.ts";
 // (packages/broker/src/broker.ts). It copies what the remote wire relies on: delivered_to and
 // queued_for, ttl_seconds, the in_reply_to check against what a sweep left, redelivery of unacked
 // messages on reconnect, presence with the team rule, the findSecret refusal. The clock and the
-// sweep are the test's: nothing expires or goes until it says so.
+// sweep are the test's: nothing expires or goes until it says so. packages/broker's
+// test/remote-wire.test.ts pins the same behaviours on the real broker.
 
 interface Peer {
   name: string;
@@ -28,6 +29,8 @@ export class FakeNetwork {
   readonly refused: Array<{ from: string; to: string[]; code: string }> = [];
   /** Past this many messages a send is refused: a runaway exchange fails its test instead of spinning. */
   limit = 200;
+  /** The broker's credential check; a test swaps it for a newer detector than the supervisor's. */
+  detector: (body: string) => string | null = findSecret;
 
   private readonly links = new Map<string, FakeLink>();
   private readonly peers = new Map<string, Peer>();
@@ -36,6 +39,8 @@ export class FakeNetwork {
   /** message id → recipient keys not yet acked. */
   private readonly deliveries = new Map<string, Set<string>>();
   private seq = 0;
+  /** Waits on this clock (a supervisor's `sleep`), resolved by `advance`. */
+  private timers: Array<{ at: number; resolve: () => void }> = [];
 
   /** The link for a laptop's supervisor: one connection that hosts the names it registers. */
   link(laptop: string): FakeLink {
@@ -46,7 +51,13 @@ export class FakeNetwork {
 
   advance(seconds: number): void {
     this.now += seconds * 1000;
+    const due = this.timers.filter((t) => t.at <= this.now);
+    this.timers = this.timers.filter((t) => t.at > this.now);
+    for (const t of due) t.resolve();
   }
+
+  /** A wait on the network's clock, for a Supervisor's `sleep`. */
+  readonly sleep = (ms: number): Promise<void> => new Promise((resolve) => this.timers.push({ at: this.now + ms, resolve }));
 
   /** The broker's alarm: drops what has expired, so an in_reply_to to it is refused. */
   sweep(): void {
@@ -110,7 +121,7 @@ export class FakeNetwork {
       throw new BrokerError(code, message);
     };
     if (frame.body.length > LIMITS.bodyChars) refuse("bad_frame", "body too long");
-    const found = findSecret(frame.body);
+    const found = this.detector(frame.body);
     if (found) refuse("secret_detected", `Message looks like it contains a credential (${found}); send a path instead`);
     const recipients: Peer[] = [];
     const unknown: string[] = [];
@@ -196,6 +207,8 @@ export class FakeLink implements BrokerLink {
   readonly pushes: PushFrame[] = [];
   /** Where pushes go: the supervisor's onPush, set once it exists. */
   onPush: (frame: PushFrame) => void = () => {};
+  /** A send this returns a code for fails with it before it reaches the network: an outage, or a refusal the fake doesn't make. */
+  failSend: (frame: Extract<RequestFrame, { t: "send" }>) => string | null = () => null;
 
   private readonly net: FakeNetwork;
   readonly laptop: string;
@@ -219,8 +232,11 @@ export class FakeLink implements BrokerLink {
 
   async request<R>(frame: RequestFrame): Promise<R> {
     switch (frame.t) {
-      case "send":
+      case "send": {
+        const code = this.failSend(frame);
+        if (code) throw new BrokerError(code as ConstructorParameters<typeof BrokerError>[0], `failed as the test said: ${code}`);
         return this.net.send(this, frame) as R;
+      }
       case "peers":
         return { peers: this.net.peerList() } as R;
       case "report":

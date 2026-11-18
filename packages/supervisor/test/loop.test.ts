@@ -120,7 +120,7 @@ describe("the loop test: two supervisors never answer each other's replies", () 
       [SUP_UBU, null],
       [SUP_MBP, req.id],
     ]);
-    // The v: 2 ops are served from BOB-61 on; the refusal is a reply (rc.37's own, RC37.invalid, is below).
+    // The v: 2 ops are served from BOB-62 on; the refusal is a reply (rc.37's own, RC37.invalid, is below).
     expect(JSON.parse(net.log[1]!.body)).toEqual({ v: 2, re: "list", req: req.id, ok: false, error: "this supervisor doesn't serve v: 2 requests yet" });
     expect(mbp.store.auditLog(20).filter((a) => a.action.startsWith("remote:")).map((a) => a.action)).toEqual(["remote:refused"]);
     expect(ubu.store.auditLog(20).filter((a) => a.action.startsWith("remote:"))).toEqual([]);

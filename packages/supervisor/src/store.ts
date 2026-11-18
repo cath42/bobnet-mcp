@@ -100,7 +100,11 @@ CREATE TABLE IF NOT EXISTS audit (
   worker_id TEXT, detail TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS remote_requests (
-  message_id TEXT PRIMARY KEY, sender TEXT NOT NULL, op TEXT NOT NULL, reply TEXT NOT NULL, at TEXT NOT NULL
+  message_id TEXT PRIMARY KEY, sender TEXT NOT NULL, op TEXT NOT NULL, reply TEXT, at TEXT NOT NULL, v INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS remote_sent (
+  id TEXT PRIMARY KEY, message_id TEXT UNIQUE, to_name TEXT NOT NULL, op TEXT NOT NULL, target TEXT, body TEXT NOT NULL,
+  state TEXT NOT NULL, reply TEXT, sent_at TEXT NOT NULL, deadline TEXT, replied_at TEXT
 );
 `;
 
@@ -108,7 +112,37 @@ const now = () => new Date().toISOString();
 
 export const newWorkerId = () => `w_${randomUUID().slice(0, 8)}`;
 
-export type OutboxKind = "message" | "board_op";
+export type OutboxKind = "message" | "board_op" | "remote";
+
+export interface OutboxRow {
+  seq: number;
+  to_name: string;
+  body: string;
+  created_at: string;
+  kind: OutboxKind;
+  in_reply_to: string | null;
+  ttl_seconds: number | null;
+}
+
+/**
+ * One request this supervisor sent another laptop's (ADR 0007 §2, the requester's record): written
+ * before the send, its message id once the broker took it, its reply whenever that comes.
+ * `sending` (not known to have left), `sent`, `replied`, `unanswered` (its wait ended without a
+ * reply; a later one still counts), `failed` (the broker refused it).
+ */
+export interface RemoteSentRow {
+  id: string;
+  message_id: string | null;
+  to_name: string;
+  op: string;
+  target: string | null;
+  body: string;
+  state: "sending" | "sent" | "replied" | "unanswered" | "failed";
+  reply: string | null;
+  sent_at: string;
+  deadline: string | null;
+  replied_at: string | null;
+}
 
 export class Store {
   private readonly db: DatabaseSync;
@@ -131,6 +165,19 @@ export class Store {
     // The outbox also holds the supervisor's board reports (ADR 0001 §9): kind board_op, to_name the peer, body { ctx, op }.
     const outCols = new Set((this.db.prepare("PRAGMA table_info(outbox)").all() as Array<{ name: string }>).map((c) => c.name));
     if (!outCols.has("kind")) this.db.exec("ALTER TABLE outbox ADD COLUMN kind TEXT NOT NULL DEFAULT 'message'");
+    // Kind remote (ADR 0007 §2): a reply or event, sent verbatim with these.
+    if (!outCols.has("in_reply_to")) this.db.exec("ALTER TABLE outbox ADD COLUMN in_reply_to TEXT");
+    if (!outCols.has("ttl_seconds")) this.db.exec("ALTER TABLE outbox ADD COLUMN ttl_seconds INTEGER");
+    // A remote request is recorded in progress (reply null) before any work: the table before that had reply NOT NULL.
+    const reqCols = this.db.prepare("PRAGMA table_info(remote_requests)").all() as Array<{ name: string; notnull: number }>;
+    if (reqCols.find((c) => c.name === "reply")?.notnull) {
+      this.db.exec(`ALTER TABLE remote_requests RENAME TO remote_requests_old;
+        CREATE TABLE remote_requests (
+          message_id TEXT PRIMARY KEY, sender TEXT NOT NULL, op TEXT NOT NULL, reply TEXT, at TEXT NOT NULL, v INTEGER NOT NULL DEFAULT 1
+        );
+        INSERT INTO remote_requests (message_id, sender, op, reply, at) SELECT message_id, sender, op, reply, at FROM remote_requests_old;
+        DROP TABLE remote_requests_old;`);
+    }
   }
 
   close(): void {
@@ -286,13 +333,22 @@ export class Store {
 
   // ---------- Outbox ----------
 
-  /** A notification the broker couldn't take (e.g. the orchestrator never registered). */
-  addOutbox(to: string, body: string, kind: OutboxKind = "message"): void {
-    this.run("INSERT INTO outbox (to_name, body, created_at, kind) VALUES (?, ?, ?, ?)", to, body, now(), kind);
+  /** A notification the broker couldn't take (e.g. the orchestrator never registered); a board report; a remote reply or event. */
+  addOutbox(to: string, body: string, kind: OutboxKind = "message", opts: { inReplyTo?: string | null; ttlSeconds?: number | null } = {}): void {
+    this.run(
+      "INSERT INTO outbox (to_name, body, created_at, kind, in_reply_to, ttl_seconds) VALUES (?, ?, ?, ?, ?, ?)",
+      to, body, now(), kind, opts.inReplyTo ?? null, opts.ttlSeconds ?? null,
+    );
   }
 
-  outbox(kind?: OutboxKind): Array<{ seq: number; to_name: string; body: string; created_at: string; kind: OutboxKind }> {
+  outbox(kind?: OutboxKind): OutboxRow[] {
     return kind ? this.all("SELECT * FROM outbox WHERE kind = ? ORDER BY seq", kind) : this.all("SELECT * FROM outbox ORDER BY seq");
+  }
+
+  /** A row sent again differently: without its in_reply_to, or with another body in its place. */
+  updateOutbox(seq: number, set: { body?: string; in_reply_to?: null }): void {
+    if (set.body !== undefined) this.run("UPDATE outbox SET body = ? WHERE seq = ?", set.body, seq);
+    if (set.in_reply_to === null) this.run("UPDATE outbox SET in_reply_to = NULL WHERE seq = ?", seq);
   }
 
   removeOutbox(seq: number): void {
@@ -303,13 +359,60 @@ export class Store {
 
   // ---------- Remote requests ----------
 
-  /** The reply already sent to this message, if it was handled: a redelivery is answered, not acted on twice. */
-  remoteReply(messageId: string): string | null {
-    return this.one<{ reply: string }>("SELECT reply FROM remote_requests WHERE message_id = ?", messageId)?.reply ?? null;
+  /**
+   * A request this supervisor was sent, if it has seen it: `reply` null while it is in progress, else
+   * the reply it sent. A redelivery is answered or ignored, never acted on twice.
+   */
+  remoteRequest(messageId: string): { sender: string; op: string; reply: string | null; v: 1 | 2 } | null {
+    return this.one<{ sender: string; op: string; reply: string | null; v: 1 | 2 }>("SELECT sender, op, reply, v FROM remote_requests WHERE message_id = ?", messageId) ?? null;
   }
 
-  recordRemote(messageId: string, sender: string, op: string, reply: string): void {
-    this.run("INSERT OR IGNORE INTO remote_requests (message_id, sender, op, reply, at) VALUES (?, ?, ?, ?, ?)", messageId, sender, op, reply, now());
+  /** Recorded in progress before any work; false if it was already. */
+  beginRemote(messageId: string, sender: string, op: string, v: 1 | 2): boolean {
+    if (this.remoteRequest(messageId)) return false;
+    this.run("INSERT INTO remote_requests (message_id, sender, op, reply, at, v) VALUES (?, ?, ?, NULL, ?, ?)", messageId, sender, op, now(), v);
+    return true;
+  }
+
+  finishRemote(messageId: string, reply: string): void {
+    this.run("UPDATE remote_requests SET reply = ? WHERE message_id = ?", reply, messageId);
+  }
+
+  /** Requests still in progress: at start, those the supervisor died handling. */
+  remoteInProgress(): Array<{ message_id: string; sender: string; op: string; v: 1 | 2 }> {
+    return this.all("SELECT message_id, sender, op, v FROM remote_requests WHERE reply IS NULL ORDER BY at");
+  }
+
+  // ---------- Remote sent (the requester's record, ADR 0007 §2) ----------
+
+  addRemoteSent(r: { id: string; to: string; op: string; target: string | null; body: string; deadline: string }): void {
+    this.run(
+      "INSERT INTO remote_sent (id, message_id, to_name, op, target, body, state, sent_at, deadline) VALUES (?, NULL, ?, ?, ?, ?, 'sending', ?, ?)",
+      r.id, r.to, r.op, r.target, r.body, now(), r.deadline,
+    );
+  }
+
+  remoteSent(id: string): RemoteSentRow | null {
+    return this.one<RemoteSentRow>("SELECT * FROM remote_sent WHERE id = ?", id) ?? null;
+  }
+
+  remoteSentList(): RemoteSentRow[] {
+    return this.all("SELECT * FROM remote_sent ORDER BY sent_at, rowid");
+  }
+
+  remoteSentByMessage(messageId: string): RemoteSentRow | null {
+    return this.one<RemoteSentRow>("SELECT * FROM remote_sent WHERE message_id = ?", messageId) ?? null;
+  }
+
+  /** The broker took it: its message id, which its reply names as `req`. */
+  remoteSentAs(id: string, messageId: string): void {
+    this.run("UPDATE remote_sent SET message_id = ?, state = 'sent' WHERE id = ? AND state = 'sending'", messageId, id);
+  }
+
+  /** Its outcome; a reply always wins, whenever it comes, and nothing replaces one. */
+  settleRemoteSent(id: string, set: { state: "replied"; reply: string } | { state: "unanswered" | "failed" }): void {
+    if (set.state === "replied") this.run("UPDATE remote_sent SET state = 'replied', reply = ?, replied_at = ? WHERE id = ? AND state != 'replied'", set.reply, now(), id);
+    else this.run("UPDATE remote_sent SET state = ? WHERE id = ? AND state IN ('sending', 'sent')", set.state, id);
   }
 
   audit(actor: string, action: string, workerId: string | null, detail: Record<string, unknown> = {}): void {

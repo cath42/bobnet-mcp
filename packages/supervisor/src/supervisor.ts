@@ -4,18 +4,24 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync, renameSync } from
 import { join, relative, resolve, isAbsolute } from "node:path";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import {
+  addressKey,
   BoardOp,
   type BoardCtx,
   type BoardOpInput,
   type BoardResults,
   type CiStatus,
+  classifyRemote,
   findSecret,
   fromBoard,
   type Envelope,
   ItemRef,
   type LaptopSnapshot,
+  LIMITS,
+  parseRecipient,
   type PeerInfo,
   readRemoteRequest,
+  redactSecrets,
+  RemoteRequestV2,
   RUN_CTX_MAX,
   RUN_REASON_MAX,
   type ServerFrame,
@@ -113,6 +119,57 @@ const ORPHAN_TTL_MS = 24 * 3_600_000;
 const MAX_TASKS = 50;
 /** A queued board report the board refuses is dropped, not retried: a retry gets the same answer and blocks the rows behind it. */
 const FINAL_BOARD_ERRORS = new Set(["invalid", "forbidden", "conflict", "frame_too_large", "secret_detected", "bad_frame"]);
+/**
+ * A queued message, reply or event the broker will never take (ADR 0007 §2): dropped and audited, not
+ * retried, so it can't hold up the rows behind it. `too_long` is the supervisor's own check.
+ */
+const FINAL_SEND_ERRORS = new Set(["secret_detected", "unknown_peer", "unknown_message", "bad_frame", "frame_too_large", "too_long"]);
+/** Replies and events to another laptop's supervisor expire at the broker in a day (§2): what they carry is of no use longer. */
+const REMOTE_ANSWER_TTL_S = 86_400;
+/** What stands in a text field for a span that looks like a credential (§2). */
+const WITHHELD = "[withheld: looks like a credential]";
+/** A request in progress when the supervisor stopped (§2): it can't say whether it ran. */
+const REMOTE_RESTARTED = "the target restarted while handling it; list shows whether it ran";
+
+/** A request's ttl_seconds (§2): one the broker hasn't delivered by then is dropped, so it never starts late. */
+const remoteTtl = (op: string) => (op === "spawn" ? 30 : 20);
+/** How long the requester waits for a reply: the ttl and 30 s; a spawn that joins a board session can take a minute. */
+const remoteWaitMs = (op: string) => (op === "spawn" ? 90_000 : (remoteTtl(op) + 30) * 1000);
+
+/** A reply or event with each text field's credential-looking spans withheld, the rest kept (§2). */
+function withholdSecrets<T>(value: T): T {
+  if (typeof value === "string") return (findSecret(value) ? redactSecrets(value, WITHHELD) : value) as T;
+  if (Array.isArray(value)) return value.map(withholdSecrets) as T;
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withholdSecrets(v)])) as T;
+  return value;
+}
+
+/** What goes in place of a reply or event the broker refused as a credential anyway (its detector newer than ours): who it was about. */
+function withheldBody(body: string): string | null {
+  const json = classifyRemote(body)?.json;
+  if (!json || json["event"] === "withheld") return null;
+  const w = json["worker"];
+  const worker = typeof w === "string" ? w : w && typeof w === "object" && typeof (w as { id?: unknown }).id === "string" ? (w as { id: string }).id : undefined;
+  return reply({
+    ...(json["v"] === 2 ? { v: 2 } : {}),
+    event: "withheld",
+    ...(worker ? { worker } : {}),
+    ...(typeof json["spawn_req"] === "string" ? { spawn_req: json["spawn_req"] } : {}),
+    // A withheld reply still names its request, so the requester knows it was answered.
+    ...(typeof json["re"] === "string" && typeof json["req"] === "string" ? { re: json["re"], req: json["req"] } : {}),
+  });
+}
+
+/**
+ * What a remote request came to (ADR 0007 §2), `sent` its row in remote_sent: the target's reply,
+ * matched on `req` (a `withheld` event when the broker refused it); else, no reply in time, the
+ * worker `list` found for it; else unknown.
+ */
+export type RemoteOutcome =
+  | { outcome: "reply"; sent: string; reply: Record<string, unknown> }
+  | { outcome: "found"; sent: string; worker: Record<string, unknown> }
+  | { outcome: "unknown"; sent: string; error: string };
+
 /** The longest name a slot run takes (the protocol's); a slot's command is often longer. */
 const SLOT_NAME_MAX = 100;
 
@@ -179,6 +236,9 @@ export class Supervisor {
   /** This laptop's id on BobNet, once the supervisor has registered. */
   private laptop: string | null = null;
   private readonly sandboxCheck: () => Promise<string | null>;
+  private readonly sleep: (ms: number) => Promise<void>;
+  /** The remote requests waiting for their reply, by their remote_sent row. */
+  private readonly remoteWaits = new Map<string, (reply: Record<string, unknown>) => void>();
   /** Why the sandbox can't run on this machine, from the check at start; null when it can (or nothing needs it). */
   private sandboxBroken: string | null = null;
   /** Each running lead's info-only news (joins, leaves, statuses, quiet broadcasts), as the interactive orchestrator's digest. */
@@ -211,8 +271,11 @@ export class Supervisor {
     captureDir?: string;
     /** The gh adapter (ADR 0001 §10); defaults to one that runs git and gh. */
     ciPoll?: GhCiPoll;
+    /** A remote request's wait (ADR 0007 §2); tests run it on the fake network's clock. */
+    sleep?: (ms: number) => Promise<void>;
   }) {
     this.ciPoll = deps.ciPoll ?? new GhCiPoll(deps.log);
+    this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms).unref()));
     this.ownerCheck = deps.ownerCheck ?? null;
     this.sandboxCheck = deps.sandboxCheck ?? sandboxProblem;
     this.config = deps.config;
@@ -283,6 +346,14 @@ export class Supervisor {
       this.store.markOrphaned(r.id);
     }
     this.expireOrphans();
+    // Remote requests this supervisor died handling: whether they ran, list says (ADR 0007 §2).
+    for (const r of this.store.remoteInProgress()) {
+      const text = reply(r.v === 2 ? { v: 2, re: r.op, req: r.message_id, ok: false, error: REMOTE_RESTARTED } : { ok: false, op: r.op, error: REMOTE_RESTARTED });
+      this.store.finishRemote(r.message_id, text);
+      this.store.audit(r.sender, "remote:restarted", null, { message: r.message_id, op: r.op });
+      // Queued only: the outbox is flushed once the supervisor is registered.
+      this.store.addOutbox(r.sender, text, "remote", { inReplyTo: r.message_id, ttlSeconds: REMOTE_ANSWER_TTL_S });
+    }
 
     const me = (await this.registerWithRetry({
       name: this.config.name,
@@ -765,20 +836,27 @@ export class Supervisor {
 
   // ---------- Remote requests (remote.ts) ----------
 
-  /** A message to the supervisor: a remote request is answered; anything else, replies and events included, is only logged. */
+  /**
+   * A message to the supervisor: a remote request is answered, once; a reply is matched to the
+   * request this supervisor sent; anything else, events included, is only logged. A request is
+   * recorded in progress before any work (ADR 0007 §2): a redelivery meanwhile (an ack lost in a
+   * reconnect) is ignored, and one after gets the reply again.
+   */
   private async onRemote(msg: Envelope): Promise<void> {
     const read = readRemoteRequest(msg.body, msg.in_reply_to);
-    if (!read) return;
-    const prior = this.store.remoteReply(msg.id);
-    if (prior !== null) return this.toRemote(msg.from, prior, msg.id);
-    let op: string;
+    if (!read) return this.onRemoteAnswer(msg);
+    const op = "request" in read ? read.request.op : read.v === 2 ? read.re : "invalid";
+    const seen = this.store.remoteRequest(msg.id);
+    if (seen) {
+      if (seen.reply !== null) this.sendRemote(msg.from, seen.reply, msg.id);
+      return;
+    }
+    this.store.beginRemote(msg.id, msg.from, op, read.v);
     let out: Record<string, unknown>;
     if (read.v === 2) {
-      // The v: 2 ops are served from BOB-61 on; until then each gets its reply, a refusal.
-      op = "request" in read ? read.request.op : read.re;
+      // The v: 2 ops are served from BOB-62 on; until then each gets its reply, a refusal.
       out = { v: 2, re: op, req: msg.id, ok: false, error: "error" in read ? read.error : "this supervisor doesn't serve v: 2 requests yet" };
     } else {
-      op = "request" in read ? read.request.op : "invalid";
       try {
         if ("error" in read) throw new SupervisorError(read.error);
         out = { ok: true, op, ...(await this.remoteDo(msg.from, read.request)) };
@@ -786,10 +864,74 @@ export class Supervisor {
         out = { ok: false, op, error: (err as Error).message };
       }
     }
-    const text = reply(out);
-    this.store.recordRemote(msg.id, msg.from, op, text);
+    const text = reply(withholdSecrets(out));
+    this.store.finishRemote(msg.id, text);
     this.store.audit(msg.from, out["ok"] ? `remote:${op}` : "remote:refused", (out["worker"] as { id?: string } | undefined)?.id ?? null, { message: msg.id, ...(out["ok"] ? {} : { error: out["error"] }) });
-    this.toRemote(msg.from, text, msg.id);
+    this.sendRemote(msg.from, text, msg.id);
+  }
+
+  /** A reply from a supervisor this one sent a request: matched on `req` and its sender, never the envelope; the rest is logged. */
+  private onRemoteAnswer(msg: Envelope): void {
+    const read = classifyRemote(msg.body, msg.in_reply_to);
+    if (!read) return;
+    const req = read.json["req"];
+    const answers = read.kind === "reply" || read.json["event"] === "withheld";
+    const sent = answers && typeof req === "string" ? this.store.remoteSentByMessage(req) : null;
+    const from = parseRecipient(msg.from, this.laptop ?? "");
+    const to = sent ? parseRecipient(sent.to_name, this.laptop ?? "") : null;
+    if (!sent || !from || !to || addressKey(from) !== addressKey(to)) {
+      this.log.info("a reply or event from another supervisor, not one to a request sent", { from: msg.from, id: msg.id, kind: read.kind });
+      return;
+    }
+    // A reply that comes after its wait ended still counts: it is the record of what happened.
+    this.store.settleRemoteSent(sent.id, { state: "replied", reply: msg.body });
+    this.remoteWaits.get(sent.id)?.(read.json);
+  }
+
+  /**
+   * Asks another laptop's supervisor (`to`, its name@laptop) a `v: 2` request and waits for its reply
+   * (ADR 0007 §2). Its row is written before the send; the broker drops it undelivered after its ttl.
+   * Without a reply in time, `list` asks after the worker the request made or names; failing that,
+   * it may or may not have run. A reply that arrives later is still kept on the row.
+   */
+  async remoteRequest(to: string, request: RemoteRequestV2): Promise<RemoteOutcome> {
+    const body = RemoteRequestV2.parse(request);
+    const first = await this.remoteAsk(to, body);
+    if (first.reply) return { outcome: "reply", sent: first.id, reply: first.reply };
+    const msgId = this.store.remoteSent(first.id)!.message_id!;
+    const look = body.op === "spawn" ? { reqs: [msgId] } : body.op === "status" || body.op === "stop" || body.op === "tail" || body.op === "summary" ? { ids: [body.id] } : null;
+    if (look) {
+      const listed = await this.remoteAsk(to, { v: 2, op: "list", ...look }).catch(() => null);
+      const workers = listed?.reply?.["ok"] === true && Array.isArray(listed.reply["workers"]) ? (listed.reply["workers"] as Array<Record<string, unknown>>) : [];
+      // Filtered by the spawn's message id, what list returns is the worker that spawn made.
+      const worker = body.op === "spawn" ? workers[0] : workers.find((w) => w["id"] === look.ids?.[0]);
+      if (worker) return { outcome: "found", sent: first.id, worker };
+    }
+    // The reply may have come while list was asked.
+    const late = this.store.remoteSent(first.id);
+    if (late?.state === "replied" && late.reply) return { outcome: "reply", sent: first.id, reply: classifyRemote(late.reply)!.json };
+    return { outcome: "unknown", sent: first.id, error: `no reply from ${to} within ${remoteWaitMs(body.op) / 1000} s: the ${body.op} may or may not have run` };
+  }
+
+  /** One request sent and waited for: its remote_sent row, and its reply if one came in time. */
+  private async remoteAsk(to: string, body: RemoteRequestV2): Promise<{ id: string; reply: Record<string, unknown> | null }> {
+    const id = `rs_${randomUUID().slice(0, 8)}`;
+    const text = reply(body);
+    const waitMs = remoteWaitMs(body.op);
+    this.store.addRemoteSent({ id, to, op: body.op, target: "id" in body ? body.id : null, body: text, deadline: new Date(Date.now() + waitMs).toISOString() });
+    const replied = new Promise<Record<string, unknown>>((resolve) => this.remoteWaits.set(id, resolve));
+    try {
+      const sent = await this.broker.request<{ id: string }>({ t: "send", as: this.config.name, to: [to], body: text, ttl_seconds: remoteTtl(body.op) });
+      this.store.remoteSentAs(id, sent.id);
+    } catch (err) {
+      this.remoteWaits.delete(id);
+      this.store.settleRemoteSent(id, { state: "failed" });
+      throw new SupervisorError(`could not send ${body.op} to ${to}: ${(err as Error).message}`);
+    }
+    const got = await Promise.race([replied, this.sleep(waitMs).then(() => null)]);
+    this.remoteWaits.delete(id);
+    if (!got) this.store.settleRemoteSent(id, { state: "unanswered" });
+    return { id, reply: got };
   }
 
   private async remoteDo(from: string, req: RemoteRequest): Promise<Record<string, unknown>> {
@@ -848,16 +990,16 @@ export class Supervisor {
     };
   }
 
-  private toRemote(to: string, body: string, inReplyTo?: string): void {
-    this.broker
-      .request({ t: "send", as: this.config.name, to: [to], body, ...(inReplyTo ? { in_reply_to: inReplyTo } : {}) })
-      .catch((err: Error) => this.log.warn("could not answer a remote request", { to, err: err.message }));
+  /** A reply or event to another laptop's supervisor: always through the outbox, so they leave in the order made (ADR 0007 §2). */
+  private sendRemote(to: string, body: string, inReplyTo?: string): void {
+    this.store.addOutbox(to, body, "remote", { inReplyTo: inReplyTo ?? null, ttlSeconds: REMOTE_ANSWER_TTL_S });
+    this.flushOutbox();
   }
 
   /** Tells a remote requester about a worker it spawned: its Remote Control URL, its end. */
   private remoteEvent(w: WorkerRow, event: Record<string, unknown>): void {
     if (!w.spawned_by?.includes("@")) return;
-    this.toRemote(w.spawned_by, reply({ event: event["event"], worker: w.id, ...event }));
+    this.sendRemote(w.spawned_by, reply(withholdSecrets({ event: event["event"], worker: w.id, ...event })));
   }
 
   /** A dashboard action: only after the owner's own token checks out. */
@@ -1659,6 +1801,7 @@ export class Supervisor {
       try {
         await this.flushMessages();
         await this.flushBoardReports();
+        await this.flushRemote();
       } finally {
         this.flushing = false;
         if (this.flushAgain) {
@@ -1669,15 +1812,69 @@ export class Supervisor {
     })();
   }
 
+  /** The notices, in order. One the broker refuses for good is logged and dropped; one it can't take now waits, with all behind it. */
   private async flushMessages(): Promise<void> {
-    try {
-      for (const item of this.store.outbox("message")) {
-        await this.broker.request({ t: "send", as: this.config.name, to: [item.to_name], body: `(sent ${item.created_at}) ${item.body}` });
-        this.store.removeOutbox(item.seq);
+    for (const item of this.store.outbox("message")) {
+      try {
+        await this.sendChecked(item.to_name, `(sent ${item.created_at}) ${item.body}`);
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        // Still unreachable; the next flush retries.
+        if (code === undefined || !FINAL_SEND_ERRORS.has(code)) return;
+        this.log.error("a queued message can't be sent; dropped", { to: item.to_name, code, err: (err as Error).message });
+        this.store.audit("supervisor", "message:undeliverable", null, { to: item.to_name, code, message: (err as Error).message });
       }
-    } catch {
-      // Still unreachable; the next flush retries.
+      this.store.removeOutbox(item.seq);
     }
+  }
+
+  /** The outbox row a remote wait was last logged for. */
+  private remoteWaitLogged: number | null = null;
+
+  /**
+   * Replies and events to other laptops' supervisors (ADR 0007 §2): verbatim, in the order made, each
+   * removed once the broker has it. A reply whose request the broker has swept goes again once without
+   * in_reply_to; one refused as a credential gives its place to a short `withheld` event. Any other
+   * refusal for good is logged, audited and dropped, so it can't hold up the rest. One the broker
+   * can't take now waits, with all behind it.
+   */
+  private async flushRemote(): Promise<void> {
+    for (const item of this.store.outbox("remote")) {
+      let row = item;
+      for (;;) {
+        try {
+          await this.sendChecked(row.to_name, row.body, row.in_reply_to, row.ttl_seconds);
+          break;
+        } catch (err) {
+          const code = (err as { code?: string }).code;
+          if (code === undefined || !FINAL_SEND_ERRORS.has(code)) {
+            if (this.remoteWaitLogged !== row.seq) this.log.warn("replies and events to other laptops wait", { seq: row.seq, to: row.to_name, code, err: (err as Error).message });
+            this.remoteWaitLogged = row.seq;
+            return;
+          }
+          // Read without its envelope it must still be no request, or the target would answer it.
+          if (code === "unknown_message" && row.in_reply_to && classifyRemote(row.body)?.kind !== "request") {
+            this.log.info("its request was swept; sent again without in_reply_to", { to: row.to_name, in_reply_to: row.in_reply_to });
+            this.store.updateOutbox(row.seq, { in_reply_to: null });
+            row = { ...row, in_reply_to: null };
+            continue;
+          }
+          this.log.error("a reply or event can't be sent; dropped", { to: row.to_name, code, err: (err as Error).message });
+          this.store.audit("supervisor", "remote:undeliverable", null, { to: row.to_name, code, message: (err as Error).message, in_reply_to: row.in_reply_to });
+          const withheld = code === "secret_detected" ? withheldBody(row.body) : null;
+          if (!withheld) break;
+          this.store.updateOutbox(row.seq, { body: withheld });
+          row = { ...row, body: withheld };
+        }
+      }
+      this.store.removeOutbox(item.seq);
+    }
+  }
+
+  /** A send from the outbox; a body past the broker's limit is refused here, for good. */
+  private async sendChecked(to: string, body: string, inReplyTo?: string | null, ttlSeconds?: number | null): Promise<void> {
+    if (body.length > LIMITS.bodyChars) throw Object.assign(new Error(`${body.length} characters, past the broker's ${LIMITS.bodyChars}`), { code: "too_long" });
+    await this.broker.request({ t: "send", as: this.config.name, to: [to], body, ...(inReplyTo ? { in_reply_to: inReplyTo } : {}), ...(ttlSeconds ? { ttl_seconds: ttlSeconds } : {}) });
   }
 
   /**

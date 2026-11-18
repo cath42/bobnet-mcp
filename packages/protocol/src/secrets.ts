@@ -18,3 +18,10 @@ export function findSecret(text: string): string | null {
   for (const [name, re] of PATTERNS) if (re.test(text)) return name;
   return null;
 }
+
+/** The text with every span that looks like a credential replaced by `mark`; the rest stays. */
+export function redactSecrets(text: string, mark: string): string {
+  let out = text;
+  for (const [, re] of PATTERNS) out = out.replace(new RegExp(re.source, `${re.flags}g`), mark);
+  return out;
+}

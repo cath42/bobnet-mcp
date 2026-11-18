@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressKey, CLIENT_FRAME_TYPES, ClientFrame, findSecret, LaptopSnapshot, parseRecipient, PROTOCOL_VERSION, WorkerSnapshot } from "../src/index.ts";
+import { addressKey, CLIENT_FRAME_TYPES, ClientFrame, findSecret, LaptopSnapshot, redactSecrets, parseRecipient, PROTOCOL_VERSION, WorkerSnapshot } from "../src/index.ts";
 
 describe("parseRecipient", () => {
   it("resolves a bare name to the sender's laptop", () => {
@@ -31,6 +31,21 @@ describe("findSecret", () => {
   });
   it("passes ordinary coordination text", () => {
     expect(findSecret("LAND-12.3 done, see architecture/design-notes/LAND-12.3.md")).toBeNull();
+  });
+});
+
+describe("redactSecrets", () => {
+  const MARK = "[withheld: looks like a credential]";
+  it("replaces each matching span, every one, and keeps the rest", () => {
+    const gh = "ghp_" + "a".repeat(36);
+    const text = `Pushed with ${gh}; then AKIAIOSFODNN7EXAMPLE and ${gh} again. Handoff in lead/h.md`;
+    const out = redactSecrets(text, MARK);
+    expect(out).toBe(`Pushed with ${MARK}; then ${MARK} and ${MARK} again. Handoff in lead/h.md`);
+    expect(findSecret(out)).toBeNull();
+  });
+  it("leaves ordinary text as it is", () => {
+    const text = "LAND-12.3 done, see architecture/design-notes/LAND-12.3.md";
+    expect(redactSecrets(text, MARK)).toBe(text);
   });
 });
 
