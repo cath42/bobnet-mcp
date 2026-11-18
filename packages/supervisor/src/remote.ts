@@ -34,8 +34,14 @@ export type RemoteRequest = z.infer<typeof RemoteRequest>;
  * The request in a message body: one JSON object, bare or in a ```json fence. Null when the
  * body isn't one (a plain message to the supervisor, which it only logs); a parse error when
  * it is one but malformed.
+ *
+ * A supervisor never answers an answer (ADR 0007 §2): a request has `op`, isn't sent in reply
+ * (`inReplyTo`, the envelope's), and carries neither `re` nor `event`. Anything else is a reply or
+ * an event, null here. Today's replies carry `op`; answered as malformed requests, two
+ * supervisors would answer each other without end.
  */
-export function readRequest(body: string): { request: RemoteRequest } | { error: string } | null {
+export function readRequest(body: string, inReplyTo: string | null = null): { request: RemoteRequest } | { error: string } | null {
+  if (inReplyTo !== null) return null;
   const fenced = /^\s*```(?:json)?\s*\n([\s\S]*?)\n\s*```\s*$/.exec(body);
   const text = (fenced ? fenced[1]! : body).trim();
   if (!text.startsWith("{")) return null;
@@ -45,7 +51,7 @@ export function readRequest(body: string): { request: RemoteRequest } | { error:
   } catch {
     return null;
   }
-  if (typeof json !== "object" || json === null || !("op" in json)) return null;
+  if (typeof json !== "object" || json === null || !("op" in json) || "re" in json || "event" in json) return null;
   const parsed = RemoteRequest.safeParse(json);
   if (!parsed.success) return { error: `bad request: ${parsed.error.issues.map((i) => `${i.path.join(".") || "op"} ${i.message}`).join("; ")}` };
   return { request: parsed.data };

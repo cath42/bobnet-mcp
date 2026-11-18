@@ -764,9 +764,9 @@ export class Supervisor {
 
   // ---------- Remote requests (remote.ts) ----------
 
-  /** A message to the supervisor: a remote request is answered; anything else is only logged. */
+  /** A message to the supervisor: a remote request is answered; anything else, replies and events included, is only logged. */
   private async onRemote(msg: Envelope): Promise<void> {
-    const read = readRequest(msg.body);
+    const read = readRequest(msg.body, msg.in_reply_to);
     if (!read) return;
     const prior = this.store.remoteReply(msg.id);
     if (prior !== null) return this.toRemote(msg.from, prior, msg.id);
