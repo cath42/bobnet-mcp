@@ -207,6 +207,38 @@ function fitSummary(sum: Summary & { state: WorkerState; checkpoint: string | nu
 
 const cut = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n - 1)}…`);
 
+/** The most of an `exit`'s error that crosses (ADR 0007 §6); the handoff gets the rest of the body. */
+const EXIT_ERROR_MAX = 500;
+/** The most of each land outcome an `exit` carries: one line each, as in the local end notice. */
+const EXIT_LAND_MAX = 300;
+
+/**
+ * A reply or event (`fields`, its `v`/`re`/`req` or `event`/`worker`/`spawn_req` included) with a
+ * worker's handoff text (§6): credential-looking spans withheld, then cut to what the serialised
+ * body leaves under 16 KiB with REMOTE_FIT_CHARS's margin, with `handoff_truncated` and the file's
+ * length when cut. No text (no file, or an empty one) is `handoff_text: null`.
+ */
+export function withHandoff(fields: Record<string, unknown>, text: string | null): Record<string, unknown> {
+  const base = withholdSecrets(fields);
+  if (text === null) return { ...base, handoff_text: null };
+  const handoff = withholdSecrets(text);
+  const whole = { ...base, handoff_text: handoff };
+  if (fits(whole)) return whole;
+  const at = (n: number) => {
+    // Never half a surrogate pair: a lone one is escaped six characters long.
+    const end = n > 0 && /[\ud800-\udbff]/.test(handoff[n - 1]!) ? n - 1 : n;
+    return { ...base, handoff_text: handoff.slice(0, end), handoff_truncated: true, handoff_length: text.length };
+  };
+  let lo = 0;
+  let hi = handoff.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (fits(at(mid))) lo = mid;
+    else hi = mid - 1;
+  }
+  return at(lo);
+}
+
 /**
  * What a remote request came to (ADR 0007 §2), `sent` its row in remote_sent: the target's reply,
  * matched on `req` (a `withheld` event when the broker refused it); else, no reply in time, the
@@ -288,6 +320,8 @@ export class Supervisor {
   private readonly remoteWaits = new Map<string, (reply: Record<string, unknown>) => void>();
   /** Spawns a tool is still deciding (waiting, or listing after the wait): a late reply to one is the tool's, not a note's. */
   private readonly remoteDeciding = new Set<string>();
+  /** Remote workers whose `exit` the orchestrator has heard, so a redelivery isn't told twice (BOB-65's copies replace it). */
+  private readonly remoteExits = new Set<string>();
   /** project/role of each `v: 2` spawn joining its board session: the role and a place held for it. */
   private readonly reserved = new Set<string>();
   /** Why the sandbox can't run on this machine, from the check at start; null when it can (or nothing needs it). */
@@ -386,6 +420,8 @@ export class Supervisor {
       const ended_at = new Date().toISOString();
       this.store.updateWorker(w.id, { state: "failed", error: "supervisor restarted", ended_at });
       this.store.audit("supervisor", "orphaned", w.id, {});
+      // A v: 2 worker's spawner hears it ended (§8), its handoff with it; queued until registered.
+      this.exitEvent(this.store.worker(w.id)!, w.checkpoint, [], false);
       // Its end was never seen, so its board run would stay open for good (ADR 0005 §3): it ends lost, its
       // tokens unknown, since usage is kept only at exit. The zeros are sent because the op needs them.
       if (this.config.projects.get(w.project)?.roles.has(w.role)) {
@@ -979,6 +1015,7 @@ export class Supervisor {
   private onRemoteAnswer(msg: Envelope): void {
     const read = classifyRemote(msg.body, msg.in_reply_to);
     if (!read) return;
+    if (read.kind === "event" && read.json["v"] === 2 && read.json["event"] === "exit") return this.onRemoteExit(msg.from, read.json);
     const req = read.json["req"];
     const answers = read.kind === "reply" || read.json["event"] === "withheld";
     const sent = answers && typeof req === "string" ? this.store.remoteSentByMessage(req) : null;
@@ -994,6 +1031,40 @@ export class Supervisor {
     this.store.settleRemoteSent(sent.id, { state: "replied", reply: msg.body });
     this.remoteWaits.get(sent.id)?.(read.json);
     if (gaveUp && sent.op === "spawn") this.spawnedAfterAll(sent, read.json, known!);
+  }
+
+  /**
+   * A `v: 2` worker's end, from the supervisor its spawn went to (ADR 0007 §6): the orchestrator hears
+   * it as for a local end, its handoff's text left for worker_summary. Until the requester keeps
+   * copies of its remote workers (BOB-65), it is matched to the spawn it sent, and heard once a run.
+   */
+  private onRemoteExit(from: string, json: Record<string, unknown>): void {
+    const sent = typeof json["spawn_req"] === "string" ? this.store.remoteSentByMessage(json["spawn_req"]) : null;
+    const fromAt = parseRecipient(from, this.laptop ?? "");
+    const to = sent ? parseRecipient(sent.to_name, this.laptop ?? "") : null;
+    const id = json["worker"];
+    if (!sent || sent.op !== "spawn" || !fromAt || !to || addressKey(fromAt) !== addressKey(to) || typeof id !== "string" || this.remoteExits.has(id)) {
+      this.log.info("an exit from another supervisor, not for a spawn sent", { from, worker: id });
+      return;
+    }
+    this.remoteExits.add(id);
+    const laptop = sent.to_name.split("@")[1] ?? sent.to_name;
+    const body = JSON.parse(sent.body) as { project?: string; role?: string };
+    const replied = sent.reply ? (classifyRemote(sent.reply)?.json["worker"] as Record<string, unknown> | undefined) : undefined;
+    const name = typeof replied?.["name"] === "string" ? replied["name"] : body.role;
+    const checkpoint = typeof json["checkpoint"] === "string" ? json["checkpoint"] : null;
+    const state = String(json["state"]);
+    const what = state === "done" ? `done${checkpoint ? `: ${checkpoint}` : ""}` : `${state}: ${String(json["error"] ?? "no reason given")}`;
+    const lands = Array.isArray(json["lands"]) ? (json["lands"] as unknown[]).filter((l): l is string => typeof l === "string") : [];
+    const landed = lands.length ? ` Land: ${lands.join("; ")}.` : "";
+    const handoff =
+      typeof json["handoff_text"] !== "string"
+        ? "no handoff file"
+        : json["handoff_truncated"] === true
+          ? `handoff in worker_summary (cut; ${String(json["handoff_length"])} characters in the file)`
+          : "handoff in worker_summary";
+    this.store.audit(from, "remote:exit", id, { message: json["spawn_req"], state });
+    this.notify(`${name} (${id}, ${body.project}/${body.role}) on ${laptop} ${what}; ${handoff}.${landed}`, body.project);
   }
 
   /** A spawn's reply after its tool gave up on it (§3): the worker runs, and the orchestrator hears so, unless list already found it. */
@@ -1276,7 +1347,11 @@ export class Supervisor {
         return { id: req.id, ...fitLines(this.tail(own(req.id).id, req.n)) };
       case "summary": {
         const w = own(req.id);
-        return { worker: this.remoteView(w), ...fitSummary(this.summary(w.id)) };
+        const out = { worker: this.remoteView(w), ...fitSummary(this.summary(w.id)) };
+        // Once it ended, its handoff too (§6), sized with the reply's own envelope.
+        if (ACTIVE_STATES.includes(w.state) || w.state === "queued") return out;
+        const { v: _v, re: _re, req: _req, ok: _ok, ...fitted } = withHandoff({ v: 2, re: "summary", req: msgId, ok: true, ...out }, this.handoffText(w));
+        return fitted;
       }
       case "request":
       case "answer":
@@ -1435,7 +1510,9 @@ export class Supervisor {
             remoteControl: remoteName(role, w, this.laptop),
             onRemoteControl: (rc) => {
               this.store.audit("supervisor", "url" in rc ? "remote-control" : "remote-control:failed", w.id, rc);
+              // A v: 2 spawner hears the error too, so it knows the worker runs unwatched (§2).
               if ("url" in rc) this.remoteEvent(w, { event: "remote_control", url: rc.url });
+              else if (w.spawn_req) this.remoteEvent(w, { event: "remote_control", error: rc.error });
               // The board learns the link after run_start, through the same outbox, so it lands on the run's row.
               const row = this.store.worker(w.id);
               if ("url" in rc && row) this.boardReport(row, { op: "run_remote", project: w.project, id: w.id, remote_url: rc.url });
@@ -1971,7 +2048,8 @@ export class Supervisor {
         ...(outcome.state === "done" ? {} : { reason: (outcome.state === "failed" ? outcome.error : outcome.reason).slice(0, RUN_REASON_MAX) }),
       });
     }
-    this.remoteEvent(this.store.worker(id)!, { event: "exit", state: outcome.state, checkpoint, ...(outcome.state === "done" ? {} : { error: outcome.state === "failed" ? outcome.error : outcome.reason }) });
+    const exitedRow = this.store.worker(id)!;
+    if (!exitedRow.spawn_req) this.remoteEvent(exitedRow, { event: "exit", state: outcome.state, checkpoint, ...(outcome.state === "done" ? {} : { error: outcome.state === "failed" ? outcome.error : outcome.reason }) });
     void this.boards?.refresh();
 
     const role = this.roleOf(w);
@@ -1983,6 +2061,7 @@ export class Supervisor {
           : `stopped: ${outcome.reason}`;
     const lands = this.landResults.get(id) ?? [];
     this.landResults.delete(id);
+    this.exitEvent(exitedRow, checkpoint, lands);
     if (!consultWorker) {
       const landed = lands.length ? ` Land: ${lands.join("; ")}.` : "";
       this.notify(`${role.name} (${id}, ${w.project}/${w.role}) ${what}.${landed} Handoff: ${w.handoff ?? "none"}.`, w.project);
@@ -2032,6 +2111,36 @@ export class Supervisor {
 
   private handoffOf(w: WorkerRow): string {
     return w.handoff ?? join(this.config.stateDir, "handoffs", w.project, `${w.id}.md`);
+  }
+
+  /** The text of a worker's handoff file, read here (ADR 0007 §6); null with no file or an empty one. */
+  private handoffText(w: WorkerRow): string | null {
+    try {
+      const text = readFileSync(this.handoffOf(w), "utf8");
+      return text.trim() ? text : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * A `v: 2` worker's end to its spawner (§6): what the local end notice says, and its handoff's
+   * text, the whole body under 16 KiB. `flush` false only queues it (at start, before registering).
+   */
+  private exitEvent(w: WorkerRow, checkpoint: string | null, lands: string[], flush = true): void {
+    if (!w.spawn_req || !w.spawned_by?.includes("@")) return;
+    const fields = {
+      v: 2,
+      event: "exit",
+      worker: w.id,
+      spawn_req: w.spawn_req,
+      state: w.state,
+      checkpoint,
+      ...(w.state === "done" || !w.error ? {} : { error: cut(w.error, EXIT_ERROR_MAX) }),
+      lands: lands.map((l) => cut(l, EXIT_LAND_MAX)),
+    };
+    this.store.addOutbox(w.spawned_by, reply(withHandoff(fields, this.handoffText(w))), "remote", { inReplyTo: null, ttlSeconds: REMOTE_ANSWER_TTL_S });
+    if (flush) this.flushOutbox();
   }
 
   // ---------- Helpers ----------

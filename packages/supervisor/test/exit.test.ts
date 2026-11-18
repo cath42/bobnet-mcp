@@ -1,0 +1,297 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Envelope } from "@bobnet/protocol";
+import { afterEach, describe, expect, it } from "vitest";
+import { GhCiPoll } from "../src/ci-poll.ts";
+import { callTool, handlers } from "../src/mcp.ts";
+import { Policy } from "../src/policy.ts";
+import { Store } from "../src/store.ts";
+import { REMOTE_TOOLS_SINCE, Supervisor, withHandoff } from "../src/supervisor.ts";
+import { fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
+import { FakeNetwork } from "./network.ts";
+
+// The result comes back as text (ADR 0007 §6, §8; BOB-64): a `v: 2` worker's end reaches its
+// spawner as an `exit` event carrying its handoff's text, read on the target, the whole body under
+// 16 KiB; `summary` carries it too once ended; a worker failed at the target's start gets its exit.
+// On the FakeNetwork: ubu1's supervisor is real; mbp-1's is real (with Bob) or scripted.
+
+const POLICY = new Policy(`rules: []`);
+const UBU = `  studio:
+    path: /work/studio
+    roles:
+      ann: { dir: /work/studio-ann }
+remote:
+  supervisor@mbp-1: { spawn: { studio: [ann] } }
+`;
+const SUP_MBP = "supervisor@mbp-1";
+const SUP_UBU = "supervisor@ubu1";
+const SPAWN = { v: 2, op: "spawn", project: "studio", role: "ann", task: "one fix", by: "poe" } as const;
+const KEY = "AKIAABCDEFGHIJKLMNOP";
+
+const dirs: string[] = [];
+const stores = new Set<Store>();
+const running: Supervisor[] = [];
+afterEach(async () => {
+  await Promise.all(running.splice(0).map((s) => s.shutdown()));
+  await tick(20);
+  for (const s of stores) s.close();
+  stores.clear();
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
+
+function newStore(): { dir: string; store: Store } {
+  const dir = mkdtempSync(join(tmpdir(), "bobnet-exit-"));
+  dirs.push(dir);
+  const store = new Store(join(dir, "supervisor.db"));
+  stores.add(store);
+  return { dir, store };
+}
+
+async function boot(net: FakeNetwork, laptop: string, over: string, at = newStore(), query = fakeQuery()) {
+  const link = net.link(laptop);
+  const ciPoll = new GhCiPoll(quiet, async () => {
+    throw new Error("no gh in tests");
+  });
+  const sup = new Supervisor({ config: testConfig(at.dir, over), policy: POLICY, store: at.store, broker: link, queryFn: query.queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async () => false, sleep: net.sleep, ciPoll });
+  link.onPush = (f) => sup.onPush(f);
+  await sup.start();
+  running.push(sup);
+  /** Where a worker's handoff is on this laptop (its default path). */
+  const handoff = (id: string) => join(at.dir, "handoffs", "studio", `${id}.md`);
+  const writeHandoff = (id: string, text: string) => {
+    mkdirSync(join(at.dir, "handoffs", "studio"), { recursive: true });
+    writeFileSync(handoff(id), text);
+  };
+  return { sup, store: at.store, link, sessions: query.sessions, dir: at.dir, writeHandoff };
+}
+
+/** mbp-1's supervisor scripted: it sends requests and keeps what it gets. */
+async function scripted(net: FakeNetwork) {
+  const link = net.link("mbp-1");
+  const got: Envelope[] = [];
+  link.onPush = (f) => {
+    if (f.t === "deliver") got.push(f.msg);
+  };
+  await link.register({ name: "supervisor" });
+  const ask = async (body: unknown) => {
+    const sent = await link.request<{ id: string }>({ t: "send", as: "supervisor", to: [SUP_UBU], body: JSON.stringify(body) });
+    await until(() => got.some((m) => m.in_reply_to === sent.id));
+    return { id: sent.id, reply: JSON.parse(got.find((m) => m.in_reply_to === sent.id)!.body) as Record<string, any> };
+  };
+  const exits = () => got.filter((m) => m.body.includes('"event":"exit"'));
+  return { link, got, ask, exits };
+}
+
+/** ubu1 real, mbp-1 scripted, and one v: 2 worker of mbp-1's running on ubu1. */
+async function spawned(query = fakeQuery()) {
+  const net = new FakeNetwork();
+  const ubu = await boot(net, "ubu1", UBU, newStore(), query);
+  const mbp = await scripted(net);
+  const { id: req, reply } = await mbp.ask(SPAWN);
+  const id = reply["worker"].id as string;
+  await until(() => ubu.sessions.length === 1);
+  return { net, ubu, mbp, req, id };
+}
+
+/** Ends the worker with a handoff of `text` (none when null), and returns its exit as mbp-1 got it. */
+async function endWith(s: Awaited<ReturnType<typeof spawned>>, text: string | null) {
+  if (text !== null) s.ubu.writeHandoff(s.id, text);
+  s.ubu.sessions[0]!.finish();
+  await until(() => s.mbp.exits().length === 1);
+  const msg = s.mbp.exits()[0]!;
+  return { body: msg.body, exit: JSON.parse(msg.body) as Record<string, any> };
+}
+
+describe("the exit event carries the handoff's text (criterion 1)", () => {
+  it("a real requester gets the text with no file read: the event, Bob's notice, and worker_summary", async () => {
+    const net = new FakeNetwork();
+    net.clients.set(SUP_UBU, { package: "@bobnet/supervisor", version: REMOTE_TOOLS_SINCE, protocol: 1 });
+    const ubu = await boot(net, "ubu1", UBU);
+    const mbp = await boot(net, "mbp-1", "");
+    await mbp.link.register({ name: "Bob" });
+    const tools = handlers(mbp.sup);
+    const call = async (name: string, args: Record<string, unknown>) => JSON.parse((await callTool(tools, name, args)).content[0]!.text);
+
+    const { id } = await call("spawn_worker", { project: "studio", role: "ann", task: "one fix", laptop: "ubu1" });
+    await until(() => ubu.sessions.length === 1);
+    ubu.store.updateWorker(id, { checkpoint: "fix landed" });
+    (ubu.sup as unknown as { landResults: Map<string, string[]> }).landResults.set(id, ["landed 1a2b3c4 on v2"]);
+    ubu.writeHandoff(id, "# Done\n\nFixed it. Next: nothing.\n");
+    ubu.sessions[0]!.finish();
+
+    await until(() => net.between(SUP_UBU, SUP_MBP).some((b) => b.includes('"event":"exit"')));
+    const exit = JSON.parse(net.between(SUP_UBU, SUP_MBP).find((b) => b.includes('"event":"exit"'))!);
+    expect(exit).toEqual({ v: 2, event: "exit", worker: id, spawn_req: expect.any(String), state: "done", checkpoint: "fix landed", lands: ["landed 1a2b3c4 on v2"], handoff_text: "# Done\n\nFixed it. Next: nothing.\n" });
+    expect(exit).not.toHaveProperty("handoff");
+    await until(() => net.between(SUP_MBP, "Bob@mbp-1").some((b) => b.includes(id)));
+    expect(net.between(SUP_MBP, "Bob@mbp-1")).toContain(`Ann (${id}, studio/ann) on ubu1 done: fix landed; handoff in worker_summary. Land: landed 1a2b3c4 on v2.`);
+    expect(await call("worker_summary", { id })).toMatchObject({ laptop: "ubu1", worker: { id, state: "done" }, handoff_text: "# Done\n\nFixed it. Next: nothing.\n" });
+  });
+
+  it("carries the state, the checkpoint and the stop reason, the error cut to 500 characters", async () => {
+    const s = await spawned();
+    s.ubu.writeHandoff(s.id, "stopped half way");
+    const stopping = s.ubu.sup.stop(s.id, `told to stop: ${"why ".repeat(300)}`);
+    await until(() => s.ubu.sessions[0]!.inputs.length === 2);
+    s.ubu.sessions[0]!.turnDone("handoff written");
+    await stopping;
+    await until(() => s.mbp.exits().length === 1);
+    const exit = JSON.parse(s.mbp.exits()[0]!.body);
+    expect(exit).toMatchObject({ v: 2, event: "exit", worker: s.id, spawn_req: s.req, state: "stopped", checkpoint: null, lands: [], handoff_text: "stopped half way" });
+    expect(exit.error).toHaveLength(500);
+    expect(exit.error).toMatch(/^told to stop: why why .*…$/);
+  });
+
+  it("a v-less spawn's worker gets today's exit, unchanged", async () => {
+    const net = new FakeNetwork();
+    const ubu = await boot(net, "ubu1", UBU);
+    const mbp = await scripted(net);
+    const { reply } = await mbp.ask({ op: "spawn", project: "studio", role: "ann", task: "one fix" });
+    const id = reply["worker"].id as string;
+    await until(() => ubu.sessions.length === 1);
+    ubu.writeHandoff(id, "not sent");
+    ubu.sessions[0]!.finish();
+    await until(() => mbp.exits().length === 1);
+    expect(JSON.parse(mbp.exits()[0]!.body)).toEqual({ event: "exit", worker: id, state: "done", checkpoint: null });
+  });
+});
+
+describe("sized on the whole body (criterion 2)", () => {
+  const event = { v: 2, event: "exit", worker: "w_1a2b3c4d", spawn_req: "m_0123456789abcdef", state: "failed", checkpoint: "F1 · a checkpoint", error: "e".repeat(500), lands: ["landed 1a2b3c4 on v2"] };
+  const LIMIT = 16 * 1024;
+
+  it.each([
+    ["2 KB", 2_000, false],
+    ["12 KB", 12_000, false],
+    ["40 KB", 40_000, true],
+  ])("a %s handoff: whole when it fits, else cut with handoff_truncated and the file's length; never over 16 KiB", (_, size, truncated) => {
+    const text = "x".repeat(size - 1) + "\n";
+    const out = withHandoff(event, text);
+    expect(JSON.stringify(out).length).toBeLessThanOrEqual(LIMIT - 1024);
+    if (!truncated) return expect(out).toEqual({ ...event, handoff_text: text });
+    expect(out).toMatchObject({ handoff_truncated: true, handoff_length: 40_000 });
+    expect(text.startsWith(out["handoff_text"] as string)).toBe(true);
+    // Cut to the room there is, not far short of it.
+    expect(JSON.stringify(out).length).toBeGreaterThan(LIMIT - 1024 - 10);
+  });
+
+  it("a handoff full of characters that escape is cut on its serialised length", () => {
+    const text = '"\\\n\t\u0001'.repeat(3_000);
+    const out = withHandoff(event, text);
+    expect(out).toMatchObject({ handoff_truncated: true, handoff_length: 15_000 });
+    expect(JSON.stringify(out).length).toBeLessThanOrEqual(LIMIT - 1024);
+    // 14 serialised characters for each 5: about 5,500 of them fit.
+    expect((out["handoff_text"] as string).length).toBeLessThan(6_000);
+    // Never half a surrogate pair.
+    const emoji = withHandoff(event, "😀".repeat(20_000));
+    expect(JSON.stringify(emoji).length).toBeLessThanOrEqual(LIMIT - 1024);
+    expect((emoji["handoff_text"] as string).length % 2).toBe(0);
+  });
+
+  it("on the wire: a 40 KB handoff and one that escapes both arrive, each body under 16 KiB", async () => {
+    for (const text of ["y".repeat(40_000), '"\\\n'.repeat(10_000)]) {
+      const s = await spawned();
+      const { body, exit } = await endWith(s, text);
+      expect(body.length).toBeLessThanOrEqual(LIMIT);
+      expect(exit).toMatchObject({ handoff_truncated: true, handoff_length: text.length });
+      expect(s.net.refused.filter((r) => r.to.includes(SUP_MBP))).toEqual([]);
+    }
+  });
+});
+
+describe("credentials (criterion 3)", () => {
+  it("a credential-like span in the handoff is withheld, the rest goes", async () => {
+    const s = await spawned();
+    const { exit } = await endWith(s, `Deployed with ${KEY} as the key.\nNext: rotate it.`);
+    expect(exit["handoff_text"]).toBe("Deployed with [withheld: looks like a credential] as the key.\nNext: rotate it.");
+    expect(s.net.refused.filter((r) => r.to.includes(SUP_MBP))).toEqual([]);
+  });
+});
+
+describe("summary carries the handoff once ended (criterion 4)", () => {
+  it("not while running; once ended, handoff_text, sized with the reply", async () => {
+    const s = await spawned();
+    s.ubu.writeHandoff(s.id, "written early");
+    expect((await s.mbp.ask({ v: 2, op: "summary", id: s.id })).reply).not.toHaveProperty("handoff_text");
+    await endWith(s, "the handoff, for a requester whose exit expired");
+    expect((await s.mbp.ask({ v: 2, op: "summary", id: s.id })).reply).toMatchObject({ v: 2, re: "summary", ok: true, worker: { id: s.id, state: "done" }, handoff_text: "the handoff, for a requester whose exit expired" });
+    s.ubu.writeHandoff(s.id, "z".repeat(40_000));
+    const msg = s.mbp.got.at(-1)!;
+    const { reply } = await s.mbp.ask({ v: 2, op: "summary", id: s.id });
+    expect(reply).toMatchObject({ ok: true, handoff_truncated: true, handoff_length: 40_000 });
+    expect(s.mbp.got.at(-1)!.body.length).toBeLessThanOrEqual(16 * 1024);
+    expect(s.mbp.got.at(-1)).not.toBe(msg);
+  });
+});
+
+describe("at the target's start (criterion 5)", () => {
+  it("each v: 2 worker it fails gets an exit (failed) with its handoff, sent once connected", async () => {
+    const at = newStore();
+    const w = at.store.createWorker({ project: "studio", role: "ann", task: "one fix", handoff: null, priority: 0, resume_session: null, spawned_by: SUP_MBP, remote_by: "poe", spawn_req: "m_spawn1" });
+    at.store.updateWorker(w.id, { state: "running", checkpoint: "half way" });
+    const bare = at.store.createWorker({ project: "studio", role: "ann", task: "no file", handoff: null, priority: 0, resume_session: null, spawned_by: SUP_MBP, remote_by: "poe", spawn_req: "m_spawn2" });
+    at.store.updateWorker(bare.id, { state: "running" });
+    const local = at.store.createWorker({ project: "studio", role: "ann", task: "local", handoff: null, priority: 0, resume_session: null });
+    at.store.updateWorker(local.id, { state: "running" });
+    mkdirSync(join(at.dir, "handoffs", "studio"), { recursive: true });
+    writeFileSync(join(at.dir, "handoffs", "studio", `${w.id}.md`), "what I got done before the restart");
+
+    const net = new FakeNetwork();
+    const mbp = await scripted(net);
+    await boot(net, "ubu1", UBU, at);
+    await until(() => mbp.exits().length === 2);
+    const exits = mbp.exits().map((m) => JSON.parse(m.body));
+    expect(exits).toEqual([
+      { v: 2, event: "exit", worker: w.id, spawn_req: "m_spawn1", state: "failed", checkpoint: "half way", error: "supervisor restarted", lands: [], handoff_text: "what I got done before the restart" },
+      { v: 2, event: "exit", worker: bare.id, spawn_req: "m_spawn2", state: "failed", checkpoint: null, error: "supervisor restarted", lands: [], handoff_text: null },
+    ]);
+  });
+});
+
+describe("Remote Control (criterion 6)", () => {
+  it("the url goes to the spawner as a v: 2 remote_control event", async () => {
+    const s = await spawned();
+    await until(() => s.mbp.got.some((m) => m.body.includes('"event":"remote_control"')));
+    expect(JSON.parse(s.mbp.got.find((m) => m.body.includes('"event":"remote_control"'))!.body)).toEqual({ v: 2, event: "remote_control", worker: s.id, spawn_req: s.req, url: "https://claude.ai/code/session_test" });
+  });
+
+  it("so does the error it runs without", async () => {
+    const s = await spawned(fakeQuery({ remoteControl: false }));
+    await until(() => s.mbp.got.some((m) => m.body.includes('"event":"remote_control"')));
+    expect(JSON.parse(s.mbp.got.find((m) => m.body.includes('"event":"remote_control"'))!.body)).toEqual({ v: 2, event: "remote_control", worker: s.id, spawn_req: s.req, error: expect.stringMatching(/no enableRemoteControl/) });
+  });
+});
+
+describe("no handoff file (criterion 7)", () => {
+  it.each([
+    ["missing", null],
+    ["empty", ""],
+    ["blank", "  \n"],
+  ])("a %s file: handoff_text null in the exit and the summary", async (_, text) => {
+    const s = await spawned();
+    const { exit } = await endWith(s, text);
+    expect(exit).toMatchObject({ state: "done", handoff_text: null });
+    expect(exit).not.toHaveProperty("handoff_truncated");
+    expect((await s.mbp.ask({ v: 2, op: "summary", id: s.id })).reply).toMatchObject({ ok: true, handoff_text: null });
+  });
+
+  it("the requester's notice says no handoff file", async () => {
+    const net = new FakeNetwork();
+    net.clients.set(SUP_UBU, { package: "@bobnet/supervisor", version: REMOTE_TOOLS_SINCE, protocol: 1 });
+    const ubu = await boot(net, "ubu1", UBU);
+    const mbp = await boot(net, "mbp-1", "");
+    await mbp.link.register({ name: "Bob" });
+    const r = await callTool(handlers(mbp.sup), "spawn_worker", { project: "studio", role: "ann", task: "one fix", laptop: "ubu1" });
+    const { id } = JSON.parse(r.content[0]!.text) as { id: string };
+    await until(() => ubu.sessions.length === 1);
+    ubu.sessions[0]!.fail();
+    await until(() => net.between(SUP_MBP, "Bob@mbp-1").some((b) => b.includes(id)));
+    expect(net.between(SUP_MBP, "Bob@mbp-1").find((b) => b.includes(id))).toMatch(new RegExp(`^Ann \\(${id}, studio/ann\\) on ubu1 failed: .+; no handoff file\\.$`));
+    // Delivered again, it isn't told twice.
+    const exit = net.log.find((m) => m.body.includes('"event":"exit"'))!;
+    mbp.sup.onPush({ t: "deliver", to: SUP_MBP, wake: true, msg: exit } as never);
+    await tick(20);
+    expect(net.between(SUP_MBP, "Bob@mbp-1").filter((b) => b.includes(id))).toHaveLength(1);
+  });
+});
