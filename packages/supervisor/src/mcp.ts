@@ -8,10 +8,14 @@ import type { Logger } from "@bobnet/client/log";
 import { z } from "zod";
 import { EFFORTS } from "./config.ts";
 import { AnswerError } from "./router.ts";
-import { type Supervisor, SupervisorError } from "./supervisor.ts";
+import { LIST_ALL_DEFAULT, type Supervisor, SupervisorError } from "./supervisor.ts";
 
 // The orchestrator's tools, over MCP Streamable HTTP on 127.0.0.1 only, behind
 // a bearer token kept in ~/.config/bobnet/supervisor.token (mode 0600).
+// With `laptop`, the orchestrator's tools act on another laptop's supervisor (ADR 0007 §5).
+
+/** Another laptop by its BobNet id; none, or this one's, is this laptop as before. */
+const Laptop = z.string().min(1).optional();
 
 const Spawn = z.object({
   project: z.string(),
@@ -24,15 +28,18 @@ const Spawn = z.object({
   model: z.string().optional(),
   effort: z.enum(EFFORTS).optional(),
   as: z.enum(["lead", "worker"]).optional(),
+  laptop: Laptop,
 });
 const Id = z.object({ id: z.string() });
-const Reset = z.object({ id: z.string(), model: z.string().optional(), effort: z.enum(EFFORTS).optional() });
-const TakeSlot = z.object({ project: z.string(), name: z.string().min(1), label: z.string().min(1) });
-const FreeSlot = z.object({ name: z.string().min(1) });
-const OrderQueue = z.object({ names: z.array(z.string()).min(1) });
-const Tail = z.object({ id: z.string(), n: z.number().int().positive().max(500).default(40) });
-const ListArgs = z.object({ project: z.string().optional(), all: z.boolean().default(false), limit: z.number().int().positive().max(500).optional(), since: z.string().optional() });
-const StatusArgs = z.object({ id: z.string(), full: z.boolean().default(false) });
+const WorkerId = z.object({ id: z.string(), laptop: Laptop });
+const Reset = z.object({ id: z.string(), model: z.string().optional(), effort: z.enum(EFFORTS).optional(), laptop: Laptop });
+const TakeSlot = z.object({ project: z.string(), name: z.string().min(1), label: z.string().min(1), laptop: Laptop });
+const FreeSlot = z.object({ name: z.string().min(1), laptop: Laptop });
+const OrderQueue = z.object({ names: z.array(z.string()).min(1), laptop: Laptop });
+const Here = z.object({ laptop: Laptop });
+const Tail = z.object({ id: z.string(), n: z.number().int().positive().max(500).default(40), laptop: Laptop });
+const ListArgs = z.object({ project: z.string().optional(), all: z.boolean().default(false), limit: z.number().int().positive().max(500).optional(), since: z.string().optional(), laptop: Laptop });
+const StatusArgs = z.object({ id: z.string(), full: z.boolean().default(false), laptop: Laptop });
 const AnswerArgs = z.object({
   id: z.string(),
   decision: z.enum(["allow", "deny", "answer"]),
@@ -55,6 +62,16 @@ const POWER = {
   model: { type: "string", description: "Override the role's default model (opus, sonnet, haiku) for this task; the role may limit which." },
   effort: { type: "string", enum: [...EFFORTS], description: "Override the role's default effort: less for routine work, more for hard design; capped by the role's max_effort." },
 };
+
+/** `laptop` on the tools that act on a worker or spawn one. */
+const AT = {
+  laptop: {
+    type: "string",
+    description: "Another laptop's BobNet id (e.g. ubu1): act there, through its supervisor. Default: this laptop. A worker spawned elsewhere is found without it.",
+  },
+};
+/** `laptop` on the tools that act on this laptop only (§5): another is refused. */
+const HERE = { laptop: { type: "string", description: "This laptop only; another laptop's is its own orchestrator's." } };
 
 export const TOOLS = [
   {
@@ -93,15 +110,20 @@ export const TOOLS = [
             "worker (the default): ends after its result and holds a worker slot. lead: a long-lived session Casper talks to, alive until stopped, holding no slot; only for a role with lead: true, and only when Casper asks for one.",
         },
         ...POWER,
+        laptop: {
+          type: "string",
+          description:
+            "Another laptop's BobNet id (e.g. ubu1): spawn there, under its supervisor's config, now or refused with its reason, never queued. Not with handoff, resume_session or as: lead. Default: this laptop.",
+        },
       },
       ["project", "role", "task"],
     ),
   },
-  { name: "stop_worker", description: "Interrupt a worker, then kill it after a grace period.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
+  { name: "stop_worker", description: "Interrupt a worker, then kill it after a grace period.", inputSchema: obj({ id: { type: "string" }, ...AT }, ["id"]) },
   {
     name: "reset_worker",
     description: "Stop a worker and queue a fresh one for the same role and task, with no prior context, on what it ran on unless you set model or effort (a retry that failed for lack of power).",
-    inputSchema: obj({ id: { type: "string" }, ...POWER }, ["id"]),
+    inputSchema: obj({ id: { type: "string" }, ...POWER, ...HERE }, ["id"]),
   },
   {
     name: "list_workers",
@@ -111,15 +133,19 @@ export const TOOLS = [
       all: { type: "boolean", description: "Include finished workers." },
       limit: { type: "number", description: "The newest this many (all: true defaults to 20; at most 500)." },
       since: { type: "string", description: "ISO time: only workers that started or ended at or after it." },
+      laptop: {
+        type: "string",
+        description: "Another laptop's BobNet id: the workers this supervisor spawned there, asked live, each with as_of. \"*\": this laptop's and every laptop's, each row with laptop. Default: this laptop.",
+      },
     }),
   },
   {
     name: "worker_status",
     description: "A worker's state, task (its first 500 characters unless full), last activity, session id and how to open its transcript.",
-    inputSchema: obj({ id: { type: "string" }, full: { type: "boolean", description: "The whole brief." } }, ["id"]),
+    inputSchema: obj({ id: { type: "string" }, full: { type: "boolean", description: "The whole brief." }, ...AT }, ["id"]),
   },
-  { name: "tail_worker", description: "The worker's last n events, one line each.", inputSchema: obj({ id: { type: "string" }, n: { type: "number" } }, ["id"]) },
-  { name: "worker_summary", description: "A short digest of what a worker has done: tools used, files changed, last message, result.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
+  { name: "tail_worker", description: "The worker's last n events, one line each.", inputSchema: obj({ id: { type: "string" }, n: { type: "number" }, ...AT }, ["id"]) },
+  { name: "worker_summary", description: "A short digest of what a worker has done: tools used, files changed, last message, result.", inputSchema: obj({ id: { type: "string" }, ...AT }, ["id"]) },
   { name: "pending_requests", description: "Open approvals and questions across all workers (including ones orphaned by a restart, until they can no longer resume or are a day old), one line each. request_detail gives one in full.", inputSchema: obj({}) },
   { name: "request_detail", description: "One request in full, its whole input included. Only when the one-line preview isn't enough to decide.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
   {
@@ -144,15 +170,15 @@ export const TOOLS = [
     name: "take_slot",
     description:
       "Queue an interactive agent (not a worker) for the laptop's one run slot, for a test, probe, browser run or land. You are told when it's given; tell the agent to go, then free_slot when it reports done. Workers queue themselves.",
-    inputSchema: obj({ project: { type: "string" }, name: { type: "string" }, label: { type: "string", description: "What will run" } }, ["project", "name", "label"]),
+    inputSchema: obj({ project: { type: "string" }, name: { type: "string" }, label: { type: "string", description: "What will run" }, ...HERE }, ["project", "name", "label"]),
   },
-  { name: "free_slot", description: "Free the run slot (or a place in its queue) held by an agent or worker, by name or worker id.", inputSchema: obj({ name: { type: "string" } }, ["name"]) },
+  { name: "free_slot", description: "Free the run slot (or a place in its queue) held by an agent or worker, by name or worker id.", inputSchema: obj({ name: { type: "string" }, ...HERE }, ["name"]) },
   {
     name: "order_run_queue",
     description: "Put these agents (names or worker ids) first in the run queue, in this order, e.g. by the critical path. The rest keep their order.",
-    inputSchema: obj({ names: { type: "array", items: { type: "string" } } }, ["names"]),
+    inputSchema: obj({ names: { type: "array", items: { type: "string" } }, ...HERE }, ["names"]),
   },
-  { name: "run_slots", description: "The run slot: the hold if any (read from the projects' hold files, e.g. pnpm integrate hold), who holds the slot and for what, and who is waiting, in order.", inputSchema: obj({}) },
+  { name: "run_slots", description: "The run slot: the hold if any (read from the projects' hold files, e.g. pnpm integrate hold), who holds the slot and for what, and who is waiting, in order.", inputSchema: obj({ ...HERE }) },
 ] as const;
 
 /**
@@ -164,9 +190,55 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
     if (opts.lead && id === opts.lead) throw new SupervisorError(`You can't ${what} yourself; Casper does that from the dashboard`);
     return id;
   };
+  /** A tool that acts on this laptop only (§5), or any tool of a lead's (§1): another laptop is refused. */
+  const here = (laptop: string | undefined, tool: string) => {
+    if (sup.isHere(laptop)) return;
+    if (opts.lead) throw new SupervisorError(`A lead's tools act on its own laptop only (${sup.laptopName}); laptop ${laptop} is the orchestrator's`);
+    throw new SupervisorError(`${tool} acts on this laptop only (${sup.laptopName}); ${laptop}'s is its own orchestrator's`);
+  };
+  /** The laptop a worker id is on: null for this one. A lead's are all here. */
+  const where = (id: string, laptop: string | undefined, tool: string): string | null => {
+    if (!opts.lead) return sup.remoteWhere(id, laptop);
+    here(laptop, tool);
+    return null;
+  };
+  /** A remote worker as a tool shows it: where it is and when that was so. */
+  const remoteRow = (w: unknown, laptop: string, as_of: string) => ({ ...(w as Record<string, unknown>), laptop, as_of });
+  /** What a reply the requester didn't get in time, its worker found by list instead, says. */
+  const found = (r: Record<string, unknown>, laptop: string, what: string) => (r["found"] ? { note: `no reply in time; ${laptop}'s list shows ${what}` } : {});
+  /** The workers this supervisor spawned on `laptop`, asked live: its live ones, or with `all` every one it knows of. */
+  const remoteList = async (laptop: string, l: z.infer<typeof ListArgs>) => {
+    const r = await sup.remoteCall(laptop, { v: 2, op: "list", ...(l.all ? { ids: sup.remoteIdsOn(laptop).slice(-100) } : {}) });
+    let ws = (r["workers"] as Array<Record<string, unknown>>).filter((w) => !l.project || w["project"] === l.project);
+    if (l.since) ws = ws.filter((w) => !w["ended_at"] || String(w["ended_at"]) >= l.since! || String(w["started_at"] ?? "") >= l.since!);
+    const limit = l.limit ?? (l.all ? LIST_ALL_DEFAULT : undefined);
+    if (limit !== undefined) ws = ws.slice(-limit);
+    return ws.map((w) => remoteRow(w, laptop, r.as_of));
+  };
   return {
-    spawn_worker: (a) => {
+    spawn_worker: async (a) => {
       const s = Spawn.parse(a);
+      if (!sup.isHere(s.laptop)) {
+        if (opts.lead) here(s.laptop, "spawn_worker");
+        const laptop = s.laptop!;
+        // Never a path, a session or a lead to another laptop (§3): refused here, before anything is sent.
+        if (s.handoff) throw new SupervisorError(`handoff isn't sent to another laptop: a path names nothing on ${laptop}; put what the worker needs in task`);
+        if (s.resume_session) throw new SupervisorError(`resume_session isn't sent to another laptop: a spawn on ${laptop} starts fresh`);
+        if (s.as === "lead") throw new SupervisorError(`a lead isn't spawned on another laptop; ${laptop}'s own orchestrator spawns its leads`);
+        const r = await sup.remoteCall(laptop, {
+          v: 2,
+          op: "spawn",
+          project: s.project,
+          role: s.role,
+          task: s.task,
+          ...(s.tasks ? { tasks: s.tasks } : {}),
+          ...(s.session !== undefined ? { session: s.session ? { feature: s.session.feature, kind: s.session.kind, ...(s.session.label ? { label: s.session.label } : {}) } : null } : {}),
+          ...(s.model ? { model: s.model } : {}),
+          ...(s.effort ? { effort: s.effort } : {}),
+          by: sup.orchestratorOf(s.project),
+        });
+        return { ...remoteRow(r["worker"], laptop, r.as_of), ...found(r, laptop, "the worker this spawn made") };
+      }
       return sup.spawnJoined({
         project: s.project,
         role: s.role,
@@ -181,24 +253,56 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
         ...(opts.lead ? { spawnedBy: opts.lead } : {}),
       });
     },
-    stop_worker: (a) => sup.stop(notSelf(Id.parse(a).id, "stop")),
+    stop_worker: async (a) => {
+      const x = WorkerId.parse(a);
+      const laptop = where(x.id, x.laptop, "stop_worker");
+      if (laptop === null) return sup.stop(notSelf(x.id, "stop"));
+      const r = await sup.remoteCall(laptop, { v: 2, op: "stop", id: x.id });
+      const w = r["worker"] as Record<string, unknown>;
+      // A stop that races the worker's own end is common (§5): it is reported as ended, not an error.
+      return { ...remoteRow(w, laptop, r.as_of), ...found(r, laptop, `it ${w["state"]}`), ...(r["already_ended"] ? { already_ended: true, note: `${x.id} had already ended (${w["state"]}) on ${laptop}` } : {}) };
+    },
     reset_worker: (a) => {
       const r = Reset.parse(a);
+      here(r.laptop, "reset_worker");
       return sup.reset(notSelf(r.id, "reset"), { ...(r.model ? { model: r.model } : {}), ...(r.effort ? { effort: r.effort } : {}) }, opts.lead);
     },
-    list_workers: (a) => {
+    list_workers: async (a) => {
       const l = ListArgs.parse(a);
-      return sup.list(l.project, l.all, { ...(l.limit ? { limit: l.limit } : {}), ...(l.since ? { since: l.since } : {}) });
+      const local = () => sup.list(l.project, l.all, { ...(l.limit ? { limit: l.limit } : {}), ...(l.since ? { since: l.since } : {}) });
+      if (l.laptop === "*") {
+        const rows: Array<Record<string, unknown>> = local().map((w) => ({ ...w, laptop: sup.laptopName }));
+        if (opts.lead) return rows;
+        // A laptop that can't be asked says why, in its place.
+        for (const laptop of sup.remoteLaptops()) rows.push(...(await remoteList(laptop, l).catch((err: Error) => [{ laptop, unreachable: err.message }])));
+        return rows;
+      }
+      if (sup.isHere(l.laptop)) return local();
+      if (opts.lead) here(l.laptop, "list_workers");
+      return remoteList(l.laptop!, l);
     },
-    worker_status: (a) => {
+    worker_status: async (a) => {
       const s = StatusArgs.parse(a);
-      return sup.status(s.id, s.full);
+      const laptop = where(s.id, s.laptop, "worker_status");
+      if (laptop === null) return sup.status(s.id, s.full);
+      const r = await sup.remoteCall(laptop, { v: 2, op: "status", id: s.id });
+      return { ...remoteRow(r["worker"], laptop, r.as_of), ...found(r, laptop, "it") };
     },
-    tail_worker: (a) => {
+    tail_worker: async (a) => {
       const t = Tail.parse(a);
-      return sup.tail(t.id, t.n).join("\n") || "(no events yet)";
+      const laptop = where(t.id, t.laptop, "tail_worker");
+      if (laptop === null) return sup.tail(t.id, t.n).join("\n") || "(no events yet)";
+      const r = await sup.remoteCall(laptop, { v: 2, op: "tail", id: t.id, n: t.n });
+      const lines = (r["lines"] as string[]).join("\n") || "(no events yet)";
+      return r["truncated"] ? `${lines}\n(cut to fit a message from ${laptop}; ask for fewer lines)` : lines;
     },
-    worker_summary: (a) => sup.summary(Id.parse(a).id),
+    worker_summary: async (a) => {
+      const x = WorkerId.parse(a);
+      const laptop = where(x.id, x.laptop, "worker_summary");
+      if (laptop === null) return sup.summary(x.id);
+      const r = await sup.remoteCall(laptop, { v: 2, op: "summary", id: x.id });
+      return { ...r, laptop };
+    },
     pending_requests: () => sup.pending(),
     request_detail: (a) => sup.requestDetail(Id.parse(a).id),
     answer_request: (a) => {
@@ -218,16 +322,28 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
     audit_log: (a) => sup.audit(AuditArgs.parse(a).limit),
     take_slot: (a) => {
       const t = TakeSlot.parse(a);
+      here(t.laptop, "take_slot");
       return sup.takeSlot(t.project, t.name, t.label);
     },
-    free_slot: (a) => sup.freeSlot(FreeSlot.parse(a).name),
-    order_run_queue: (a) => sup.orderRunQueue(OrderQueue.parse(a).names),
-    run_slots: () => sup.slotStatus(),
+    free_slot: (a) => {
+      const f = FreeSlot.parse(a);
+      here(f.laptop, "free_slot");
+      return sup.freeSlot(f.name);
+    },
+    order_run_queue: (a) => {
+      const o = OrderQueue.parse(a);
+      here(o.laptop, "order_run_queue");
+      return sup.orderRunQueue(o.names);
+    },
+    run_slots: (a) => {
+      here(Here.parse(a).laptop, "run_slots");
+      return sup.slotStatus();
+    },
   };
 }
 
 export const INSTRUCTIONS =
-  "Controls the headless workers on this laptop. Spawn a fresh worker per story phase; read worker_summary and handoff files, not raw logs. " +
+  "Controls the headless workers on this laptop, and with laptop, on another laptop's supervisor. Spawn a fresh worker per story phase; read worker_summary and handoff files, not raw logs. " +
   "Escalations and worker completions arrive as BobNet messages from the supervisor; answer with answer_request. " +
   "Surface to the user anything you can't decide, and every tier-\"human\" request.";
 

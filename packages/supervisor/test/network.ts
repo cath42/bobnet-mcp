@@ -1,6 +1,6 @@
 import type { Identity } from "@bobnet/client/config";
 import { BrokerError, type PushFrame, type RequestFrame } from "@bobnet/client/connection";
-import { addressKey, type BoardCtx, type BoardOpInput, type BoardResults, type Envelope, findSecret, formatAddress, LIMITS, parseRecipient, type PeerInfo } from "@bobnet/protocol";
+import { addressKey, type BoardCtx, type BoardOpInput, type BoardResults, type ClientInfo, type Envelope, findSecret, formatAddress, LIMITS, parseRecipient, type PeerInfo } from "@bobnet/protocol";
 import type { BrokerLink } from "../src/supervisor.ts";
 
 // Several laptops on one fake broker (ADR 0007, Consequences "Testing"): each supervisor gets its
@@ -31,6 +31,8 @@ export class FakeNetwork {
   limit = 200;
   /** The broker's credential check; a test swaps it for a newer detector than the supervisor's. */
   detector: (body: string) => string | null = findSecret;
+  /** What each peer says it runs (its `client`, by address), as the broker keeps it from register; none is null, as a client too old to say. */
+  readonly clients = new Map<string, ClientInfo>();
 
   private readonly links = new Map<string, FakeLink>();
   private readonly peers = new Map<string, Peer>();
@@ -190,7 +192,7 @@ export class FakeNetwork {
   }
 
   private info(p: Peer): PeerInfo {
-    return { address: formatAddress(p), name: p.name, laptop: p.laptop, team: p.team, purpose: null, expertise: [], status: null, online: p.link !== null, last_seen: p.last_seen, client: null };
+    return { address: formatAddress(p), name: p.name, laptop: p.laptop, team: p.team, purpose: null, expertise: [], status: null, online: p.link !== null, last_seen: p.last_seen, client: this.clients.get(formatAddress(p)) ?? null };
   }
 
   private iso(): string {

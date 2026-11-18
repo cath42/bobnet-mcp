@@ -11,6 +11,7 @@ import {
   type BoardResults,
   type CiStatus,
   classifyRemote,
+  compareVersions,
   findSecret,
   fromBoard,
   type Envelope,
@@ -45,7 +46,7 @@ import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
 import { holdReader, RunSlots, type SlotEntry } from "./slots.ts";
-import { ACTIVE_STATES, newWorkerId, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
+import { ACTIVE_STATES, newWorkerId, type RemoteSentRow, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
 import { type Outcome, type QueryFn, type Usage, WorkerRun, type WorkerRunOptions, workerEnv, ZERO_USAGE } from "./worker.ts";
 import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
 
@@ -106,7 +107,7 @@ const LAND_OUTPUT_MAX = 20_000;
 /** How much of a task list_workers shows. */
 const LIST_TASK_MAX = 100;
 /** list_workers with all: the newest this many, unless asked for more. */
-const LIST_ALL_DEFAULT = 20;
+export const LIST_ALL_DEFAULT = 20;
 /** worker_status's brief, unless asked for in full. */
 const STATUS_TASK_MAX = 500;
 /** The most of a saved tool output a Read may take back; past it the command is re-run narrower. */
@@ -138,6 +139,14 @@ const REMOTE_RESTARTED = "the target restarted while handling it; list shows whe
 const remoteTtl = (op: string) => (op === "spawn" ? 30 : 20);
 /** How long the requester waits for a reply: the ttl and 30 s; a spawn that joins a board session can take a minute. */
 const remoteWaitMs = (op: string) => (op === "spawn" ? 90_000 : (remoteTtl(op) + 30) * 1000);
+/**
+ * The first release whose supervisor serves `v: 2` (ADR 0007 §9): an older target is refused before
+ * anything is sent. The release after rc.38, the first with BOB-62's target; Mario's to move if
+ * build A ships later.
+ */
+export const REMOTE_TOOLS_SINCE = "2.0.0-rc.39";
+/** The ops whose replies name workers, from which the requester knows which laptop a worker is on (§5). */
+const NAMES_WORKERS = new Set(["spawn", "list", "status", "stop", "summary"]);
 
 /** A reply or event with each text field's credential-looking spans withheld, the rest kept (§2). */
 function withholdSecrets<T>(value: T): T {
@@ -277,6 +286,8 @@ export class Supervisor {
   private readonly sleep: (ms: number) => Promise<void>;
   /** The remote requests waiting for their reply, by their remote_sent row. */
   private readonly remoteWaits = new Map<string, (reply: Record<string, unknown>) => void>();
+  /** Spawns a tool is still deciding (waiting, or listing after the wait): a late reply to one is the tool's, not a note's. */
+  private readonly remoteDeciding = new Set<string>();
   /** project/role of each `v: 2` spawn joining its board session: the role and a place held for it. */
   private readonly reserved = new Set<string>();
   /** Why the sandbox can't run on this machine, from the check at start; null when it can (or nothing needs it). */
@@ -978,8 +989,21 @@ export class Supervisor {
       return;
     }
     // A reply that comes after its wait ended still counts: it is the record of what happened.
+    const gaveUp = sent.state === "unanswered" && !this.remoteWaits.has(sent.id) && !this.remoteDeciding.has(sent.id);
+    const known = gaveUp ? this.remoteWorkers() : null;
     this.store.settleRemoteSent(sent.id, { state: "replied", reply: msg.body });
     this.remoteWaits.get(sent.id)?.(read.json);
+    if (gaveUp && sent.op === "spawn") this.spawnedAfterAll(sent, read.json, known!);
+  }
+
+  /** A spawn's reply after its tool gave up on it (§3): the worker runs, and the orchestrator hears so, unless list already found it. */
+  private spawnedAfterAll(sent: RemoteSentRow, json: Record<string, unknown>, known: Map<string, Set<string>>): void {
+    const w = json["ok"] === true ? (json["worker"] as Record<string, unknown> | undefined) : undefined;
+    if (!w || typeof w["id"] !== "string" || known.has(w["id"])) return;
+    const laptop = sent.to_name.split("@")[1] ?? sent.to_name;
+    const body = JSON.parse(sent.body) as { project?: string; role?: string };
+    this.store.audit(sent.to_name, "remote:spawned_after_all", w["id"], { message: sent.message_id });
+    this.notify(`${w["name"] ?? body.role} (${w["id"]}, ${body.project}/${body.role}) on ${laptop} spawned after all: its reply came after spawn_worker had given up on it. worker_status ${w["id"]} for more.`, body.project);
   }
 
   /**
@@ -988,9 +1012,18 @@ export class Supervisor {
    * Without a reply in time, `list` asks after the worker the request made or names; failing that,
    * it may or may not have run. A reply that arrives later is still kept on the row.
    */
-  async remoteRequest(to: string, request: RemoteRequestV2): Promise<RemoteOutcome> {
+  async remoteRequest(to: string, request: RemoteRequestV2, opts: { refuseQueued?: string } = {}): Promise<RemoteOutcome> {
     const body = RemoteRequestV2.parse(request);
-    const first = await this.remoteAsk(to, body);
+    const deciding: string[] = [];
+    try {
+      return await this.remoteDecide(to, body, deciding, opts.refuseQueued);
+    } finally {
+      for (const id of deciding) this.remoteDeciding.delete(id);
+    }
+  }
+
+  private async remoteDecide(to: string, body: RemoteRequestV2, deciding: string[], refuseQueued: string | undefined): Promise<RemoteOutcome> {
+    const first = await this.remoteAsk(to, body, { deciding, ...(refuseQueued ? { refuseQueued } : {}) });
     if (first.reply) return { outcome: "reply", sent: first.id, reply: first.reply };
     const msgId = this.store.remoteSent(first.id)!.message_id!;
     const look = body.op === "spawn" ? { reqs: [msgId] } : body.op === "status" || body.op === "stop" || body.op === "tail" || body.op === "summary" ? { ids: [body.id] } : null;
@@ -1008,16 +1041,31 @@ export class Supervisor {
   }
 
   /** One request sent and waited for: its remote_sent row, and its reply if one came in time. */
-  private async remoteAsk(to: string, body: RemoteRequestV2): Promise<{ id: string; reply: Record<string, unknown> | null }> {
+  /**
+   * With `deciding`, the row is held as the tool's until it returns. With `refuseQueued`, a request
+   * the broker only queued (the target dropped between the peer check and the send, §3) is refused
+   * with that text and not waited for; should it still run, its reply is a late one.
+   */
+  private async remoteAsk(to: string, body: RemoteRequestV2, opts: { deciding?: string[]; refuseQueued?: string } = {}): Promise<{ id: string; reply: Record<string, unknown> | null }> {
     const id = `rs_${randomUUID().slice(0, 8)}`;
     const text = reply(body);
     const waitMs = remoteWaitMs(body.op);
     this.store.addRemoteSent({ id, to, op: body.op, target: "id" in body ? body.id : null, body: text, deadline: new Date(Date.now() + waitMs).toISOString() });
+    if (opts.deciding) {
+      opts.deciding.push(id);
+      this.remoteDeciding.add(id);
+    }
     const replied = new Promise<Record<string, unknown>>((resolve) => this.remoteWaits.set(id, resolve));
     try {
-      const sent = await this.broker.request<{ id: string }>({ t: "send", as: this.config.name, to: [to], body: text, ttl_seconds: remoteTtl(body.op) });
+      const sent = await this.broker.request<{ id: string; queued_for?: string[] }>({ t: "send", as: this.config.name, to: [to], body: text, ttl_seconds: remoteTtl(body.op) });
       this.store.remoteSentAs(id, sent.id);
+      if (opts.refuseQueued && sent.queued_for?.some((a) => a.toLowerCase() === to.toLowerCase())) {
+        this.remoteWaits.delete(id);
+        this.store.settleRemoteSent(id, { state: "unanswered" });
+        throw new SupervisorError(opts.refuseQueued);
+      }
     } catch (err) {
+      if (err instanceof SupervisorError) throw err;
       this.remoteWaits.delete(id);
       this.store.settleRemoteSent(id, { state: "failed" });
       throw new SupervisorError(`could not send ${body.op} to ${to}: ${(err as Error).message}`);
@@ -1026,6 +1074,117 @@ export class Supervisor {
     this.remoteWaits.delete(id);
     if (!got) this.store.settleRemoteSent(id, { state: "unanswered" });
     return { id, reply: got };
+  }
+
+  // ---------- The remote tools (ADR 0007 §1, §5): this supervisor as the requester ----------
+
+  /** This laptop's id on BobNet (null before it registered). */
+  get laptopName(): string | null {
+    return this.laptop;
+  }
+
+  /** Whether `laptop` names this one: no laptop does, as old callers pass none. */
+  isHere(laptop: string | undefined): boolean {
+    return laptop === undefined || (this.laptop !== null && laptop.toLowerCase() === this.laptop.toLowerCase());
+  }
+
+  /**
+   * The target supervisor's address on `laptop` (its name is this one's, §1), checked before anything
+   * is sent (§3, §9): offline, or older than the release that serves `v: 2`, refuses at once. A
+   * version that is missing or doesn't parse is sent anyway: an old target refuses the body as a bad
+   * request and runs nothing.
+   */
+  async remoteTarget(laptop: string): Promise<string> {
+    const want = `${this.config.name}@${laptop}`;
+    const { peers } = await this.broker.request<{ peers: PeerInfo[] }>({ t: "peers" });
+    const peer = peers.find((p) => p.name.toLowerCase() === this.config.name.toLowerCase() && p.laptop.toLowerCase() === laptop.toLowerCase());
+    if (!peer) throw new SupervisorError(`${laptop}'s supervisor isn't on BobNet: no ${want} in the peer list`);
+    if (!peer.online) throw new SupervisorError(`${peer.laptop}'s supervisor is offline (last seen ${peer.last_seen}): nothing was sent to ${peer.address}`);
+    const version = peer.client?.version;
+    if (compareVersions(version, REMOTE_TOOLS_SINCE) === -1) {
+      throw new SupervisorError(`${peer.laptop}'s supervisor runs ${version}; the remote tools need ${REMOTE_TOOLS_SINCE} there: nothing was sent`);
+    }
+    return peer.address;
+  }
+
+  /**
+   * Each remote worker this supervisor knows of, by id: the target addresses whose replies named it
+   * (a spawn's, or a list's that found it). Read from remote_sent until the copies (§7) keep them.
+   */
+  remoteWorkers(): Map<string, Set<string>> {
+    const known = new Map<string, Set<string>>();
+    for (const row of this.store.remoteSentList()) {
+      if (row.state !== "replied" || !row.reply || !NAMES_WORKERS.has(row.op)) continue;
+      const json = classifyRemote(row.reply)?.json;
+      if (!json || json["ok"] !== true) continue;
+      const ws = [json["worker"], ...(Array.isArray(json["workers"]) ? json["workers"] : [])];
+      for (const w of ws) {
+        const id = w && typeof w === "object" ? (w as { id?: unknown }).id : undefined;
+        if (typeof id !== "string") continue;
+        const at = known.get(id) ?? new Set<string>();
+        at.add(row.to_name);
+        known.set(id, at);
+      }
+    }
+    return known;
+  }
+
+  /**
+   * Where a worker id is (§5): null for this laptop, else the laptop it was spawned on. `laptop`, if
+   * given, must match; an id on two laptops needs it. An id known nowhere stays this laptop's, as
+   * today, or goes to the laptop named, whose supervisor answers for it.
+   */
+  remoteWhere(id: string, laptop?: string): string | null {
+    if (laptop !== undefined && this.isHere(laptop)) return null;
+    const here = this.store.worker(id) !== undefined;
+    const there = [...(this.remoteWorkers().get(id) ?? [])].map((a) => a.split("@")[1] ?? a);
+    if (laptop === undefined) {
+      if (there.length + (here ? 1 : 0) > 1) throw new SupervisorError(`${id} is a worker on ${[...(here ? [this.laptop ?? "this laptop"] : []), ...there].join(" and ")}: say which with laptop`);
+      return here || there.length === 0 ? null : there[0]!;
+    }
+    if (there.some((l) => l.toLowerCase() === laptop.toLowerCase())) return laptop;
+    if (here) throw new SupervisorError(`${id} runs on this laptop (${this.laptop}), not ${laptop}`);
+    if (there.length > 0) throw new SupervisorError(`${id} runs on ${there.join(" and ")}, not ${laptop}`);
+    return laptop;
+  }
+
+  /** The remote workers this supervisor knows of on `laptop`, oldest first. */
+  remoteIdsOn(laptop: string): string[] {
+    const on = (to: string) => (to.split("@")[1] ?? "").toLowerCase() === laptop.toLowerCase();
+    return [...this.remoteWorkers()].filter(([, at]) => [...at].some(on)).map(([id]) => id);
+  }
+
+  /** The laptops this supervisor has spawned on, for list_workers laptop "*". */
+  remoteLaptops(): string[] {
+    const at = new Set<string>();
+    for (const tos of this.remoteWorkers().values()) for (const to of tos) at.add(to.split("@")[1] ?? to);
+    return [...at];
+  }
+
+  /**
+   * One `v: 2` request to `laptop`'s supervisor for a tool (§5): checked, sent, its reply's fields, with
+   * `as_of`, the time it was answered. A refusal is the target's own words; no reply leaves only what
+   * `list` found, else an error that it may or may not have run.
+   */
+  async remoteCall(laptop: string, request: RemoteRequestV2): Promise<Record<string, unknown> & { as_of: string }> {
+    const to = await this.remoteTarget(laptop);
+    const offline =
+      request.op === "spawn"
+        ? `${laptop}'s supervisor is offline (it dropped as the spawn was sent; it runs only if ${laptop} is back within ${remoteTtl("spawn")} s, and you are told then)`
+        : `${laptop}'s supervisor is offline (it dropped as the ${request.op} was sent)`;
+    const out = await this.remoteRequest(to, request, { refuseQueued: offline });
+    const as_of = new Date().toISOString();
+    if (out.outcome === "unknown") throw new SupervisorError(out.error);
+    if (out.outcome === "found") {
+      // Only the worker's view came back: enough for a spawn, a status or a stop, not for a tail or a summary.
+      if (request.op === "tail" || request.op === "summary") throw new SupervisorError(`no reply from ${laptop} to the ${request.op} in time; its list shows ${out.worker["id"]} ${out.worker["state"]}: ask again`);
+      return { worker: out.worker, found: true, as_of };
+    }
+    const r = out.reply;
+    if (r["ok"] === false) throw new SupervisorError(typeof r["error"] === "string" ? r["error"] : `${laptop} refused the ${request.op}`);
+    if (r["ok"] !== true) throw new SupervisorError(`${laptop}'s reply to the ${request.op} was withheld (it looked like a credential to the broker); list_workers with laptop "${laptop}" shows what ran`);
+    const { v: _v, re: _re, req: _req, ok: _ok, ...fields } = r;
+    return { ...fields, as_of };
   }
 
   private async remoteDo(from: string, req: RemoteRequest): Promise<Record<string, unknown>> {
@@ -1906,13 +2065,18 @@ export class Supervisor {
 
   /** Messages the project's orchestrator (the laptop's if none); what the broker can't take waits in the outbox. */
   private notify(body: string, project?: string): void {
-    const to = (project && this.config.projects.get(project)?.orchestrator) || this.config.orchestrator;
+    const to = this.orchestratorOf(project);
     this.broker
       .request({ t: "send", as: this.config.name, to: [to], body })
       .catch((err: Error) => {
         this.log.warn("orchestrator unreachable; kept in the outbox", { err: err.message });
         this.store.addOutbox(to, body);
       });
+  }
+
+  /** Who is told of a project's workers: its orchestrator, else the laptop's; a remote spawn's `by` (ADR 0007 §1). */
+  orchestratorOf(project?: string): string {
+    return (project && this.config.projects.get(project)?.orchestrator) || this.config.orchestrator;
   }
 
   private orchestrators(): Set<string> {
