@@ -123,8 +123,8 @@ describe("a remote request", () => {
     expect(await ask("poe@ubu1", { ...handoff, v: 2, by: "poe" }, "m_v2a")).toEqual({ v: 2, re: "spawn", req: "m_v2a", ok: false, error: "bad request: handoff is not allowed" });
     expect(await ask("poe@ubu1", { v: 2, op: "spawn", project: "studio", role: "bob", task: "x", by: "poe", session: { feature: "F-1", kind: "build", dir: "/x" } }, "m_v2b")).toEqual({ v: 2, re: "spawn", req: "m_v2b", ok: false, error: "bad request: session.dir is not allowed" });
     expect(await ask("poe@ubu1", { v: 2, op: 7 }, "m_v2c")).toMatchObject({ v: 2, re: "invalid", req: "m_v2c", ok: false, error: expect.stringMatching(/^bad request: op /) });
-    // Well-formed, but served from BOB-62 on.
-    expect(await ask("poe@ubu1", { v: 2, op: "status", id: "w_1" }, "m_v2d")).toEqual({ v: 2, re: "status", req: "m_v2d", ok: false, error: "this supervisor doesn't serve v: 2 requests yet" });
+    // Well-formed, about a worker it didn't spawn.
+    expect(await ask("poe@ubu1", { v: 2, op: "status", id: "w_1" }, "m_v2d")).toEqual({ v: 2, re: "status", req: "m_v2d", ok: false, error: "w_1 isn't a worker poe@ubu1 spawned" });
     await tick(20);
     expect(sessions.length).toBe(0);
     expect(store.auditLog(50).filter((a) => a.action === "remote:refused").length).toBe(5);

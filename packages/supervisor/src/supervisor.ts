@@ -86,6 +86,9 @@ export interface SpawnOptions {
    * says which, a worker unless it asks (Casper, 2026-11-07): whoever starts a lead role decides.
    */
   as?: "lead" | "worker";
+  /** A `v: 2` remote spawn's `by` and its message id (ADR 0007 §3), kept on the row. */
+  remoteBy?: string;
+  spawnReq?: string;
 }
 
 const STALL_CHECK_MS = 60_000;
@@ -159,6 +162,41 @@ function withheldBody(body: string): string | null {
     ...(typeof json["re"] === "string" && typeof json["req"] === "string" ? { re: json["re"], req: json["req"] } : {}),
   });
 }
+
+/** The most workers a `v: 2` list returns. */
+const REMOTE_LIST_MAX = 100;
+/** What a reply's own fields may take of a message body (§2, 16 KiB whole): the rest is its envelope and a withheld span's growth. */
+const REMOTE_FIT_CHARS = LIMITS.bodyChars - 1024;
+const fits = (value: unknown) => JSON.stringify(value).length <= REMOTE_FIT_CHARS;
+
+/** A tail cut to fit the body (§2): its last lines, a line past the limit cut short, `truncated` when cut. */
+export function fitLines(all: string[]): { lines: string[]; truncated?: true } {
+  if (fits({ lines: all })) return { lines: all };
+  let lines = all;
+  while (lines.length > 1 && !fits({ lines })) lines = lines.slice(Math.max(1, Math.floor(lines.length / 8)));
+  if (!fits({ lines })) lines = lines.map((l) => cut(l, REMOTE_FIT_CHARS / 2));
+  return { lines, truncated: true };
+}
+
+/** A list cut to fit the body: the newest workers kept. */
+function fitList(all: Array<Record<string, unknown>>): { workers: Array<Record<string, unknown>>; truncated?: true } {
+  let workers = all;
+  while (workers.length > 0 && !fits({ workers })) workers = workers.slice(1);
+  return workers.length < all.length ? { workers, truncated: true } : { workers };
+}
+
+/** A summary cut to fit the body: its last message, then its result, then its files, shortened in turn. */
+function fitSummary(sum: Summary & { state: WorkerState; checkpoint: string | null }): Record<string, unknown> {
+  const out = { tool_calls: sum.tool_calls, files_changed: sum.files_changed, errors: sum.errors, events: sum.events, last_message: sum.last_message, result: sum.result };
+  if (fits(out)) return out;
+  for (const field of ["last_message", "result"] as const) {
+    while (!fits(out) && (out[field]?.length ?? 0) > 200) out[field] = cut(out[field]!, Math.floor(out[field]!.length / 2));
+  }
+  while (!fits(out) && out.files_changed.length > 0) out.files_changed = out.files_changed.slice(0, Math.floor(out.files_changed.length / 2));
+  return { ...out, truncated: true };
+}
+
+const cut = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n - 1)}…`);
 
 /**
  * What a remote request came to (ADR 0007 §2), `sent` its row in remote_sent: the target's reply,
@@ -239,6 +277,8 @@ export class Supervisor {
   private readonly sleep: (ms: number) => Promise<void>;
   /** The remote requests waiting for their reply, by their remote_sent row. */
   private readonly remoteWaits = new Map<string, (reply: Record<string, unknown>) => void>();
+  /** project/role of each `v: 2` spawn joining its board session: the role and a place held for it. */
+  private readonly reserved = new Set<string>();
   /** Why the sandbox can't run on this machine, from the check at start; null when it can (or nothing needs it). */
   private sandboxBroken: string | null = null;
   /** Each running lead's info-only news (joins, leaves, statuses, quiet broadcasts), as the interactive orchestrator's digest. */
@@ -434,7 +474,7 @@ export class Supervisor {
 
   // ---------- Orchestrator API ----------
 
-  spawn(opts: SpawnOptions & { id?: string }): WorkerRow & { note?: string } {
+  spawn(opts: SpawnOptions & { id?: string }, now = false): WorkerRow & { note?: string } {
     const { project, role, tasks, declared } = this.admit(opts);
     const w = this.store.createWorker({
       ...(opts.id ? { id: opts.id } : {}),
@@ -450,8 +490,12 @@ export class Supervisor {
       declared_session: declared,
       spawned_by: opts.spawnedBy ?? "orchestrator",
       run_as: opts.as ?? "worker",
+      remote_by: opts.remoteBy ?? null,
+      spawn_req: opts.spawnReq ?? null,
     });
-    this.store.audit(opts.spawnedBy ?? "orchestrator", "spawn", w.id, { project: w.project, role: w.role, as: opts.as ?? "worker", tasks, session: declared, resume: w.resume_session, model: w.model, effort: w.effort });
+    this.store.audit(opts.spawnedBy ?? "orchestrator", "spawn", w.id, { project: w.project, role: w.role, as: opts.as ?? "worker", tasks, session: declared, resume: w.resume_session, model: w.model, effort: w.effort, ...(opts.spawnReq ? { spawn_req: opts.spawnReq, by: opts.remoteBy } : {}) });
+    // A spawn that reserved its role and place starts now, ahead of anything queued meanwhile.
+    if (now) this.launch(this.store.worker(w.id)!);
     this.schedule();
     const row = this.store.worker(w.id)!;
     const note = row.state === "queued" ? this.queuedBecause(row) : undefined;
@@ -464,9 +508,54 @@ export class Supervisor {
    * reached within a minute: a worker never starts outside the session it was spawned into (§6, §12).
    */
   async spawnJoined(opts: SpawnOptions): Promise<WorkerRow & { note?: string }> {
-    const { project, role, tasks, declared } = this.admit(opts);
+    const admitted = this.admit(opts);
+    const id = await this.joinFor(opts, admitted);
+    return this.spawn({ ...opts, ...(id ? { id } : {}) });
+  }
+
+  /**
+   * A `v: 2` remote spawn (ADR 0007 §3): it starts now or is refused, never queued. Where a local
+   * spawn would queue it is refused with the reason; otherwise its role and a place under
+   * `concurrency` are reserved, synchronously, before the board join and until its row is made, so
+   * nothing takes them meanwhile. A failed join frees them; no row is made for a refusal.
+   */
+  async spawnNow(opts: SpawnOptions): Promise<WorkerRow> {
+    const admitted = this.admit(opts);
+    const { project, role } = admitted;
+    const busy = this.busyBecause(project.key, role.key);
+    if (busy) throw new SupervisorError(`${role.name} isn't spawned: ${busy}`);
+    const key = `${project.key}/${role.key}`;
+    this.reserved.add(key);
+    let id: string | undefined;
+    try {
+      id = await this.joinFor(opts, admitted);
+    } finally {
+      this.reserved.delete(key);
+    }
+    // No await from here: the reservation passes straight to the running worker.
+    return this.spawn({ ...opts, ...(id ? { id } : {}) }, true);
+  }
+
+  /** Why a worker of this role can't start now (as a local spawn would queue), or null. */
+  private busyBecause(project: string, roleKey: string): string | null {
+    const active = this.activeRun(project, roleKey);
+    if (active && isLead(this.store.worker(active))) return `${project}/${roleKey} is running as a lead (${active})`;
+    if (active) return `${project}/${roleKey} already has a worker running`;
+    if (this.reserved.has(`${project}/${roleKey}`)) return `${project}/${roleKey} already has a worker starting`;
+    if (this.store.queued().some((w) => w.project === project && w.role === roleKey)) return `${project}/${roleKey} already has a worker queued`;
+    const taken = this.workersRunning() + this.reserved.size;
+    if (taken >= this.config.concurrency) return `${taken} workers running, the laptop's limit`;
+    return null;
+  }
+
+  /**
+   * On a project on the board service, a spawn into a session joins it first: the worker id it
+   * joined as, or undefined when there is nothing to join. Fails, saying why, if the board refuses
+   * or can't be reached within a minute.
+   */
+  private async joinFor(opts: SpawnOptions, { project, role, tasks, declared }: ReturnType<Supervisor["admit"]>): Promise<string | undefined> {
     const d = declared ? (JSON.parse(declared) as DeclaredSession | null) : null;
-    if (project.board !== "service" || !d || opts.carrySession !== undefined) return this.spawn(opts);
+    if (project.board !== "service" || !d || opts.carrySession !== undefined) return undefined;
     const id = newWorkerId();
     const ctx: BoardCtx = { worker: id, role: role.key, project: project.key, session: boardSession(d), tasks: tasks ?? [] };
     try {
@@ -476,7 +565,7 @@ export class Supervisor {
       const refused = code !== undefined && ["invalid", "forbidden", "conflict"].includes(code);
       throw new SupervisorError(`${role.name} isn't spawned: the board ${refused ? "refused to join" : "can't be reached to join"} ${sessionName(d)}: ${(err as Error).message}`);
     }
-    return this.spawn({ ...opts, id });
+    return id;
   }
 
   /** Checks a spawn before anything is made of it. */
@@ -525,7 +614,8 @@ export class Supervisor {
     const active = this.activeRun(w.project, w.role);
     if (active && isLead(this.store.worker(active))) return `queued: ${this.roleOf(w).name} is running as a lead (${active}), which lives until stopped; it starts after that lead is stopped, or message ${this.roleOf(w).name} instead`;
     if (active) return `queued: ${this.roleOf(w).name} already has a worker running; it starts after that one ends`;
-    if (this.workersRunning() >= this.config.concurrency) return `queued: ${this.workersRunning()} workers running, the laptop's limit; it starts when one ends`;
+    if (this.reserved.has(`${w.project}/${w.role}`)) return `queued: ${this.roleOf(w).name} has a worker starting for another laptop; it starts after that one ends`;
+    if (this.workersRunning() + this.reserved.size >= this.config.concurrency) return `queued: ${this.workersRunning()} workers running, the laptop's limit; it starts when one ends`;
     return "queued";
   }
 
@@ -854,8 +944,12 @@ export class Supervisor {
     this.store.beginRemote(msg.id, msg.from, op, read.v);
     let out: Record<string, unknown>;
     if (read.v === 2) {
-      // The v: 2 ops are served from BOB-62 on; until then each gets its reply, a refusal.
-      out = { v: 2, re: op, req: msg.id, ok: false, error: "error" in read ? read.error : "this supervisor doesn't serve v: 2 requests yet" };
+      try {
+        if ("error" in read) throw new SupervisorError(read.error);
+        out = { v: 2, re: op, req: msg.id, ok: true, ...(await this.remoteDoV2(msg.from, msg.id, read.request)) };
+      } catch (err) {
+        out = { v: 2, re: op, req: msg.id, ok: false, error: (err as Error).message };
+      }
     } else {
       try {
         if ("error" in read) throw new SupervisorError(read.error);
@@ -970,6 +1064,67 @@ export class Supervisor {
     }
   }
 
+  /**
+   * A `v: 2` request (ADR 0007 §2, §3): from an allowlisted sender, about its own workers only
+   * (`spawned_by`). A spawn starts now or is refused (spawnNow); a stop of one already ended is ok.
+   */
+  private async remoteDoV2(from: string, msgId: string, req: RemoteRequestV2): Promise<Record<string, unknown>> {
+    const may = this.config.remote.get(from.toLowerCase());
+    if (!may) throw new SupervisorError(`${from} may not make requests here: it isn't in this supervisor's remote list`);
+    const mine = (w: WorkerRow) => w.spawned_by?.toLowerCase() === from.toLowerCase();
+    const own = (id: string): WorkerRow => {
+      const w = this.store.worker(id);
+      if (!w || !mine(w)) throw new SupervisorError(`${id} isn't a worker ${from} spawned`);
+      return w;
+    };
+    switch (req.op) {
+      case "spawn": {
+        if (!may.get(req.project)?.has(req.role)) {
+          const listed = [...may].flatMap(([p, rs]) => [...rs].map((r) => `${p}/${r}`)).join(", ");
+          throw new SupervisorError(`${from} may not spawn ${req.project}/${req.role}; it may spawn ${listed || "nothing"}`);
+        }
+        const w = await this.spawnNow({
+          project: req.project,
+          role: req.role,
+          task: req.task,
+          ...(req.tasks ? { tasks: req.tasks } : {}),
+          ...(req.session !== undefined ? { session: req.session ? { feature: req.session.feature, kind: req.session.kind, ...(req.session.label ? { label: req.session.label } : {}) } : null } : {}),
+          ...(req.model ? { model: req.model } : {}),
+          ...(req.effort ? { effort: req.effort } : {}),
+          as: "worker",
+          spawnedBy: from,
+          remoteBy: req.by,
+          spawnReq: msgId,
+        });
+        return { worker: this.remoteView(w) };
+      }
+      case "status":
+        return { worker: this.remoteView(own(req.id)) };
+      case "stop": {
+        const w = own(req.id);
+        if (w.state !== "queued" && !this.runs.has(w.id)) return { already_ended: true, worker: this.remoteView(w) };
+        return { worker: this.remoteView(await this.stop(w.id, `stopped by ${from}`)) };
+      }
+      case "list": {
+        const named = req.ids !== undefined || req.reqs !== undefined;
+        const ids = new Set(req.ids ?? []);
+        const reqs = new Set(req.reqs ?? []);
+        const live = new Set<WorkerState>(["queued", ...ACTIVE_STATES]);
+        const ws = this.store.workers().filter((w) => mine(w) && (named ? ids.has(w.id) || (w.spawn_req !== null && reqs.has(w.spawn_req)) : live.has(w.state)));
+        return fitList(ws.slice(-REMOTE_LIST_MAX).map((w) => this.remoteView(w)));
+      }
+      case "tail":
+        return { id: req.id, ...fitLines(this.tail(own(req.id).id, req.n)) };
+      case "summary": {
+        const w = own(req.id);
+        return { worker: this.remoteView(w), ...fitSummary(this.summary(w.id)) };
+      }
+      case "request":
+      case "answer":
+        throw new SupervisorError(`this supervisor doesn't serve v: 2 ${req.op} yet`);
+    }
+  }
+
   /** What a requester sees of a worker it spawned: its state and session, not its brief. */
   private remoteView(w: WorkerRow): Record<string, unknown> {
     const run = this.runs.get(w.id);
@@ -987,6 +1142,7 @@ export class Supervisor {
       started_at: w.started_at,
       ended_at: w.ended_at,
       remote_url: run?.remote && "url" in run.remote ? run.remote.url : null,
+      ...(w.spawn_req ? { spawn_req: w.spawn_req } : {}),
     };
   }
 
@@ -999,7 +1155,9 @@ export class Supervisor {
   /** Tells a remote requester about a worker it spawned: its Remote Control URL, its end. */
   private remoteEvent(w: WorkerRow, event: Record<string, unknown>): void {
     if (!w.spawned_by?.includes("@")) return;
-    this.sendRemote(w.spawned_by, reply(withholdSecrets({ event: event["event"], worker: w.id, ...event })));
+    // A v: 2 spawn's worker: its events say so and name the spawn that made it (ADR 0007 §2).
+    const v2 = w.spawn_req ? { v: 2, event: event["event"], worker: w.id, spawn_req: w.spawn_req } : { event: event["event"], worker: w.id };
+    this.sendRemote(w.spawned_by, reply(withholdSecrets({ ...v2, ...event })));
   }
 
   /** A dashboard action: only after the owner's own token checks out. */
@@ -1036,8 +1194,9 @@ export class Supervisor {
   private schedule(): void {
     for (const w of this.store.queued()) {
       // A lead holds no worker slot, so it never waits behind its own builders.
-      if (!isLead(w) && this.workersRunning() >= this.config.concurrency) continue;
-      const busy = [...this.runs.keys()].some((id) => {
+      // A remote spawn's reservation (spawnNow) holds its role and a place while it joins.
+      if (!isLead(w) && this.workersRunning() + this.reserved.size >= this.config.concurrency) continue;
+      const busy = this.reserved.has(`${w.project}/${w.role}`) || [...this.runs.keys()].some((id) => {
         const r = this.store.worker(id);
         return r?.project === w.project && r.role === w.role;
       });

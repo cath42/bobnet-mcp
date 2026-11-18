@@ -88,7 +88,7 @@ const send = (link: FakeLink, to: string, body: unknown, opts: { in_reply_to?: s
   });
 
 const ttlOf = (m: Envelope) => (Date.parse(m.expires_at) - Date.parse(m.created_at)) / 1000;
-const NOT_SERVED = "this supervisor doesn't serve v: 2 requests yet";
+const notYours = (id: string) => `${id} isn't a worker ${SUP_MBP} spawned`;
 
 describe("the store: the remote outbox and the requests' records", () => {
   it("keeps a remote row's to, its body verbatim, in_reply_to and ttl_seconds, in the order made", () => {
@@ -158,8 +158,8 @@ describe("the remote outbox: replies and events in the order made (criterion 1)"
     await until(() => ubu.store.outbox("remote").length === 4);
     const queued = ubu.store.outbox("remote");
     expect(queued.map((r) => [r.to_name, r.in_reply_to, r.ttl_seconds])).toContainEqual([SUP_MBP, r1.id, 86_400]);
-    expect(queued.find((r) => r.in_reply_to === r1.id)!.body).toBe(JSON.stringify({ v: 2, re: "status", req: r1.id, ok: false, error: NOT_SERVED }));
-    expect(queued.find((r) => r.in_reply_to === r3.id)!.body).toBe(JSON.stringify({ v: 2, re: "list", req: r3.id, ok: false, error: NOT_SERVED }));
+    expect(queued.find((r) => r.in_reply_to === r1.id)!.body).toBe(JSON.stringify({ v: 2, re: "status", req: r1.id, ok: false, error: notYours("w_1") }));
+    expect(JSON.parse(queued.find((r) => r.in_reply_to === r3.id)!.body)).toMatchObject({ v: 2, re: "list", req: r3.id, ok: true, workers: [{ project: "studio", role: "ann" }] });
     expect(queued.find((r) => r.in_reply_to === r2.id)!.body).toMatch(/^\{"ok":true,"op":"spawn",/);
     expect(queued.find((r) => r.in_reply_to === null)).toMatchObject({ to_name: SUP_MBP, ttl_seconds: 86_400, body: expect.stringMatching(/^\{"event":"remote_control","worker":"w_/) });
     expect(net.log.filter((m) => m.from === SUP_UBU)).toEqual([]);
@@ -168,7 +168,7 @@ describe("the remote outbox: replies and events in the order made (criterion 1)"
     ubu.link.failSend = () => null;
     const r4 = await send(mbp.link, SUP_UBU, { v: 2, op: "status", id: "w_2" });
     await until(() => mbp.got.length === 5);
-    expect(mbp.got.map((m) => [m.body, m.in_reply_to])).toEqual([...queued.map((r) => [r.body, r.in_reply_to]), [JSON.stringify({ v: 2, re: "status", req: r4.id, ok: false, error: NOT_SERVED }), r4.id]]);
+    expect(mbp.got.map((m) => [m.body, m.in_reply_to])).toEqual([...queued.map((r) => [r.body, r.in_reply_to]), [JSON.stringify({ v: 2, re: "status", req: r4.id, ok: false, error: notYours("w_2") }), r4.id]]);
     expect(ubu.store.outbox()).toEqual([]);
   });
 });
@@ -265,7 +265,7 @@ describe("a reply whose request was swept (criterion 3)", () => {
     await until(() => mbp.got.length === 1);
     expect(net.refused).toEqual([{ from: SUP_UBU, to: [SUP_MBP], code: "unknown_message" }]);
     expect(mbp.got[0]!.in_reply_to).toBeNull();
-    expect(JSON.parse(mbp.got[0]!.body)).toEqual({ v: 2, re: "status", req: req.id, ok: false, error: NOT_SERVED });
+    expect(JSON.parse(mbp.got[0]!.body)).toEqual({ v: 2, re: "status", req: req.id, ok: false, error: notYours("w_1") });
     await tick(30);
     expect(mbp.got).toHaveLength(1);
     expect(ubu.store.outbox()).toEqual([]);
@@ -579,7 +579,7 @@ describe("the target: a request handled once (criterion 6)", () => {
   });
 
   it("at start, a v: 2 request in progress gets a v: 2 reply naming it", async () => {
-    // Recorded as start finds it: v: 2 requests are served from BOB-62 on.
+    // Recorded as start finds it: the target stopped mid-spawn.
     const at = newStore();
     at.store.beginRemote("m_v2", SUP_MBP, "spawn", 2);
     const net = new FakeNetwork();

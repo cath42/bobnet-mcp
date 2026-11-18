@@ -43,6 +43,10 @@ export interface WorkerRow {
   spawned_by: string | null;
   /** "lead" for a long-lived lead its spawn asked for; "worker" (or null, before spawns said) ends after its result. */
   run_as: string | null;
+  /** A `v: 2` remote spawn's: the requester's orchestrator (`by`), kept for the record, never authorised on. */
+  remote_by: string | null;
+  /** A `v: 2` remote spawn's: the message id of the spawn that made it (ADR 0007 §2). */
+  spawn_req: string | null;
 }
 
 export type RequestKind = "approval" | "question";
@@ -162,6 +166,8 @@ export class Store {
     if (!cols.has("declared_session")) this.db.exec("ALTER TABLE workers ADD COLUMN declared_session TEXT");
     if (!cols.has("spawned_by")) this.db.exec("ALTER TABLE workers ADD COLUMN spawned_by TEXT");
     if (!cols.has("run_as")) this.db.exec("ALTER TABLE workers ADD COLUMN run_as TEXT");
+    if (!cols.has("remote_by")) this.db.exec("ALTER TABLE workers ADD COLUMN remote_by TEXT");
+    if (!cols.has("spawn_req")) this.db.exec("ALTER TABLE workers ADD COLUMN spawn_req TEXT");
     // The outbox also holds the supervisor's board reports (ADR 0001 §9): kind board_op, to_name the peer, body { ctx, op }.
     const outCols = new Set((this.db.prepare("PRAGMA table_info(outbox)").all() as Array<{ name: string }>).map((c) => c.name));
     if (!outCols.has("kind")) this.db.exec("ALTER TABLE outbox ADD COLUMN kind TEXT NOT NULL DEFAULT 'message'");
@@ -212,14 +218,16 @@ export class Store {
     declared_session?: string | null;
     spawned_by?: string | null;
     run_as?: "lead" | "worker";
+    remote_by?: string | null;
+    spawn_req?: string | null;
     /** Made beforehand when the board needs it before the row exists (a session join). */
     id?: string;
   }): WorkerRow {
     const id = w.id ?? newWorkerId();
     this.run(
-      `INSERT INTO workers (id, project, role, task, handoff, state, priority, resume_session, model, effort, tasks, declared_session, spawned_by, run_as, created_at)
-       VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, w.project, w.role, w.task, w.handoff, w.priority, w.resume_session, w.model ?? null, w.effort ?? null, w.tasks ? JSON.stringify(w.tasks) : null, w.declared_session ?? null, w.spawned_by ?? null, w.run_as ?? "worker", now(),
+      `INSERT INTO workers (id, project, role, task, handoff, state, priority, resume_session, model, effort, tasks, declared_session, spawned_by, run_as, remote_by, spawn_req, created_at)
+       VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, w.project, w.role, w.task, w.handoff, w.priority, w.resume_session, w.model ?? null, w.effort ?? null, w.tasks ? JSON.stringify(w.tasks) : null, w.declared_session ?? null, w.spawned_by ?? null, w.run_as ?? "worker", w.remote_by ?? null, w.spawn_req ?? null, now(),
     );
     return this.worker(id)!;
   }

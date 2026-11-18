@@ -111,7 +111,7 @@ describe("the loop test: two supervisors never answer each other's replies", () 
     expect(mbp.store.auditLog(20).filter((a) => a.action.startsWith("remote:"))).toEqual([]);
   });
 
-  it("a v: 2 request: the target refuses it with a v: 2 reply until it serves them, and the requester doesn't answer the refusal", async () => {
+  it("a v: 2 request: the target serves it with a v: 2 reply, and the requester doesn't answer the reply", async () => {
     const { net, mbp, ubu } = await twoSupervisors();
     const req = await send(ubu.link, SUP_MBP, JSON.stringify({ v: 2, op: "list" }));
     await until(() => net.log.some((m) => m.in_reply_to === req.id));
@@ -120,9 +120,28 @@ describe("the loop test: two supervisors never answer each other's replies", () 
       [SUP_UBU, null],
       [SUP_MBP, req.id],
     ]);
-    // The v: 2 ops are served from BOB-62 on; the refusal is a reply (rc.37's own, RC37.invalid, is below).
-    expect(JSON.parse(net.log[1]!.body)).toEqual({ v: 2, re: "list", req: req.id, ok: false, error: "this supervisor doesn't serve v: 2 requests yet" });
-    expect(mbp.store.auditLog(20).filter((a) => a.action.startsWith("remote:")).map((a) => a.action)).toEqual(["remote:refused"]);
+    expect(JSON.parse(net.log[1]!.body)).toEqual({ v: 2, re: "list", req: req.id, ok: true, workers: [] });
+    expect(mbp.store.auditLog(20).filter((a) => a.action.startsWith("remote:")).map((a) => a.action)).toEqual(["remote:list"]);
+    expect(ubu.store.auditLog(20).filter((a) => a.action.startsWith("remote:"))).toEqual([]);
+  });
+
+  it("a v: 2 spawn served: its reply and its worker's v: 2 events are never answered", async () => {
+    const { net, mbp, ubu } = await twoSupervisors();
+    const req = await send(ubu.link, SUP_MBP, JSON.stringify({ v: 2, op: "spawn", project: "studio", role: "ann", task: "one fix", by: "poe" }));
+    await until(() => net.log.some((m) => m.body.includes('"event":"remote_control"')));
+    // A refusal too: the role is busy now.
+    await send(ubu.link, SUP_MBP, JSON.stringify({ v: 2, op: "spawn", project: "studio", role: "ann", task: "again", by: "poe" }));
+    await until(() => net.log.length >= 5);
+    await settle(net);
+    expect(net.log.map((m) => [m.from, m.in_reply_to === null ? null : "reply", Object.keys(JSON.parse(m.body)).slice(0, 4).join(",")])).toEqual([
+      [SUP_UBU, null, "v,op,project,role"],
+      [SUP_MBP, "reply", "v,re,req,ok"],
+      [SUP_MBP, null, "v,event,worker,spawn_req"],
+      [SUP_UBU, null, "v,op,project,role"],
+      [SUP_MBP, "reply", "v,re,req,ok"],
+    ]);
+    expect(JSON.parse(net.log[2]!.body)).toMatchObject({ spawn_req: req.id });
+    expect(JSON.parse(net.log[4]!.body)).toMatchObject({ ok: false, error: "Ann isn't spawned: studio/ann already has a worker running" });
     expect(ubu.store.auditLog(20).filter((a) => a.action.startsWith("remote:"))).toEqual([]);
   });
 
