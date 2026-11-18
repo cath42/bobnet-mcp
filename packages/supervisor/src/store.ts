@@ -110,6 +110,11 @@ CREATE TABLE IF NOT EXISTS remote_sent (
   id TEXT PRIMARY KEY, message_id TEXT UNIQUE, to_name TEXT NOT NULL, op TEXT NOT NULL, target TEXT, body TEXT NOT NULL,
   state TEXT NOT NULL, reply TEXT, sent_at TEXT NOT NULL, deadline TEXT, replied_at TEXT
 );
+CREATE TABLE IF NOT EXISTS remote_workers (
+  laptop TEXT NOT NULL COLLATE NOCASE, id TEXT NOT NULL, to_name TEXT NOT NULL, spawn_req TEXT, view TEXT, state TEXT NOT NULL,
+  as_of TEXT NOT NULL, ended INTEGER NOT NULL DEFAULT 0, handoff TEXT, remote_url TEXT, told INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, PRIMARY KEY (laptop, id)
+);
 `;
 
 const now = () => new Date().toISOString();
@@ -146,6 +151,28 @@ export interface RemoteSentRow {
   sent_at: string;
   deadline: string | null;
   replied_at: string | null;
+}
+
+/**
+ * The requester's copy of a worker it spawned on another laptop (ADR 0007 §7): changed only by the
+ * target's replies and events, and only forward. `view` is the target's last remoteView (null until
+ * one came: a copy made from an event); `state` its state, or `unknown` (asked for, not returned, or
+ * not yet asked); `handoff` the handoff fields once ended (`handoff_text`, null for no file), null
+ * until they came; `told` once the orchestrator heard of its end.
+ */
+export interface RemoteWorkerRow {
+  laptop: string;
+  id: string;
+  to_name: string;
+  spawn_req: string | null;
+  view: string | null;
+  state: string;
+  as_of: string;
+  ended: number;
+  handoff: string | null;
+  remote_url: string | null;
+  told: number;
+  created_at: string;
 }
 
 export class Store {
@@ -421,6 +448,38 @@ export class Store {
   settleRemoteSent(id: string, set: { state: "replied"; reply: string } | { state: "unanswered" | "failed" }): void {
     if (set.state === "replied") this.run("UPDATE remote_sent SET state = 'replied', reply = ?, replied_at = ? WHERE id = ? AND state != 'replied'", set.reply, now(), id);
     else this.run("UPDATE remote_sent SET state = ? WHERE id = ? AND state IN ('sending', 'sent')", set.state, id);
+  }
+
+  /** The spawns sent since `since` that have no reply yet, for a reconcile's `reqs` (§7). */
+  remoteSpawnsUnanswered(since: string): RemoteSentRow[] {
+    return this.all("SELECT * FROM remote_sent WHERE op = 'spawn' AND state IN ('sent', 'unanswered') AND message_id IS NOT NULL AND sent_at >= ? ORDER BY sent_at, rowid", since);
+  }
+
+  // ---------- Remote workers (the requester's copies, ADR 0007 §7) ----------
+
+  remoteCopy(laptop: string, id: string): RemoteWorkerRow | null {
+    return this.one<RemoteWorkerRow>("SELECT * FROM remote_workers WHERE laptop = ? AND id = ?", laptop, id) ?? null;
+  }
+
+  /** Every copy, or those on `laptop`, oldest first. */
+  remoteCopies(laptop?: string): RemoteWorkerRow[] {
+    return laptop === undefined
+      ? this.all("SELECT * FROM remote_workers ORDER BY created_at, rowid")
+      : this.all("SELECT * FROM remote_workers WHERE laptop = ? ORDER BY created_at, rowid", laptop);
+  }
+
+  remoteCopiesOf(id: string): RemoteWorkerRow[] {
+    return this.all("SELECT * FROM remote_workers WHERE id = ? ORDER BY created_at, rowid", id);
+  }
+
+  putRemoteCopy(c: Omit<RemoteWorkerRow, "created_at">): void {
+    this.run(
+      `INSERT INTO remote_workers (laptop, id, to_name, spawn_req, view, state, as_of, ended, handoff, remote_url, told, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (laptop, id) DO UPDATE SET to_name = excluded.to_name, spawn_req = excluded.spawn_req, view = excluded.view, state = excluded.state,
+         as_of = excluded.as_of, ended = excluded.ended, handoff = excluded.handoff, remote_url = excluded.remote_url, told = excluded.told`,
+      c.laptop, c.id, c.to_name, c.spawn_req, c.view, c.state, c.as_of, c.ended, c.handoff, c.remote_url, c.told, now(),
+    );
   }
 
   audit(actor: string, action: string, workerId: string | null, detail: Record<string, unknown> = {}): void {

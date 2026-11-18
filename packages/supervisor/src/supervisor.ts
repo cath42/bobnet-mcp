@@ -46,7 +46,7 @@ import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
 import { holdReader, RunSlots, type SlotEntry } from "./slots.ts";
-import { ACTIVE_STATES, newWorkerId, type RemoteSentRow, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
+import { ACTIVE_STATES, newWorkerId, type RemoteSentRow, type RemoteWorkerRow, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
 import { type Outcome, type QueryFn, type Usage, WorkerRun, type WorkerRunOptions, workerEnv, ZERO_USAGE } from "./worker.ts";
 import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
 
@@ -145,8 +145,22 @@ const remoteWaitMs = (op: string) => (op === "spawn" ? 90_000 : (remoteTtl(op) +
  * build A ships later.
  */
 export const REMOTE_TOOLS_SINCE = "2.0.0-rc.39";
-/** The ops whose replies name workers, from which the requester knows which laptop a worker is on (§5). */
-const NAMES_WORKERS = new Set(["spawn", "list", "status", "stop", "summary"]);
+/** A worker's states that end it: an ended copy is final (§7). */
+const ENDED_STATES = new Set<string>(["done", "failed", "stopped"]);
+/** How often the requester reconciles while any copy isn't ended (§7). */
+const RECONCILE_MS = 5 * 60_000;
+/** The most ids, and the most reqs, one reconcile `list` names: their views fit one reply (§2). */
+const RECONCILE_BATCH = 10;
+/** The laptop of a name@laptop address. */
+const laptopOf = (address: string) => address.split("@")[1] ?? address;
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+/** Whether a copy has had a view from the target, not only what an event said (§7). */
+const filled = (c: RemoteWorkerRow) => c.view !== null && (JSON.parse(c.view) as Record<string, unknown>)["project"] !== undefined;
+/** An `exit` event's or a `summary` reply's handoff fields, as a copy keeps them (§6). */
+function handoffFields(json: Record<string, unknown>): string {
+  const text = typeof json["handoff_text"] === "string" ? json["handoff_text"] : null;
+  return JSON.stringify({ handoff_text: text, ...(text !== null && json["handoff_truncated"] === true ? { handoff_truncated: true, handoff_length: json["handoff_length"] } : {}) });
+}
 
 /** A reply or event with each text field's credential-looking spans withheld, the rest kept (§2). */
 function withholdSecrets<T>(value: T): T {
@@ -320,8 +334,12 @@ export class Supervisor {
   private readonly remoteWaits = new Map<string, (reply: Record<string, unknown>) => void>();
   /** Spawns a tool is still deciding (waiting, or listing after the wait): a late reply to one is the tool's, not a note's. */
   private readonly remoteDeciding = new Set<string>();
-  /** Remote workers whose `exit` the orchestrator has heard, so a redelivery isn't told twice (BOB-65's copies replace it). */
-  private readonly remoteExits = new Set<string>();
+  /** Copies whose handoff a `summary` is being asked for, by laptop/id. */
+  private readonly summaryAsks = new Set<string>();
+  /** Each laptop's reconcile in progress, by its lowercase name: a second waits on the first. */
+  private readonly reconciling = new Map<string, Promise<string | null>>();
+  /** Set by shutdown: the reconcile timer stops. */
+  private closing = false;
   /** project/role of each `v: 2` spawn joining its board session: the role and a place held for it. */
   private readonly reserved = new Set<string>();
   /** Why the sandbox can't run on this machine, from the check at start; null when it can (or nothing needs it). */
@@ -491,11 +509,15 @@ export class Supervisor {
     this.ciTimer = setInterval(() => void this.pollCi(), CI_POLL_MS);
     this.ciTimer.unref();
     this.stallTimer.unref();
+    // The requester's copies (ADR 0007 §7): reconciled now, and on a timer while any isn't ended.
+    void this.reconcile();
+    void this.reconcileLoop();
     this.schedule();
     this.writeStatus();
   }
 
   async shutdown(): Promise<void> {
+    this.closing = true;
     this.boards?.stop();
     if (this.ciTimer) clearInterval(this.ciTimer);
     if (this.stallTimer) clearInterval(this.stallTimer);
@@ -511,6 +533,7 @@ export class Supervisor {
   onConnected(): void {
     this.flushOutbox();
     this.flushCaptures();
+    void this.reconcile();
   }
 
   /** Captures made as a role this supervisor runs; a role's own process is this one, so its ctx goes with it. */
@@ -1011,72 +1034,245 @@ export class Supervisor {
     this.sendRemote(msg.from, text, msg.id);
   }
 
-  /** A reply from a supervisor this one sent a request: matched on `req` and its sender, never the envelope; the rest is logged. */
+  /**
+   * A reply or event from another laptop's supervisor (ADR 0007 §7): a reply is matched on `req` to
+   * the request this supervisor sent, and taken only from the address it went to; a `v: 2` event goes
+   * to its worker's copy. Anything else is logged and dropped.
+   */
   private onRemoteAnswer(msg: Envelope): void {
     const read = classifyRemote(msg.body, msg.in_reply_to);
     if (!read) return;
-    if (read.kind === "event" && read.json["v"] === 2 && read.json["event"] === "exit") return this.onRemoteExit(msg.from, read.json);
-    const req = read.json["req"];
-    const answers = read.kind === "reply" || read.json["event"] === "withheld";
-    const sent = answers && typeof req === "string" ? this.store.remoteSentByMessage(req) : null;
-    const from = parseRecipient(msg.from, this.laptop ?? "");
-    const to = sent ? parseRecipient(sent.to_name, this.laptop ?? "") : null;
-    if (!sent || !from || !to || addressKey(from) !== addressKey(to)) {
-      this.log.info("a reply or event from another supervisor, not one to a request sent", { from: msg.from, id: msg.id, kind: read.kind });
+    const answers = read.kind === "reply" || (read.json["event"] === "withheld" && typeof read.json["req"] === "string");
+    if (!answers) {
+      if (read.json["v"] === 2) return this.onRemoteEvent(msg.from, read.json);
+      this.log.info("an event from another supervisor without v: 2", { from: msg.from, id: msg.id });
       return;
     }
-    // A reply that comes after its wait ended still counts: it is the record of what happened.
-    const gaveUp = sent.state === "unanswered" && !this.remoteWaits.has(sent.id) && !this.remoteDeciding.has(sent.id);
-    const known = gaveUp ? this.remoteWorkers() : null;
+    const req = read.json["req"];
+    const sent = typeof req === "string" ? this.store.remoteSentByMessage(req) : null;
+    if (!sent || !this.sameAddress(msg.from, sent.to_name)) {
+      this.log.info("a reply from another supervisor, not to a request sent", { from: msg.from, id: msg.id });
+      return;
+    }
+    // The copies first, while the row still says whether its tool gave up on it. A reply that comes
+    // after its wait ended still counts: it is the record of what happened.
+    this.copyFromReply(sent, read.json);
     this.store.settleRemoteSent(sent.id, { state: "replied", reply: msg.body });
     this.remoteWaits.get(sent.id)?.(read.json);
-    if (gaveUp && sent.op === "spawn") this.spawnedAfterAll(sent, read.json, known!);
+  }
+
+  /** Whether two addresses name the same peer, a bare name being this laptop's. */
+  private sameAddress(a: string, b: string): boolean {
+    const x = parseRecipient(a, this.laptop ?? "");
+    const y = parseRecipient(b, this.laptop ?? "");
+    return x !== null && y !== null && addressKey(x) === addressKey(y);
   }
 
   /**
-   * A `v: 2` worker's end, from the supervisor its spawn went to (ADR 0007 §6): the orchestrator hears
-   * it as for a local end, its handoff's text left for worker_summary. Until the requester keeps
-   * copies of its remote workers (BOB-65), it is matched to the spawn it sent, and heard once a run.
+   * A `v: 2` event about a worker this supervisor spawned (§2, §7): taken only from the supervisor its
+   * `spawn_req`'s spawn went to. A worker without a copy (its spawn reply late or lost) gets one, and
+   * `status` fills it. An `exit` ends the copy with its handoff; a `remote_control` url is kept.
    */
-  private onRemoteExit(from: string, json: Record<string, unknown>): void {
-    const sent = typeof json["spawn_req"] === "string" ? this.store.remoteSentByMessage(json["spawn_req"]) : null;
-    const fromAt = parseRecipient(from, this.laptop ?? "");
-    const to = sent ? parseRecipient(sent.to_name, this.laptop ?? "") : null;
+  private onRemoteEvent(from: string, json: Record<string, unknown>): void {
     const id = json["worker"];
-    if (!sent || sent.op !== "spawn" || !fromAt || !to || addressKey(fromAt) !== addressKey(to) || typeof id !== "string" || this.remoteExits.has(id)) {
-      this.log.info("an exit from another supervisor, not for a spawn sent", { from, worker: id });
+    const spawnReq = json["spawn_req"];
+    const sent = typeof spawnReq === "string" ? this.store.remoteSentByMessage(spawnReq) : null;
+    let c = sent && typeof id === "string" ? this.store.remoteCopy(laptopOf(sent.to_name), id) : null;
+    if (!sent || sent.op !== "spawn" || typeof id !== "string" || !this.sameAddress(from, sent.to_name) || (c?.spawn_req && c.spawn_req !== spawnReq)) {
+      this.log.info("an event from another supervisor, not for a spawn sent there", { from, event: json["event"], worker: id });
       return;
     }
-    this.remoteExits.add(id);
-    const laptop = sent.to_name.split("@")[1] ?? sent.to_name;
-    const body = JSON.parse(sent.body) as { project?: string; role?: string };
-    const replied = sent.reply ? (classifyRemote(sent.reply)?.json["worker"] as Record<string, unknown> | undefined) : undefined;
-    const name = typeof replied?.["name"] === "string" ? replied["name"] : body.role;
-    const checkpoint = typeof json["checkpoint"] === "string" ? json["checkpoint"] : null;
-    const state = String(json["state"]);
-    const what = state === "done" ? `done${checkpoint ? `: ${checkpoint}` : ""}` : `${state}: ${String(json["error"] ?? "no reason given")}`;
-    const lands = Array.isArray(json["lands"]) ? (json["lands"] as unknown[]).filter((l): l is string => typeof l === "string") : [];
-    const landed = lands.length ? ` Land: ${lands.join("; ")}.` : "";
+    const now = new Date().toISOString();
+    if (!c) {
+      c = { laptop: laptopOf(sent.to_name), id, to_name: sent.to_name, spawn_req: sent.message_id, view: null, state: "unknown", as_of: now, ended: 0, handoff: null, remote_url: null, told: 0, created_at: now };
+      this.store.putRemoteCopy(c);
+      this.copyMade(c);
+      this.remoteAskQuietly(c.to_name, { v: 2, op: "status", id });
+    }
+    if (json["event"] === "exit") {
+      if (!c.ended) {
+        const state = String(json["state"]);
+        const view = { ...(c.view ? (JSON.parse(c.view) as Record<string, unknown>) : { id, spawn_req: c.spawn_req }), state, checkpoint: json["checkpoint"] ?? null, error: json["error"] ?? null };
+        c = { ...c, view: JSON.stringify(view), state, ended: 1, as_of: now };
+      }
+      if (c.handoff === null) c = { ...c, handoff: handoffFields(json) };
+      const lands = Array.isArray(json["lands"]) ? (json["lands"] as unknown[]).filter((l): l is string => typeof l === "string") : [];
+      this.copyEnd(c, lands);
+    } else if (json["event"] === "remote_control" && typeof json["url"] === "string" && !c.ended) {
+      this.store.putRemoteCopy({ ...c, remote_url: json["url"] });
+    }
+  }
+
+  /** A target's ok reply, into the copies of the workers it names (§7); ids a list was asked for and didn't return are `unknown`. */
+  private copyFromReply(sent: RemoteSentRow, json: Record<string, unknown>): void {
+    if (json["ok"] !== true) return;
+    const laptop = laptopOf(sent.to_name);
+    const asOf = new Date().toISOString();
+    const asked = JSON.parse(sent.body) as { ids?: string[] };
+    const w = json["worker"];
+    if (isRecord(w)) this.copyView(sent.to_name, laptop, w, asOf, sent.op === "summary" && "handoff_text" in json ? handoffFields(json) : undefined);
+    if (!Array.isArray(json["workers"])) return;
+    const seen = new Set<string>();
+    for (const v of json["workers"] as unknown[]) {
+      if (!isRecord(v) || typeof v["id"] !== "string") continue;
+      seen.add(v["id"]);
+      this.copyView(sent.to_name, laptop, v, asOf);
+    }
+    // A list cut to fit doesn't say what it left out.
+    if (sent.op !== "list" || json["truncated"] === true) return;
+    for (const id of asked.ids ?? []) {
+      const c = seen.has(id) ? null : this.store.remoteCopy(laptop, id);
+      if (c && !c.ended) this.store.putRemoteCopy({ ...c, state: "unknown", as_of: asOf });
+    }
+  }
+
+  /**
+   * The target's view of a worker into its copy (§7): only forward, an ended copy final, a url never
+   * cleared by a null. A copy made from an event takes the first view that comes, its state kept.
+   */
+  private copyView(to: string, laptop: string, view: Record<string, unknown>, asOf: string, handoff?: string): void {
+    const id = view["id"] as string;
+    const was = this.store.remoteCopy(laptop, id);
+    if (was?.ended && filled(was)) {
+      // Final: only its handoff, should it not have come yet.
+      if (handoff !== undefined && was.handoff === null) this.copyEnd({ ...was, handoff }, []);
+      return;
+    }
+    const state = typeof view["state"] === "string" ? view["state"] : "unknown";
+    const url = typeof view["remote_url"] === "string" ? view["remote_url"] : null;
+    const ended = was?.ended === 1 || ENDED_STATES.has(state);
+    const c: RemoteWorkerRow = {
+      laptop: was?.laptop ?? laptop,
+      id,
+      to_name: to,
+      spawn_req: typeof view["spawn_req"] === "string" ? view["spawn_req"] : (was?.spawn_req ?? null),
+      view: JSON.stringify(view),
+      state: was?.ended ? was.state : state,
+      as_of: was?.ended ? was.as_of : asOf,
+      ended: ended ? 1 : 0,
+      handoff: was?.handoff ?? handoff ?? null,
+      remote_url: url ?? was?.remote_url ?? null,
+      told: was?.told ?? 0,
+      created_at: was?.created_at ?? asOf,
+    };
+    this.store.putRemoteCopy(c);
+    if (!was) this.copyMade(c);
+    if (ended) this.copyEnd(c, []);
+  }
+
+  /**
+   * An ended copy (§6): without its handoff, `summary` is asked for it; with it, the orchestrator is
+   * told, once, as for a local end ("… done: …; handoff in worker_summary").
+   */
+  private copyEnd(c: RemoteWorkerRow, lands: string[]): void {
+    if (c.handoff === null || c.told) {
+      this.store.putRemoteCopy(c);
+      if (c.handoff === null) this.askSummary(c);
+      return;
+    }
+    this.store.putRemoteCopy({ ...c, told: 1 });
+    const { project, role, name } = this.copyNames(c);
+    const v = c.view ? (JSON.parse(c.view) as Record<string, unknown>) : {};
+    const checkpoint = typeof v["checkpoint"] === "string" ? v["checkpoint"] : null;
+    const what = c.state === "done" ? `done${checkpoint ? `: ${checkpoint}` : ""}` : `${c.state}: ${typeof v["error"] === "string" ? v["error"] : "no reason given"}`;
+    const h = JSON.parse(c.handoff) as { handoff_text: string | null; handoff_truncated?: true; handoff_length?: number };
     const handoff =
-      typeof json["handoff_text"] !== "string"
-        ? "no handoff file"
-        : json["handoff_truncated"] === true
-          ? `handoff in worker_summary (cut; ${String(json["handoff_length"])} characters in the file)`
-          : "handoff in worker_summary";
-    this.store.audit(from, "remote:exit", id, { message: json["spawn_req"], state });
-    this.notify(`${name} (${id}, ${body.project}/${body.role}) on ${laptop} ${what}; ${handoff}.${landed}`, body.project);
+      h.handoff_text === null ? "no handoff file" : h.handoff_truncated ? `handoff in worker_summary (cut; ${String(h.handoff_length)} characters in the file)` : "handoff in worker_summary";
+    const landed = lands.length ? ` Land: ${lands.join("; ")}.` : "";
+    this.store.audit(c.to_name, "remote:exit", c.id, { message: c.spawn_req, state: c.state });
+    this.notify(`${name} (${c.id}, ${project}/${role}) on ${c.laptop} ${what}; ${handoff}.${landed}`, project);
   }
 
-  /** A spawn's reply after its tool gave up on it (§3): the worker runs, and the orchestrator hears so, unless list already found it. */
-  private spawnedAfterAll(sent: RemoteSentRow, json: Record<string, unknown>, known: Map<string, Set<string>>): void {
-    const w = json["ok"] === true ? (json["worker"] as Record<string, unknown> | undefined) : undefined;
-    if (!w || typeof w["id"] !== "string" || known.has(w["id"])) return;
-    const laptop = sent.to_name.split("@")[1] ?? sent.to_name;
-    const body = JSON.parse(sent.body) as { project?: string; role?: string };
-    this.store.audit(sent.to_name, "remote:spawned_after_all", w["id"], { message: sent.message_id });
-    this.notify(`${w["name"] ?? body.role} (${w["id"]}, ${body.project}/${body.role}) on ${laptop} spawned after all: its reply came after spawn_worker had given up on it. worker_status ${w["id"]} for more.`, body.project);
+  /** A copy made for a spawn its tool gave up on (no reply in time, §3): the worker runs after all, and the orchestrator hears so. */
+  private copyMade(c: RemoteWorkerRow): void {
+    const sent = c.spawn_req ? this.store.remoteSentByMessage(c.spawn_req) : null;
+    if (!sent || sent.state !== "unanswered" || this.remoteWaits.has(sent.id) || this.remoteDeciding.has(sent.id)) return;
+    const { project, role, name } = this.copyNames(c);
+    this.store.audit(sent.to_name, "remote:spawned_after_all", c.id, { message: sent.message_id });
+    this.notify(`${name} (${c.id}, ${project}/${role}) on ${c.laptop} spawned after all: its reply came after spawn_worker had given up on it. worker_status ${c.id} for more.`, project);
   }
 
+  /** A copy's project, role and name: from its view, else from the spawn that made it. */
+  private copyNames(c: RemoteWorkerRow): { project?: string; role?: string; name: string } {
+    const v = c.view ? (JSON.parse(c.view) as Record<string, unknown>) : {};
+    const sent = c.spawn_req ? this.store.remoteSentByMessage(c.spawn_req) : null;
+    const asked = sent ? (JSON.parse(sent.body) as { project?: string; role?: string }) : {};
+    const project = typeof v["project"] === "string" ? v["project"] : asked.project;
+    const role = typeof v["role"] === "string" ? v["role"] : asked.role;
+    return { ...(project ? { project } : {}), ...(role ? { role } : {}), name: typeof v["name"] === "string" ? v["name"] : (role ?? c.id) };
+  }
+
+  /** An ended copy's handoff, asked for once at a time (§7). */
+  private askSummary(c: RemoteWorkerRow): void {
+    const key = `${c.laptop.toLowerCase()}/${c.id}`;
+    if (this.summaryAsks.has(key)) return;
+    this.summaryAsks.add(key);
+    this.remoteAskQuietly(c.to_name, { v: 2, op: "summary", id: c.id }).finally(() => this.summaryAsks.delete(key));
+  }
+
+  /** A request no tool waits on (a copy's fill, its handoff, a reconcile): its reply goes to the copies, a failure to the log. */
+  private remoteAskQuietly(to: string, body: RemoteRequestV2): Promise<unknown> {
+    return this.remoteAsk(to, body).catch((err: Error) => this.log.info("a remote request for the copies wasn't sent", { to, op: body.op, err: err.message }));
+  }
+
+  /** Reconciles the copies with each laptop they are on (§7): on start, on each connect, and every 5 minutes while one isn't ended. */
+  async reconcile(): Promise<void> {
+    if (!this.laptop) return;
+    const laptops = new Map<string, string>();
+    for (const c of this.store.remoteCopies()) if (!c.ended || c.handoff === null) laptops.set(c.laptop.toLowerCase(), c.laptop);
+    for (const s of this.store.remoteSpawnsUnanswered(new Date(Date.now() - REMOTE_ANSWER_TTL_S * 1000).toISOString())) laptops.set(laptopOf(s.to_name).toLowerCase(), laptopOf(s.to_name));
+    await Promise.all([...laptops.values()].map((l) => this.reconcileOn(l)));
+  }
+
+  /**
+   * One laptop's reconcile (§7): `list` with its copies not ended (`ids`) and its spawns of the last
+   * day with no reply (`reqs`), whose replies replace the copies; an ended copy without its handoff
+   * asks `summary`. Null once asked, or with nothing to ask; else why it couldn't be. One at a time per laptop.
+   */
+  reconcileOn(laptop: string): Promise<string | null> {
+    const key = laptop.toLowerCase();
+    const running = this.reconciling.get(key);
+    if (running) return running;
+    const p = this.reconcileNow(laptop).finally(() => this.reconciling.delete(key));
+    this.reconciling.set(key, p);
+    return p;
+  }
+
+  private async reconcileNow(laptop: string): Promise<string | null> {
+    const copies = this.store.remoteCopies(laptop);
+    const ids = copies.filter((c) => !c.ended).map((c) => c.id);
+    const made = new Set(copies.map((c) => c.spawn_req));
+    const since = new Date(Date.now() - REMOTE_ANSWER_TTL_S * 1000).toISOString();
+    const reqs = this.store
+      .remoteSpawnsUnanswered(since)
+      .filter((s) => laptopOf(s.to_name).toLowerCase() === laptop.toLowerCase() && !made.has(s.message_id))
+      .map((s) => s.message_id!);
+    const handoffs = copies.filter((c) => c.ended && c.handoff === null);
+    if (ids.length === 0 && reqs.length === 0 && handoffs.length === 0) return null;
+    try {
+      const to = await this.remoteTarget(laptop);
+      for (const c of handoffs) this.askSummary(c);
+      for (let i = 0; i < Math.max(ids.length, reqs.length); i += RECONCILE_BATCH) {
+        const some = (xs: string[]) => xs.slice(i, i + RECONCILE_BATCH);
+        const r = await this.remoteAsk(to, { v: 2, op: "list", ...(some(ids).length ? { ids: some(ids) } : {}), ...(some(reqs).length ? { reqs: some(reqs) } : {}) });
+        if (!r.reply) return `no reply from ${laptop} within ${remoteWaitMs("list") / 1000} s`;
+        if (r.reply["ok"] !== true) return typeof r.reply["error"] === "string" ? r.reply["error"] : `${laptop}'s reply to the list was withheld`;
+      }
+      return null;
+    } catch (err) {
+      this.log.info("reconcile: couldn't ask", { laptop, err: (err as Error).message });
+      return (err as Error).message;
+    }
+  }
+
+  /** Every RECONCILE_MS on the supervisor's clock, while any copy isn't ended. */
+  private async reconcileLoop(): Promise<void> {
+    while (!this.closing) {
+      await this.sleep(RECONCILE_MS);
+      if (this.closing) return;
+      if (this.store.remoteCopies().some((c) => !c.ended)) await this.reconcile();
+    }
+  }
   /**
    * Asks another laptop's supervisor (`to`, its name@laptop) a `v: 2` request and waits for its reply
    * (ADR 0007 §2). Its row is written before the send; the broker drops it undelivered after its ttl.
@@ -1179,36 +1375,14 @@ export class Supervisor {
   }
 
   /**
-   * Each remote worker this supervisor knows of, by id: the target addresses whose replies named it
-   * (a spawn's, or a list's that found it). Read from remote_sent until the copies (§7) keep them.
-   */
-  remoteWorkers(): Map<string, Set<string>> {
-    const known = new Map<string, Set<string>>();
-    for (const row of this.store.remoteSentList()) {
-      if (row.state !== "replied" || !row.reply || !NAMES_WORKERS.has(row.op)) continue;
-      const json = classifyRemote(row.reply)?.json;
-      if (!json || json["ok"] !== true) continue;
-      const ws = [json["worker"], ...(Array.isArray(json["workers"]) ? json["workers"] : [])];
-      for (const w of ws) {
-        const id = w && typeof w === "object" ? (w as { id?: unknown }).id : undefined;
-        if (typeof id !== "string") continue;
-        const at = known.get(id) ?? new Set<string>();
-        at.add(row.to_name);
-        known.set(id, at);
-      }
-    }
-    return known;
-  }
-
-  /**
-   * Where a worker id is (§5): null for this laptop, else the laptop it was spawned on. `laptop`, if
+   * Where a worker id is (§5): null for this laptop, else the laptop its copy is on. `laptop`, if
    * given, must match; an id on two laptops needs it. An id known nowhere stays this laptop's, as
    * today, or goes to the laptop named, whose supervisor answers for it.
    */
   remoteWhere(id: string, laptop?: string): string | null {
     if (laptop !== undefined && this.isHere(laptop)) return null;
     const here = this.store.worker(id) !== undefined;
-    const there = [...(this.remoteWorkers().get(id) ?? [])].map((a) => a.split("@")[1] ?? a);
+    const there = this.store.remoteCopiesOf(id).map((c) => c.laptop);
     if (laptop === undefined) {
       if (there.length + (here ? 1 : 0) > 1) throw new SupervisorError(`${id} is a worker on ${[...(here ? [this.laptop ?? "this laptop"] : []), ...there].join(" and ")}: say which with laptop`);
       return here || there.length === 0 ? null : there[0]!;
@@ -1219,33 +1393,64 @@ export class Supervisor {
     return laptop;
   }
 
-  /** The remote workers this supervisor knows of on `laptop`, oldest first. */
-  remoteIdsOn(laptop: string): string[] {
-    const on = (to: string) => (to.split("@")[1] ?? "").toLowerCase() === laptop.toLowerCase();
-    return [...this.remoteWorkers()].filter(([, at]) => [...at].some(on)).map(([id]) => id);
+  /** The laptops this supervisor has copies of workers on, for list_workers laptop "*". */
+  remoteLaptops(): string[] {
+    const at = new Map<string, string>();
+    for (const c of this.store.remoteCopies()) at.set(c.laptop.toLowerCase(), c.laptop);
+    return [...at.values()];
   }
 
-  /** The laptops this supervisor has spawned on, for list_workers laptop "*". */
-  remoteLaptops(): string[] {
-    const at = new Set<string>();
-    for (const tos of this.remoteWorkers().values()) for (const to of tos) at.add(to.split("@")[1] ?? to);
-    return [...at];
+  /** The copies of the workers on `laptop`, oldest first. */
+  remoteCopies(laptop: string): RemoteWorkerRow[] {
+    return this.store.remoteCopies(laptop);
+  }
+
+  remoteCopy(laptop: string, id: string): RemoteWorkerRow | null {
+    return this.store.remoteCopy(laptop, id);
+  }
+
+  /** A copy as the tools show it (§7): its last view, its url kept, its laptop and as_of. */
+  copyRow(c: RemoteWorkerRow): Record<string, unknown> {
+    const v = c.view ? (JSON.parse(c.view) as Record<string, unknown>) : { id: c.id, ...(c.spawn_req ? { spawn_req: c.spawn_req } : {}) };
+    return { ...v, state: c.state, remote_url: c.remote_url, laptop: c.laptop, as_of: c.as_of };
+  }
+
+  /** An ended copy's handoff fields (§6): `handoff_text` (null for no file), and the cut's; none until they came. */
+  copyHandoff(c: RemoteWorkerRow | null): Record<string, unknown> {
+    return c?.handoff ? (JSON.parse(c.handoff) as Record<string, unknown>) : {};
   }
 
   /**
    * One `v: 2` request to `laptop`'s supervisor for a tool (§5): checked, sent, its reply's fields, with
    * `as_of`, the time it was answered. A refusal is the target's own words; no reply leaves only what
-   * `list` found, else an error that it may or may not have run.
+   * `list` found, else an error that it may or may not have run. With `copy` (a worker id), a target
+   * that can't be asked answers from that worker's copy (§5, §8): its view and handoff, its `as_of`,
+   * and `from_copy`, why.
    */
-  async remoteCall(laptop: string, request: RemoteRequestV2): Promise<Record<string, unknown> & { as_of: string }> {
-    const to = await this.remoteTarget(laptop);
+  async remoteCall(laptop: string, request: RemoteRequestV2, opts: { copy?: string } = {}): Promise<Record<string, unknown> & { as_of: string }> {
+    const fromCopy = (err: Error): Record<string, unknown> & { as_of: string } => {
+      const c = opts.copy !== undefined ? this.store.remoteCopy(laptop, opts.copy) : null;
+      if (!c) throw err;
+      return { worker: this.copyRow(c), ...(request.op === "summary" ? this.copyHandoff(c) : {}), as_of: c.as_of, from_copy: err.message };
+    };
+    let to: string;
+    try {
+      to = await this.remoteTarget(laptop);
+    } catch (err) {
+      return fromCopy(err as Error);
+    }
     const offline =
       request.op === "spawn"
         ? `${laptop}'s supervisor is offline (it dropped as the spawn was sent; it runs only if ${laptop} is back within ${remoteTtl("spawn")} s, and you are told then)`
         : `${laptop}'s supervisor is offline (it dropped as the ${request.op} was sent)`;
-    const out = await this.remoteRequest(to, request, { refuseQueued: offline });
+    let out: RemoteOutcome;
+    try {
+      out = await this.remoteRequest(to, request, { refuseQueued: offline });
+    } catch (err) {
+      return fromCopy(err as Error);
+    }
     const as_of = new Date().toISOString();
-    if (out.outcome === "unknown") throw new SupervisorError(out.error);
+    if (out.outcome === "unknown") return fromCopy(new SupervisorError(out.error));
     if (out.outcome === "found") {
       // Only the worker's view came back: enough for a spawn, a status or a stop, not for a tail or a summary.
       if (request.op === "tail" || request.op === "summary") throw new SupervisorError(`no reply from ${laptop} to the ${request.op} in time; its list shows ${out.worker["id"]} ${out.worker["state"]}: ask again`);

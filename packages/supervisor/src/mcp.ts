@@ -206,15 +206,27 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
   const remoteRow = (w: unknown, laptop: string, as_of: string) => ({ ...(w as Record<string, unknown>), laptop, as_of });
   /** What a reply the requester didn't get in time, its worker found by list instead, says. */
   const found = (r: Record<string, unknown>, laptop: string, what: string) => (r["found"] ? { note: `no reply in time; ${laptop}'s list shows ${what}` } : {});
-  /** The workers this supervisor spawned on `laptop`, asked live: its live ones, or with `all` every one it knows of. */
-  const remoteList = async (laptop: string, l: z.infer<typeof ListArgs>) => {
-    const r = await sup.remoteCall(laptop, { v: 2, op: "list", ...(l.all ? { ids: sup.remoteIdsOn(laptop).slice(-100) } : {}) });
-    let ws = (r["workers"] as Array<Record<string, unknown>>).filter((w) => !l.project || w["project"] === l.project);
+  /**
+   * The workers this supervisor spawned on `laptop`, from its copies (§7) once reconciled: those not
+   * ended, or with `all` every one. A laptop that can't be asked leaves the copies as they were, each
+   * saying why; with no copies there, it is refused as any request would be.
+   */
+  const remoteList = async (laptop: string, l: z.infer<typeof ListArgs>): Promise<Array<Record<string, unknown>>> => {
+    if (sup.remoteCopies(laptop).length === 0) {
+      await sup.remoteTarget(laptop);
+      return [];
+    }
+    const why = await sup.reconcileOn(laptop);
+    let ws = sup.remoteCopies(laptop).filter((c) => l.all || !c.ended).map((c) => sup.copyRow(c));
+    if (l.project) ws = ws.filter((w) => w["project"] === l.project);
     if (l.since) ws = ws.filter((w) => !w["ended_at"] || String(w["ended_at"]) >= l.since! || String(w["started_at"] ?? "") >= l.since!);
     const limit = l.limit ?? (l.all ? LIST_ALL_DEFAULT : undefined);
     if (limit !== undefined) ws = ws.slice(-limit);
-    return ws.map((w) => remoteRow(w, laptop, r.as_of));
+    if (!why) return ws;
+    return ws.length > 0 ? ws.map((w) => ({ ...w, unreachable: why })) : [{ laptop, unreachable: why }];
   };
+  /** What a tool answered from a copy says (§5): why the target wasn't asked, and how old the copy is. */
+  const fromCopy = (r: Record<string, unknown>) => (r["from_copy"] ? { note: `${String(r["from_copy"])}: this is its copy as of ${String(r["as_of"])}` } : {});
   return {
     spawn_worker: async (a) => {
       const s = Spawn.parse(a);
@@ -237,7 +249,8 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
           ...(s.effort ? { effort: s.effort } : {}),
           by: sup.orchestratorOf(s.project),
         });
-        return { ...remoteRow(r["worker"], laptop, r.as_of), ...found(r, laptop, "the worker this spawn made") };
+        const c = sup.remoteCopy(laptop, String((r["worker"] as Record<string, unknown>)["id"]));
+        return { ...(c ? sup.copyRow(c) : remoteRow(r["worker"], laptop, r.as_of)), ...found(r, laptop, "the worker this spawn made") };
       }
       return sup.spawnJoined({
         project: s.project,
@@ -285,8 +298,10 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
       const s = StatusArgs.parse(a);
       const laptop = where(s.id, s.laptop, "worker_status");
       if (laptop === null) return sup.status(s.id, s.full);
-      const r = await sup.remoteCall(laptop, { v: 2, op: "status", id: s.id });
-      return { ...remoteRow(r["worker"], laptop, r.as_of), ...found(r, laptop, "it") };
+      const r = await sup.remoteCall(laptop, { v: 2, op: "status", id: s.id }, { copy: s.id });
+      // The copy, once the reply is in it: only forward, its url kept (§7).
+      const c = sup.remoteCopy(laptop, s.id);
+      return { ...(c ? sup.copyRow(c) : remoteRow(r["worker"], laptop, r.as_of)), ...found(r, laptop, "it"), ...fromCopy(r) };
     },
     tail_worker: async (a) => {
       const t = Tail.parse(a);
@@ -300,8 +315,10 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
       const x = WorkerId.parse(a);
       const laptop = where(x.id, x.laptop, "worker_summary");
       if (laptop === null) return sup.summary(x.id);
-      const r = await sup.remoteCall(laptop, { v: 2, op: "summary", id: x.id });
-      return { ...r, laptop };
+      const r = await sup.remoteCall(laptop, { v: 2, op: "summary", id: x.id }, { copy: x.id });
+      const { from_copy: _f, ...fields } = r;
+      // The handoff the copy keeps (§6), where the reply has none.
+      return { ...sup.copyHandoff(sup.remoteCopy(laptop, x.id)), ...fields, laptop, ...fromCopy(r) };
     },
     pending_requests: () => sup.pending(),
     request_detail: (a) => sup.requestDetail(Id.parse(a).id),

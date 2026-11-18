@@ -226,9 +226,11 @@ describe("which laptop a worker id is on (criterion 3)", () => {
     const { net, call } = await setup();
     const ann = await call("spawn_worker", ANN);
     net.disconnect("ubu1");
+    // Its copies stand in, each saying why (BOB-65); a laptop with none left to show is one row of why.
     const all = await call("list_workers", { laptop: "*" });
-    expect(all).toEqual([{ laptop: "ubu1", unreachable: expect.stringMatching(/^ubu1's supervisor is offline \(last seen /) }]);
-    expect(ann.id).toBeTruthy();
+    expect(all).toEqual([expect.objectContaining({ id: ann.id, state: "running", laptop: "ubu1", as_of: ann.as_of, unreachable: expect.stringMatching(/^ubu1's supervisor is offline \(last seen /) })]);
+    const none = await call("list_workers", { laptop: "*", project: "works" });
+    expect(none).toEqual([{ laptop: "ubu1", unreachable: expect.stringMatching(/^ubu1's supervisor is offline/) }]);
   });
 });
 
@@ -272,7 +274,7 @@ describe("before sending: the peer list (criteria 5, 8)", () => {
     const seen = net.peerList().find((p) => p.address === SUP_UBU)!.last_seen;
     await expect(call("spawn_worker", ANN)).rejects.toThrow(`ubu1's supervisor is offline (last seen ${seen}): nothing was sent to ${SUP_UBU}`);
     await expect(call("list_workers", { laptop: "ubu1" })).rejects.toThrow("ubu1's supervisor is offline");
-    // With no copies yet (A7), status of a worker there refuses with the offline reason too.
+    // With no copy of it, status of a worker there refuses with the offline reason too.
     await expect(call("worker_status", { id: "w_1", laptop: "ubu1" })).rejects.toThrow("ubu1's supervisor is offline");
     expect(sent()).toEqual([]);
   });
