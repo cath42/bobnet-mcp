@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { isValidSegment } from "@bobnet/protocol";
+import { EFFORTS, type Effort, isValidSegment } from "@bobnet/protocol";
 import { parse } from "yaml";
 import { z } from "zod";
 
@@ -32,9 +32,8 @@ const Env = z
   .default({})
   .refine((env) => !BILLING_ENV.some((k) => k in env), `must not set ${BILLING_ENV.join(", ")}: workers bill to the subscription`);
 
-/** Reasoning effort levels, lowest first. */
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
-export type Effort = (typeof EFFORTS)[number];
+/** Reasoning effort levels, lowest first (the remote wire's too). */
+export { EFFORTS, type Effort };
 const EffortLevel = z.enum(EFFORTS);
 
 /**

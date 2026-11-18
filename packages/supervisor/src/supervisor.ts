@@ -15,6 +15,7 @@ import {
   ItemRef,
   type LaptopSnapshot,
   type PeerInfo,
+  readRemoteRequest,
   RUN_CTX_MAX,
   RUN_REASON_MAX,
   type ServerFrame,
@@ -33,7 +34,7 @@ import { Inbox } from "@bobnet/client/inbox";
 import type { BoardToolDeps } from "@bobnet/client/board-tools";
 import { CAPTURE_FLUSH_MS, CaptureQueue } from "@bobnet/client/capture-queue";
 import { LEAD_SERVER, leadTools } from "./lead-tools.ts";
-import { readRequest, type RemoteRequest, reply } from "./remote.ts";
+import { type RemoteRequest, reply } from "./remote.ts";
 import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
@@ -766,17 +767,24 @@ export class Supervisor {
 
   /** A message to the supervisor: a remote request is answered; anything else, replies and events included, is only logged. */
   private async onRemote(msg: Envelope): Promise<void> {
-    const read = readRequest(msg.body, msg.in_reply_to);
+    const read = readRemoteRequest(msg.body, msg.in_reply_to);
     if (!read) return;
     const prior = this.store.remoteReply(msg.id);
     if (prior !== null) return this.toRemote(msg.from, prior, msg.id);
-    const op = "request" in read ? read.request.op : "invalid";
+    let op: string;
     let out: Record<string, unknown>;
-    try {
-      if ("error" in read) throw new SupervisorError(read.error);
-      out = { ok: true, op, ...(await this.remoteDo(msg.from, read.request)) };
-    } catch (err) {
-      out = { ok: false, op, error: (err as Error).message };
+    if (read.v === 2) {
+      // The v: 2 ops are served from BOB-61 on; until then each gets its reply, a refusal.
+      op = "request" in read ? read.request.op : read.re;
+      out = { v: 2, re: op, req: msg.id, ok: false, error: "error" in read ? read.error : "this supervisor doesn't serve v: 2 requests yet" };
+    } else {
+      op = "request" in read ? read.request.op : "invalid";
+      try {
+        if ("error" in read) throw new SupervisorError(read.error);
+        out = { ok: true, op, ...(await this.remoteDo(msg.from, read.request)) };
+      } catch (err) {
+        out = { ok: false, op, error: (err as Error).message };
+      }
     }
     const text = reply(out);
     this.store.recordRemote(msg.id, msg.from, op, text);

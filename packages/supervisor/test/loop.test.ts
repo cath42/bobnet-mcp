@@ -11,7 +11,7 @@ import { FakeNetwork, type FakeLink } from "./network.ts";
 
 // A supervisor never answers an answer (ADR 0007 §2). Today's replies carry `op`, so a supervisor that
 // read one as a request would answer it with another that has `op`, and two supervisors would answer
-// each other until a broker gave out. The guard pinned here is `readRequest`'s: a request has `op`, no
+// each other until a broker gave out. The guard pinned here is protocol's `classifyRemote` (through `readRequest`): a request has `op`, no
 // `in_reply_to`, and neither `re` nor `event`.
 
 const POLICY = new Policy(`rules: []`);
@@ -111,7 +111,7 @@ describe("the loop test: two supervisors never answer each other's replies", () 
     expect(mbp.store.auditLog(20).filter((a) => a.action.startsWith("remote:"))).toEqual([]);
   });
 
-  it("a v: 2 request: today's target refuses it, and the requester doesn't answer the refusal", async () => {
+  it("a v: 2 request: the target refuses it with a v: 2 reply until it serves them, and the requester doesn't answer the refusal", async () => {
     const { net, mbp, ubu } = await twoSupervisors();
     const req = await send(ubu.link, SUP_MBP, JSON.stringify({ v: 2, op: "list" }));
     await until(() => net.log.some((m) => m.in_reply_to === req.id));
@@ -120,8 +120,9 @@ describe("the loop test: two supervisors never answer each other's replies", () 
       [SUP_UBU, null],
       [SUP_MBP, req.id],
     ]);
-    // Until v: 2 is built (BOB-60) the strict schema refuses `v`; the refusal is still a reply.
-    expect(JSON.parse(net.log[1]!.body)).toMatchObject({ ok: false, op: "invalid", error: expect.stringMatching(/Unrecognized key.*"v"/) });
+    // The v: 2 ops are served from BOB-61 on; the refusal is a reply (rc.37's own, RC37.invalid, is below).
+    expect(JSON.parse(net.log[1]!.body)).toEqual({ v: 2, re: "list", req: req.id, ok: false, error: "this supervisor doesn't serve v: 2 requests yet" });
+    expect(mbp.store.auditLog(20).filter((a) => a.action.startsWith("remote:")).map((a) => a.action)).toEqual(["remote:refused"]);
     expect(ubu.store.auditLog(20).filter((a) => a.action.startsWith("remote:"))).toEqual([]);
   });
 

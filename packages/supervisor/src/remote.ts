@@ -1,5 +1,4 @@
-import { z } from "zod";
-import { EFFORTS } from "./config.ts";
+import { readRemoteRequest, type RemoteRequestV1 } from "@bobnet/protocol";
 
 // Spawn requests from another laptop's orchestrator, over BobNet: a directed
 // message to the supervisor whose body is one JSON request. The sender is who the
@@ -7,54 +6,20 @@ import { EFFORTS } from "./config.ts";
 // do is supervisor.yaml's `remote` allowlist. It spawns the roles listed for it and
 // follows and stops only what it spawned: no answers, no policy, no roles, no
 // resumed sessions or handoff files, which could reach another worker's context.
+// The wire (schemas, the classification) is packages/protocol's remote.ts (ADR 0007 §2).
 
-const Session = z.object({ feature: z.string(), kind: z.enum(["design", "build", "review", "retro"]), label: z.string().optional() }).strict();
-
-export const RemoteRequest = z.discriminatedUnion("op", [
-  z
-    .object({
-      op: z.literal("spawn"),
-      project: z.string(),
-      role: z.string(),
-      task: z.string().min(1),
-      tasks: z.array(z.string()).max(50).optional(),
-      session: Session.nullable().optional(),
-      model: z.string().optional(),
-      effort: z.enum(EFFORTS).optional(),
-      as: z.enum(["lead", "worker"]).optional(),
-    })
-    .strict(),
-  z.object({ op: z.literal("status"), id: z.string() }).strict(),
-  z.object({ op: z.literal("stop"), id: z.string() }).strict(),
-  z.object({ op: z.literal("list") }).strict(),
-]);
-export type RemoteRequest = z.infer<typeof RemoteRequest>;
+export type RemoteRequest = RemoteRequestV1;
 
 /**
- * The request in a message body: one JSON object, bare or in a ```json fence. Null when the
- * body isn't one (a plain message to the supervisor, which it only logs); a parse error when
- * it is one but malformed.
- *
- * A supervisor never answers an answer (ADR 0007 §2): a request has `op`, isn't sent in reply
- * (`inReplyTo`, the envelope's), and carries neither `re` nor `event`. Anything else is a reply or
- * an event, null here. Today's replies carry `op`; answered as malformed requests, two
- * supervisors would answer each other without end.
+ * Today's request (no `v`) in a message body, read with protocol's `readRemoteRequest`: null for
+ * anything that isn't a request (a plain message, a reply, an event); a parse error when it is one
+ * but malformed, a `v: 2` request included.
  */
 export function readRequest(body: string, inReplyTo: string | null = null): { request: RemoteRequest } | { error: string } | null {
-  if (inReplyTo !== null) return null;
-  const fenced = /^\s*```(?:json)?\s*\n([\s\S]*?)\n\s*```\s*$/.exec(body);
-  const text = (fenced ? fenced[1]! : body).trim();
-  if (!text.startsWith("{")) return null;
-  let json: unknown;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (typeof json !== "object" || json === null || !("op" in json) || "re" in json || "event" in json) return null;
-  const parsed = RemoteRequest.safeParse(json);
-  if (!parsed.success) return { error: `bad request: ${parsed.error.issues.map((i) => `${i.path.join(".") || "op"} ${i.message}`).join("; ")}` };
-  return { request: parsed.data };
+  const read = readRemoteRequest(body, inReplyTo);
+  if (!read) return null;
+  if ("error" in read) return { error: read.error };
+  return read.v === 1 ? { request: read.request } : { error: `bad request: v: 2 requests aren't served by this supervisor yet` };
 }
 
 /** How each request's answer reads: one JSON object, so the requester parses it the way it sent. */

@@ -116,6 +116,20 @@ describe("a remote request", () => {
     expect(store.auditLog(50).filter((a) => a.action === "remote:refused").length).toBe(7);
   });
 
+  it("answers a malformed request naming the bad key by its path; a v: 2 one with re, the sent op (ADR 0007 §2)", async () => {
+    const { sessions, ask } = await setup();
+    const handoff = { op: "spawn", project: "studio", role: "bob", task: "x", handoff: "/Users/ct/h.md" };
+    expect(await ask("poe@ubu1", handoff)).toEqual({ ok: false, op: "invalid", error: "bad request: handoff is not allowed" });
+    expect(await ask("poe@ubu1", { ...handoff, v: 2, by: "poe" }, "m_v2a")).toEqual({ v: 2, re: "spawn", req: "m_v2a", ok: false, error: "bad request: handoff is not allowed" });
+    expect(await ask("poe@ubu1", { v: 2, op: "spawn", project: "studio", role: "bob", task: "x", by: "poe", session: { feature: "F-1", kind: "build", dir: "/x" } }, "m_v2b")).toEqual({ v: 2, re: "spawn", req: "m_v2b", ok: false, error: "bad request: session.dir is not allowed" });
+    expect(await ask("poe@ubu1", { v: 2, op: 7 }, "m_v2c")).toMatchObject({ v: 2, re: "invalid", req: "m_v2c", ok: false, error: expect.stringMatching(/^bad request: op /) });
+    // Well-formed, but served from BOB-61 on.
+    expect(await ask("poe@ubu1", { v: 2, op: "status", id: "w_1" }, "m_v2d")).toEqual({ v: 2, re: "status", req: "m_v2d", ok: false, error: "this supervisor doesn't serve v: 2 requests yet" });
+    await tick(20);
+    expect(sessions.length).toBe(0);
+    expect(store.auditLog(50).filter((a) => a.action === "remote:refused").length).toBe(5);
+  });
+
   it("is acted on once when the broker delivers it twice", async () => {
     const { sessions, ask } = await setup();
     const first = await ask("poe@ubu1", SPAWN, "m_dup");
