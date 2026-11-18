@@ -6,7 +6,8 @@
   every finding is settled in `architecture/reviews/2026-11-17-adr0007-disposition.md`. Luigi's
   two-laptop spike ran the same day against ubu1 on rc.37 (`architecture/spikes/bob44-two-laptops.md`,
   c4b9fc6) and is folded in (§13 has each item's result); §4 is still unproven on the real broker
-  and build B checks it there (§13).
+  and build B checks it there (§13). Build A (BOB-59..65, v2 517ec3a..6883060) as built, and
+  where it didn't hold as written: §14 (Toad, 2026-11-18).
 - **For:** BOB-44 and `product/requirements/remote-orchestration.md` (criteria 1-7, Casper's Q-6 and
   Q-7). Amends ADR 0004 §1, §3 and §4 (Consequences).
 
@@ -464,7 +465,7 @@ corners. Suggested cut, for Mario and Peach to set:
   with `laptop`, and reconciling. In A, a `v: 2` worker's requests are still announced on the target
   (today's routing), so A ships alone and changes nothing for poe@ubu1. Its acceptance on the real
   broker: a spawn with a session on a boarded ubu1 project (the join and run report, §3) and the
-  handoff text of a real `exit` (§6), the two spike items that needed it (§13).
+  handoff text of a real `exit` (§6), the two spike items that needed it (§13). As built: §14.
 - **Build B: one answerer, and the mark** (criteria 2, 6 for answers, 7). The `request`, `settled`
   and `resumed` events, the settle hook and the abort settle, the `request` and `answer` ops with
   their auth and audit, the one-answerer filter, `pending_requests`/`request_detail`/`answer_request`
@@ -588,3 +589,132 @@ project spans laptops, so in a list of several projects two such names read alik
 spawn: TTL expiry and the swept reply (items 2, 9), a stop of a running remote worker (item 1), the
 target's restart (item 11), and the question kind (item 4). **Left for a build's acceptance on the real
 broker:** the board join and a real handoff (build A), and §4 (build B), as in §12.
+
+## 14. As built (build A)
+
+Build A landed as BOB-59..65 (v2 517ec3a..6883060; Luigi, reviewed by Mario). Where it didn't hold as
+written, or left a part for later, by section. The decisions stand; this records the build. Its
+real-broker acceptance (§12: the board join, a real handoff) waits for rc.39 on both laptops (BOB-65
+AC 10). Sources: Mario's notes and Luigi's handoffs for BOB-59..65.
+
+**§2, the wire**
+
+- **Classification** (`protocol/src/remote.ts:89`, 85ad372): `event` in the body makes an event; else
+  `in_reply_to` set, `re` present, or no `op` makes a reply; else a request. Non-object JSON and plain
+  text are neither. Any `v` but the number 2 is today's request and fails "v is not allowed".
+- **"A body with no op" and "a non-object body" are never requests**, so a supervisor never answers
+  them. `parseRemoteRequest` (`remote.ts:120`) still gives them `re: "invalid"` and an error at `op`
+  or `body`, for a caller that parses a body as a request.
+- **The malformed reply's `re`** (the sent op) is `v: 2` only; a `v`-less malformed request keeps
+  today's `op: "invalid"`, with the error now naming the path.
+- **Schemas, stricter than the table:** `by` is required on a `v: 2` spawn; `answer` requires
+  `user_decided` and `resume`; `tail` requires `n` (at most 500). `as: "lead"` fails the schema
+  (`as: z.literal("worker")`), so it is a bad request, audited `remote:refused`.
+- **The outbox carries every reply and event**, today's `v`-less ones too (ttl a day). Final codes
+  (`supervisor.ts:130`): `secret_detected`, `unknown_peer`, `unknown_message` when it can't be resent,
+  `bad_frame`, `frame_too_large`, and `too_long`, the supervisor's own check against the broker's
+  limit before sending. Anything else waits. A kind `message` row dropped is audited
+  `message:undeliverable`, not `remote:undeliverable`.
+- **The resend without `in_reply_to`** happens only if the body read alone still isn't a request
+  (`supervisor.ts:2493`). A `v`-less (rc.37-style) reply carries `op` and no `re`, so it is never
+  resent: refused `unknown_message`, it is dropped and audited. That keeps the loop guard in a mixed
+  field.
+- **The withheld stand-in** is `{ v?, event: "withheld", worker?, spawn_req?, re?, req? }`: a reply's
+  keeps `re` and `req`, so the requester takes it as the answer.
+- **A send that fails** throws "could not send `<op>` to `<to>`: …" and marks the row `failed`.
+  Requests never go through the outbox (§3: they never start late).
+- **Without a reply**, `list` with `reqs` fits only `spawn` (a req names a spawn message). `status`,
+  `stop`, `tail` and `summary` list by `ids`; `request` and `answer` have nothing to list and report
+  "may or may not have run" (`supervisor.ts:1296`).
+- **After a target restart**, the broker's redelivery of a still-unacked request resends the stored
+  restart reply, so the requester can get it twice. Harmless: matched on `req`, and nothing replaces a
+  reply.
+- **`list`'s "open and orphaned requests"** per worker is build B (with the request ops).
+- **`request` and `answer` are refused** until build B. A worker without `spawn_req` (a `v`-less
+  spawn) sends today's events, unchanged; so do the `v`-less exit and `remote_control` error.
+
+**§3, the spawn on the target**
+
+- **Busy refuses in four cases, not two:** beyond a running worker of the role and the laptop's limit,
+  a worker of the role reserved (starting) or queued (`supervisor.ts:610-617`). A local spawn during a
+  reservation queues, "has a worker starting for another laptop". The reserved worker launches
+  directly, so a local spawn queued during the join can't take its place.
+- **The preamble's `<by>@<laptop>`** is build B (B3); `remote_by` is stored for it. The target still
+  sends its own end notice to its own orchestrator for a `v: 2` worker; rerouting it is B3 too.
+
+**§5, the tools** (e6f7f24, 6883060)
+
+- **`REMOTE_TOOLS_SINCE = "2.0.0-rc.39"`** (`supervisor.ts:147`): §9's rc.N. Build A ships as rc.39, or
+  the constant moves with it.
+- **"Offline"** is any failure to reach the target: no `supervisor@<laptop>` in the peer list at all
+  ("ubu1's supervisor isn't on BobNet"), the send dropped, or no reply. Then `status` and `summary`
+  answer from the copy with `as_of`. A refusal by the target is still an error.
+- **`list_workers` with a laptop** reconciles first (a live `list`), then reads the copies. A worker
+  the target has, with no copy and no unanswered spawn here, isn't discovered (see the ruling below).
+  `laptop: "*"` gives a laptop that can't be asked as a row `{ laptop, unreachable }`. project, since
+  and limit are applied on the requester.
+- **"Spawned after all"** fires when a copy is first made for a spawn its tool gave up on: from the
+  late reply, a reconcile's `reqs`, or an event. A late refusal is only recorded.
+- **A lead's tools** refuse another laptop with "A lead's tools act on its own laptop only".
+- **`summary`** leaves out the brief (`task`); the requester has it.
+- **`pending_requests`, `request_detail` and `answer_request` with `laptop`** are build B (B4).
+
+**§6, the result** (af5ef9d)
+
+- Held as written, §8's exits-at-start too. `handoff_length` is in characters (the measure of the
+  broker's 16 KiB); a whitespace-only handoff counts as none. The handoff is fitted by a binary search
+  on the serialised body, secrets withheld first.
+
+**§7, the copies and reconciling** (6883060)
+
+- **An event is accepted only when its `spawn_req` names a `spawn` in `remote_sent` sent to the
+  sender's address** (`onRemoteEvent`, `supervisor.ts:1076-1083`), and a copy that has a `spawn_req`
+  must match it. Stricter than §7's sender check, which alone would take a `supervisor@<any laptop>`
+  event with an invented `spawn_req`; kept (ruling below).
+- **`unknown`** counts as not ended: each reconcile asks it again and the 5-minute timer keeps
+  running. A worker truly gone costs one `list` of at most 10 ids every 5 minutes.
+- **Reconcile batches** 10 `ids` and 10 `reqs` per `list` (`supervisor.ts:153`) so the views fit one
+  reply; a truncated list marks nothing `unknown`. `reqs` reach a day back (the replies' ttl).
+- **An ended copy is final once it has a target view.** One made from an `exit` (no view yet) still
+  takes the `status` fill, its ended state kept. A `remote_control` after the end is ignored.
+- **The end notice** goes once the ended copy has its handoff fields (from `exit`, or `summary` when
+  it ended by a reply). `told` is persisted, so a restart doesn't notify twice.
+- **`remote_asks`** and the `request`, `settled` and `resumed` events are build B; an event of those
+  kinds today only makes or keeps the worker copy.
+
+**§9, versions:** a `v`-less `exit` or `remote_control` (a target rolled back below rc.39) is logged
+and dropped (`supervisor.ts:1047-1048`), not taken for a copy as §9 says. Reconcile asks nothing there (the
+version check refuses it), so those copies stay not ended until the target is back on rc.39; see the
+open items.
+
+**Consequences, testing:** the broker e2e tests of the four behaviours the fake copies came with A3
+(`remote-wire.test.ts`), not with A1.
+
+**Ruling: a spawn whose broker ack was lost.** `remoteAsk` (`supervisor.ts:1316-1338`) stores the
+spawn's message id only from the broker's ack. If the socket drops after the frame left, or the ack
+misses its 15 s (`client/src/connection.ts:21`), the row is `failed` with no message id, the tool says
+"could not send", and the spawn may still have run on the target. Its reply and events then match
+nothing and are dropped, and reconcile has no `req` to ask by: poe never learns of the worker.
+
+- **Acceptable for build A.** The window is one ack's round trip, at a disconnect; it hasn't been
+  seen. In A the worker's requests still go to poe@ubu1, so nothing waits on poe; it runs to its end on
+  the target, visible on the dashboard and to poe@ubu1; and a retried spawn is refused as busy (§3),
+  which tells poe the role is running there. The strict event check stays: loosening it to the sender
+  alone would take events for spawns never sent.
+- **Not acceptable once poe@ubu1 is retired** (after build B): the worker's `request` events would be
+  dropped, its requests would time out denied, and its handoff would never reach poe. So **a task in
+  build B**, before §12's "Casper may retire poe@ubu1", with no wire change:
+  1. A spawn whose send throws once the frame may have left (a disconnect or a timeout, not "not
+     connected") is kept as `unacked`, not `failed`, and its tool says "may or may not have run", as
+     §2's no-reply does.
+  2. While a laptop has an `unacked` spawn, reconcile also sends a bare `list` (the sender's live
+     workers there) and adopts a worker whose `spawn_req` names no spawn it knows and whose project and
+     role match exactly one `unacked` spawn to that address: the row takes that `spawn_req` as its
+     message id, the copy is made, and poe gets "spawned after all". One worker per role per laptop
+     (§3) makes the match unique. A worker already ended is missed by the bare list; that is left.
+  3. An event whose `spawn_req` is unknown, from an address with an `unacked` spawn, triggers that
+     reconcile instead of only being dropped.
+  4. An `unacked` row is dropped after a day (the replies' ttl), as `reqs` are.
+
+**Open items for review A or build B** (Mario's to place): the §9 `v`-less events above (accept a
+`v`-less `exit` or `remote_control` for a copy, from its laptop's supervisor, as §9 says); the lost-ack task above.
