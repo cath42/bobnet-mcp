@@ -723,3 +723,7 @@ nothing and are dropped, and reconcile has no `req` to ask by: poe never learns 
 
 **Open items for review A or build B** (Mario's to place): the §9 `v`-less events above (accept a
 `v`-less `exit` or `remote_control` for a copy, from its laptop's supervisor, as §9 says); the lost-ack task above.
+The first is ruled in review A (`architecture/reviews/2026-11-20-bob44-build-a.md`): no fix, and §9's
+sentence on accepting them is struck, since a rolled-back target sends no `v`-less event for a worker the
+requester has a copy of; the copy shows `as_of`, and the target's queued `exit` or a reconcile ends it once
+the target is back on rc.39 or later.
