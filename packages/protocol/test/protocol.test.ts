@@ -54,6 +54,20 @@ describe("redactSecrets", () => {
     const text = "LAND-12.3 done, see architecture/design-notes/LAND-12.3.md";
     expect(redactSecrets(text, MARK)).toBe(text);
   });
+  const PEM = ["-----BEGIN OPENSSH PRIVATE KEY-----", "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW", "QyNTUxOQAAACDx3dVz0V3QyNTUxOQAAACDx3dVz0V3QyNTUxOQAAACDx3dVz0V3Q", "-----END OPENSSH PRIVATE KEY-----"].join("\n");
+  it("a private key: BEGIN through END, every line of the key (BOB-73)", () => {
+    const out = redactSecrets(`Deploy key:\n${PEM}\nThen restart.`, MARK);
+    expect(out).toBe(`Deploy key:\n${MARK}\nThen restart.`);
+    expect(findSecret(out)).toBeNull();
+    // Two blocks: each its own span, the text between them kept.
+    expect(redactSecrets(`${PEM}\nand\n${PEM}`, MARK)).toBe(`${MARK}\nand\n${MARK}`);
+  });
+  it("a private key with no END line: to the end of the text (BOB-73)", () => {
+    const cutOff = PEM.split("\n").slice(0, 3).join("\n");
+    const out = redactSecrets(`Key below.\n${cutOff}\n`, MARK);
+    expect(out).toBe(`Key below.\n${MARK}`);
+    expect(out).not.toContain("b3BlbnNzaC1rZXkt");
+  });
 });
 
 describe("ClientFrame", () => {

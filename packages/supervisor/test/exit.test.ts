@@ -213,6 +213,17 @@ describe("credentials (criterion 3)", () => {
     expect(s.net.refused.filter((r) => r.to.includes(SUP_MBP))).toEqual([]);
   });
 
+  it("a PEM block in the handoff: after redaction findSecret is null and no line of the key is left (BOB-73)", async () => {
+    const key = ["b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW", "QyNTUxOQAAACDx3dVz0V3QyNTUxOQAAACDx3dVz0V3QyNTUxOQAAACDx3dVz0V3Q"];
+    const pem = ["-----BEGIN OPENSSH PRIVATE KEY-----", ...key, "-----END OPENSSH PRIVATE KEY-----"].join("\n");
+    const s = await spawned();
+    const { body, exit } = await endWith(s, `# Handoff\n\nThe deploy key:\n${pem}\n\nNext: rotate it.\n`);
+    expect(exit["handoff_text"]).toBe("# Handoff\n\nThe deploy key:\n[withheld: looks like a credential]\n\nNext: rotate it.\n");
+    expect(findSecret(body)).toBeNull();
+    for (const line of [...key, "END OPENSSH PRIVATE KEY"]) expect(body).not.toContain(line);
+    expect(s.net.refused.filter((r) => r.to.includes(SUP_MBP))).toEqual([]);
+  });
+
   it("the serialised body is checked after per-field redaction: a handoff that matches only serialised is withheld whole (BOB-72)", () => {
     const event = { v: 2, event: "exit", worker: "w_1", spawn_req: "m_1", state: "done", checkpoint: "fixed", lands: [] };
     expect(OLD_DETECT(MULTILINE)).toBeNull();

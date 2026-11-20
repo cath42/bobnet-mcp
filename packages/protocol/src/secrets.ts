@@ -21,9 +21,20 @@ export function findSecret(text: string): string | null {
   return null;
 }
 
+/**
+ * What redaction replaces where it isn't the pattern's own match: a private key's BEGIN line is enough
+ * to detect it, but the key is the block through its END line, or the end of the text without one.
+ */
+const SPANS: Readonly<Record<string, RegExp>> = {
+  private_key: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/,
+};
+
 /** The text with every span that looks like a credential replaced by `mark`; the rest stays. */
 export function redactSecrets(text: string, mark: string): string {
   let out = text;
-  for (const [, re] of PATTERNS) out = out.replace(new RegExp(re.source, `${re.flags}g`), mark);
+  for (const [name, found] of PATTERNS) {
+    const re = SPANS[name] ?? found;
+    out = out.replace(new RegExp(re.source, `${re.flags}g`), mark);
+  }
   return out;
 }
