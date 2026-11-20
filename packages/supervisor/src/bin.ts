@@ -8,7 +8,7 @@ import { createLogger } from "@bobnet/client/log";
 import ownPackage from "../package.json" with { type: "json" };
 import { importBacklogCommand } from "./backlog-import.ts";
 import { BoardBackup, exportFetcher, importPoster } from "./board-backup.ts";
-import { configDir, loadSupervisorConfig } from "./config.ts";
+import { configDir, loadSupervisorConfig, strandedState } from "./config.ts";
 import { installLaunchAgent } from "./launchd.ts";
 import { installSystemdUnit } from "./systemd.ts";
 import { ensureToken, serveMcp } from "./mcp.ts";
@@ -42,6 +42,11 @@ if (process.argv[2] === "install-systemd") {
 }
 
 const config = loadSupervisorConfig(dir);
+const stranded = strandedState(readFileSync(join(dir, "supervisor.yaml"), "utf8"), config.stateDir);
+if (stranded) {
+  log.error(stranded);
+  process.exit(1);
+}
 
 // One supervisor per laptop: a second would fight the first for every role name.
 const pidFile = join(config.stateDir, "supervisor.pid");

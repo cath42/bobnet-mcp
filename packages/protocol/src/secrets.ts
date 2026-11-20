@@ -1,6 +1,7 @@
 // Messages carry paths, not content. The broker rejects any text that looks
 // like a credential so nothing secret is ever stored in the cloud.
 
+// No pattern has the `g` flag: findSecret's `test` would keep its lastIndex between calls.
 const PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
   ["private_key", /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
   ["anthropic_key", /\bsk-ant-[A-Za-z0-9_-]{20,}/],
@@ -34,7 +35,7 @@ export function redactSecrets(text: string, mark: string): string {
   let out = text;
   for (const [name, found] of PATTERNS) {
     const re = SPANS[name] ?? found;
-    out = out.replace(new RegExp(re.source, `${re.flags}g`), mark);
+    out = out.replace(new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`), mark);
   }
   return out;
 }

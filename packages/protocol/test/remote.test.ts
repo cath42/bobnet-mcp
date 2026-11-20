@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyRemote, compareVersions, parseRemoteRequest, readRemoteRequest, RemoteEvent, RemoteReply, RemoteRequestV1, RemoteRequestV2 } from "../src/index.ts";
+import { classifyRemote, compareVersions, parseRemoteRequest, readRemoteRequest, RemoteEvent, RemoteExit, RemoteReply, RemoteRequestV1, RemoteRequestV2, RemoteWithheld } from "../src/index.ts";
 
 // The wire between supervisors (ADR 0007 §2, §9).
 
@@ -110,6 +110,21 @@ describe("replies and events", () => {
     const body = { v: 2, event, worker: "w_1", spawn_req: "m_1", extra: "kept" };
     expect(RemoteEvent.parse(body)).toEqual(body);
     expect(RemoteEvent.safeParse({ ...body, spawn_req: undefined }).success).toBe(false);
+  });
+  it("a reply's worker and workers each have a string id; the rest of a view passes as it is (BOB-74)", () => {
+    const ok = { v: 2, re: "status", req: "m_1", ok: true };
+    expect(RemoteReply.parse({ ...ok, worker: { id: "w_1", state: "running", new_field: 1 } })).toMatchObject({ worker: { id: "w_1", new_field: 1 } });
+    for (const bad of [{ worker: {} }, { worker: { id: 42 } }, { worker: "w_1" }, { workers: [{ id: "w_1" }, { id: null }] }, { workers: [{}] }]) expect(RemoteReply.safeParse({ ...ok, ...bad }).success).toBe(false);
+  });
+  it("an exit's state is one that ends a worker (BOB-74)", () => {
+    const exit = { v: 2, event: "exit", worker: "w_1", spawn_req: "m_1" };
+    for (const state of ["done", "failed", "stopped"]) expect(RemoteExit.safeParse({ ...exit, state }).success).toBe(true);
+    for (const state of [undefined, "running", 1]) expect(RemoteExit.safeParse({ ...exit, state }).success).toBe(false);
+  });
+  it("a withheld stand-in names what it can: v, worker, spawn_req, re and req all optional (BOB-74)", () => {
+    expect(RemoteWithheld.safeParse({ event: "withheld" }).success).toBe(true);
+    expect(RemoteWithheld.parse({ v: 2, event: "withheld", re: "summary", req: "m_1" })).toEqual({ v: 2, event: "withheld", re: "summary", req: "m_1" });
+    for (const bad of [{ event: "exit" }, { event: "withheld", worker: 42 }, { event: "withheld", v: 1 }]) expect(RemoteWithheld.safeParse(bad).success).toBe(false);
   });
   it("refuses an event not in this version, and today's v-less ones", () => {
     expect(RemoteEvent.safeParse({ v: 2, event: "party", worker: "w_1", spawn_req: "m_1" }).success).toBe(false);

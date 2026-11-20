@@ -58,8 +58,25 @@ export class FakeNetwork {
     for (const t of due) t.resolve();
   }
 
-  /** A wait on the network's clock, for a Supervisor's `sleep`. */
-  readonly sleep = (ms: number): Promise<void> => new Promise((resolve) => this.timers.push({ at: this.now + ms, resolve }));
+  /** A wait on the network's clock, for a Supervisor's `sleep`; gone from the clock once `signal` aborts. */
+  readonly sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+    new Promise((resolve) => {
+      const timer = { at: this.now + ms, resolve };
+      this.timers.push(timer);
+      signal?.addEventListener(
+        "abort",
+        () => {
+          this.timers = this.timers.filter((t) => t !== timer);
+          resolve();
+        },
+        { once: true },
+      );
+    });
+
+  /** The waits still on the clock: when each is due, ms. */
+  pending(): number[] {
+    return this.timers.map((t) => t.at);
+  }
 
   /** The broker's alarm: drops what has expired, so an in_reply_to to it is refused. */
   sweep(): void {
@@ -158,6 +175,11 @@ export class FakeNetwork {
       for (const p of delivered) p.link?.deliver({ t: "deliver", to: formatAddress(p), wake: true, msg });
     });
     return { id: msg.id, delivered_to: delivered.map((p) => formatAddress(p)), queued_for: recipients.filter((p) => !delivered.includes(p)).map((p) => formatAddress(p)) };
+  }
+
+  /** Whether every recipient of a message has acked it: a supervisor acks once it has handled the message. */
+  acked(id: string): boolean {
+    return this.deliveries.get(id)?.size === 0;
   }
 
   ack(link: FakeLink, as: string, ids: string[]): void {

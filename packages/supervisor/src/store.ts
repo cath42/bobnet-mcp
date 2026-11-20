@@ -203,13 +203,21 @@ export class Store {
     if (!outCols.has("ttl_seconds")) this.db.exec("ALTER TABLE outbox ADD COLUMN ttl_seconds INTEGER");
     // A remote request is recorded in progress (reply null) before any work: the table before that had reply NOT NULL.
     const reqCols = this.db.prepare("PRAGMA table_info(remote_requests)").all() as Array<{ name: string; notnull: number }>;
+    // One transaction: a crash or a busy db midway leaves the old table and its dedupe rows, and the next start rebuilds.
     if (reqCols.find((c) => c.name === "reply")?.notnull) {
-      this.db.exec(`ALTER TABLE remote_requests RENAME TO remote_requests_old;
-        CREATE TABLE remote_requests (
-          message_id TEXT PRIMARY KEY, sender TEXT NOT NULL, op TEXT NOT NULL, reply TEXT, at TEXT NOT NULL, v INTEGER NOT NULL DEFAULT 1
-        );
-        INSERT INTO remote_requests (message_id, sender, op, reply, at) SELECT message_id, sender, op, reply, at FROM remote_requests_old;
-        DROP TABLE remote_requests_old;`);
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.db.exec(`ALTER TABLE remote_requests RENAME TO remote_requests_old;
+          CREATE TABLE remote_requests (
+            message_id TEXT PRIMARY KEY, sender TEXT NOT NULL, op TEXT NOT NULL, reply TEXT, at TEXT NOT NULL, v INTEGER NOT NULL DEFAULT 1
+          );
+          INSERT INTO remote_requests (message_id, sender, op, reply, at) SELECT message_id, sender, op, reply, at FROM remote_requests_old;
+          DROP TABLE remote_requests_old;`);
+        this.db.exec("COMMIT");
+      } catch (err) {
+        this.db.exec("ROLLBACK");
+        throw err;
+      }
     }
   }
 

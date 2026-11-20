@@ -62,9 +62,12 @@ export type RemoteOp = RemoteRequestV2["op"];
 
 export type RemoteRequest = RemoteRequestV1 | RemoteRequestV2;
 
+/** A worker as a reply names it: its id at least; the rest is the target's view, read loosely (the additive rule). */
+const View = z.looseObject({ id });
+
 /** A `v: 2` reply: one per request, matched on `req` (the request's message id), never on the envelope. */
 export const RemoteReply = z.union([
-  z.looseObject({ v, re: z.string(), req: id, ok: z.literal(true) }),
+  z.looseObject({ v, re: z.string(), req: id, ok: z.literal(true), worker: View.optional(), workers: z.array(View).optional() }),
   z.looseObject({ v, re: z.string(), req: id, ok: z.literal(false), error: z.string() }),
 ]);
 export type RemoteReply = z.infer<typeof RemoteReply>;
@@ -75,6 +78,20 @@ export type RemoteEventName = (typeof REMOTE_EVENTS)[number];
 /** A `v: 2` event, requester-bound and unasked; `spawn_req` is the message id of the spawn that made the worker. */
 export const RemoteEvent = z.looseObject({ v, event: z.enum(REMOTE_EVENTS), worker: id, spawn_req: id });
 export type RemoteEvent = z.infer<typeof RemoteEvent>;
+
+/** The states that end a worker, as an `exit` says them. */
+export const EXIT_STATES = ["done", "failed", "stopped"] as const;
+
+/** An `exit` event (§6): an end the requester takes as final, so its state is one that ends a worker. */
+export const RemoteExit = RemoteEvent.extend({ event: z.literal("exit"), state: z.enum(EXIT_STATES) });
+export type RemoteExit = z.infer<typeof RemoteExit>;
+
+/**
+ * What stands in for a reply or event the broker refused as a credential (§2): who it was about, as
+ * far as the body said. A reply's keeps `re` and `req`, so the requester takes it as the answer.
+ */
+export const RemoteWithheld = z.looseObject({ v: v.optional(), event: z.literal("withheld"), worker: id.optional(), spawn_req: id.optional(), re: z.string().optional(), req: id.optional() });
+export type RemoteWithheld = z.infer<typeof RemoteWithheld>;
 
 export type RemoteKind = "request" | "reply" | "event";
 

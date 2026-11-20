@@ -54,6 +54,15 @@ describe("redactSecrets", () => {
     const text = "LAND-12.3 done, see architecture/design-notes/LAND-12.3.md";
     expect(redactSecrets(text, MARK)).toBe(text);
   });
+  it("gives the same result on the same text, call after call (BOB-74)", () => {
+    const text = `password=hunter2hunter2 and ${"ghp_" + "b".repeat(36)}, then -----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----`;
+    const first = redactSecrets(text, MARK);
+    for (let i = 0; i < 3; i++) {
+      expect(redactSecrets(text, MARK)).toBe(first);
+      expect(findSecret(text)).toBe("private_key");
+    }
+    expect(first).toBe(`${MARK} and ${MARK}, then ${MARK}`);
+  });
   const PEM = ["-----BEGIN OPENSSH PRIVATE KEY-----", "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW", "QyNTUxOQAAACDx3dVz0V3QyNTUxOQAAACDx3dVz0V3QyNTUxOQAAACDx3dVz0V3Q", "-----END OPENSSH PRIVATE KEY-----"].join("\n");
   it("a private key: BEGIN through END, every line of the key (BOB-73)", () => {
     const out = redactSecrets(`Deploy key:\n${PEM}\nThen restart.`, MARK);

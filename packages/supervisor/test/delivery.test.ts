@@ -120,6 +120,25 @@ describe("the store: the remote outbox and the requests' records", () => {
     expect(store.remoteRequest("m_new")).toEqual({ sender: SUP_MBP, op: "spawn", reply: null, v: 2 });
   });
 
+  it("rebuilds remote_requests in one transaction: a failure midway leaves the old table and its rows (BOB-74)", () => {
+    const { dir } = newStore();
+    const file = join(dir, "old.db");
+    const old = new DatabaseSync(file);
+    // No `at`: the rebuild's copy fails after its rename and create.
+    old.exec(`CREATE TABLE remote_requests (message_id TEXT PRIMARY KEY, sender TEXT NOT NULL, op TEXT NOT NULL, reply TEXT NOT NULL);
+      INSERT INTO remote_requests VALUES ('m_old', 'poe@ubu1', 'list', '{"ok":true}');`);
+    old.close();
+    expect(() => new Store(file)).toThrow(/no such column: at/);
+    const after = new DatabaseSync(file);
+    const tables = (after.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'remote_requests%'").all() as Array<{ name: string }>).map((t) => t.name);
+    const rows = after.prepare("SELECT * FROM remote_requests").all();
+    const notnull = (after.prepare("PRAGMA table_info(remote_requests)").all() as Array<{ name: string; notnull: number }>).find((c) => c.name === "reply")!.notnull;
+    after.close();
+    expect(tables).toEqual(["remote_requests"]);
+    expect(rows).toEqual([{ message_id: "m_old", sender: "poe@ubu1", op: "list", reply: '{"ok":true}' }]);
+    expect(notnull).toBe(1);
+  });
+
   it("records a request in progress once, then its reply", () => {
     const { store } = newStore();
     expect(store.beginRemote("m_1", SUP_MBP, "spawn", 2)).toBe(true);

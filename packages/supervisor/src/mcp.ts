@@ -286,8 +286,9 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
       if (l.laptop === "*") {
         const rows: Array<Record<string, unknown>> = local().map((w) => ({ ...w, laptop: sup.laptopName }));
         if (opts.lead) return rows;
-        // A laptop that can't be asked says why, in its place.
-        for (const laptop of sup.remoteLaptops()) rows.push(...(await remoteList(laptop, l).catch((err: Error) => [{ laptop, unreachable: err.message }])));
+        // All at once, so a silent laptop costs one wait; one that can't be asked says why, in its place.
+        const lists = await Promise.all(sup.remoteLaptops().map((laptop) => remoteList(laptop, l).catch((err: Error) => [{ laptop, unreachable: err.message }])));
+        for (const list of lists) rows.push(...list);
         return rows;
       }
       if (sup.isHere(l.laptop)) return local();

@@ -194,6 +194,21 @@ describe("sized on the whole body (criterion 2)", () => {
     expect((emoji["handoff_text"] as string).length % 2).toBe(0);
   });
 
+  it("60 lands and a long handoff: the newest lands that fit, the rest counted, the whole body under 16 KiB, not dropped (BOB-74; BOB-64 AC 2)", async () => {
+    const s = await spawned();
+    const lands = Array.from({ length: 60 }, (_, i) => `landed ${String(i).padStart(2, "0")}: ${"a1b2c3d".repeat(4)} on v2, ${"x".repeat(240)}`);
+    (s.ubu.sup as unknown as { landResults: Map<string, string[]> }).landResults.set(s.id, lands);
+    const { body, exit } = await endWith(s, "h".repeat(40_000));
+    expect(body.length).toBeLessThanOrEqual(LIMIT);
+    expect(s.net.refused.filter((r) => r.to.includes(SUP_MBP))).toEqual([]);
+    const got = exit["lands"] as string[];
+    expect(got[0]).toMatch(/^\d+ earlier lands not listed$/);
+    expect(Number(got[0]!.split(" ")[0]) + got.length - 1).toBe(60);
+    expect(got.at(-1)).toBe(lands[59]);
+    expect(exit).toMatchObject({ handoff_truncated: true, handoff_length: 40_000 });
+    expect((exit["handoff_text"] as string).length).toBeGreaterThan(8_000);
+  });
+
   it("on the wire: a 40 KB handoff and one that escapes both arrive, each body under 16 KiB", async () => {
     for (const text of ["y".repeat(40_000), '"\\\n'.repeat(10_000)]) {
       const s = await spawned();

@@ -22,7 +22,11 @@ import {
   type PeerInfo,
   readRemoteRequest,
   redactSecrets,
+  RemoteEvent,
+  RemoteExit,
+  RemoteReply,
   RemoteRequestV2,
+  RemoteWithheld,
   RUN_CTX_MAX,
   RUN_REASON_MAX,
   type ServerFrame,
@@ -249,10 +253,38 @@ function fitSummary(sum: Summary & { state: WorkerState; checkpoint: string | nu
 
 const cut = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n - 1)}…`);
 
+/** A wait of `ms`, ended early (its timer cleared) once `signal` aborts. */
+export type Sleep = (ms: number, signal?: AbortSignal) => Promise<void>;
+
+/** The supervisor's own clock for its waits: unref'd, so a wait never keeps the process up. */
+export const sleepFor: Sleep = (ms, signal) =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms).unref();
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+
 /** The most of an `exit`'s error that crosses (ADR 0007 §6); the handoff gets the rest of the body. */
 const EXIT_ERROR_MAX = 500;
 /** The most of each land outcome an `exit` carries: one line each, as in the local end notice. */
 const EXIT_LAND_MAX = 300;
+/** What an `exit`'s lands may take of the body, serialised: a long run's lands leave the handoff its room. */
+const EXIT_LANDS_CHARS = 4000;
+
+/** An `exit`'s lands: the newest that fit EXIT_LANDS_CHARS, the earlier ones counted in a first line. */
+export function fitLands(all: string[]): string[] {
+  const lands = all.map((l) => cut(l, EXIT_LAND_MAX));
+  const counted = (kept: string[]) => (kept.length < lands.length ? [`${lands.length - kept.length} earlier lands not listed`, ...kept] : kept);
+  let kept = lands;
+  while (kept.length > 0 && JSON.stringify(counted(kept)).length > EXIT_LANDS_CHARS) kept = kept.slice(1);
+  return counted(kept);
+}
 
 /**
  * A reply or event (`fields`, its `v`/`re`/`req` or `event`/`worker`/`spawn_req` included) with a
@@ -360,7 +392,7 @@ export class Supervisor {
   /** This laptop's id on BobNet, once the supervisor has registered. */
   private laptop: string | null = null;
   private readonly sandboxCheck: () => Promise<string | null>;
-  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly sleep: Sleep;
   /** The credential check on what goes to another laptop (§2): the broker's, as this release knows it. */
   private readonly detect: Detect;
   /** The remote requests waiting for their reply, by their remote_sent row. */
@@ -408,13 +440,13 @@ export class Supervisor {
     /** The gh adapter (ADR 0001 §10); defaults to one that runs git and gh. */
     ciPoll?: GhCiPoll;
     /** A remote request's wait (ADR 0007 §2); tests run it on the fake network's clock. */
-    sleep?: (ms: number) => Promise<void>;
+    sleep?: Sleep;
     /** The credential check on replies and events (§2); a test passes one that matches what findSecret doesn't. */
     detect?: Detect;
   }) {
     this.detect = deps.detect ?? findSecret;
     this.ciPoll = deps.ciPoll ?? new GhCiPoll(deps.log);
-    this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms).unref()));
+    this.sleep = deps.sleep ?? sleepFor;
     this.ownerCheck = deps.ownerCheck ?? null;
     this.sandboxCheck = deps.sandboxCheck ?? sandboxProblem;
     this.config = deps.config;
@@ -991,7 +1023,10 @@ export class Supervisor {
 
     if (toName === this.config.name.toLowerCase()) {
       this.log.info("message to the supervisor", { from: msg.from, id: msg.id });
-      void this.onRemote(msg).finally(ack);
+      // A body that breaks the handling is logged, never left to crash the supervisor.
+      void this.onRemote(msg)
+        .catch((err: Error) => this.log.error("a message to the supervisor failed", { from: msg.from, id: msg.id, err: err.message }))
+        .finally(ack);
       return;
     }
     const role = this.roles().find((r) => r.name.toLowerCase() === toName);
@@ -1078,12 +1113,20 @@ export class Supervisor {
   private onRemoteAnswer(msg: Envelope): void {
     const read = classifyRemote(msg.body, msg.in_reply_to);
     if (!read) return;
-    const answers = read.kind === "reply" || (read.json["event"] === "withheld" && typeof read.json["req"] === "string");
-    if (!answers) {
-      if (read.json["v"] === 2) return this.onRemoteEvent(msg.from, read.json);
+    const withheld = read.json["event"] === "withheld";
+    const answers = read.kind === "reply" || (withheld && typeof read.json["req"] === "string");
+    // Read against the wire's schemas (§2), loose so a newer target's extra fields pass; what fails is dropped.
+    const schema = withheld ? RemoteWithheld : !answers ? (read.json["event"] === "exit" ? RemoteExit : RemoteEvent) : RemoteReply;
+    if (!answers && read.json["v"] !== 2) {
       this.log.info("an event from another supervisor without v: 2", { from: msg.from, id: msg.id });
       return;
     }
+    const checked = schema.safeParse(read.json);
+    if (!checked.success) {
+      this.log.warn("a reply or event from another supervisor that doesn't parse; dropped", { from: msg.from, id: msg.id, err: checked.error.issues[0]?.message, path: checked.error.issues[0]?.path.join(".") });
+      return;
+    }
+    if (!answers) return this.onRemoteEvent(msg.from, read.json);
     const req = read.json["req"];
     const sent = typeof req === "string" ? this.store.remoteSentByMessage(req) : null;
     if (!sent || !this.sameAddress(msg.from, sent.to_name)) {
@@ -1392,7 +1435,9 @@ export class Supervisor {
       this.store.settleRemoteSent(id, { state: "failed" });
       throw new SupervisorError(`could not send ${body.op} to ${to}: ${(err as Error).message}`);
     }
-    const got = await Promise.race([replied, this.sleep(waitMs).then(() => null)]);
+    const waiting = new AbortController();
+    const got = await Promise.race([replied, this.sleep(waitMs, waiting.signal).then(() => null)]);
+    waiting.abort();
     this.remoteWaits.delete(id);
     if (!got) this.store.settleRemoteSent(id, { state: "unanswered" });
     return { id, reply: got };
@@ -2397,7 +2442,7 @@ export class Supervisor {
       state: w.state,
       checkpoint,
       ...(w.state === "done" || !w.error ? {} : { error: cut(w.error, EXIT_ERROR_MAX) }),
-      lands: lands.map((l) => cut(l, EXIT_LAND_MAX)),
+      lands: fitLands(lands),
     };
     this.store.addOutbox(w.spawned_by, reply(withHandoff(fields, this.handoffText(w), this.detect)), "remote", { inReplyTo: null, ttlSeconds: REMOTE_ANSWER_TTL_S });
     if (flush) this.flushOutbox();

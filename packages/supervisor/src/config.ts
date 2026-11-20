@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { EFFORTS, type Effort, isValidSegment } from "@bobnet/protocol";
@@ -469,6 +469,20 @@ function readMcp(projectPath: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/**
+ * Why the supervisor must not start, or null (BOB-74). Before rc.40 a supervisor.yaml without
+ * `state_dir` kept the db and pid file under `<cwd>/~/.local/state/bobnet`, a literal "~"; rc.40 and
+ * later read the real one, so that laptop would start over on another db. Nothing is moved: the
+ * files are the laptop owner's to move.
+ */
+export function strandedState(text: string, stateDir: string, cwd = process.cwd()): string | null {
+  const raw = parse(text) as unknown;
+  if (raw && typeof raw === "object" && "state_dir" in raw) return null;
+  const old = join(cwd, "~", ".local", "state", "bobnet");
+  if (!existsSync(join(old, "supervisor.db"))) return null;
+  return `supervisor.yaml sets no state_dir, and a supervisor db from before rc.40 is at ${join(old, "supervisor.db")}; this release would start on ${join(stateDir, "supervisor.db")} without its workers and outbox. Move the files in ${old} to ${stateDir}, or set state_dir: ${old}, then start again.`;
 }
 
 export function loadSupervisorConfig(dir = configDir()): SupervisorConfig {

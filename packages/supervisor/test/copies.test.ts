@@ -1,13 +1,14 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Logger } from "@bobnet/client/log";
 import { findSecret } from "@bobnet/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GhCiPoll } from "../src/ci-poll.ts";
 import { callTool, handlers } from "../src/mcp.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
-import { REMOTE_TOOLS_SINCE, Supervisor } from "../src/supervisor.ts";
+import { REMOTE_TOOLS_SINCE, sleepFor, Supervisor } from "../src/supervisor.ts";
 import { fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 import { FakeNetwork } from "./network.ts";
 
@@ -48,13 +49,13 @@ function newStore(): { dir: string; store: Store } {
   return { dir, store };
 }
 
-async function boot(net: FakeNetwork, laptop: string, over: string, at = newStore()) {
+async function boot(net: FakeNetwork, laptop: string, over: string, at = newStore(), log: Logger = quiet) {
   const link = net.link(laptop);
   const { queryFn, sessions } = fakeQuery();
   const ciPoll = new GhCiPoll(quiet, async () => {
     throw new Error("no gh in tests");
   });
-  const sup = new Supervisor({ config: testConfig(at.dir, over), policy: POLICY, store: at.store, broker: link, queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async () => false, sleep: net.sleep, ciPoll });
+  const sup = new Supervisor({ config: testConfig(at.dir, over), policy: POLICY, store: at.store, broker: link, queryFn, log, sandboxCheck: async () => null, ownerCheck: async () => false, sleep: net.sleep, ciPoll });
   link.onPush = (f) => sup.onPush(f);
   await sup.start();
   running.push(sup);
@@ -99,7 +100,7 @@ const view = (id: string, spawnReq: string, over: Record<string, unknown> = {}) 
  * no reply), `send` sends any body as supervisor@ubu1 (or another name there), `spawnReq` is the
  * message id of the spawn it got, the one its worker w_9 was made by.
  */
-async function scripted() {
+async function scripted(log: Logger = quiet) {
   const net = new FakeNetwork();
   net.clients.set(SUP_UBU, { package: "@bobnet/supervisor", version: REMOTE_TOOLS_SINCE, protocol: 1 });
   const ubu = net.link("ubu1");
@@ -108,7 +109,7 @@ async function scripted() {
   const answer: Record<string, (body: Record<string, any>) => Record<string, unknown> | null> = {
     spawn: () => ({ worker: view("w_9", spawnReq) }),
   };
-  const send = (body: unknown, as = "supervisor") => ubu.request({ t: "send", as, to: [SUP_MBP], body: JSON.stringify(body) });
+  const send = (body: unknown, as = "supervisor") => ubu.request<{ id: string }>({ t: "send", as, to: [SUP_MBP], body: JSON.stringify(body) });
   ubu.onPush = (f) => {
     if (f.t !== "deliver") return;
     const body = JSON.parse(f.msg.body) as Record<string, any>;
@@ -119,7 +120,7 @@ async function scripted() {
   };
   await ubu.register({ name: "supervisor" });
   await ubu.register({ name: "Mallory" });
-  const mbp = await boot(net, "mbp-1", "");
+  const mbp = await boot(net, "mbp-1", "", newStore(), log);
   await mbp.link.register({ name: "Bob" });
   const bob = () => net.between(SUP_MBP, "Bob@mbp-1");
   const ops = () => got.map((g) => g.body["op"]);
@@ -173,20 +174,21 @@ describe("the sender check (criterion 2)", () => {
     const s = await scripted();
     await s.call("spawn_worker", ANN);
     const before = s.mbp.store.remoteCopy("ubu1", "w_9")!;
+    const forged: string[] = [];
     // Another name on ubu1, and a supervisor on another laptop.
-    await s.send(EXIT(s.spawnReq()), "Mallory");
+    forged.push((await s.send(EXIT(s.spawnReq()), "Mallory")).id);
     const pi = s.net.link("pi");
     await pi.register({ name: "supervisor" });
-    await pi.request({ t: "send", as: "supervisor", to: [SUP_MBP], body: JSON.stringify(EXIT(s.spawnReq())) });
-    await pi.request({ t: "send", as: "supervisor", to: [SUP_MBP], body: JSON.stringify({ ...EXIT(s.spawnReq()), worker: "w_new" }) });
+    for (const body of [EXIT(s.spawnReq()), { ...EXIT(s.spawnReq()), worker: "w_new" }]) forged.push((await pi.request<{ id: string }>({ t: "send", as: "supervisor", to: [SUP_MBP], body: JSON.stringify(body) })).id);
     // A reply to a request sent, from the wrong sender.
     s.answer["status"] = () => null;
     s.answer["list"] = () => ({ workers: [] });
     const asking = s.call("worker_status", { id: "w_9" }).catch(() => null);
     await until(() => s.ops().includes("status"));
     const statusReq = s.got.at(-1)!.id;
-    await s.send({ v: 2, re: "status", req: statusReq, ok: true, worker: view("w_9", s.spawnReq(), { state: "failed" }) }, "Mallory");
-    await tick(30);
+    forged.push((await s.send({ v: 2, re: "status", req: statusReq, ok: true, worker: view("w_9", s.spawnReq(), { state: "failed" }) }, "Mallory")).id);
+    // Each one handled (acked) before asserting it changed nothing.
+    await until(() => forged.every((id) => s.net.acked(id)));
     expect(s.mbp.store.remoteCopy("ubu1", "w_9")).toEqual(before);
     expect(s.mbp.store.remoteCopy("pi", "w_9")).toBeNull();
     expect(s.mbp.store.remoteCopy("pi", "w_new")).toBeNull();
@@ -286,8 +288,10 @@ describe("reconciling (criterion 4)", () => {
     const s = await scripted();
     await s.call("spawn_worker", ANN);
     s.answer["list"] = () => ({ workers: [view("w_9", s.spawnReq())] });
+    const due = s.net.now + 300_000;
     s.net.advance(299);
-    await tick(20);
+    // The reconcile's wait is still on the clock: nothing could have asked yet.
+    expect(s.net.pending()).toContain(due);
     expect(s.ops()).toEqual(["spawn"]);
     s.net.advance(1);
     await until(() => s.ops().length === 2);
@@ -296,7 +300,8 @@ describe("reconciling (criterion 4)", () => {
     await until(() => s.mbp.store.remoteCopy("ubu1", "w_9")?.ended === 1);
     s.net.advance(300);
     s.net.advance(300);
-    await tick(30);
+    // The loop woke, found every copy ended, and waits again: only then is "not at all" shown.
+    await until(() => s.net.pending().includes(s.net.now + 300_000));
     expect(s.ops()).toEqual(["spawn", "list"]);
   });
 
@@ -348,8 +353,8 @@ describe("the end, told and kept (criterion 5)", () => {
     await until(() => s.bob().length === 1);
     await s.mbp.sup.shutdown();
     const again = await boot(s.net, "mbp-1", "", s.mbp.at);
-    await s.send(EXIT(s.spawnReq()));
-    await tick(30);
+    const { id } = await s.send(EXIT(s.spawnReq()));
+    await until(() => s.net.acked(id));
     expect(s.bob().length).toBe(1);
     expect(again.store.remoteCopy("ubu1", "w_9")!.told).toBe(1);
   });
@@ -378,9 +383,88 @@ describe("an end the broker withholds (BOB-72)", () => {
     await mbp.sup.reconcile();
     net.advance(300);
     net.advance(300);
-    await tick(30);
+    await until(() => net.pending().includes(net.now + 300_000));
     expect(sent().slice(asked).filter((b) => b["op"] === "summary" || b["op"] === "list")).toEqual([]);
     expect(bob().length).toBe(1);
+  });
+});
+
+/** A logger that keeps its warnings and errors. */
+function logged(): { log: Logger; said: Array<{ level: string; msg: string } & Record<string, unknown>> } {
+  const said: Array<{ level: string; msg: string } & Record<string, unknown>> = [];
+  const keep = (level: string) => (msg: string, fields?: Record<string, unknown>) => void said.push({ level, msg, ...fields });
+  return { log: { ...quiet, warn: keep("warn"), error: keep("error") }, said };
+}
+
+describe("build A's minors (BOB-74)", () => {
+  it("a reply with a missing or non-string id is logged and dropped; the supervisor keeps running (AC 1)", async () => {
+    const { log, said } = logged();
+    const s = await scripted(log);
+    await s.call("spawn_worker", ANN);
+    s.answer["status"] = () => null;
+    const asking = s.call("worker_status", { id: "w_9" });
+    await until(() => s.ops().includes("status"));
+    const req = s.got.at(-1)!.id;
+    const malformed = [
+      { worker: { ...view("w_9", s.spawnReq()), id: undefined } },
+      { worker: { ...view("w_9", s.spawnReq()), id: 42 } },
+      { workers: [view("w_9", s.spawnReq()), { state: "failed" }] },
+    ];
+    for (const fields of malformed) await s.send({ v: 2, re: "status", req, ok: true, ...fields });
+    // An exit whose state ends nothing is dropped the same way.
+    await s.send(EXIT(s.spawnReq(), { state: "running" }));
+    await until(() => said.filter((l) => l.msg.includes("doesn't parse")).length === 4);
+    expect(said.filter((l) => l.level === "error")).toEqual([]);
+    expect(s.mbp.store.remoteCopy("ubu1", "w_9")).toMatchObject({ state: "running", ended: 0 });
+    // Still running: the good reply is taken.
+    await s.send({ v: 2, re: "status", req, ok: true, worker: view("w_9", s.spawnReq(), { checkpoint: "half way" }) });
+    expect(await asking).toMatchObject({ id: "w_9", checkpoint: "half way" });
+  });
+
+  it("remoteAsk's wait is cleared when its reply comes: none left on the clock (AC 6)", async () => {
+    const s = await scripted();
+    await s.call("spawn_worker", ANN);
+    const before = s.net.pending();
+    s.answer["status"] = () => ({ worker: view("w_9", s.spawnReq()) });
+    await s.call("worker_status", { id: "w_9" });
+    expect(s.net.pending()).toEqual(before);
+  });
+
+  it("the supervisor's own sleep clears its timer when aborted (AC 6, fake timers)", async () => {
+    vi.useFakeTimers();
+    try {
+      const waiting = new AbortController();
+      const slept = sleepFor(90_000, waiting.signal);
+      expect(vi.getTimerCount()).toBe(1);
+      waiting.abort();
+      await slept;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("list_workers laptop '*' asks the laptops in parallel: two silent targets cost one wait (AC 7)", async () => {
+    const s = await scripted();
+    await s.call("spawn_worker", ANN);
+    // A second laptop with a copy on it, whose supervisor never answers either.
+    const pi = s.net.link("pi");
+    const piGot: string[] = [];
+    pi.onPush = (f) => void (f.t === "deliver" && piGot.push(f.msg.body));
+    await pi.register({ name: "supervisor" });
+    s.net.clients.set("supervisor@pi", { package: "@bobnet/supervisor", version: REMOTE_TOOLS_SINCE, protocol: 1 });
+    const now = new Date(s.net.now).toISOString();
+    s.mbp.store.putRemoteCopy({ laptop: "pi", id: "w_7", to_name: "supervisor@pi", spawn_req: null, view: null, state: "running", as_of: now, ended: 0, handoff: null, remote_url: null, told: 0 });
+    s.answer["list"] = () => null;
+    const listing = s.call("list_workers", { laptop: "*" });
+    // Both lists are out before any wait ends.
+    await until(() => s.ops().includes("list") && piGot.length === 1);
+    s.net.advance(50);
+    const rows = await listing;
+    expect(rows.map((r: { id?: string; laptop: string; unreachable?: string }) => [r.id ?? null, r.laptop, r.unreachable])).toEqual([
+      ["w_9", "ubu1", "no reply from ubu1 within 50 s"],
+      ["w_7", "pi", "no reply from pi within 50 s"],
+    ]);
   });
 });
 
@@ -472,8 +556,8 @@ describe("remote_url on the copy (criterion 9)", () => {
     await until(() => s.mbp.store.remoteCopy("ubu1", "w_9")!.remote_url !== null);
     s.answer["status"] = () => ({ worker: view("w_9", s.spawnReq(), { remote_url: null, checkpoint: "later" }) });
     expect(await s.call("worker_status", { id: "w_9" })).toMatchObject({ checkpoint: "later", remote_url: "https://claude.ai/code/s1" });
-    await s.send({ v: 2, event: "remote_control", worker: "w_9", spawn_req: s.spawnReq(), error: "Remote Control is off" });
-    await tick(30);
+    const { id } = await s.send({ v: 2, event: "remote_control", worker: "w_9", spawn_req: s.spawnReq(), error: "Remote Control is off" });
+    await until(() => s.net.acked(id));
     expect(s.mbp.store.remoteCopy("ubu1", "w_9")!.remote_url).toBe("https://claude.ai/code/s1");
   });
 });

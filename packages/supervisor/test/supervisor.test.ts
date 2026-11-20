@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Envelope } from "@bobnet/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseSupervisorConfig } from "../src/config.ts";
+import { parseSupervisorConfig, strandedState } from "../src/config.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
 import { landSummary, powerNote, savedOutputCheck, Supervisor, taskRef } from "../src/supervisor.ts";
@@ -93,6 +93,26 @@ describe("config", () => {
     expect(c.stateDir).toBe(join(homedir(), ".local/state/bobnet"));
     const set = parseSupervisorConfig(`orchestrator: Bob\nstate_dir: ~/s\nprojects:\n  a: { path: /a, roles: { bill: { dir: /a/b } } }`, (d) => d);
     expect(set.stateDir).toBe(join(homedir(), "s"));
+  });
+
+  it("refuses to start with no state_dir while a db from before rc.40 is under <cwd>/~, naming both paths, moving nothing (BOB-74)", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bobnet-cwd-"));
+    try {
+      const yaml = `orchestrator: Bob\nprojects: {}\n`;
+      const real = join(homedir(), ".local/state/bobnet");
+      expect(strandedState(yaml, real, cwd)).toBeNull();
+      const old = join(cwd, "~", ".local", "state", "bobnet");
+      mkdirSync(old, { recursive: true });
+      writeFileSync(join(old, "supervisor.db"), "the old db");
+      const why = strandedState(yaml, real, cwd)!;
+      expect(why).toContain(join(old, "supervisor.db"));
+      expect(why).toContain(join(real, "supervisor.db"));
+      expect(readFileSync(join(old, "supervisor.db"), "utf8")).toBe("the old db");
+      // state_dir set, to anything: the config says where.
+      expect(strandedState(`state_dir: ~/.local/state/bobnet\n${yaml}`, real, cwd)).toBeNull();
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });
 
