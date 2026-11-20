@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { findSecret } from "@bobnet/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { GhCiPoll } from "../src/ci-poll.ts";
 import { callTool, handlers } from "../src/mcp.ts";
@@ -351,6 +352,35 @@ describe("the end, told and kept (criterion 5)", () => {
     await tick(30);
     expect(s.bob().length).toBe(1);
     expect(again.store.remoteCopy("ubu1", "w_9")!.told).toBe(1);
+  });
+});
+
+describe("an end the broker withholds (BOB-72)", () => {
+  it("the broker refuses what the target doesn't: the copy is ended, one notice, no further summary or list for it", async () => {
+    const { net, ubu, mbp, call, bob, sent } = await real();
+    // The broker's detector before BOB-72 narrowed password_assignment; the target's is the narrowed one.
+    net.detector = (t) => findSecret(t) ?? (/\b(?:password|passwd|secret|api[_-]?key)\s*[:=]\s*["']?[^\s"']{8,}/i.test(t) ? "password_assignment" : null);
+    const { id } = await call("spawn_worker", ANN);
+    await until(() => ubu.sessions.length === 1);
+    ubu.writeHandoff(id, "# Handoff\n\nThe service reads its api_key:\n\nthen goes on.\n");
+    ubu.sessions[0]!.finish();
+    await until(() => bob().length === 1);
+    expect(bob()).toEqual([`Ann (${id}, studio/ann) on ubu1 done; handoff withheld: ask Ann on ubu1.`]);
+    // The exit and the summary both came as stand-ins.
+    expect(net.refused.filter((r) => r.to.includes(SUP_MBP)).map((r) => r.code)).toEqual(["secret_detected", "secret_detected"]);
+    expect(sent().map((b) => b["op"])).toEqual(["spawn", "status", "summary"]);
+    expect(mbp.store.remoteCopy("ubu1", id)).toMatchObject({ state: "done", ended: 1, told: 1, handoff: JSON.stringify({ handoff_text: null, handoff_withheld: true }) });
+    // Not asked again: a reconnect, a reconcile run to its end, the 5-minute timer.
+    const asked = sent().length;
+    net.disconnect("mbp-1");
+    await net.reconnect("mbp-1");
+    mbp.sup.onConnected();
+    await mbp.sup.reconcile();
+    net.advance(300);
+    net.advance(300);
+    await tick(30);
+    expect(sent().slice(asked).filter((b) => b["op"] === "summary" || b["op"] === "list")).toEqual([]);
+    expect(bob().length).toBe(1);
   });
 });
 

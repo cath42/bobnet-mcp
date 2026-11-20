@@ -32,6 +32,13 @@ describe("findSecret", () => {
   it("passes ordinary coordination text", () => {
     expect(findSecret("LAND-12.3 done, see architecture/design-notes/LAND-12.3.md")).toBeNull();
   });
+  it("password_assignment doesn't match across a JSON escape: the serialised body only where a field does (BOB-72)", () => {
+    const handoff = "# Handoff\n\nThe service reads its api_key:\n\nthen goes on.\n";
+    expect(findSecret(handoff)).toBeNull();
+    expect(findSecret(JSON.stringify({ v: 2, event: "exit", handoff_text: handoff }))).toBeNull();
+    expect(findSecret("api_key=abcdefgh123")).toBe("password_assignment");
+    expect(findSecret(JSON.stringify({ handoff_text: "set password=hunter2hunter2\n" }))).toBe("password_assignment");
+  });
 });
 
 describe("redactSecrets", () => {

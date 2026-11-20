@@ -1,13 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Envelope } from "@bobnet/protocol";
+import { type Envelope, findSecret } from "@bobnet/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { GhCiPoll } from "../src/ci-poll.ts";
 import { callTool, handlers } from "../src/mcp.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
-import { REMOTE_TOOLS_SINCE, Supervisor, withHandoff } from "../src/supervisor.ts";
+import { type Detect, REMOTE_TOOLS_SINCE, Supervisor, withHandoff } from "../src/supervisor.ts";
 import { fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 import { FakeNetwork } from "./network.ts";
 
@@ -28,6 +28,10 @@ const SUP_MBP = "supervisor@mbp-1";
 const SUP_UBU = "supervisor@ubu1";
 const SPAWN = { v: 2, op: "spawn", project: "studio", role: "ann", task: "one fix", by: "poe" } as const;
 const KEY = "AKIAABCDEFGHIJKLMNOP";
+/** The broker's detector before BOB-72 narrowed `password_assignment`: a newline written `\n` in a body runs into its value. */
+const OLD_DETECT: Detect = (t) => findSecret(t) ?? (/\b(?:password|passwd|secret|api[_-]?key)\s*[:=]\s*["']?[^\s"']{8,}/i.test(t) ? "password_assignment" : null);
+/** A handoff no field of which matches the old detector, though its serialised form does. */
+const MULTILINE = "# Handoff\n\nThe service reads its api_key:\n\nthen goes on.\n";
 
 const dirs: string[] = [];
 const stores = new Set<Store>();
@@ -48,12 +52,12 @@ function newStore(): { dir: string; store: Store } {
   return { dir, store };
 }
 
-async function boot(net: FakeNetwork, laptop: string, over: string, at = newStore(), query = fakeQuery()) {
+async function boot(net: FakeNetwork, laptop: string, over: string, at = newStore(), query = fakeQuery(), detect?: Detect) {
   const link = net.link(laptop);
   const ciPoll = new GhCiPoll(quiet, async () => {
     throw new Error("no gh in tests");
   });
-  const sup = new Supervisor({ config: testConfig(at.dir, over), policy: POLICY, store: at.store, broker: link, queryFn: query.queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async () => false, sleep: net.sleep, ciPoll });
+  const sup = new Supervisor({ config: testConfig(at.dir, over), policy: POLICY, store: at.store, broker: link, queryFn: query.queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async () => false, sleep: net.sleep, ciPoll, ...(detect ? { detect } : {}) });
   link.onPush = (f) => sup.onPush(f);
   await sup.start();
   running.push(sup);
@@ -84,9 +88,10 @@ async function scripted(net: FakeNetwork) {
 }
 
 /** ubu1 real, mbp-1 scripted, and one v: 2 worker of mbp-1's running on ubu1. */
-async function spawned(query = fakeQuery()) {
+async function spawned(query = fakeQuery(), detect?: Detect) {
   const net = new FakeNetwork();
-  const ubu = await boot(net, "ubu1", UBU, newStore(), query);
+  if (detect) net.detector = detect;
+  const ubu = await boot(net, "ubu1", UBU, newStore(), query, detect);
   const mbp = await scripted(net);
   const { id: req, reply } = await mbp.ask(SPAWN);
   const id = reply["worker"].id as string;
@@ -205,6 +210,25 @@ describe("credentials (criterion 3)", () => {
     const s = await spawned();
     const { exit } = await endWith(s, `Deployed with ${KEY} as the key.\nNext: rotate it.`);
     expect(exit["handoff_text"]).toBe("Deployed with [withheld: looks like a credential] as the key.\nNext: rotate it.");
+    expect(s.net.refused.filter((r) => r.to.includes(SUP_MBP))).toEqual([]);
+  });
+
+  it("the serialised body is checked after per-field redaction: a handoff that matches only serialised is withheld whole (BOB-72)", () => {
+    const event = { v: 2, event: "exit", worker: "w_1", spawn_req: "m_1", state: "done", checkpoint: "fixed", lands: [] };
+    expect(OLD_DETECT(MULTILINE)).toBeNull();
+    expect(OLD_DETECT(JSON.stringify({ ...event, handoff_text: MULTILINE }))).toBe("password_assignment");
+    const out = withHandoff(event, MULTILINE, OLD_DETECT);
+    expect(out).toEqual({ ...event, handoff_text: null, handoff_withheld: true });
+    expect(OLD_DETECT(JSON.stringify(out))).toBeNull();
+    // Another field the same way: withheld whole, the rest kept.
+    expect(withHandoff({ ...event, checkpoint: MULTILINE }, "fine", OLD_DETECT)).toEqual({ ...event, checkpoint: "[withheld: looks like a credential]", handoff_text: "fine" });
+  });
+
+  it("on the wire, against the fake's detector: the exit goes, with its state, the handoff withheld (BOB-72)", async () => {
+    const s = await spawned(fakeQuery(), OLD_DETECT);
+    const { body, exit } = await endWith(s, MULTILINE);
+    expect(exit).toMatchObject({ v: 2, event: "exit", worker: s.id, state: "done", handoff_text: null, handoff_withheld: true });
+    expect(OLD_DETECT(body)).toBeNull();
     expect(s.net.refused.filter((r) => r.to.includes(SUP_MBP))).toEqual([]);
   });
 });

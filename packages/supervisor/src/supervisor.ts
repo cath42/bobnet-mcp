@@ -159,15 +159,43 @@ const filled = (c: RemoteWorkerRow) => c.view !== null && (JSON.parse(c.view) as
 /** An `exit` event's or a `summary` reply's handoff fields, as a copy keeps them (§6). */
 function handoffFields(json: Record<string, unknown>): string {
   const text = typeof json["handoff_text"] === "string" ? json["handoff_text"] : null;
+  if (text === null && json["handoff_withheld"] === true) return WITHHELD_HANDOFF;
   return JSON.stringify({ handoff_text: text, ...(text !== null && json["handoff_truncated"] === true ? { handoff_truncated: true, handoff_length: json["handoff_length"] } : {}) });
 }
+/** A copy's handoff that the target, or the broker, withheld as a credential (§2): the role on the target has it. */
+const WITHHELD_HANDOFF = JSON.stringify({ handoff_text: null, handoff_withheld: true });
+
+/** The broker's credential check as this release knows it; a test passes another. */
+export type Detect = (text: string) => string | null;
 
 /** A reply or event with each text field's credential-looking spans withheld, the rest kept (§2). */
-function withholdSecrets<T>(value: T): T {
-  if (typeof value === "string") return (findSecret(value) ? redactSecrets(value, WITHHELD) : value) as T;
-  if (Array.isArray(value)) return value.map(withholdSecrets) as T;
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withholdSecrets(v)])) as T;
+function withholdSecrets<T>(value: T, detect: Detect = findSecret): T {
+  if (typeof value === "string") return (detect(value) ? redactSecrets(value, WITHHELD) : value) as T;
+  if (Array.isArray(value)) return value.map((v) => withholdSecrets(v, detect)) as T;
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withholdSecrets(v, detect)])) as T;
   return value;
+}
+
+/** A value with each string whose serialised form still looks like a credential withheld whole. */
+function withholdWhole<T>(value: T, detect: Detect): T {
+  if (typeof value === "string") return (detect(JSON.stringify(value)) ? WITHHELD : value) as T;
+  if (Array.isArray(value)) return value.map((v) => withholdWhole(v, detect)) as T;
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withholdWhole(v, detect)])) as T;
+  return value;
+}
+
+/**
+ * A reply or event as it goes (§2): each field's spans withheld, then the serialised body checked as
+ * the broker checks it. JSON writes a newline as `\n`, so a pattern can match the body where no field
+ * did; the field whose serialised form matches is withheld whole, the handoff as `handoff_text: null,
+ * handoff_withheld: true`, rather than send a body the broker refuses.
+ */
+export function withholdBody(fields: Record<string, unknown>, detect: Detect = findSecret): Record<string, unknown> {
+  const out = withholdSecrets(fields, detect);
+  if (!detect(JSON.stringify(out))) return out;
+  const { handoff_text: text, handoff_truncated: _t, handoff_length: _l, ...rest } = out;
+  if (typeof text === "string" && detect(JSON.stringify(text))) return { ...withholdWhole(rest, detect), handoff_text: null, handoff_withheld: true };
+  return withholdWhole(out, detect);
 }
 
 /** What goes in place of a reply or event the broker refused as a credential anyway (its detector newer than ours): who it was about. */
@@ -232,10 +260,12 @@ const EXIT_LAND_MAX = 300;
  * body leaves under 16 KiB with REMOTE_FIT_CHARS's margin, with `handoff_truncated` and the file's
  * length when cut. No text (no file, or an empty one) is `handoff_text: null`.
  */
-export function withHandoff(fields: Record<string, unknown>, text: string | null): Record<string, unknown> {
-  const base = withholdSecrets(fields);
+export function withHandoff(fields: Record<string, unknown>, text: string | null, detect: Detect = findSecret): Record<string, unknown> {
+  const base = withholdBody(fields, detect);
   if (text === null) return { ...base, handoff_text: null };
-  const handoff = withholdSecrets(text);
+  const handoff = withholdSecrets(text, detect);
+  // What matches only serialised (§2) goes whole, before any cut.
+  if (detect(JSON.stringify(handoff))) return { ...base, handoff_text: null, handoff_withheld: true };
   const whole = { ...base, handoff_text: handoff };
   if (fits(whole)) return whole;
   const at = (n: number) => {
@@ -250,7 +280,8 @@ export function withHandoff(fields: Record<string, unknown>, text: string | null
     if (fits(at(mid))) lo = mid;
     else hi = mid - 1;
   }
-  return at(lo);
+  // A cut can end a span where the whole text didn't (a `\b` at its end).
+  return withholdBody(at(lo), detect);
 }
 
 /**
@@ -330,6 +361,8 @@ export class Supervisor {
   private laptop: string | null = null;
   private readonly sandboxCheck: () => Promise<string | null>;
   private readonly sleep: (ms: number) => Promise<void>;
+  /** The credential check on what goes to another laptop (§2): the broker's, as this release knows it. */
+  private readonly detect: Detect;
   /** The remote requests waiting for their reply, by their remote_sent row. */
   private readonly remoteWaits = new Map<string, (reply: Record<string, unknown>) => void>();
   /** Spawns a tool is still deciding (waiting, or listing after the wait): a late reply to one is the tool's, not a note's. */
@@ -376,7 +409,10 @@ export class Supervisor {
     ciPoll?: GhCiPoll;
     /** A remote request's wait (ADR 0007 §2); tests run it on the fake network's clock. */
     sleep?: (ms: number) => Promise<void>;
+    /** The credential check on replies and events (§2); a test passes one that matches what findSecret doesn't. */
+    detect?: Detect;
   }) {
+    this.detect = deps.detect ?? findSecret;
     this.ciPoll = deps.ciPoll ?? new GhCiPoll(deps.log);
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms).unref()));
     this.ownerCheck = deps.ownerCheck ?? null;
@@ -1028,7 +1064,7 @@ export class Supervisor {
         out = { ok: false, op, error: (err as Error).message };
       }
     }
-    const text = reply(withholdSecrets(out));
+    const text = reply(withholdBody(out, this.detect));
     this.store.finishRemote(msg.id, text);
     this.store.audit(msg.from, out["ok"] ? `remote:${op}` : "remote:refused", (out["worker"] as { id?: string } | undefined)?.id ?? null, { message: msg.id, ...(out["ok"] ? {} : { error: out["error"] }) });
     this.sendRemote(msg.from, text, msg.id);
@@ -1088,6 +1124,9 @@ export class Supervisor {
       this.store.putRemoteCopy(c);
       this.copyMade(c);
       this.remoteAskQuietly(c.to_name, { v: 2, op: "status", id });
+    } else if (json["event"] === "withheld" && !c.ended) {
+      // An event the broker refused (an exit, or a url): status says whether it ended, and an end asks summary.
+      this.remoteAskQuietly(c.to_name, { v: 2, op: "status", id });
     }
     if (json["event"] === "exit") {
       if (!c.ended) {
@@ -1105,6 +1144,7 @@ export class Supervisor {
 
   /** A target's ok reply, into the copies of the workers it names (§7); ids a list was asked for and didn't return are `unknown`. */
   private copyFromReply(sent: RemoteSentRow, json: Record<string, unknown>): void {
+    if (json["event"] === "withheld" && sent.op === "summary" && sent.target) this.summaryWithheld(laptopOf(sent.to_name), sent.target);
     if (json["ok"] !== true) return;
     const laptop = laptopOf(sent.to_name);
     const asOf = new Date().toISOString();
@@ -1161,6 +1201,16 @@ export class Supervisor {
   }
 
   /**
+   * A `summary` the broker refused as a credential (§2): an ended copy ends with its handoff withheld,
+   * and isn't asked again; the orchestrator asks the role on the target. One not ended yet is left to
+   * its status.
+   */
+  private summaryWithheld(laptop: string, id: string): void {
+    const c = this.store.remoteCopy(laptop, id);
+    if (c?.ended && c.handoff === null) this.copyEnd({ ...c, handoff: WITHHELD_HANDOFF }, []);
+  }
+
+  /**
    * An ended copy (§6): without its handoff, `summary` is asked for it; with it, the orchestrator is
    * told, once, as for a local end ("… done: …; handoff in worker_summary").
    */
@@ -1175,9 +1225,14 @@ export class Supervisor {
     const v = c.view ? (JSON.parse(c.view) as Record<string, unknown>) : {};
     const checkpoint = typeof v["checkpoint"] === "string" ? v["checkpoint"] : null;
     const what = c.state === "done" ? `done${checkpoint ? `: ${checkpoint}` : ""}` : `${c.state}: ${typeof v["error"] === "string" ? v["error"] : "no reason given"}`;
-    const h = JSON.parse(c.handoff) as { handoff_text: string | null; handoff_truncated?: true; handoff_length?: number };
-    const handoff =
-      h.handoff_text === null ? "no handoff file" : h.handoff_truncated ? `handoff in worker_summary (cut; ${String(h.handoff_length)} characters in the file)` : "handoff in worker_summary";
+    const h = JSON.parse(c.handoff) as { handoff_text: string | null; handoff_truncated?: true; handoff_length?: number; handoff_withheld?: true };
+    const handoff = h.handoff_withheld
+      ? `handoff withheld: ask ${name} on ${c.laptop}`
+      : h.handoff_text === null
+        ? "no handoff file"
+        : h.handoff_truncated
+          ? `handoff in worker_summary (cut; ${String(h.handoff_length)} characters in the file)`
+          : "handoff in worker_summary";
     const landed = lands.length ? ` Land: ${lands.join("; ")}.` : "";
     this.store.audit(c.to_name, "remote:exit", c.id, { message: c.spawn_req, state: c.state });
     this.notify(`${name} (${c.id}, ${project}/${role}) on ${c.laptop} ${what}; ${handoff}.${landed}`, project);
@@ -1555,7 +1610,7 @@ export class Supervisor {
         const out = { worker: this.remoteView(w), ...fitSummary(this.summary(w.id)) };
         // Once it ended, its handoff too (§6), sized with the reply's own envelope.
         if (ACTIVE_STATES.includes(w.state) || w.state === "queued") return out;
-        const { v: _v, re: _re, req: _req, ok: _ok, ...fitted } = withHandoff({ v: 2, re: "summary", req: msgId, ok: true, ...out }, this.handoffText(w));
+        const { v: _v, re: _re, req: _req, ok: _ok, ...fitted } = withHandoff({ v: 2, re: "summary", req: msgId, ok: true, ...out }, this.handoffText(w), this.detect);
         return fitted;
       }
       case "request":
@@ -1596,7 +1651,7 @@ export class Supervisor {
     if (!w.spawned_by?.includes("@")) return;
     // A v: 2 spawn's worker: its events say so and name the spawn that made it (ADR 0007 §2).
     const v2 = w.spawn_req ? { v: 2, event: event["event"], worker: w.id, spawn_req: w.spawn_req } : { event: event["event"], worker: w.id };
-    this.sendRemote(w.spawned_by, reply(withholdSecrets({ ...v2, ...event })));
+    this.sendRemote(w.spawned_by, reply(withholdBody({ ...v2, ...event }, this.detect)));
   }
 
   /** A dashboard action: only after the owner's own token checks out. */
@@ -2344,7 +2399,7 @@ export class Supervisor {
       ...(w.state === "done" || !w.error ? {} : { error: cut(w.error, EXIT_ERROR_MAX) }),
       lands: lands.map((l) => cut(l, EXIT_LAND_MAX)),
     };
-    this.store.addOutbox(w.spawned_by, reply(withHandoff(fields, this.handoffText(w))), "remote", { inReplyTo: null, ttlSeconds: REMOTE_ANSWER_TTL_S });
+    this.store.addOutbox(w.spawned_by, reply(withHandoff(fields, this.handoffText(w), this.detect)), "remote", { inReplyTo: null, ttlSeconds: REMOTE_ANSWER_TTL_S });
     if (flush) this.flushOutbox();
   }
 

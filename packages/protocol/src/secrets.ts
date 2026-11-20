@@ -10,7 +10,9 @@ const PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
   ["slack_token", /\bxox[abposr]-[A-Za-z0-9-]{10,}/],
   ["jwt", /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/],
   ["bearer", /\bBearer\s+[A-Za-z0-9._~+/-]{24,}=*/],
-  ["password_assignment", /\b(?:password|passwd|secret|api[_-]?key)\s*[:=]\s*["']?[^\s"']{8,}/i],
+  // No `\` in the value: a JSON escape (a newline as `\n`) can't carry a match across what the field
+  // keeps apart, so the serialised body matches only where a field does (ADR 0007 §2).
+  ["password_assignment", /\b(?:password|passwd|secret|api[_-]?key)\s*[:=]\s*["']?[^\s"'\\]{8,}/i],
 ];
 
 /** Returns the name of the first credential pattern found, or null. */
