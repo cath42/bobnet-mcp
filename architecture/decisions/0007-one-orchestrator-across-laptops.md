@@ -727,3 +727,12 @@ The first is ruled in review A (`architecture/reviews/2026-11-20-bob44-build-a.m
 sentence on accepting them is struck, since a rolled-back target sends no `v`-less event for a worker the
 requester has a copy of; the copy shows `as_of`, and the target's queued `exit` or a reconcile ends it once
 the target is back on rc.39 or later.
+
+**§2, credentials, after the A-fixes** (rc.41: b2c8a96, c985339; `architecture/reviews/2026-11-20-bob44-a-fixes.md`):
+the target redacts each field, then checks the serialised body as the broker does and withholds a matching
+field whole (a handoff as `handoff_text: null, handoff_withheld: true`). `password_assignment`'s value
+excludes `\`, so a body matches only where a field does. `private_key` redacts BEGIN through END, or to the
+end of the text. The requester ends a copy whose handoff is withheld with "handoff withheld: ask <name> on
+<laptop>". Until the broker carries the narrowed pattern (B6, BOB-71), the target checks with the narrowed
+one and the broker refuses: stand-ins carry the end, and a worker whose `error` matches only serialised
+withholds its `status` and `list` too.
