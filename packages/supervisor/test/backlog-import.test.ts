@@ -340,7 +340,8 @@ describe("the Backlog.md import", () => {
     });
   });
 
-  describe("the command's --post", () => {
+  // Each run makes a git repo: under the land's load, four of them pass 5 s.
+  describe("the command's --post", { timeout: 30_000 }, () => {
     const run = async (answer: ImportPosted | Error, extra: string[] = []) => {
       const { dir } = repo({ "product/backlog/tasks/bob-1.md": task("BOB-1", { type: "increment" }) });
       const errors: string[] = [];
