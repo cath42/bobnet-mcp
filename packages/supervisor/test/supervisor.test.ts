@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Envelope } from "@bobnet/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -86,6 +86,13 @@ describe("config", () => {
     expect(() =>
       parseSupervisorConfig(`orchestrator: Bob\nprojects:\n  a: { path: /a, roles: { bob: { dir: /a/b } } }`, (d) => d),
     ).toThrow(/already used by the orchestrator/);
+  });
+
+  it("expands the default state_dir to an absolute path under the home folder", () => {
+    const c = parseSupervisorConfig(`orchestrator: Bob\nprojects:\n  a: { path: /a, roles: { bill: { dir: /a/b } } }`, (d) => d);
+    expect(c.stateDir).toBe(join(homedir(), ".local/state/bobnet"));
+    const set = parseSupervisorConfig(`orchestrator: Bob\nstate_dir: ~/s\nprojects:\n  a: { path: /a, roles: { bill: { dir: /a/b } } }`, (d) => d);
+    expect(set.stateDir).toBe(join(homedir(), "s"));
   });
 });
 

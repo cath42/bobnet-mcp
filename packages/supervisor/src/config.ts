@@ -192,7 +192,8 @@ const SupervisorFile = z.object({
   /** The same for a tool call that runs this long with no output (a long verify is quiet; a hung one stays so). */
   tool_stall_minutes: z.number().positive().default(45),
   request_timeout_minutes: z.number().positive().default(60),
-  state_dir: path.default("~/.local/state/bobnet"),
+  // prefault, not default: zod 4 hands a default out unparsed, so "~" would stay literal.
+  state_dir: path.prefault("~/.local/state/bobnet"),
   mcp_port: z.number().int().min(1024).max(65535).default(7425),
   /** Heavy runs (tests, probes, landing) at once on this laptop (ADR 0094 §2: one). */
   run_slots: z.number().int().positive().default(1),
