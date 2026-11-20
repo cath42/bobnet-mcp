@@ -658,6 +658,11 @@ AC 10). Sources: Mario's notes and Luigi's handoffs for BOB-59..65.
 - **A lead's tools** refuse another laptop with "A lead's tools act on its own laptop only".
 - **`summary`** leaves out the brief (`task`); the requester has it.
 - **`pending_requests`, `request_detail` and `answer_request` with `laptop`** are build B (B4).
+- **Who holds the tools:** the orchestrator `supervisor.yaml`'s `orchestrator:` names (`orchestratorOf`,
+  `supervisor.ts:2392`; also a remote spawn's `by` and where its end notice goes), through the supervisor
+  MCP (127.0.0.1, bearer token). §1 assumed that was poe; nobody checked before the build. On mbp-1 it
+  named the offline `Orchestrator`, now `orchestrator: poe` (Casper, 2026-11-20: config only). The JSON
+  op path stays without `laptop`: giving it one would open the relay to any `remote` agent, against §1.
 
 **§6, the result** (af5ef9d)
 
