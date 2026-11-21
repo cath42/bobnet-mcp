@@ -36,3 +36,18 @@ fixes should be live (tag + push; poe hand-installs on mbp-1).
     substring denied it); relative words resolved from the cwd even without a cd; globs, other variables, eval
     and $(…) not covered (the sandbox enforces).
 - 15:57Z L2 Luigi w_e101d787 on BOB-92, BOB-93.
+- 16:07Z BOB-92 landed d3ce4ac, BOB-93 b860909 (Luigi w_e101d787; supervisor 520). Read:
+  - ask() refuses after the verify when `current` is no longer waiting (Toad's m2 as written).
+  - The upgrades row now starts at `installing` (in run(), before any build), then goes waiting, then restarting
+    (switchAndExit moves it, no longer inserts it), and ends ready, failed or installed (restart: no).
+  - fail() ends the row for every failure, superseded included.
+  - resume() reads every open row: installing -> failed "restarted while installing" plus discard(tag); waiting ->
+    failed step wait ("stays installed, ask again"); restarting as before.
+  - No migration: stage is TEXT.
+  - For Toad:
+    - the `waiting` stage goes beyond m3;
+    - onExit no longer pokes while closing, so a shutdown never completes a waiting upgrade's switch (the next
+      process fails the row);
+    - rollback to rc.44 leaves installing/waiting rows unread (rc.44's resume reads only `restarting`), which is
+      harmless.
+- 16:07Z L3 Luigi w_e402f419 on BOB-95.
