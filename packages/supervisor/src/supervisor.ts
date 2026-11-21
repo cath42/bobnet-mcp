@@ -253,6 +253,21 @@ function fitList(all: Array<Record<string, unknown>>): { workers: Array<Record<s
   return workers.length < all.length ? { workers, truncated: true } : { workers };
 }
 
+/** A request in `list` (§2): the `request` event's fields and its state, the input left to the `request` op. */
+function askView(r: RequestRow): Record<string, unknown> {
+  return { request: r.id, kind: r.kind, tool: r.tool, tier: r.tier, rule: r.rule, preview: oneLine(r), state: r.state, created_at: r.created_at };
+}
+
+/** A request in full, cut to fit the body (§2): its input, then its reason and message, shortened in turn. */
+function fitRequest(r: RequestRow): { request: RequestRow; truncated?: true } {
+  const request = { ...r };
+  if (fits({ request })) return { request };
+  for (const field of ["input", "reason", "message"] as const) {
+    while (!fits({ request }) && (request[field]?.length ?? 0) > 200) request[field] = cut(request[field]!, Math.floor(request[field]!.length / 2));
+  }
+  return { request, truncated: true };
+}
+
 /** A summary cut to fit the body: its last message, then its result, then its files, shortened in turn. */
 function fitSummary(sum: Summary & { state: WorkerState; checkpoint: string | null }): Record<string, unknown> {
   const out = { tool_calls: sum.tool_calls, files_changed: sum.files_changed, errors: sum.errors, events: sum.events, last_message: sum.last_message, result: sum.result };
@@ -1158,7 +1173,12 @@ export class Supervisor {
     if (sent["event"] === "withheld") this.store.audit(msg.from, "remote:withheld", worker, { message: msg.id, re: op });
     // Every upgrade request is audited as one, refused or not (ADR 0008 §2), with the tag it asked for.
     else if (op === "upgrade") this.store.audit(msg.from, "remote:upgrade", null, { message: msg.id, ok: out["ok"] === true, ...("request" in read && read.request.op === "upgrade" ? { tag: read.request.tag } : {}), ...(out["ok"] ? { from: out["from"], to: out["to"] } : { error: out["error"] }) });
-    else this.store.audit(msg.from, out["ok"] ? `remote:${op}` : "remote:refused", worker, { message: msg.id, ...(out["ok"] ? {} : { error: out["error"] }) });
+    // An answer's row names the request, its decision and who decided (§4), allowed or refused.
+    else if ("request" in read && read.request.op === "answer") {
+      const a = read.request;
+      const detail = { message: msg.id, request: a.id, decision: a.decision, by: a.user_decided ? "human" : "orchestrator" };
+      this.store.audit(msg.from, out["ok"] ? "remote:answer" : "remote:refused", this.store.request(a.id)?.worker_id ?? null, { ...detail, ...(out["ok"] ? {} : { error: out["error"] }) });
+    } else this.store.audit(msg.from, out["ok"] ? `remote:${op}` : "remote:refused", worker, { message: msg.id, ...(out["ok"] ? {} : { error: out["error"] }) });
     this.sendRemote(msg.from, text, msg.id);
     this.upgrades.poke();
   }
@@ -1774,7 +1794,10 @@ export class Supervisor {
         const reqs = new Set(req.reqs ?? []);
         const live = new Set<WorkerState>(["queued", ...ACTIVE_STATES]);
         const ws = this.store.workers().filter((w) => mine(w) && (named ? ids.has(w.id) || (w.spawn_req !== null && reqs.has(w.spawn_req)) : live.has(w.state)));
-        return fitList(ws.slice(-REMOTE_LIST_MAX).map((w) => this.remoteView(w)));
+        // Each with its open and orphaned requests (§2), so the requester's copies can catch up.
+        const asks = new Map<string, Array<Record<string, unknown>>>();
+        for (const r of this.store.requests(["open", "orphaned"])) asks.set(r.worker_id, [...(asks.get(r.worker_id) ?? []), askView(r)]);
+        return fitList(ws.slice(-REMOTE_LIST_MAX).map((w) => ({ ...this.remoteView(w), requests: asks.get(w.id) ?? [] })));
       }
       case "tail":
         return { id: req.id, ...fitLines(this.tail(own(req.id).id, req.n)) };
@@ -1790,13 +1813,36 @@ export class Supervisor {
         return rest;
       }
       case "request":
-      case "answer":
-        throw new SupervisorError(`this supervisor doesn't serve v: 2 ${req.op} yet`);
+        return fitRequest(this.ownRequest(from, may, req.id, false));
+      case "answer": {
+        const r = this.ownRequest(from, may, req.id, true);
+        if (req.decision === "answer" && !req.answers) throw new SupervisorError(`decision "answer" needs answers`);
+        const answer: Answer = req.decision === "answer" ? { decision: "answer", answers: req.answers!, ...(req.message ? { message: req.message } : {}) } : { decision: req.decision, ...(req.message ? { message: req.message } : {}) };
+        // As a local answer from here on (§4): the router's checks (a human tier needs user_decided, the decision fits the kind), resume for an orphan.
+        const done = this.answer(r.id, answer, req.user_decided ? "human" : "orchestrator", req.resume);
+        return { request: done.request.id, worker: r.worker_id, state: done.request.state, decision: done.request.decision, ...(done.resumed ? { resumed: done.resumed.id } : {}) };
+      }
       case "upgrade":
         // Its own grant, apart from spawn (ADR 0008 §2): off unless the entry says upgrade: true.
         if (!this.config.remoteUpgrade.has(from.toLowerCase())) throw new SupervisorError(`${from} may not upgrade this supervisor: its remote entry has no upgrade: true`);
         return this.upgradeAsk(msgId, from, req.tag, req.restart);
     }
+  }
+
+  /**
+   * A request a `request` or `answer` op names, checked in §4's order: the sender is in `remote`
+   * (remoteDoV2's first check); the request's worker is the sender's; its entry still lists that
+   * worker's project and role, read from the config now, not at the spawn; and, to answer, the
+   * request is open or orphaned. The worker is checked before the entry, so another sender's
+   * request is refused the same way whether it exists or not.
+   */
+  private ownRequest(from: string, may: Map<string, Set<string>>, id: string, answering: boolean): RequestRow {
+    const r = this.store.request(id);
+    const w = r ? this.store.worker(r.worker_id) : null;
+    if (!r || !w || w.spawned_by?.toLowerCase() !== from.toLowerCase()) throw new SupervisorError(`${id} isn't a request of a worker ${from} spawned`);
+    if (!may.get(w.project)?.has(w.role)) throw new SupervisorError(`${from} may no longer spawn ${w.project}/${w.role} here, so it can't act on ${id}`);
+    if (answering && r.state !== "open" && r.state !== "orphaned") throw new SupervisorError(`${id} is already ${r.state}`);
+    return r;
   }
 
   /** What a requester sees of a worker it spawned: its state and session, not its brief. */

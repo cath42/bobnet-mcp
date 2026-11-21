@@ -213,7 +213,13 @@ const SupervisorFile = z.object({
   /**
    * Who may ask this supervisor, over BobNet, to spawn: a sender's address (name@laptop, as the
    * broker stamps it) to the roles it may spawn, by project. It may follow and stop only what it
-   * spawned; it answers no request and changes no policy or role. Anyone else is refused.
+   * spawned, and (`v: 2`, ADR 0007 §4) answer those workers' requests while its entry still lists
+   * their project and role: the entry grants the orchestrator on the requester's laptop what a local
+   * one has over the workers it spawned, any orchestrator there, since the spawner is the laptop's
+   * supervisor. Its `user_decided` is its assertion, as locally, so it makes human-tier decisions too.
+   * Removing the entry, or the role from it, ends answering too, from the next start (the config is
+   * read then), whenever the worker was spawned. It changes no policy or role.
+   * Anyone else is refused.
    * `upgrade: true` also lets it upgrade and restart this supervisor (ADR 0008 §2): off unless said,
    * apart from `spawn`; an entry has either or both.
    */

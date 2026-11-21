@@ -286,9 +286,10 @@ describe("the other ops answer only for the sender's own workers (criterion 8)",
     expect(JSON.stringify(fitLines(["y".repeat(40_000)])).length).toBeLessThan(16 * 1024);
   });
 
-  it("request and answer aren't served in this version", async () => {
+  it("request and answer of a request that doesn't exist are refused", async () => {
     const { mbp } = await setup();
-    expect((await mbp.ask({ v: 2, op: "request", id: "r_1" })).reply).toMatchObject({ ok: false, error: "this supervisor doesn't serve v: 2 request yet" });
+    expect((await mbp.ask({ v: 2, op: "request", id: "r_1" })).reply).toMatchObject({ ok: false, error: `r_1 isn't a request of a worker ${SUP_MBP} spawned` });
+    expect((await mbp.ask({ v: 2, op: "answer", id: "r_1", decision: "allow", user_decided: false, resume: true })).reply).toMatchObject({ ok: false, error: `r_1 isn't a request of a worker ${SUP_MBP} spawned` });
   });
 });
 

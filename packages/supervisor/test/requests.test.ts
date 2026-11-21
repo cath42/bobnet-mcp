@@ -25,6 +25,12 @@ rules:
     decision: escalate
     tier: orchestrator
     reason: the probe
+  - id: human
+    tools: [Bash]
+    command: "^echo human"
+    decision: escalate
+    tier: human
+    reason: the user decides
 `);
 const UBU = `  studio:
     path: /work/studio
@@ -71,18 +77,19 @@ async function boot(net: FakeNetwork, laptop: string, over: string, at = newStor
   return { sup, store: at.store, at, link, sessions: query.sessions };
 }
 
-/** mbp-1's supervisor scripted: it sends requests and keeps what it gets. */
-async function scripted(net: FakeNetwork) {
-  const link = net.link("mbp-1");
+/** mbp-1's supervisor scripted (or another sender, by laptop and name): it sends requests and keeps what it gets. */
+async function scripted(net: FakeNetwork, laptop = "mbp-1", name = "supervisor") {
+  const link = net.link(laptop);
   const got: Envelope[] = [];
   link.onPush = (f) => {
     if (f.t === "deliver") got.push(f.msg);
   };
-  await link.register({ name: "supervisor" });
+  await link.register({ name });
   const ask = async (body: unknown) => {
-    const sent = await link.request<{ id: string }>({ t: "send", as: "supervisor", to: [SUP_UBU], body: JSON.stringify(body) });
+    const sent = await link.request<{ id: string }>({ t: "send", as: name, to: [SUP_UBU], body: JSON.stringify(body) });
     await until(() => got.some((m) => m.in_reply_to === sent.id));
-    return { id: sent.id, reply: JSON.parse(got.find((m) => m.in_reply_to === sent.id)!.body) as Record<string, any> };
+    const raw = got.find((m) => m.in_reply_to === sent.id)!.body;
+    return { id: sent.id, raw, reply: JSON.parse(raw) as Record<string, any> };
   };
   const events = (event: string) => got.map((m) => JSON.parse(m.body) as Record<string, any>).filter((b) => b["event"] === event);
   return { link, got, ask, events };
@@ -379,5 +386,160 @@ describe("the requester's remote_asks (AC 6)", () => {
     expect(t.ask()).toMatchObject({ state: "orphaned", preview: null });
     await t.deliver(t.settled("answered", { decision: "allow", decided_by: "orchestrator" }));
     expect(t.ask()).toMatchObject({ state: "answered", decision: "allow", decided_by: "orchestrator" });
+  });
+});
+
+// BOB-67 (B2): the target's `request` and `answer` ops (ADR 0007 §4): checked in order against the
+// config of the moment, then answered as a local answer; every one audited.
+
+const ANSWER = (id: string, over: Record<string, unknown> = {}) => ({ v: 2, op: "answer", id, decision: "allow", user_decided: false, resume: true, ...over });
+const audits = (store: Store, action: string) => store.auditLog(200).filter((a) => a.action === action).map((a) => ({ ...a, detail: JSON.parse(a.detail) as Record<string, unknown> }));
+
+/** A v: 2 worker of mbp-1's on ubu1 with one open request, raised by the session's call. */
+async function asking(tool = "Bash", input: Record<string, unknown> = PROBE, over = "") {
+  const s = await spawned(over);
+  const result = s.ubu.sessions[0]!.ask(tool, input);
+  await until(() => s.mbp.events("request").length === 1);
+  return { ...s, result, rid: s.mbp.events("request")[0]!["request"] as string };
+}
+
+describe("the answer op's checks, in order (BOB-67 AC 1, 4)", () => {
+  it("a sender not in remote is refused, and audited remote:refused with the request, decision and by", async () => {
+    const s = await asking();
+    const poe = await scripted(s.net, "mbp-1", "poe");
+    const { id, reply } = await poe.ask(ANSWER(s.rid));
+    expect(reply).toMatchObject({ v: 2, re: "answer", ok: false, error: "poe@mbp-1 may not make requests here: it isn't in this supervisor's remote list" });
+    expect(s.ubu.store.request(s.rid)!.state).toBe("open");
+    expect(audits(s.ubu.store, "remote:refused")).toEqual([expect.objectContaining({ actor: "poe@mbp-1", worker_id: s.id, detail: { message: id, request: s.rid, decision: "allow", by: "orchestrator", error: expect.any(String) } })]);
+  });
+
+  it("an entry removed after the spawn: the config at the answer's time refuses it (criterion 6)", async () => {
+    const { at, w, r } = leftBehind();
+    const net = new FakeNetwork();
+    const mbp = await scripted(net);
+    // Casper took ann out of mbp-1's entry; the supervisor read its config again at start.
+    const ubu = await boot(net, "ubu1", UBU.replace("studio: [ann, bea]", "studio: [bea]"), at);
+    await until(() => mbp.events("settled").length === 1);
+    const { reply } = await mbp.ask(ANSWER(r.id));
+    expect(reply).toMatchObject({ ok: false, error: `${SUP_MBP} may no longer spawn studio/ann here, so it can't act on ${r.id}` });
+    expect(ubu.store.request(r.id)!.state).toBe("orphaned");
+    expect(ubu.store.workers().filter((x) => x.id !== w.id)).toEqual([]);
+    expect(audits(ubu.store, "remote:refused")[0]).toMatchObject({ actor: SUP_MBP, worker_id: w.id, detail: { request: r.id, decision: "allow", by: "orchestrator" } });
+  });
+
+  it("a request of another sender's worker, or none at all, is refused the same way", async () => {
+    const s = await asking("Bash", PROBE, "  supervisor@mbp-2: { spawn: { studio: [ann, bea] } }\n");
+    const other = await scripted(s.net, "mbp-2");
+    const theirs = await other.ask(ANSWER(s.rid));
+    expect(theirs.reply).toMatchObject({ ok: false, error: `${s.rid} isn't a request of a worker supervisor@mbp-2 spawned` });
+    const none = await other.ask(ANSWER("r_nothing"));
+    expect(none.reply).toMatchObject({ ok: false, error: "r_nothing isn't a request of a worker supervisor@mbp-2 spawned" });
+    expect(s.ubu.store.request(s.rid)!.state).toBe("open");
+    // Newest first.
+    expect(audits(s.ubu.store, "remote:refused").map((a) => [a.actor, a.worker_id, a.detail["request"]])).toEqual([
+      ["supervisor@mbp-2", null, "r_nothing"],
+      ["supervisor@mbp-2", s.id, s.rid],
+    ]);
+  });
+
+  it("a request no longer open or orphaned is refused", async () => {
+    const s = await asking();
+    expect((await s.mbp.ask(ANSWER(s.rid))).reply).toMatchObject({ ok: true });
+    expect((await s.mbp.ask(ANSWER(s.rid, { decision: "deny" }))).reply).toMatchObject({ ok: false, error: `${s.rid} is already answered` });
+  });
+});
+
+describe("a passing answer runs as a local one (BOB-67 AC 2, 4)", () => {
+  it("an approval: allow runs the call; audited remote:answer besides answer:allow with decided_by", async () => {
+    const s = await asking();
+    const { id, reply } = await s.mbp.ask(ANSWER(s.rid));
+    expect(reply).toEqual({ v: 2, re: "answer", req: id, ok: true, request: s.rid, worker: s.id, state: "answered", decision: "allow" });
+    expect(await s.result).toMatchObject({ behavior: "allow" });
+    expect(audits(s.ubu.store, "remote:answer")).toEqual([expect.objectContaining({ actor: SUP_MBP, worker_id: s.id, detail: { message: id, request: s.rid, decision: "allow", by: "orchestrator" } })]);
+    expect(audits(s.ubu.store, "answer:allow")).toEqual([expect.objectContaining({ actor: "orchestrator", worker_id: s.id })]);
+    expect(s.ubu.store.request(s.rid)).toMatchObject({ decided_by: "orchestrator" });
+    await until(() => s.mbp.events("settled").length === 1);
+  });
+
+  it("an approval: deny refuses the call, with the message; answer is refused", async () => {
+    const s = await asking();
+    expect((await s.mbp.ask(ANSWER(s.rid, { decision: "answer", answers: { a: "b" } }))).reply).toMatchObject({ ok: false, error: `Request ${s.rid} is an approval: allow or deny it` });
+    expect((await s.mbp.ask(ANSWER(s.rid, { decision: "deny", message: "not now" }))).reply).toMatchObject({ ok: true, decision: "deny" });
+    expect(await s.result).toMatchObject({ behavior: "deny", message: expect.stringContaining("not now") });
+  });
+
+  it("a human-tier request needs user_decided; with it, decided by human", async () => {
+    const s = await asking("Bash", { command: "echo human" });
+    expect((await s.mbp.ask(ANSWER(s.rid))).reply).toMatchObject({ ok: false, error: expect.stringMatching(/needs the user's own decision/) });
+    expect(audits(s.ubu.store, "remote:refused")[0]!.detail).toMatchObject({ request: s.rid, by: "orchestrator" });
+    expect((await s.mbp.ask(ANSWER(s.rid, { user_decided: true }))).reply).toMatchObject({ ok: true, state: "answered" });
+    expect(await s.result).toMatchObject({ behavior: "allow" });
+    expect(s.ubu.store.request(s.rid)).toMatchObject({ decided_by: "human" });
+    expect(audits(s.ubu.store, "remote:answer")[0]!.detail).toMatchObject({ by: "human" });
+  });
+
+  it("a question takes answer (with answers) or deny, not allow", async () => {
+    const input = { questions: [{ question: "Which index?", header: "Index", options: [{ label: "GiST" }, { label: "BRIN" }], multiSelect: false }] };
+    const s = await asking("AskUserQuestion", input);
+    expect((await s.mbp.ask(ANSWER(s.rid))).reply).toMatchObject({ ok: false, error: expect.stringMatching(/is a question/) });
+    expect((await s.mbp.ask(ANSWER(s.rid, { decision: "answer" }))).reply).toMatchObject({ ok: false, error: 'decision "answer" needs answers' });
+    expect((await s.mbp.ask(ANSWER(s.rid, { decision: "answer", answers: { "Which index?": "GiST" } }))).reply).toMatchObject({ ok: true, decision: "answer" });
+    expect(await s.result).toEqual({ behavior: "allow", updatedInput: { ...input, answers: { "Which index?": "GiST" } } });
+    const q = await asking("AskUserQuestion", input);
+    expect((await q.mbp.ask(ANSWER(q.rid, { decision: "deny" }))).reply).toMatchObject({ ok: true, decision: "deny" });
+    expect(await q.result).toMatchObject({ behavior: "deny" });
+  });
+
+  it("an orphan: resume runs it as a new worker of the same spawner; without resume, a deny dismisses it", async () => {
+    const { at, w, r } = leftBehind();
+    const net = new FakeNetwork();
+    const mbp = await scripted(net);
+    const ubu = await boot(net, "ubu1", UBU, at);
+    await until(() => mbp.events("settled").length === 1);
+    const { reply } = await mbp.ask(ANSWER(r.id));
+    expect(reply).toMatchObject({ ok: true, request: r.id, worker: w.id, state: "answered", decision: "allow", resumed: expect.stringMatching(/^w_/) });
+    expect(ubu.store.worker(reply["resumed"])).toMatchObject({ spawned_by: SUP_MBP, remote_by: "poe", spawn_req: "m_spawn1", resume_session: "sess-old" });
+    await until(() => mbp.events("resumed").length === 1);
+    expect(mbp.events("resumed")[0]).toMatchObject({ worker: reply["resumed"], previous: w.id, request: r.id });
+
+    const left = leftBehind();
+    const net2 = new FakeNetwork();
+    const mbp2 = await scripted(net2);
+    const ubu2 = await boot(net2, "ubu1", UBU, left.at);
+    await until(() => mbp2.events("settled").length === 1);
+    expect((await mbp2.ask(ANSWER(left.r.id, { resume: false }))).reply).toMatchObject({ ok: false, error: expect.stringMatching(/^Dismiss .* with decision "deny"/) });
+    expect((await mbp2.ask(ANSWER(left.r.id, { decision: "deny", resume: false }))).reply).toEqual(expect.objectContaining({ ok: true, state: "answered", decision: "deny" }));
+    expect((await mbp2.ask(ANSWER(left.r.id, { decision: "deny", resume: false }))).reply).toMatchObject({ ok: false });
+    expect(ubu2.store.workers().length).toBe(1);
+  });
+});
+
+describe("the request op (BOB-67 AC 3)", () => {
+  it("returns the request in full, for the spawner only", async () => {
+    const s = await asking("Bash", PROBE, "  supervisor@mbp-2: { spawn: { studio: [ann, bea] } }\n");
+    const { reply } = await s.mbp.ask({ v: 2, op: "request", id: s.rid });
+    expect(reply).toMatchObject({ ok: true, request: { id: s.rid, worker_id: s.id, kind: "approval", tool: "Bash", input: JSON.stringify(PROBE), tier: "orchestrator", rule: "probe", state: "open" } });
+    expect(reply["truncated"]).toBeUndefined();
+    const other = await scripted(s.net, "mbp-2");
+    expect((await other.ask({ v: 2, op: "request", id: s.rid })).reply).toMatchObject({ ok: false, error: `${s.rid} isn't a request of a worker supervisor@mbp-2 spawned` });
+    expect(audits(s.ubu.store, "remote:refused")[0]).toMatchObject({ actor: "supervisor@mbp-2" });
+  });
+
+  it("an oversized input is cut to fit 16 KiB, truncated: true", async () => {
+    const s = await asking("Bash", { command: `echo human ${"x\"y ".repeat(10_000)}` });
+    const { raw, reply } = await s.mbp.ask({ v: 2, op: "request", id: s.rid });
+    expect(raw.length).toBeLessThanOrEqual(16 * 1024);
+    expect(reply).toMatchObject({ ok: true, truncated: true, request: { id: s.rid, input: expect.stringMatching(/^\{"command":"echo human .*…$/) } });
+  });
+});
+
+describe("list carries each worker's open and orphaned requests (ADR 0007 §2)", () => {
+  it("the request event's fields and its state; none once settled", async () => {
+    const s = await asking();
+    const listed = await s.mbp.ask({ v: 2, op: "list", ids: [s.id] });
+    const r = s.ubu.store.request(s.rid)!;
+    expect(listed.reply["workers"][0]["requests"]).toEqual([{ request: s.rid, kind: "approval", tool: "Bash", tier: "orchestrator", rule: "probe", preview: "echo probe", state: "open", created_at: r.created_at }]);
+    await s.mbp.ask(ANSWER(s.rid));
+    expect((await s.mbp.ask({ v: 2, op: "list", ids: [s.id] })).reply["workers"][0]["requests"]).toEqual([]);
   });
 });

@@ -4,8 +4,12 @@ import { readRemoteRequest, type RemoteRequestV1 } from "@bobnet/protocol";
 // message to the supervisor whose body is one JSON request. The sender is who the
 // broker says it is (Casper, 2026-11-07: the BobNet sender is trusted); what it may
 // do is supervisor.yaml's `remote` allowlist. It spawns the roles listed for it and
-// follows and stops only what it spawned: no answers, no policy, no roles, no
-// resumed sessions or handoff files, which could reach another worker's context.
+// follows and stops only what it spawned: no policy, no roles, no resumed sessions or
+// handoff files, which could reach another worker's context. With `v: 2` it also
+// answers the requests of what it spawned (ADR 0007 §4), while its entry still lists
+// the worker's project and role: the orchestrator on the requester's laptop answers
+// and stops what that laptop spawned here, and its `user_decided` is its own
+// assertion, as a local orchestrator's is, so it makes human-tier decisions too.
 // The wire (schemas, the classification) is packages/protocol's remote.ts (ADR 0007 §2).
 
 export type RemoteRequest = RemoteRequestV1;
