@@ -1949,7 +1949,7 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
       releases: [],
     },
     stuck: {
-      runs: [{ id: "w_x", agent: "Luigi", role: "engineer", session: ss("BOB-33", "build", "a"), outcome: "failed", reason: "pnpm test exited 1", ended_at: iso(50) }],
+      runs: [{ id: "w_x", agent: "Luigi", role: "engineer", session: ss("BOB-33", "build", "a"), outcome: "failed", reason: "pnpm test exited 1", ended_at: iso(50), laptop: "ubu1" }],
       ci: [], idle_sessions: [{ session: ss("BOB-32", "build", "1"), since: iso(300) }], idle_features: [], answered_holding: [],
       settled: [{ kind: "ci", entry: { source: "github-actions", name: "test", branch: "v2", sha: null, url: null, worker: null, session: null, ended_at: iso(90) }, settled_at: iso(70) }],
     },
@@ -2031,6 +2031,8 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
     expect($("sec-done").querySelector('a.id[href="#feature/bobnet/BOB-27"]')).not.toBeNull();
     expect($("sec-stuck").querySelector(".hl")!.textContent).toBe("Run failed · Nobody on it");
     expect($("sec-stuck").querySelector("li .what")!.textContent).toContain("Luigi's run on BOB-33 build a failed");
+    // The laptop it ran on, before the reason (BOB-44).
+    expect($("sec-stuck").querySelector("li .what .m")!.textContent).toBe("on ubu1 · pnpm test exited 1");
     expect($("sec-stuck").querySelector(".settled summary")!.textContent).toMatch(/^Settled since .*: 1$/);
     expect($("sec-backlog").querySelector(".thin")!.textContent).toBe("Thin: fewer than 2 Ready features with criteria, and R2 has 4 more to do.");
     expect($("sec-backlog").querySelector('li[data-warn="true"]')!.textContent).toContain("nothing Ready");
@@ -2131,6 +2133,102 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
     expect(view().querySelector(".banner.down")!.textContent).toMatch(/^Board unavailableShowing what it said at \d\d:\d\d\.$/);
     expect(view().querySelector(".pcard")).not.toBeNull();
   }, 10_000);
+
+  it("says a stuck run's laptop: a lost one's is that laptop's restart; an older broker's says none (BOB-44)", async () => {
+    await go("#status/bobnet");
+    // A chip reads its span: a fresh read to answer.
+    ([...view().querySelectorAll(".span-chips button")].find((b) => b.textContent === "A week") as HTMLButtonElement).click();
+    await settle();
+    const runs = [
+      { id: "w_l", agent: "Toad", role: "architect", session: ss("BOB-44", "build", "B"), outcome: "lost", reason: "supervisor restarted", ended_at: iso(40), laptop: "ubu1" },
+      { id: "w_o", agent: "Daisy", role: "designer", session: ss("BOB-45", "build", "A"), outcome: "stopped", reason: "stopped by Casper", ended_at: iso(45) },
+    ];
+    const rows = [statusRow({ stuck: { ...statusRow().stuck, runs, idle_sessions: [], settled: [] } })];
+    await answerStatus(rows);
+    await answerStatus(rows);
+    const metas = [...$("sec-stuck").querySelectorAll("li .what")].map((x) => x.querySelector(".m")?.textContent);
+    expect(metas).toEqual(["on ubu1 · Running when its supervisor restarted; nobody has started it again.", "stopped by Casper"]);
+  });
+});
+
+describe("the laptop mark (BOB-44; design/BOB-44/laptop-mark.md)", () => {
+  const helixOnMbp = structuredClone(dashboard.laptops[0]!.snapshot);
+  /** bobnet spans mbp-1 and ubu1; helix runs on mbp-1 only. */
+  const report = (ubuAt = 0, pending: unknown[] = []) => {
+    const mbp = structuredClone(helixOnMbp);
+    mbp.workers = [worker({}), worker({ id: "w_m", name: "Mario", project: "bobnet", role: "lead", session: null, task_ref: null, task_refs: [] })] as never;
+    const ubu = {
+      supervisor: { started_at: iso(300), concurrency: 3, active: 3, queued: 1 },
+      workers: [
+        worker({ id: "w_l", name: "Luigi", project: "bobnet", role: "luigi", session: null, task_ref: null, task_refs: [], state: "waiting-approval", remote_from: "supervisor@mbp-1", remote_by: "poe" }),
+        worker({ id: "w_d", name: "Daisy", project: "bobnet", role: "daisy", session: null, task_ref: null, task_refs: [], state: "waiting-approval", remote_from: "supervisor@mbp-1", remote_by: "poe" }),
+        // An older supervisor's worker: no remote_from or remote_by at all.
+        worker({ id: "w_t", name: "Toad", project: "bobnet", role: "toad", session: null, task_ref: null, task_refs: [], state: "waiting-approval" }),
+        worker({ id: "w_q", name: "Peach", project: "bobnet", role: "peach", session: null, task_ref: null, task_refs: [], state: "queued", started_at: null }),
+      ],
+      pending,
+      usage: [],
+    };
+    // The broker's clock is read from the latest report: ubu1's first, so it can be the stale one.
+    FakeSocket.last.frame({ t: "report", laptop: "ubu1", at: iso(ubuAt), snapshot: ubu });
+    FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: mbp });
+  };
+  const ask = (id: string, worker_id: string, name: string, tier: string) => ({ id, worker_id, name, kind: "approval", tool: "Bash", tier, created_at: iso(1), preview: "git push" });
+  const line = (id: string) => $("working").querySelector(`li[data-worker="${id}"]`)!;
+
+  it("marks each worker of a project that spans laptops, local ones too, and none of a one-laptop project's", async () => {
+    report(0, [ask("r_1", "w_l", "Luigi", "human"), ask("r_2", "w_d", "Daisy", "orchestrator"), ask("r_3", "w_t", "Toad", "orchestrator")]);
+    await go("#overview");
+    expect(line("w_l").querySelector(".l-who .who-at")!.textContent).toBe("Luigi@ubu1");
+    expect(line("w_l").querySelector(".lap")!.getAttribute("title")).toBe("Runs on ubu1");
+    expect(line("w_m").querySelector(".l-who .who-at")!.textContent).toBe("Mario@mbp-1");
+    expect(line("w_1").querySelector(".l-who .who-at")!.textContent).toBe("records-agent");
+    expect(line("w_1").querySelector(".lap")).toBeNull();
+    // Queued waits for that laptop's slot.
+    expect(view().querySelector(".queued")!.textContent).toBe("1 queued: Peach@ubu1");
+    // Needs you: the permission names who it holds up, with the mark.
+    expect($("needs").querySelector('li[data-id*="r_1"] .l-m')!.textContent).toContain("holds up Luigi@ubu1");
+  });
+
+  it("waits on a remote spawn's spawner, poe@mbp-1; an older supervisor's worker waits on the lead as before", async () => {
+    expect(line("w_d").querySelector(".a-st")!.textContent).toBe("waiting on poe@mbp-1");
+    expect(line("w_t").querySelector(".a-st")!.textContent).toBe("waiting on Mario");
+  });
+
+  it("says who spawned it under the detail row, and nothing for an older supervisor's worker (AC 3)", async () => {
+    (line("w_d").querySelector(".a-btn") as HTMLElement).click();
+    await settle();
+    expect(line("w_d").querySelector(".a-detail .spawned")!.textContent).toBe("spawned by poe@mbp-1");
+    expect(line("w_d").querySelector(".a-detail")!.textContent).toContain("· ubu1 ·");
+    (line("w_t").querySelector(".a-btn") as HTMLElement).click();
+    await settle();
+    expect(line("w_t").querySelector(".a-detail")).not.toBeNull();
+    expect(line("w_t").querySelector(".a-detail .spawned")).toBeNull();
+    (line("w_t").querySelector(".a-btn") as HTMLElement).click();
+    await settle();
+  });
+
+  it("turns a quiet laptop's mark warn with its minutes, in every project", async () => {
+    report(5);
+    await settle();
+    const lap = line("w_l").querySelector(".lap")!;
+    expect(lap.classList.contains("stale")).toBe(true);
+    expect(lap.getAttribute("title")).toBe("Runs on ubu1; no report for 5 min");
+    expect(line("w_l").querySelector(".who-at")!.textContent).toBe("Luigi@ubu1 · no report 5 min");
+    expect(line("w_m").querySelector(".lap")!.classList.contains("stale")).toBe(false);
+  });
+
+  it("puts the spawner on an ended worker's card in Sessions", async () => {
+    const snap = { supervisor: { started_at: iso(300), concurrency: 3, active: 0, queued: 0 }, pending: [], usage: [],
+      workers: [worker({ id: "w_e", name: "Luigi", project: "bobnet", role: "luigi", state: "done", ended_at: iso(2), remote_from: "supervisor@mbp-1", remote_by: "poe" })] };
+    FakeSocket.last.frame({ t: "report", laptop: "ubu1", at: iso(0), snapshot: snap });
+    await go("#sessions");
+    const card = [...$("ended").querySelectorAll(".card")].find((c) => c.textContent!.includes("w_e"))!;
+    expect(card.querySelector(".sub")!.textContent).toMatch(/· ubu1 · .*· spawned by poe@mbp-1$/);
+    FakeSocket.last.frame({ t: "report", laptop: "ubu1", at: iso(0), snapshot: { ...snap, workers: [] } });
+    FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: helixOnMbp });
+    await settle();
+  });
 });
 
 describe("a reload (BOB-31)", () => {

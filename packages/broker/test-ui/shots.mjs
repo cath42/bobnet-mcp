@@ -84,7 +84,7 @@ function fakeBroker() {
         { close: close({ minors_fixed: 2, summary: "The chain, outcomes and task lists built and tested; shots taken.", handoff_path: "~/.local/state/bobnet/handoffs/bobnet/w_a53c1f42.md", handoff_text: "# Luigi: BOB-4 build A", commit: "6733f0a6aa" }),
           tasks_moved: [{ task: "BOB-41", status: "Done" }, { task: "BOB-42", status: "Done" }, { task: "BOB-43", status: "Done" }, { task: "BOB-44", status: "In Review" }] }),
       ss("review", "1", 540, 470, [run("w_t1", "Toad", "toad", 540, 470, ctx(45, 25000, 1300, 2))], { close: close({ majors: ["BOB-44"], sent_back: ["BOB-44"], summary: "One major: an agent on two tasks shows once. Sent back to a fixes build." }), tasks_moved: [{ task: "BOB-44", status: "In Progress" }] }),
-      ss("build", "Fixes", 60, null, [run("w_9ff16006", "Luigi", "luigi", 50, null, [])], {
+      ss("build", "Fixes", 60, null, [run("w_9ff16006", "Luigi", "luigi", 50, null, [], window.BOB44 ? { laptop: "ubu1" } : {})], {
         tasks_moved: [{ task: "BOB-44", status: "In Progress" }],
         ci_runs: [{ source: "github-actions", external_id: "4812", name: "test (v2)", url: "https://github.com/cath42/bobnet-mcp/actions", repo: "cath42/bobnet-mcp", branch: "v2", sha: "abc", laptop: null, status: "running", started_at: iso(12), ended_at: null, worker: "w_9ff16006", usual_ms: 9 * 60_000 }],
       }),
@@ -264,6 +264,25 @@ function fakeBroker() {
     preview: "The e2e run on staging fails on the map tiles because the tile server's key rotated last night. Should I point the e2e config at the new key from the team vault, or skip the map step in e2e until Picard has checked the rotation with the ops channel?" }]
     : window.BOB5 ? [{ id: "r_5", worker_id: "w_ho", name: "Howard", kind: "approval", tool: "Bash", tier: "human", created_at: iso(14), preview: "kill 33987" }] : window.BOB4 ? [{ id: "r_2", worker_id: "w_da", name: "Daisy", kind: "approval", tool: "Bash", tier: "lead", created_at: iso(2), preview: "git push origin HEAD" }] : window.BOB3 ? [{ id: "r_1", worker_id: "w_9453f36a", name: "Toad", kind: "approval", tool: "Bash", tier: "human", created_at: iso(2), preview: "git log --oneline v2..origin/v2" }] : [];
   const dashboard = { peers: [], laptops: [{ laptop: "mbp-1", at: iso(0), snapshot: { supervisor: { started_at: iso(600), concurrency: 3, active: 1, queued: 0 }, workers: others, pending, usage: [] } }], boards: [], updates: [], traffic: [] };
+  // BOB-44's laptop mark: poe@mbp-1 spawned Luigi and Daisy on ubu1, Toad runs there under an older supervisor (no remote_from),
+  // Peach waits for ubu1's slot; BobNet spans both laptops, Helix runs on mbp-1 only. STALE: ubu1 last reported 4 min ago.
+  if (window.BOB44) {
+    const fixes = others.find((w) => w.id === "w_9ff16006");
+    const remote = { remote_from: "supervisor@mbp-1", remote_by: "poe" };
+    const ubu = [{ ...fixes, ...remote }, { ...worker, id: "w_da", name: "Daisy", role: "designer", session: null, task: "spec", tokens: 400_000, state: "waiting-approval", ...remote },
+      { ...worker, id: "w_9453f36a", name: "Toad", role: "architect", session: null, task: "consult", tokens: 600_000, state: "waiting-approval" },
+      { ...worker, id: "w_pe", name: "Peach", role: "po", session: null, task: "accept", state: "queued", tokens: 0 }];
+    const mbp = [{ ...worker, id: "w_m", name: "Mario", role: "lead", session: null, task: "lead", tokens: 5_600_000 },
+      { ...worker, id: "w_ho", name: "Howard", project: "helix", role: "builder", session: "LAND-49 build Fixes", task: "LAND-49", task_refs: ["LAND-49.14"], tokens: 1_400_000 },
+      { ...worker, id: "w_ma", name: "Marvin", project: "helix", role: "qa", session: "LAND-49 build Fixes", task: "LAND-49", task_refs: ["LAND-49.19"], tokens: 2_200_000 }];
+    dashboard.now = new Date(now).toISOString();
+    dashboard.laptops = [
+      { laptop: "mbp-1", at: iso(0), snapshot: { supervisor: { started_at: iso(600), concurrency: 3, active: 3, queued: 0 }, workers: mbp, pending: [], usage: [] } },
+      { laptop: "ubu1", at: iso(window.STALE ? 4 : 0), snapshot: { supervisor: { started_at: iso(300), concurrency: 3, active: 3, queued: 1 }, workers: ubu, usage: [],
+        pending: [{ id: "r_7", worker_id: "w_9453f36a", name: "Toad", kind: "approval", tool: "Bash", tier: "human", created_at: iso(3), preview: "git log --oneline v2..origin/v2" },
+          { id: "r_8", worker_id: "w_da", name: "Daisy", kind: "approval", tool: "Bash", tier: "orchestrator", created_at: iso(2), preview: "git push origin HEAD" }] } },
+    ];
+  }
   // Now's CI banner, now a line under Working now (BOB-5 as built 3): one run in progress, one failed.
   if (window.CI) dashboard.boards.push({ laptop: "mbp-1", at: iso(0), board: { project: "bobnet", ref: "f90256f0", backlog: null, sessions: [], runs: [], baseline: null, commits: [],
     ci: [{ name: "test", status: "in_progress", conclusion: null, created_at: iso(4), sha: "1a2b3c4d5e6f" }, { name: "e2e", status: "completed", conclusion: "failure", created_at: iso(12), sha: "9f8e7d6c5b4a" }] } });
@@ -346,6 +365,12 @@ const all = [
   ["bob31-c2-needs-answering", "overview", [(p) => q1(p).getByRole("button", { name: "Answer" }).click(), (p) => q1(p).locator(".opt-row").first().click(),
     (p) => q1(p).locator("textarea").fill("Fixture is fine, and note it on BOB-9 so"), (p) => p.waitForTimeout(5500)], false, null, ".ov-needs"],
   ["bob31-c1-waits-context", "waits", [(p) => p.getByRole("button", { name: "Show context" }).first().click()], true],
+  // BOB-44 (design/BOB-44/laptop-mark.md, "Review"): Working now and Needs you with BobNet on mbp-1 and ubu1 and Helix on mbp-1;
+  // the feature page with a remote worker's detail row open; ubu1 gone quiet.
+  ["bob44-overview", "overview", [], true],
+  ["bob44-feature-detail", "feature/bobnet/BOB-4", [(p) => p.locator("#on-now .a-line", { hasText: "Luigi" }).locator(".a-btn").click()], true],
+  ["bob44-overview-detail", "overview", [(p) => p.locator("#working .a-line", { hasText: "Daisy" }).locator(".a-btn").click()], false, null, ".ov-now"],
+  ["bob44-overview-stale", "overview", [], false, null, ".ov-now"],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 
@@ -354,16 +379,20 @@ const browser = await chromium.launch();
 try {
   for (const [name, hash, steps, full, until, el, scheme] of shots) {
     for (const [w, [width, height]] of Object.entries(widths)) {
+      // BOB-44's criterion asks for phone and desktop; a tablet follows desktop (design/BOB-44/laptop-mark.md).
+      if (name.startsWith("bob44") && w === "1024") continue;
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2, colorScheme: scheme ?? "light" });
       if (name.startsWith("bob31")) await page.addInitScript(() => (window.BOB31 = true));
       if (name.startsWith("bob3") && !name.startsWith("bob31")) await page.addInitScript(() => (window.BOB3 = true));
       if (name.startsWith("bob4")) await page.addInitScript(() => (window.BOB4 = true));
+      if (name.startsWith("bob44")) await page.addInitScript(() => (window.BOB44 = true));
+      if (name.includes("-stale")) await page.addInitScript(() => (window.STALE = true));
       if (name.startsWith("bob5")) {
         await page.addInitScript(() => (window.BOB5 = true));
         if (name === "bob5-ci-line") await page.addInitScript(() => (window.CI = true));
         await page.addInitScript({ path: join(here, "../../../design/BOB-1/sample/records.js") });
       }
-      if (name.startsWith("bob3acc") || name.startsWith("bob5") || name.startsWith("bob31")) {
+      if (name.startsWith("bob3acc") || name.startsWith("bob5") || name.startsWith("bob31") || name.startsWith("bob44")) {
         await page.addInitScript(() => (window.TWO = true));
         await page.addInitScript({ path: join(here, "../../../design/BOB-1/sample/helix.js") });
       }

@@ -1,7 +1,7 @@
 // Screenshots of the Status tab (BOB-33, design/BOB-33/spec.md "Which shot shows what") at phone, tablet and desktop
 // widths, against a fake broker in the page answering the status read with a sample shaped like BobNet's and Helix's
 // boards (design/BOB-33/prototype/data.js). This build is BOB-33 only: no lead's note, Recurring "Comes with theme tags".
-//   node test-ui/shots-bob33.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob33-*.png)
+//   node test-ui/shots-bob33.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob33-*.png, and bob44-status-*.png)
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, extname, join } from "node:path";
@@ -80,7 +80,10 @@ function fakeBroker() {
     const within = (list, at) => list.filter((x) => at(x) >= since);
     const helix = key === "helix";
     const sessions = quiet ? [] : within(helix ? [...helixSessions, ...olderHelix] : bobnetSessions, (s) => s.ended_at);
-    const stuckRuns = helix ? [{ id: "w_ma", agent: "Marvin", role: "tester", session: ss("LAND-49", "build", "Fixes 2"), outcome: "lost", reason: "supervisor restarted", ended_at: iso(250) }] : [];
+    const stuckRuns = helix ? [{ id: "w_ma", agent: "Marvin", role: "tester", session: ss("LAND-49", "build", "Fixes 2"), outcome: "lost", reason: "supervisor restarted", ended_at: iso(250), ...(window.BOB44 ? { laptop: "ubu1" } : {}) },
+      // BOB-44: a run on another laptop, and one from a broker before the field (no laptop).
+      ...(window.BOB44 ? [{ id: "w_ho9", agent: "Howard", role: "engineer", session: ss("LAND-49", "build", "Fixes 2"), outcome: "failed", reason: "pnpm test exited 1", ended_at: iso(230), laptop: "mbp-1" },
+        { id: "w_bi9", agent: "Bill", role: "reviewer", session: ss("LAND-52", "review", "1"), outcome: "stopped", reason: "stopped by Casper", ended_at: iso(240) }] : [])] : [];
     return {
       project: key, name: helix ? "Helix" : "BobNet", note: null, recurring: null,
       waits: waits[key],
@@ -177,6 +180,8 @@ const all = [
   ["bob33-s6-first-visit", "status", [], false, true],
   ["bob33-s7-overview-line", "overview", [], false],
   ["bob33-s8-bob33-only", "status/helix", [], true],
+  // BOB-44: a stuck run shows the laptop it ran on (design/BOB-44/laptop-mark.md, Status).
+  ["bob44-status-stuck", "status/helix", [(p) => p.evaluate(() => { document.getElementById("sec-stuck").open = true; }), (p) => p.locator("#sec-stuck").scrollIntoViewIfNeeded()], false, false, "light", ["390", "1440"]],
 ];
 
 const shots = all.filter(([name]) => name.startsWith(process.argv[2] ?? ""));
@@ -188,6 +193,7 @@ try {
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2, colorScheme: scheme ?? "light" });
       // This device's last visit, 7 h ago (Sun 23:10 in the prototype); none on a first visit.
       if (!first) await page.addInitScript(() => localStorage.setItem("bobnet.status.lastVisit", new Date(Date.now() - 7 * 3600_000).toISOString()));
+      if (name.startsWith("bob44")) await page.addInitScript(() => (window.BOB44 = true));
       await page.addInitScript(fakeBroker);
       await page.goto(`${base}#${hash}`);
       await page.waitForSelector(hash.startsWith("overview") ? ".st-line" : hash.includes("/") ? ".secs" : ".pcards");

@@ -471,7 +471,7 @@ function agentState(w, run) {
   if (run) return { text: run.status === "failed" ? "CI failed" : run.source === "slot" ? "waiting on a run" : "waiting on CI", cls: "run" };
   const p = pendingAll().find((x) => x.worker_id === w.id);
   if (p && p.tier === "human") return { text: "waiting on you", cls: "warn" };
-  if (p) return { text: `waiting on ${leadName(w.project)}`, cls: "muted" };
+  if (p) return { text: `waiting on ${waitsOnName(w)}`, cls: "muted" };
   if (w.state !== "running") return { text: waitingText(w), cls: "warn" };
   const q = quietMinutes(w);
   if (q >= QUIET_MIN) return { text: `quiet ${q} min`, cls: "warn", title: "No activity from it in that long. Nothing interrupts it: stop or reset it if it's stuck." };
@@ -496,6 +496,7 @@ function agentDetail(w, ctx) {
   const p = pendingAll().find((x) => x.worker_id === w.id && x.tier !== "human");
   return h("div", { class: "a-detail" },
     h("span", { class: "muted" }, `${fmtModel(w)} · ${w.laptop} · worked ${since(w.started_at)} · context ${w.calls ? `${fmtTokens(w.context ?? 0)} · ${w.calls} calls` : "–"}`),
+    spawnedLine(w),
     h("div", { class: "actions" },
       w.remote_url ? h("a", { href: w.remote_url, target: "_blank", rel: "noopener", title: "Follow it and type to it in Claude" }, "Open in Claude ↗") : null,
       ctx ? h("button", { type: "button", class: "ctx-btn", onclick: ctx }, "Context per call") : null,
@@ -508,6 +509,11 @@ function agentDetail(w, ctx) {
       h("span", { class: "grp" },
         button("Stop", "danger", (b) => act(w.laptop, { kind: "stop", worker: w.id }, b, `Stop ${w.name} (${w.id})? It is interrupted, then ended.`)),
         button("Reset", "", (b) => act(w.laptop, { kind: "reset", worker: w.id }, b, `Reset ${w.name} (${w.id})? It is stopped and a fresh worker starts the same task with no prior context.`)))));
+}
+/** "spawned by poe@mbp-1", for a worker spawned from another laptop (BOB-44): who answers its requests and gets its result. */
+function spawnedLine(w) {
+  const by = spawnerOf(w);
+  return by && by.slice(by.indexOf("@") + 1) !== w.laptop ? h("div", { class: "muted spawned" }, `spawned by ${by}`) : null;
 }
 const stateSpan = (st) => h("span", { class: `a-st ${st.cls}`, title: st.title ?? null }, st.text);
 /** Opens a session card's context panel on an agent: on this page, or on its feature's. */
@@ -572,7 +578,7 @@ function viewServiceFeature(p, ref) {
           f.status === "Done" && total && checked < total ? h("span", { class: "sub-note" }, "Done, criteria not ticked") : null,
           h("span", null, f.tasks?.total ? `${f.tasks.done} of ${f.tasks.total} tasks done` : h("span", { class: "muted" }, "no tasks")),
           h("span", null, plural(sessions.length, "session")),
-          on.length ? h("span", { class: "now" }, `● ${on.map((w) => w.name).join(", ")} on it now`) : st === "open" ? h("span", { class: "muted" }, "nobody on it now") : null)),
+          on.length ? h("span", { class: "now" }, "● ", whoNames(on), " on it now") : st === "open" ? h("span", { class: "muted" }, "nobody on it now") : null)),
       fd.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, `Showing what it last said. ${fd.error}`)) : null,
       nx ? nextBanner(nx) : null,
       on.length ? h("section", { class: "card on-now", id: "on-now" }, h("h2", { style: "margin:0" }, "On it now"),
@@ -597,7 +603,7 @@ function viewServiceFeature(p, ref) {
   ];
 }
 
-const agentWho = (w, st) => h("span", { class: "l-who" }, h("i", { class: `dot ${st.cls === "warn" ? "warn" : st.cls === "run" ? "run" : "on"}`, "aria-hidden": "true" }), h("b", null, w.name), h("span", { class: "muted" }, ` ${w.role} · `), stateSpan(st), h("span", { class: "muted" }, ` · ${fmtTokens(workerTokens(w))} tokens`));
+const agentWho = (w, st) => h("span", { class: "l-who" }, h("i", { class: `dot ${st.cls === "warn" ? "warn" : st.cls === "run" ? "run" : "on"}`, "aria-hidden": "true" }), whoName(w), h("span", { class: "muted" }, ` ${w.role} · `), stateSpan(st), h("span", { class: "muted" }, ` · ${fmtTokens(workerTokens(w))} tokens`));
 /** The tasks an agent's spawn named, with their titles; the feature itself is no task. */
 const taskRefs = (w, f, tasks) => refsOf(w).filter((r) => r !== f.ref).map((r, i) => [i ? h("span", { class: "muted tsep" }, " · ") : null, h("span", { class: "tref" }, h("span", { class: "id" }, r), tasks.find((t) => t.ref === r)?.title ?? "")]);
 
@@ -628,7 +634,7 @@ function taskLi(key, t, status, withSession, anchor = false, runOf = () => null)
   return h("li", { class: ws.length ? "on" : null, id: anchor ? `task-${t.ref}` : null }, h("span", { class: "id" }, t.ref), h("span", { class: "tt", title: t.title }, t.title),
     badge(status === "In Review" ? "in review" : status === "In Progress" ? "running" : status.toLowerCase(), status), h("span", { class: "ac" }, total ? `${checked}/${total}` : "–"),
     // One state per agent: the same state, dot and colour as On it now (spec, BOB-4 as built).
-    ws.length ? h("span", { class: "on-it" }, ws.map((w) => { const s = agentState(w, runOf(w)); return h("span", { class: "who", dataset: { state: s.text } }, h("i", { class: `dot ${s.cls === "warn" ? "warn" : s.cls === "run" ? "run" : "on"}`, "aria-hidden": "true" }), h("b", null, w.name), ` ${w.role} · `, stateSpan(s), ` · ${fmtTokens(workerTokens(w))} tokens`, withSession && sessionOf(w) ? ` · ${declaredStep(w)}` : ""); })) : null);
+    ws.length ? h("span", { class: "on-it" }, ws.map((w) => { const s = agentState(w, runOf(w)); return h("span", { class: "who", dataset: { state: s.text } }, h("i", { class: `dot ${s.cls === "warn" ? "warn" : s.cls === "run" ? "run" : "on"}`, "aria-hidden": "true" }), whoName(w), ` ${w.role} · `, stateSpan(s), ` · ${fmtTokens(workerTokens(w))} tokens`, withSession && sessionOf(w) ? ` · ${declaredStep(w)}` : ""); })) : null);
 }
 
 function stepItem(p, f, ss, sessions, tasks, last, runOf) {
@@ -696,7 +702,8 @@ function ctxPanel(key, ss, sessions, runs, panelKey) {
     const earlier = sessions.filter((x) => x.started_at < ss.started_at).flatMap((x) => runsOf(key, x)).filter((r) => r.role === role && r.ctx?.length);
     band = [];
     for (let i = 0; ; i++) { const v = earlier.map((r) => r.ctx[i]).filter((x) => x !== undefined); if (v.length < 3) break; band.push([quantile(v, 0.25), quantile(v, 0.5), quantile(v, 0.75)]); }
-    series = [{ name: `${pick}, ${stepName(ss)}`, pts: line.pts, resets: line.resets, color: "var(--accent)", style: "solid", w: 2.5 }];
+    const laps = [...new Set(mine.map((r) => r.laptop).filter(Boolean))];
+    series = [{ name: `${pick}, ${stepName(ss)}`, tip: laps.length === 1 ? `${whoText({ name: pick, laptop: laps[0] }, key)}, ${stepName(ss)}` : null, pts: line.pts, resets: line.resets, color: "var(--accent)", style: "solid", w: 2.5 }];
     note = `${pick}'s runs in the session, one after another; a new worker starts again from a small context (dotted). ${band.length ? `The grey band is the middle half of ${earlier.length} earlier ${pick} runs on this feature at the same call.` : `No band: fewer than three earlier ${pick} runs on this feature.`}`;
   }
   const { svg, tip, wrap } = plotChart(series, band?.length ? band : null);
@@ -705,7 +712,8 @@ function ctxPanel(key, ss, sessions, runs, panelKey) {
   wrap.append(svg, h("div", { class: "key" }, key2), tip);
   const rows = names.map((nm) => {
     const rs = runs.filter((r) => r.name === nm);
-    return { nm, model: rs.at(-1)?.model ?? "default", runs: rs.length, calls: rs.reduce((n, r) => n + (r.ctx?.length || r.calls || 0), 0), peak: Math.max(0, ...rs.flatMap((r) => r.ctx ?? [])), tokens: rs.reduce((n, r) => n + r.tokens, 0) };
+    const laps = [...new Set(rs.map((r) => r.laptop).filter(Boolean))];
+    return { nm, laptop: laps.length === 1 ? laps[0] : null, model: rs.at(-1)?.model ?? "default", runs: rs.length, calls: rs.reduce((n, r) => n + (r.ctx?.length || r.calls || 0), 0), peak: Math.max(0, ...rs.flatMap((r) => r.ctx ?? [])), tokens: rs.reduce((n, r) => n + r.tokens, 0) };
   });
   const top = Math.max(1, ...rows.map((x) => x.peak));
   return h("div", { class: "ctxp" },
@@ -714,7 +722,7 @@ function ctxPanel(key, ss, sessions, runs, panelKey) {
     h("div", { class: "table-wrap" }, h("table", { class: "stack ctx-agents" },
       h("thead", null, h("tr", null, h("th", null, "Agent"), h("th", null, "Model"), h("th", { class: "num" }, "Runs"), h("th", { class: "num" }, "Calls"), h("th", { class: "num" }, "Peak context"), h("th", null, ""), h("th", { class: "num" }, "Tokens"))),
       h("tbody", null, rows.map((x) => h("tr", { class: `pick${pick === x.nm ? " sel" : ""}`, tabindex: "0", onclick: () => set(x.nm), onkeydown: (e) => e.key === "Enter" && set(x.nm) },
-          h("td", null, h("b", null, x.nm)), h("td", { "data-label": "Model" }, x.model), h("td", { class: "num", "data-label": "Runs" }, String(x.runs)), h("td", { class: "num", "data-label": "Calls" }, String(x.calls)),
+          h("td", null, whoName({ name: x.nm, laptop: x.laptop }, true, key)), h("td", { "data-label": "Model" }, x.model), h("td", { class: "num", "data-label": "Runs" }, String(x.runs)), h("td", { class: "num", "data-label": "Calls" }, String(x.calls)),
           h("td", { class: "num", "data-label": "Peak" }, fmtTokens(x.peak)), h("td", { class: "bar" }, meterOf(x.peak, top)), h("td", { class: "num", "data-label": "Tokens" }, fmtTokens(x.tokens)))),
         h("tr", { class: "total" }, h("td", null, h("b", null, "Session")), h("td", { "data-label": "Model" }, ""), h("td", { class: "num", "data-label": "Runs" }, String(runs.length)),
           h("td", { class: "num", "data-label": "Calls" }, String(rows.reduce((n, x) => n + x.calls, 0))), h("td", { class: "num", "data-label": "Peak" }, fmtTokens(Math.max(0, ...rows.map((x) => x.peak)))), h("td", { class: "bar" }),
@@ -1055,7 +1063,7 @@ function featureRow(key, data, r, f, n, edit) {
     h("td", { class: "wide keep", "data-label": "" },
       h("span", { class: `ord${f.ord === null ? " unset" : ""}`, title: f.ord === null ? "No order on the board: after the ordered ones, by id" : `Order ${n}` }, r ? n : "·"),
       h("a", { class: "id", href: featureHref(key, f.ref) }, f.ref), h("span", { class: "title" }, f.title),
-      on.length ? h("div", { class: "now" }, `● ${on.map((w) => w.name).join(", ")} on it now`) : st === "open" ? h("div", { class: "now idle" }, "open · nobody on it now") : null),
+      on.length ? h("div", { class: "now" }, "● ", whoNames(on), " on it now") : st === "open" ? h("div", { class: "now idle" }, "open · nobody on it now") : null),
     h("td", { "data-label": "State" }, badge(st), unticked ? h("div", { class: "sub-note" }, "Done, criteria not ticked") : null),
     h("td", { "data-label": "Criteria" }, total ? h("div", { class: "crit" }, meterOf(checked, total, st === "done" ? "idle" : "ok"), h("span", { class: "m" }, `${checked} of ${total}`)) : h("span", { class: "muted" }, "none yet")),
     h("td", { "data-label": "Tasks" }, f.tasks?.total ? `${f.tasks.done} of ${f.tasks.total} done` : h("span", { class: "muted" }, "none yet")),
@@ -1200,11 +1208,42 @@ const projectName = (key) => svc.projects?.find((p) => p.key === key)?.name ?? k
 /** The laptops a project runs on: its supervisor's board, and its agents'. */
 const laptopsOf = (key) => [...new Set([...projects().filter((e) => e.board.project === key).map((e) => e.laptop), ...workers().filter((w) => w.project === key).map((w) => w.laptop)])];
 
+/**
+ * A worker's laptop after its name, "Luigi@ubu1" (BOB-44; design/BOB-44/laptop-mark.md): only once its project has run on
+ * more than one laptop, and always while its laptop has gone quiet. `key`: its project, for a board run that names none.
+ */
+function lapMark(w, key = w.project) {
+  if (!w?.laptop) return null;
+  const l = state.laptops.get(w.laptop);
+  if (l && staleReport(l)) {
+    const min = Math.floor((brokerNow() - Date.parse(l.at)) / 60_000);
+    return [h("span", { class: "lap stale", title: `Runs on ${w.laptop}; no report for ${min} min` }, `@${w.laptop}`), h("span", { class: "lap-age" }, ` · no report ${min} min`)];
+  }
+  return laptopsOf(key).length > 1 ? h("span", { class: "lap", title: `Runs on ${w.laptop}` }, `@${w.laptop}`) : null;
+}
+/** A worker's name and its mark, kept on one line. */
+const whoName = (w, bold = true, key = w.project) => h("span", { class: "who-at" }, bold ? h("b", null, w.name) : w.name, lapMark(w, key));
+/** Workers' names with their marks: "Luigi@ubu1, Toad@mbp-1". */
+const whoNames = (ws, bold = false) => ws.map((w, i) => [i ? ", " : null, whoName(w, bold)]);
+/** The text form, for a tooltip or a chart's key: "Luigi@ubu1" when the mark would show. */
+const whoText = (w, key = w.project) => (w.laptop && laptopsOf(key).length > 1 ? `${w.name}@${w.laptop}` : w.name);
+/** Who spawned a worker from another laptop, "poe@mbp-1" (ADR 0007 §7), or its sender when it named none; null for a local spawn or an older supervisor's. */
+function spawnerOf(w) {
+  if (!w.remote_from) return null;
+  return w.remote_by ? `${w.remote_by}@${w.remote_from.slice(w.remote_from.indexOf("@") + 1)}` : w.remote_from;
+}
+/** Whom its requests wait on: a v: 2 remote spawn's spawner (ADR 0007 §4), its laptop said when it isn't the worker's; else the project's lead. */
+function waitsOnName(w) {
+  if (!w.remote_from || !w.remote_by) return leadName(w.project);
+  const lap = w.remote_from.slice(w.remote_from.indexOf("@") + 1);
+  return lap === w.laptop ? w.remote_by : `${w.remote_by}@${lap}`;
+}
+
 /** A worker's state when it isn't working: what it waits on, and whose it is. */
 function waitingText(w) {
   if (w.state === "running") return null;
   const p = pendingAll().find((x) => x.worker_id === w.id);
-  return p ? (p.tier === "human" ? "waiting on you" : `waiting on ${leadName(w.project)}`) : w.state === "waiting-answer" ? "waiting on an answer" : "waiting on a permission";
+  return p ? (p.tier === "human" ? "waiting on you" : `waiting on ${waitsOnName(w)}`) : w.state === "waiting-answer" ? "waiting on an answer" : "waiting on a permission";
 }
 
 const WAIT_KIND = { question: ["question", "question"], action: ["action", "action"], review_gate: ["review", "review gate"], bug: ["bug", "bug · blocks use"] };
@@ -1287,7 +1326,7 @@ function ciLines() {
 }
 
 /** "2 queued: Luigi, Toad" (spec, BOB-3 gap 2). */
-const queuedLine = () => { const q = workers().filter((w) => w.state === "queued"); return q.length ? h("p", { class: "more queued" }, `${q.length} queued: ${q.map((w) => w.name).join(", ")}`) : null; };
+const queuedLine = () => { const q = workers().filter((w) => w.state === "queued"); return q.length ? h("p", { class: "more queued" }, `${q.length} queued: `, whoNames(q)) : null; };
 
 function waitLine(w) {
   const [st, label] = WAIT_KIND[w.kind];
@@ -1307,7 +1346,7 @@ function permissionLine(p) {
   const ss = w && sessionOf(w);
   const id = permId(p);
   return needsLine(id, `${p.name}'s ${p.kind === "question" ? "question" : "request"}`, badge("permission"), permText(p), [],
-    `${w ? projectName(w.project) : p.laptop}${ss ? ` · ${ss.feature}` : ""} · holds up ${p.name}${ss ? ` (${declaredStep(w)})` : ""}`,
+    [`${w ? projectName(w.project) : p.laptop}${ss ? ` · ${ss.feature}` : ""} · holds up `, w ? whoName(w, false) : p.name, ss ? ` (${declaredStep(w)})` : ""],
     ANSWER_VERB.permission, state.answering?.id === id ? permissionForm(p) : null);
 }
 
@@ -1596,7 +1635,7 @@ function nowLine(w) {
   const tasks = refsOf(w).filter((id) => id !== ss?.feature);
   const href = ss ? featureHref(w.project, ss.feature) : null;
   return agentLine(w,
-    [h("span", { class: "l-who" }, h("i", { class: `dot ${st.cls === "warn" ? "warn" : "on"}`, "aria-hidden": "true" }), h("b", null, w.name), h("span", { class: "muted" }, ` ${w.role}`)),
+    [h("span", { class: "l-who" }, h("i", { class: `dot ${st.cls === "warn" ? "warn" : "on"}`, "aria-hidden": "true" }), whoName(w), h("span", { class: "muted" }, ` ${w.role}`)),
       h("span", { class: "l-path" }, h("span", { class: "muted" }, projectName(w.project), " › "),
         ss ? [h("a", { class: "id", href }, ss.feature), h("span", { class: "muted" }, `${declaredStep(w)}${tasks.length ? " › " : ""}`),
             tasks.map((id, i) => [i ? h("span", { class: "muted tsep" }, " · ") : null, h("a", { href, class: "l-task" }, h("span", { class: "id" }, id), items.find((x) => x.id === id)?.title ?? "")])]
@@ -1621,7 +1660,7 @@ function projectRow(o) {
       : h("span", { class: "muted" }, "no open release")),
     cell("Open now", open
       ? [h("a", { href: featureHref(p.key, open.ref), class: "v clamp" }, h("span", { class: "id" }, open.ref), open.title),
-         h("span", { class: "muted" }, `${open.progress.checked} of ${open.progress.total} criteria · `, on.length ? h("span", { style: "color:var(--ok)" }, `${on.map((w) => w.name).join(", ")} on it`) : "nobody on it"),
+         h("span", { class: "muted" }, `${open.progress.checked} of ${open.progress.total} criteria · `, on.length ? h("span", { style: "color:var(--ok)" }, whoNames(on), " on it") : "nobody on it"),
          o.open.length > 1 ? h("a", { href: `#roadmap/${p.key}`, class: "muted" }, `and ${o.open.length - 1} more open`) : null]
       : h("span", { class: "muted" }, "no feature open")),
     cell("Next", o.waits_on_you ? h("span", { class: "v", style: "color:var(--warn)" }, `Waits on you: ${o.waits_on_you}`) : null,
@@ -1746,7 +1785,8 @@ function stuckRun(r) {
   const on = r.session ? sessName(r.session) : "other work";
   const said = { failed: ["Run failed", "bad", "failed"], stopped: ["Run stopped", "warn", "was stopped"], lost: ["Run lost", "warn", "was lost"] }[r.outcome];
   return { tone: said[1], label: said[0], ref: r.session?.feature ?? null, text: `${r.agent}'s run on ${on} ${said[2]}`,
-    meta: r.outcome === "lost" ? "Running when the supervisor restarted; nobody has started it again." : r.reason, at: r.ended_at };
+    // The laptop it ran on, from a broker that says it (BOB-44); a lost run is that laptop's restart.
+    meta: [r.laptop ? `on ${r.laptop}` : null, r.outcome === "lost" ? "Running when its supervisor restarted; nobody has started it again." : r.reason].filter(Boolean).join(" · ") || null, at: r.ended_at };
 }
 function stuckCi(c) {
   const land = c.source === "slot" && c.name === "land";
@@ -2073,7 +2113,7 @@ const SECTION = {
           h("ul", { class: "rows" }, u.heavy.map((x) => h("li", { dataset: { sev: "warn" } }, badge("waiting", `${(totalTokens(x.tokens) / Math.max(1, totalTokens(x.usual))).toFixed(1)}×`),
             h("span", null, sessLink(row.project, x.session), `${stepName(x.session)}: ${fmtTokens(totalTokens(x.tokens))} tokens, a ${kindOf(x.session)}'s usual is ${fmtTokens(totalTokens(x.usual))}`))))) : null,
         live.length ? h("div", { class: "grp" }, h("h3", null, "Running now"), h("p", { class: "note" }, "From the laptops. Counted above when each run ends."),
-          h("ul", { class: "rows running" }, live.map((w) => h("li", null, h("span", { class: "dot on" }), h("span", null, h("b", null, w.name), ` ${w.role}`), h("span", { class: "num" }, `${fmtTokens(workerTokens(w))} so far`))))) : null,
+          h("ul", { class: "rows running" }, live.map((w) => h("li", null, h("span", { class: "dot on" }), h("span", null, whoName(w), ` ${w.role}`), h("span", { class: "num" }, `${fmtTokens(workerTokens(w))} so far`))))) : null,
       ],
     };
   },
@@ -2480,7 +2520,7 @@ function plotChart(series, band) {
     if (i < 1 || i > xMax) return leave();
     cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
     const rows = series.filter((sr) => sr.pts.length >= i).map((sr) => [sr, sr.pts[i - 1]]).sort((a, c) => c[1] - a[1]).slice(0, 6);
-    tip.replaceChildren(h("b", null, `Call ${i}`), ...rows.map(([sr, v]) => h("div", { class: "row" }, h("span", null, h("i", { class: sr.style === "solid" ? "" : "dash", style: `--k:${sr.color}` }), sr.name), h("span", null, fmtTokens(v)))),
+    tip.replaceChildren(h("b", null, `Call ${i}`), ...rows.map(([sr, v]) => h("div", { class: "row" }, h("span", null, h("i", { class: sr.style === "solid" ? "" : "dash", style: `--k:${sr.color}` }), sr.tip ?? sr.name), h("span", null, fmtTokens(v)))),
       band?.[i - 1] ? h("div", { class: "row muted" }, h("span", null, "earlier runs, median"), h("span", null, fmtTokens(band[i - 1][1]))) : null);
     tip.hidden = false;
     const wr = wrap.getBoundingClientRect();
@@ -2593,7 +2633,7 @@ function taskChip(task) {
 function workerCard(w) {
   return h("div", { class: "card" },
     h("div", { class: "top" }, h("span", { class: "name" }, w.name), h("span", { class: "badge", dataset: { state: w.state } }, w.state)),
-    h("div", { class: "sub" }, `${w.project} / ${w.role} · ${w.id} · ${fmtModel(w)} · ${w.laptop}${w.session ? ` · ${w.session}` : ""}`),
+    h("div", { class: "sub" }, `${w.project} / ${w.role} · ${w.id} · ${fmtModel(w)} · ${w.laptop}${w.session ? ` · ${w.session}` : ""}${spawnerOf(w) ? ` · spawned by ${spawnerOf(w)}` : ""}`),
     h("div", { class: "task" }, w.task),
     w.checkpoint ? h("div", { class: "checkpoint" }, w.checkpoint) : null,
     h("div", { class: "meta" },

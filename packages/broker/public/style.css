@@ -772,3 +772,13 @@ main.wide .st { max-width: 1320px; }
 @media (max-width: 760px) { .caught-foot { display: flex; } }
 .ov > .st-line { margin: 0; }
 .rows .m a { color: var(--accent); }
+
+/* BOB-44: a worker's laptop, after its name. Full name in the title and the detail row. */
+.who-at { white-space: nowrap; }
+.who .who-at b { margin-right: 0; }
+.lap { color: var(--muted); font-weight: 400; font-size: 0.92em; display: inline-block; max-width: 20ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.lap.stale, .lap-age { color: var(--warn); }
+.lap-age { font-weight: 400; font-size: 0.92em; }
+.a-detail .spawned { font-size: 13px; }
+@media (max-width: 600px) { .lap { max-width: 10ch; } .lap-age { display: none; } }
