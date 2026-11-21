@@ -282,6 +282,23 @@ the wire.
    A refusal after the join leaves the board a join with no run behind it. A crash between the join and the spawn
    leaves the same. The retry after `ready` joins again as a new worker.
 
+## As built, build D
+
+Toad, 2026-11-21. This is build D, v2 a0cfe42 (BOB-105), as reviewed in `reviews/2026-11-21-bob44-build-d.md`. It
+adds to "As built, build C" 4. None of it is on the wire.
+
+1. **No ask before the start has read the rows.** Until `resume()` has run, `ask()` refuses with "this supervisor
+   is starting; ask again once it is ready". It uses the existing refusal shape.
+   - Otherwise `resume()` would take a fresh ask's `installing` row for a dead process's row.
+   - An ask the broker queued while the supervisor was down arrives in this window, so it is refused, not run.
+     The requester asks again once the target is `ready`.
+2. **A row ends once.** `moveUpgrade` and `endUpgrade` touch only an open row (`installing`, `waiting`,
+   `restarting`). The first end stands.
+   - An upgrade whose row was ended under it stops: no event, no switch, no exit. Whatever ended the row told the
+     requester.
+   - The row moves to `waiting` before `installed` is sent. So a restart after the build says "restarted before
+     the switch", not "restarted while installing".
+
 ## Consequences
 
 - A release is one request per laptop. ubu1 needs no poe of its own and no ssh.
