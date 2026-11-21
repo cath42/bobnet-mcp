@@ -1,6 +1,6 @@
 {
   "name": "@bobnet/protocol",
-  "version": "2.0.0-rc.44",
+  "version": "2.0.0-rc.45",
   "private": true,
   "type": "module",
   "exports": {
