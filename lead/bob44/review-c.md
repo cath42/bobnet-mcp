@@ -54,3 +54,9 @@ order rule. ubu1 stays on rc.41 until Casper's A-2; the broker deploy, BOB-69 AC
   failed by resume() and its partial discarded, then restarts anyway), 7 minors. Mario confirmed M1 in the code
   (supervisor.ts:615-635, store.ts:650/668). So rc.45 waits for its fix.
 - 16:4xZ Toad done (a207ce4): 0/0/2, rc.45 go, no order rule. Merged above; M1 holds rc.45.
+- 16:4xZ Peach w_f403a51a: M1 is BOB-105 (BOB-44, a-fixes-6); minors 1-5 are backlog BOB-106..110. BOB-91, 92, 94, 95
+  Done; BOB-93 In Review until BOB-105 lands and is reviewed. Toad told of M1 (m_e0973d08).
+
+## Close
+- No rc.45. Next: build D (BOB-105, Luigi), then its review, then rc.45 (tag + push; poe hand-installs on mbp-1).
+  rc.45 adds no order rule (Toad). Nothing for poe to install now: mbp-1 stays on rc.44, ubu1 on rc.41 (A-2).
