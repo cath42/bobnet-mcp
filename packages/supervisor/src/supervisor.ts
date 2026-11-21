@@ -456,6 +456,8 @@ export class Supervisor {
   private readonly reconciling = new Map<string, Promise<string | null>>();
   /** Set by shutdown: the reconcile timer stops. */
   private closing = false;
+  /** Workers a stop was asked for, until they exit: a shutdown meanwhile doesn't make their requests resumable. */
+  private readonly stopping = new Set<string>();
   /** project/role of each `v: 2` spawn joining its board session: the role and a place held for it. */
   private readonly reserved = new Set<string>();
   /** Why the sandbox can't run on this machine, from the check at start; null when it can (or nothing needs it). */
@@ -547,6 +549,7 @@ export class Supervisor {
       announce: (req, name) => this.announce(req, name),
       setWorkerState: (id, state) => this.setState(id, state),
       closing: () => this.closing,
+      stopping: (id) => this.stopping.has(id),
       takeSlot: (workerId, author, toolUseId, label, signal) => this.takeCallSlot(workerId, author, toolUseId, label, signal),
     });
     // Every settle and orphaning of a request, wherever it is made, tells a v: 2 worker's spawner (ADR 0007 §4).
@@ -853,6 +856,7 @@ export class Supervisor {
       const run = this.runs.get(id);
       if (!run) throw new SupervisorError(`Worker ${id} is ${w.state}, not running`);
       this.store.audit("orchestrator", "stop", id, { reason });
+      this.stopping.add(id);
       // A consult writes nothing; a worker gets a last turn for its handoff.
       await run.stop(reason, w.task.startsWith("[Consult ") ? undefined : `You are being stopped (${reason}). Write your checkpoint and your handoff (${this.handoffOf(w)}) now, in this turn, and do nothing else; the session ends in a few minutes.`);
     }
@@ -1559,6 +1563,8 @@ export class Supervisor {
   private copyMade(c: RemoteWorkerRow): void {
     const sent = c.spawn_req ? this.store.remoteSentByMessage(c.spawn_req) : null;
     if (!sent || (sent.state !== "unanswered" && sent.state !== "unacked") || this.remoteWaits.has(sent.id) || this.remoteDeciding.has(sent.id)) return;
+    // Only the spawn's first worker: a resume or reset of it on the target (the same spawn_req) ran after all already.
+    if (this.store.remoteCopiesBySpawn(c.spawn_req!).some((o) => o.laptop !== c.laptop || o.id !== c.id)) return;
     const { project, role, name } = this.copyNames(c);
     const why = sent.state === "unacked" ? "the broker's ack of the spawn was lost, so spawn_worker couldn't say whether it ran" : "its reply came after spawn_worker had given up on it";
     this.store.audit(sent.to_name, "remote:spawned_after_all", c.id, { message: sent.message_id });
@@ -2813,6 +2819,7 @@ export class Supervisor {
   private onExit(id: string, outcome: Outcome): void {
     const run = this.runs.get(id);
     this.runs.delete(id);
+    this.stopping.delete(id);
     // An upgrade waiting for idle looks again once this end is recorded (ADR 0008 §4).
     setImmediate(() => this.upgrades.poke());
     // Unread input stays unconsumed in the inbox: the role's next worker gets it with its brief.

@@ -583,6 +583,11 @@ export class Store {
       : this.all("SELECT * FROM remote_workers WHERE laptop = ? ORDER BY created_at, rowid", laptop);
   }
 
+  /** The copies made for one spawn: its first worker, and any resume or reset of it on the target. */
+  remoteCopiesBySpawn(spawnReq: string): RemoteWorkerRow[] {
+    return this.all("SELECT * FROM remote_workers WHERE spawn_req = ? ORDER BY created_at, rowid", spawnReq);
+  }
+
   remoteCopiesOf(id: string): RemoteWorkerRow[] {
     return this.all("SELECT * FROM remote_workers WHERE id = ? ORDER BY created_at, rowid", id);
   }

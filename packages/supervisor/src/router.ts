@@ -27,6 +27,8 @@ export interface RouterDeps {
   setWorkerState: (workerId: string, state: WorkerState) => void;
   /** True while the supervisor shuts down: a request its workers leave stays open, to be orphaned at the next start. */
   closing: () => boolean;
+  /** True once a stop of this worker was asked for: its requests settle even if a shutdown starts meanwhile. */
+  stopping: (workerId: string) => boolean;
   /** Resolves once the call holds a run slot; the slot is freed when the call returns. */
   takeSlot: (workerId: string, author: string, toolUseId: string, label: string, signal: AbortSignal) => Promise<void>;
 }
@@ -197,8 +199,9 @@ export class Router {
           if (w.timer) clearTimeout(w.timer);
           this.waiting.delete(req.id);
           // A stop settles it now, not left open until a restart orphans it (ADR 0007 §4). A shutdown's
-          // stays open: the next start orphans it, and answering it resumes the worker.
-          if (!this.deps.closing()) {
+          // stays open: the next start orphans it, and answering it resumes the worker. A stop asked for
+          // before the shutdown is still a stop: resuming that worker would undo it.
+          if (!this.deps.closing() || this.deps.stopping(w.workerId)) {
             store.settleRequest(req.id, { state: "expired", decision: "deny", message: "worker stopped", answers: null, decided_by: "stop" });
             store.audit("stop", "expire", workerId, { request: req.id });
           }

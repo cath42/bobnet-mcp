@@ -253,6 +253,47 @@ describe("every settle is told, from one hook (AC 2, 3, 5)", () => {
   });
 });
 
+describe("a stop that races a shutdown (BOB-100 AC 2)", () => {
+  it("a stop asked before the shutdown still settles the request (BOB-100 AC 2): the next start has nothing to orphan or resume", async () => {
+    const s = await spawned();
+    const at = s.ubu.at;
+    const cancel = new AbortController();
+    const result = askWith(s.ubu.sessions[0]!, cancel.signal);
+    await until(() => s.mbp.events("request").length === 1);
+    const rid = s.mbp.events("request")[0]!["request"] as string;
+    // The stop is asked for, the shutdown starts, and only then does the SDK abort the call.
+    const stopping = s.ubu.sup.stop(s.id);
+    const closing = s.ubu.sup.shutdown();
+    cancel.abort();
+    await Promise.all([stopping, closing]);
+    expect(await result).toMatchObject({ behavior: "deny", message: "Worker stopped" });
+    expect(at.store.request(rid)).toMatchObject({ state: "expired", decision: "deny", decided_by: "stop" });
+    running.splice(running.indexOf(s.ubu.sup), 1);
+    const again = await boot(s.net, "ubu1", UBU, at);
+    await tick(20);
+    expect(again.store.requests(["open", "orphaned"])).toEqual([]);
+    expect(() => again.sup.answer(rid, { decision: "allow" }, "orchestrator")).toThrow();
+  });
+
+  it("a stop of another worker doesn't settle a shutdown's request of this one", async () => {
+    const net = new FakeNetwork();
+    const ubu = await boot(net, "ubu1", UBU);
+    const ann = ubu.sup.spawn({ project: "studio", role: "ann", task: "local" });
+    const bea = ubu.sup.spawn({ project: "studio", role: "bea", task: "local" });
+    await until(() => ubu.sessions.length === 2);
+    const cancel = new AbortController();
+    void askWith(ubu.sessions[0]!, cancel.signal);
+    await until(() => ubu.store.requests(["open"]).length === 1);
+    const r = ubu.store.requests(["open"])[0]!;
+    const other = r.worker_id === ann.id ? bea.id : ann.id;
+    const stopping = ubu.sup.stop(other);
+    const closing = ubu.sup.shutdown();
+    cancel.abort();
+    await Promise.all([stopping, closing]);
+    expect(ubu.store.request(r.id)).toMatchObject({ state: "open", decided_by: null });
+  });
+});
+
 describe("a target restart and an orphaned request (AC 4)", () => {
   it("settled orphaned at start; answered with resume, a new worker of the same spawner, resumed sent, the local queue rule followed", async () => {
     const { at, w, r } = leftBehind();

@@ -222,6 +222,29 @@ describe("an event for a worker with no copy (criterion 3)", () => {
     expect((await s.call("worker_status", { id: "w_9" })).laptop).toBe("ubu1");
   });
 
+  it("'spawned after all' only for the spawn's first copy, not again for a resume or reset of it on the target (BOB-100 AC 1)", async () => {
+    const s = await scripted();
+    s.answer["spawn"] = () => null;
+    s.answer["list"] = () => ({ workers: [] });
+    const spawning = s.call("spawn_worker", ANN).catch(() => null);
+    await until(() => s.ops().includes("spawn"));
+    s.net.advance(90);
+    await spawning;
+    s.answer["status"] = (b) => ({ worker: view(b["id"] as string, s.spawnReq()) });
+    await s.send({ v: 2, event: "remote_control", worker: "w_9", spawn_req: s.spawnReq(), url: "https://claude.ai/code/s1" });
+    await until(() => s.bob().length === 1);
+    expect(s.bob()[0]).toMatch(/^ann \(w_9, studio\/ann\) on ubu1 spawned after all/);
+    // w_9 resumed (or reset) on ubu1: a new id, the same spawn_req, by an event and then by a list.
+    await s.send({ v: 2, event: "remote_control", worker: "w_10", spawn_req: s.spawnReq(), url: "https://claude.ai/code/s2" });
+    await until(() => s.mbp.store.remoteCopy("ubu1", "w_10")?.state === "running");
+    s.answer["list"] = () => ({ workers: [view("w_9", s.spawnReq(), { state: "stopped" }), view("w_10", s.spawnReq()), view("w_11", s.spawnReq())] });
+    await s.mbp.sup.reconcile();
+    await until(() => s.mbp.store.remoteCopy("ubu1", "w_11") !== null);
+    await tick(20);
+    expect(s.bob().filter((b) => b.includes("spawned after all"))).toHaveLength(1);
+    expect(s.mbp.store.auditLog(50).filter((a) => a.action === "remote:spawned_after_all").map((a) => a.worker_id)).toEqual(["w_9"]);
+  });
+
   it("an exit for a worker with no copy makes it ended, with its handoff, and tells the orchestrator", async () => {
     const s = await scripted();
     s.answer["spawn"] = () => null;
