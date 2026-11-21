@@ -7,7 +7,7 @@ import { GhCiPoll } from "../src/ci-poll.ts";
 import { callTool, handlers } from "../src/mcp.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
-import { type Detect, REMOTE_TOOLS_SINCE, Supervisor, withHandoff } from "../src/supervisor.ts";
+import { type Detect, REMOTE_TOOLS_SINCE, Supervisor, withHandoff, withholdBody } from "../src/supervisor.ts";
 import { fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 import { FakeNetwork } from "./network.ts";
 
@@ -248,6 +248,17 @@ describe("credentials (criterion 3)", () => {
     expect(OLD_DETECT(JSON.stringify(out))).toBeNull();
     // Another field the same way: withheld whole, the rest kept.
     expect(withHandoff({ ...event, checkpoint: MULTILINE }, "fine", OLD_DETECT)).toEqual({ ...event, checkpoint: "[withheld: looks like a credential]", handoff_text: "fine" });
+  });
+
+  it("checked again after the whole-field withhold: a match across fields or in a key sends the stand-in (BOB-81 AC 2)", () => {
+    // Neither string matches alone; serialised, `password=",[12345678]]}` does.
+    const across = withholdBody({ v: 2, re: "status", req: "m_1", ok: true, x: ["note password=", [12345678]] });
+    expect(across).toEqual({ v: 2, event: "withheld", re: "status", req: "m_1" });
+    const key = { v: 2, event: "exit", worker: "w_1", spawn_req: "m_1", state: "done", tool_calls: { AKIAIOSFODNN7EXAMPLE: 1 } };
+    expect(withholdBody(key)).toEqual({ v: 2, event: "withheld", worker: "w_1", spawn_req: "m_1" });
+    // With a handoff, the stand-in goes as it is: no handoff added to it.
+    expect(withHandoff(key, "the handoff")).toEqual({ v: 2, event: "withheld", worker: "w_1", spawn_req: "m_1" });
+    for (const out of [across, withholdBody(key)]) expect(findSecret(JSON.stringify(out))).toBeNull();
   });
 
   it("on the wire, against the fake's detector: the exit goes, with its state, the handoff withheld (BOB-72)", async () => {

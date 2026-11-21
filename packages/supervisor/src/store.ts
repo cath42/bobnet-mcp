@@ -215,7 +215,8 @@ export class Store {
           DROP TABLE remote_requests_old;`);
         this.db.exec("COMMIT");
       } catch (err) {
-        this.db.exec("ROLLBACK");
+        // SQLite rolls back by itself on some errors (full, I/O, out of memory): a second ROLLBACK would hide this one.
+        if (this.db.isTransaction) this.db.exec("ROLLBACK");
         throw err;
       }
     }

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { type Envelope, findSecret } from "@bobnet/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GhCiPoll } from "../src/ci-poll.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
@@ -137,6 +137,30 @@ describe("the store: the remote outbox and the requests' records", () => {
     expect(tables).toEqual(["remote_requests"]);
     expect(rows).toEqual([{ message_id: "m_old", sender: "poe@ubu1", op: "list", reply: '{"ok":true}' }]);
     expect(notnull).toBe(1);
+  });
+
+  it("a rebuild SQLite rolled back by itself throws its own error, not ROLLBACK's (BOB-81 AC 1)", () => {
+    const { dir } = newStore();
+    const file = join(dir, "old.db");
+    const old = new DatabaseSync(file);
+    old.exec(`CREATE TABLE remote_requests (message_id TEXT PRIMARY KEY, sender TEXT NOT NULL, op TEXT NOT NULL, reply TEXT NOT NULL, at TEXT NOT NULL);
+      INSERT INTO remote_requests VALUES ('m_old', 'poe@ubu1', 'list', '{"ok":true}', '2026-11-20T00:00:00.000Z');`);
+    old.close();
+    // As SQLITE_FULL does: the transaction rolled back by SQLite, then the statement's error.
+    const exec = DatabaseSync.prototype.exec;
+    const spy = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql: string) {
+      if (!sql.startsWith("ALTER TABLE remote_requests RENAME")) return exec.call(this, sql);
+      exec.call(this, "ROLLBACK");
+      throw new Error("database or disk is full");
+    });
+    try {
+      expect(() => new Store(file)).toThrow(/^database or disk is full$/);
+    } finally {
+      spy.mockRestore();
+    }
+    const store = new Store(file);
+    stores.add(store);
+    expect(store.remoteRequest("m_old")).toMatchObject({ op: "list", reply: '{"ok":true}' });
   });
 
   it("records a request in progress once, then its reply", () => {

@@ -198,24 +198,30 @@ export function withholdBody(fields: Record<string, unknown>, detect: Detect = f
   const out = withholdSecrets(fields, detect);
   if (!detect(JSON.stringify(out))) return out;
   const { handoff_text: text, handoff_truncated: _t, handoff_length: _l, ...rest } = out;
-  if (typeof text === "string" && detect(JSON.stringify(text))) return { ...withholdWhole(rest, detect), handoff_text: null, handoff_withheld: true };
-  return withholdWhole(out, detect);
+  const whole = typeof text === "string" && detect(JSON.stringify(text)) ? { ...withholdWhole(rest, detect), handoff_text: null, handoff_withheld: true } : withholdWhole(out, detect);
+  // A key, or a match across fields, still matches: the stand-in goes, as the broker would have it.
+  return detect(JSON.stringify(whole)) ? standIn(out) : whole;
 }
 
-/** What goes in place of a reply or event the broker refused as a credential anyway (its detector newer than ours): who it was about. */
-function withheldBody(body: string): string | null {
-  const json = classifyRemote(body)?.json;
-  if (!json || json["event"] === "withheld") return null;
+/** A withheld stand-in for a reply or event: who it was about, and a reply's request. */
+function standIn(json: Record<string, unknown>): Record<string, unknown> {
   const w = json["worker"];
   const worker = typeof w === "string" ? w : w && typeof w === "object" && typeof (w as { id?: unknown }).id === "string" ? (w as { id: string }).id : undefined;
-  return reply({
+  return {
     ...(json["v"] === 2 ? { v: 2 } : {}),
     event: "withheld",
     ...(worker ? { worker } : {}),
     ...(typeof json["spawn_req"] === "string" ? { spawn_req: json["spawn_req"] } : {}),
     // A withheld reply still names its request, so the requester knows it was answered.
     ...(typeof json["re"] === "string" && typeof json["req"] === "string" ? { re: json["re"], req: json["req"] } : {}),
-  });
+  };
+}
+
+/** What goes in place of a reply or event the broker refused as a credential anyway (its detector newer than ours): who it was about. */
+function withheldBody(body: string): string | null {
+  const json = classifyRemote(body)?.json;
+  if (!json || json["event"] === "withheld") return null;
+  return reply(standIn(json));
 }
 
 /** The most workers a `v: 2` list returns. */
@@ -294,6 +300,7 @@ export function fitLands(all: string[]): string[] {
  */
 export function withHandoff(fields: Record<string, unknown>, text: string | null, detect: Detect = findSecret): Record<string, unknown> {
   const base = withholdBody(fields, detect);
+  if (base["event"] === "withheld") return base;
   if (text === null) return { ...base, handoff_text: null };
   const handoff = withholdSecrets(text, detect);
   // What matches only serialised (§2) goes whole, before any cut.
