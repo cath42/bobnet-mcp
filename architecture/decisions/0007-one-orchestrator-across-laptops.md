@@ -824,8 +824,8 @@ the broker refuses more. Measured with node on 200 KB adversarial inputs: each p
   goes to the laptops first, and the broker deploy follows (above).
 
 **As built (A-fixes-2, 63c29b5..dd9279e; `reviews/2026-11-20-bob44-a-fixes-2.md`).**
-- BOB-80's patterns and BOB-79's linear pairing are as ruled (`secrets.ts:9-82`). PuTTY's span ends at the
-  end of the Private-MAC's hex.
+- BOB-80's patterns are as ruled (`secrets.ts:9-36`). PuTTY's span ends at the end of the Private-MAC's hex.
+- BOB-79's pairing is linear, but it is a stack, against point 4. That is M2, ruled below.
 - BOB-81: the target's re-check sends the same stand-in as a broker refusal (`standIn`, `supervisor.ts:207`).
 - BOB-78 keeps `remote_workers.state_withheld`, which is the supervisor's local store, so the broker needs no
   migration:
@@ -834,5 +834,65 @@ the broker refuses more. Measured with node on 200 KB adversarial inputs: each p
   - 2 means the orchestrator was told.
 - As built, `state_withheld` never resets, so the bound is one notice per copy. Minor 1 of that review resets
   it on a view that passes, which makes the bound one notice per withheld episode.
-- The BOB-80 broker deploy has my go once mbp-1 and ubu1 run the release carrying dd9279e. The conditions are
-  in the review.
+- The BOB-80 broker deploy has my go only for the release that carries A-fixes-3 (below), once mbp-1 and ubu1
+  run it. The conditions are in the review.
+
+**Ruling, A-fixes-3: the independent reviewer's M1-M3 of A-fixes-2** (`lead/bob44/review-a-fixes-2.md`;
+`reviews/2026-11-20-bob44-a-fixes-2.md`). I confirm all three as majors. A tested sketch of the redaction below
+is in `reviews/2026-11-20-a-fixes-3-redaction-sketch.mts`. Run with node over 400,000 fuzzed texts, its output
+has 0 leaks and 0 residual matches, and each 200 KB adversarial input takes under 6 ms.
+
+1. **M1: one pass of spans, all on the original text.** `redactSecrets` computes every span on the input and
+   only then replaces, never one pattern's output fed to the next:
+   - the block spans (point 2 below);
+   - each token pattern's matches;
+   - a mark already in the text, as a span;
+   - `password_assignment`. Its prefix (`ASSIGNMENT`) is found at every keyword, in one `matchAll`. Each
+     prefix's value is the run of value characters (`[^\s"'\\]`) from the prefix's end. The prefix redacts from
+     its keyword through the run's end when the run is 8 or more characters long. It also redacts when the run
+     reaches another span, and then it goes through that span. So `api_key=secret:"abcdefgh"` becomes one
+     mark, and nothing is left that matches again.
+
+   The spans are unioned, and each merged span becomes one mark. This replaces "a marked value is its value"
+   (BOB-79).
+   - **Linear:** the runs are found once. The value ends come from a pointer walk with the prefixes in order,
+     and the "reaches a span" test from one walk right to left.
+   - **Must redact:**
+     - `password=x;password="RealSecret123"`, which leaves no `RealSecret123`;
+     - `DB_PASSWORD=;API_KEY='Hunter2hunter2'`;
+     - `{api_key:x,password:"Hunter2hunter2"}`;
+     - `secret=sk-ant-…{=<value>`, where the token is cut out first and so must not cut the assignment short.
+   - **Test property:** `findSecret(redactSecrets(x))` is null. Also, no value that `password_assignment`
+     matches at any keyword position of the input survives (a fuzz with unique value tokens, as in the sketch).
+   - `findSecret` is unchanged by this point.
+2. **M2: point 4 as ruled, not a stack.** Each BEGIN (or PuTTY header) redacts through the first END of its kind
+   that starts after it. Only a BEGIN with no END after it redacts just its own line.
+   - One pointer walk over the kind's BEGINs and ENDs, both found once.
+   - So `BEGIN\nOUTER\nBEGIN\nINNER\nEND\ntail` leaves only `tail`. A BEGIN quoted in prose before a real key
+     redacts through that key's END: it withholds more, and leaks nothing.
+   - BOB-79's stack (an END closes only the latest BEGIN) left an outer key's body in clear, and is withdrawn.
+3. **M3: `jwt` starts only where no run of its characters is under way:**
+   ```
+   /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/
+   ```
+   - `\b` let every `-eyJ` inside a run start a scan of the whole run, which is quadratic: 16 KiB (the broker's
+     body cap) costs 0.1-0.6 s of broker CPU, and a 200 KB handoff blocks the supervisor's loop for about 30 s.
+   - With the lookbehind, 200 KB takes under 2 ms. A real JWT after a space, `=`, `:`, `"`, `/` or `Bearer `
+     still matches.
+   - **It narrows:** a JWT glued after a `-` (`abc-eyJ…`) is no longer detected. That is accepted.
+   - The other patterns were checked, and none has this shape. `jwt` is the only one with a required suffix
+     after an unbounded run that can start inside the run.
+4. **While in `ASSIGNMENT`:** the `(?!_detected\b)` guard applies only to `secret`
+   (`…|secret(?!_detected\b)|…`). Applied to every keyword, it also hid `password_detected=…`. This widens
+   `findSecret` a little.
+5. **Rollout.** Points 3 and 4 change `findSecret`, so they ride BOB-80's broker deploy. The order stays:
+   laptops on the release first, then the broker. BOB-80's widening sets that order, and point 3's narrowing
+   only means that in the gap, a `-eyJ…` JWT is refused by the broker as a stand-in (BOB-78). Points 1 and 2
+   change only redaction, so they need no deploy. No separate deploy for M3: the broker body cap keeps it at
+   under a second per send, and only Casper's laptops can send.
+6. **Same build, minors:**
+   - `state_withheld` goes back to 0 on a view or event that passes, so the bound is one notice per withheld
+     episode;
+   - a `summary` stand-in goes out without `ok`;
+   - reconcile reports its withheld batches before an early return;
+   - the 50 ms timing tests warm up once and take the best of 3.
