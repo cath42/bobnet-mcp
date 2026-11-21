@@ -33,9 +33,12 @@ and mbp-1 doesn't.
   section and `upgrade: true` on `supervisor@mbp-1`); then poe@mbp-1 rolls rc.43 there with
   `upgrade_supervisor {laptop: "ubu1", tag: "v2.0.0-rc.43"}`. That first remote upgrade is also BOB-83's AC 7.
   If Casper prefers one hand install, the same file with `TAG=v2.0.0-rc.43` in steps 2-3 works (step 4 then
-  expects `ok: 2.0.0-rc.43`); step 6 is the same.
+  expects `ok: 2.0.0-rc.43`); step 6 is the same. mbp-1 runs rc.43 since 14:47:24Z, so the order holds either
+  way (review B, Toad).
 - **Check** on each: `supervisor@<laptop>` reports 2.0.0-rc.43 in `list_peers`.
-- **Rollback:** `previous` points at rc.42 after the upgrade; `upgrade_supervisor` to v2.0.0-rc.42, or
+- **Rollback, the target first** (review B, independent M1): never roll mbp-1 back alone while ubu1 runs rc.43,
+  or a v: 2 worker's requests on ubu1 reach no orchestrator (only the dashboard or the timeout). Roll ubu1 back
+  first, then mbp-1. `previous` points at rc.42 after the upgrade; `upgrade_supervisor` to v2.0.0-rc.42, or
   `ln -sfn v2.0.0-rc.42 <root>/current` and restart.
 
 ## Broker (laptops first)
