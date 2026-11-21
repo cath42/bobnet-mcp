@@ -1,6 +1,6 @@
 # ADR 0008: A supervisor upgrades and restarts itself on a remote request
 
-Status: accepted (Toad, 2026-11-20). Item: BOB-83 (Casper via poe, 22:14 CST, "3"). Builds on ADR 0007 §2 (the
+Status: accepted (Toad, 2026-11-20); rulings for the BOB-83 build added 2026-11-21. Item: BOB-83 (Casper via poe, 22:14 CST, "3"). Builds on ADR 0007 §2 (the
 `v: 2` wire) and §7 (who owns what). Line numbers are at dd9279e.
 
 ## Context
@@ -167,6 +167,76 @@ What the code does today:
 - Casper adds `upgrade:` (`repo`, and optionally `root` and `line`) and the grant to `supervisor.yaml`.
 - poe does the restarts. The config is Casper's (CLAUDE.md, Ground rules).
 - After that, a release reaches a laptop as `upgrade_supervisor`. Mario cuts and tags; poe asks.
+
+## Rulings, BOB-83 build
+
+Toad, 2026-11-21. These are my answers to Luigi's consults during the build (c_97c7a90a, c_9e8b6d19), as
+built in a5ed7dd, and the review's rulings (`reviews/2026-11-21-bob44-a-fixes-4.md`). Line numbers are at
+a5ed7dd. Where they say more than §1-§7, they win.
+
+1. **Who may use the tool.**
+   - `upgrade_supervisor` is the laptop orchestrator's: poe's MCP, whose handlers have no `lead`.
+   - A lead worker is refused (`mcp.ts`, `opts.lead`), and `lead-tools.ts` leaves the tool out of a lead's
+     in-process tools (`ORCHESTRATOR_ONLY`).
+   - "Lead" in §5 means the laptop's orchestrator, not a lead worker.
+2. **The orchestrator's own laptop.**
+   - The upgrade runs in-process, on the same code path: the same `upgrades` row, and the same audit, with
+     `orchestrator` as the requester.
+   - It needs no grant, because the tool's token is the authority. It does need the `upgrade:` section.
+   - Its stages come to the orchestrator as notices.
+3. **The grant is on the address the request comes from.** poe's tool sends as its laptop's supervisor, so
+   the grant on ubu1 is `remote."supervisor@mbp-1".upgrade: true`, not `poe@mbp-1`.
+4. **The guard on `<root>`.**
+   - It has the same reach as the config-folder guard: every worker, the orchestrator lead included, any
+     touch, and any Bash command that names the path.
+   - `<root>` is `upgrade.root ?? ~/.local/share/bobnet`. The guard covers it even without an `upgrade:`
+     section.
+   - When the two differ, both the default and `upgrade.root` are covered (`bin.ts:81`). That withholds
+     more.
+5. **The clone is guarded too (review M1).**
+   - The supervisor runs `git` in `upgrade.repo`. Its `.git/config` says where `origin` is (the trust
+     root, §3), and it can name commands git runs (`core.sshCommand`, `credential.helper`).
+   - So a worker that can write the clone can make the next upgrade run its code as the supervisor, with
+     no guard.
+   - For rc.42, the clone lives under `<root>`, so the existing guard covers it. A dot-name keeps
+     `runningRelease` off it, e.g. `<root>/.src.git`, a bare clone.
+   - In the next build, `bin.ts` also adds `upgrade.repo` to the guard's roots, wherever it is.
+6. **Small rulings.**
+   - (a) In a `remote` entry, `spawn` is optional, and an entry must grant something
+     (`config.ts`, the refine).
+   - (b) "Older than the first release that carries `upgrade`" is read from the tag's
+     `packages/supervisor/package.json`, `bobnet.upgradable`, with `git show` before the archive. No version
+     is hard-coded.
+   - (c) The reply waits for the fetch and the checks, not for the archive or the install. A requester waits
+     90 s for an `upgrade` reply, and the ttl is 30 s.
+   - (d) `waiting_on` is `{workers, runs, requests}`, plus `leads` by name.
+   - (e) Exit 75 removes the pid file, as SIGTERM does.
+   - (f) An installed tag skips the git work only when `<root>/<tag>` is a complete folder, its version
+     matches the tag, and it is upgradable.
+7. **A live lead holds `when_idle`.** A lead is `running` for its whole life, so on a laptop with a live
+   lead, `when_idle` never fires. The notice names the lead. poe uses `now` once the lead has left its
+   handoff.
+8. **Luigi's departures from §2-§5, all accepted.** None of them is on the wire, except an additive field.
+   - **The fetch** is `git fetch --no-tags origin +refs/heads/<line>:refs/remotes/origin/<line>
+     +refs/tags/<tag>:refs/tags/<tag>`, not `git fetch origin tag <tag>`. `origin/<line>` must be fresh for
+     the ancestry check, and origin's tag wins over a local one. That is stronger than §3.
+   - **`restarting` carries `root`**, so the overdue notice can give the exact rollback command. This is
+     additive: `RemoteUpgrade` is loose.
+   - **The failed steps** are named `git archive`, `pnpm install`, `check`, `switch`, `wait` (superseded)
+     and `start` (version mismatch).
+   - **`missing()`** also refuses when `upgrade.repo` isn't a git clone.
+9. **Luigi's open questions.**
+   - **A restart mid-install** leaves no row, so the requester gets no `failed`, and a `.<tag>.partial` may
+     stay behind until the next build clears it. This is a minor (review m3), not for rc.42. Later, an
+     `installing` row lets `resume()` send `failed`, "restarted while installing".
+   - **pnpm's `.bin` shims after the rename:** fine. Each shim runs its target through `$basedir`, a
+     relative path. Only its fallback `NODE_PATH` names the `.partial` folder.
+   - **The service's environment:** fine.
+     - `servicePath` puts node's folder first, then the installing shell's PATH.
+     - `missing()` refuses an upgrade with no pnpm.
+     - A fetch that can't authenticate fails within 60 s and says so in the reply. With no tty, ssh fails;
+       it doesn't prompt.
+     - The rc notes have the as-the-service fetch test.
 
 ## Consequences
 
