@@ -229,6 +229,21 @@ describe("a retry is safe (criterion 6)", () => {
   });
 });
 
+describe("the snapshot names a remote spawn's sender, never a local one's (BOB-70, ADR 0007 §7)", () => {
+  it("remote_from is the sender and remote_by its by; a v-less remote spawn has remote_by null; a local or a lead's spawn has neither", async () => {
+    const { sup, mbp, pi } = await setup();
+    const { reply: v2 } = await mbp.ask(SPAWN);
+    const { reply: v1 } = await pi.ask({ op: "spawn", project: "studio", role: "bea", task: "old style" });
+    const local = sup.spawn({ project: "studio", role: "cal", task: "local work" });
+    const byLead = sup.spawn({ project: "studio", role: "ann", task: "lead's, queued", spawnedBy: "w_lead1" });
+    const shown = (id: string) => sup.snapshot().workers.find((w) => w.id === id)!;
+    expect(shown(v2["worker"].id)).toMatchObject({ remote_from: SUP_MBP, remote_by: "poe" });
+    expect(shown(v1["worker"].id)).toMatchObject({ remote_from: SUP_PI, remote_by: null });
+    expect(shown(local.id)).toMatchObject({ remote_from: null, remote_by: null });
+    expect(shown(byLead.id)).toMatchObject({ remote_from: null, remote_by: null });
+  });
+});
+
 describe("a v-less spawn is served as today (criterion 7)", () => {
   it("queues when the role is busy, and says why", async () => {
     const { sup, store, mbp } = await setup();

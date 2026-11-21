@@ -3287,6 +3287,9 @@ export class Supervisor {
         task_refs: workerTasks(w),
         ...this.callsOf(w, run),
         remote_url: run?.remote && "url" in run.remote ? run.remote.url : null,
+        // Only a remote spawn's address: a local one's "orchestrator" or a lead's worker id stays here (ADR 0007 §7).
+        remote_from: w.spawned_by?.includes("@") ? w.spawned_by : null,
+        remote_by: w.spawned_by?.includes("@") ? w.remote_by : null,
       };
     });
 

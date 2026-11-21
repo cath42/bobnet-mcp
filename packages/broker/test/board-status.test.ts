@@ -257,6 +257,8 @@ describe("how a run ended (BOB-38)", () => {
     const h = row(await status(ago(60)));
     // The run with no outcome is never stuck; the lost one is.
     expect(h.stuck.runs.map((r) => [r.id, r.outcome])).toEqual([["w_4", "lost"], ["w_2", "failed"]]);
+    // Each with the laptop it ran on (BOB-70).
+    expect(h.stuck.runs.map((r) => r.laptop)).toEqual(["mbp-1", "mbp-1"]);
     expect(h.usage).toMatchObject({ tokens: tokens(9), lost: 1, by_agent: [{ agent: "Bill", runs: 4, lost: 1, tokens: tokens(9) }] });
     expect(h.done.counts.sessions).toBe(0);
     // The export carries it, and an import restores it.

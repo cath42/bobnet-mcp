@@ -698,6 +698,7 @@ export class BoardStore {
         outcome: r.outcome as StatusStuckRun["outcome"],
         reason: r.outcome_reason,
         ended_at: r.ended_at!,
+        laptop: r.laptop,
       };
       const closed =
         r.session === null

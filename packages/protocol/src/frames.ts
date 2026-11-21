@@ -120,6 +120,9 @@ export const WorkerSnapshot = z.object({
   ctx: z.array(z.number().int().nonnegative()).max(400).default([]),
   /** Its Remote Control session on claude.ai, while it runs with one. */
   remote_url: z.string().url().startsWith("https://claude.ai/").max(200).nullable().default(null),
+  /** A remote spawn's authorised sender (`supervisor@mbp-1`) and the agent it named (`poe`, ADR 0007 §7); null when spawned here. */
+  remote_from: z.string().max(65).nullable().default(null),
+  remote_by: z.string().max(40).nullable().default(null),
 });
 export type WorkerSnapshot = z.infer<typeof WorkerSnapshot>;
 

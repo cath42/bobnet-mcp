@@ -507,3 +507,24 @@ describe("tokens only (BOB-21)", () => {
     expect(WorkerSnapshot.parse({ ...worker, cost_usd: 0.5 }).cost_usd).toBe(0.5);
   });
 });
+
+describe("the laptop mark's data (BOB-70, ADR 0007 §7)", () => {
+  const worker = {
+    id: "w_1", name: "Ann", project: "studio", role: "ann", state: "running", task: "one fix", checkpoint: null,
+    started_at: null, ended_at: null, last_event_at: null, tokens: { input: 1, output: 2, cache_read: 3, cache_write: 4 },
+  };
+
+  it("carries remote_from and remote_by, both null when a snapshot has neither (an old supervisor's)", () => {
+    expect(WorkerSnapshot.parse({ ...worker, remote_from: "supervisor@mbp-1", remote_by: "poe" })).toMatchObject({ remote_from: "supervisor@mbp-1", remote_by: "poe" });
+    expect(WorkerSnapshot.parse(worker)).toMatchObject({ remote_from: null, remote_by: null });
+    const snap = { supervisor: { started_at: "x", concurrency: 1, active: 1, queued: 0 }, workers: [worker], pending: [], usage: [] };
+    expect(LaptopSnapshot.parse(snap).workers[0]).toMatchObject({ remote_from: null, remote_by: null });
+  });
+
+  it("an old broker's schema drops the fields and still takes the snapshot", () => {
+    const old = WorkerSnapshot.omit({ remote_from: true, remote_by: true });
+    const got = old.parse({ ...worker, remote_from: "supervisor@mbp-1", remote_by: "poe" });
+    expect(got).not.toHaveProperty("remote_from");
+    expect(got).not.toHaveProperty("remote_by");
+  });
+});

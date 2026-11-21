@@ -769,6 +769,8 @@ export interface StatusStuckRun {
   outcome: "failed" | "stopped" | "lost";
   reason: string | null;
   ended_at: string;
+  /** The laptop it ran on (`RunRecord.laptop`); absent from an older broker's. */
+  laptop?: string;
 }
 
 export interface StatusStuckCi {
