@@ -736,3 +736,89 @@ end of the text. The requester ends a copy whose handoff is withheld with "hando
 <laptop>". Until the broker carries the narrowed pattern (B6, BOB-71), the target checks with the narrowed
 one and the broker refuses: stand-ins carry the end, and a worker whose `error` matches only serialised
 withholds its `status` and `list` too.
+
+**Ruling, review A-fixes F1** (consult c_8eed3623, advisory (c); Mario confirmed; `lead/bob44/review-a-fixes.md`):
+the fix for the gap (the target passes a body that the broker, on the old pattern, refuses) has two parts.
+(a) Deploy the narrowed `findSecret` to the broker ahead of build B. The broker uses only `findSecret` from
+`secrets.ts` (`broker.ts:636`), and `packages/broker/src` is unchanged since f0e7f8f, so the deploy carries only
+the narrowed `password_assignment`. It was deployed on 2026-11-20 as version
+2a36f1e6-129d-4190-b844-1aab6b1160b0 (02:35:52Z). (b) The requester-side fix, BOB-78: a withheld `list` goes on
+to the next batch, and a withheld `status` tells poe once. It stays useful after (a), because any later gap
+between the two detectors, such as a laptop rolled back, shows up the same way. **Rejected:** a union of the old
+and new patterns on the target. It leaves a second pattern to retire, and after (a) it would withhold more than
+the broker refuses.
+
+**Ruling, BOB-80 (review A-fixes F3; Casper Q3 "Yes"): the widened `findSecret`.** All four widen detection, so
+the broker refuses more. Measured with node on 200 KB adversarial inputs: each pattern runs in under 5 ms.
+
+1. **`X_PASSWORD` names.** `password_assignment` keeps its name and its value rule, and its prefix changes:
+   ```
+   /(?<![A-Za-z0-9])(?:password|passwd|secret|api[_-]?key)(?!_detected\b)(?:_[A-Za-z0-9]{1,32}){0,4}\s*[:=]\s*["']?[^\s"'\\]{8,}/i
+   ```
+   - **Before the keyword:** the lookbehind replaces `\b`, so `_` may precede it (`DB_PASSWORD`,
+     `MYSQL_ROOT_PASSWORD`, `X_API_KEY`). The match starts at the keyword, so redaction keeps `DB_`.
+   - **After the keyword:** up to 4 `_`-joined segments of 1..32 alphanumerics (`SECRET_KEY`,
+     `AWS_SECRET_ACCESS_KEY`, `PASSWORD_HASH`). Without that bound, 200 KB of `_password` repeated is quadratic.
+   - **`(?!_detected\b)`** keeps BobNet's own refusal text from matching. `secret_detected: password_assignment`
+     would otherwise match, and a stand-in or error that quotes it would be refused in turn.
+   - **Must match:** `DB_PASSWORD=hunter2hunter2`, `MYSQL_ROOT_PASSWORD: 'abcdefgh1'`,
+     `AWS_SECRET_ACCESS_KEY=…`, `export GH_PASSWORD = "abcdefghi"`, and today's `password=…`.
+   - **Must not match:** `password reset`, a bare `PASSWORD`, `passwordless=abcdefghijk`, `MYPASSWORD=…` (no
+     separator: not in Casper's scope), `DB_PASSWORDS=…`, `DB_PASSWORD=short`, `DB_PASSWORD=Pa\ssw0rd!!` (Q1's
+     `\` gap, kept), `"password": "…"` (a quote after the name: not detected today either, and not in scope),
+     `secret_detected: …`, and the stand-in texts (`[withheld: looks like a credential]`,
+     `[hidden: looks like it contains a credential]`, the broker's and client's `secret_detected` messages).
+   - **Now withheld though not a secret** (AC 7's list; each ends as a stand-in):
+     `PASSWORD_RESET_URL=https://…`, `DB_PASSWORD=${DB_PASSWORD}`, `PASSWORD_FILE=/run/secrets/db`,
+     `SECRET_NAME=prod-db-creds`.
+2. **PGP blocks and lowercase PEM: still `private_key`, one pattern:**
+   ```
+   BEGIN: /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----/i
+   END:   /-----END [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----/i
+   ```
+   - **Must match:** PGP's `PRIVATE KEY BLOCK`, any case, and the existing PKCS#8, RSA, EC and OPENSSH labels.
+   - **Must not match:** `PGP PUBLIC KEY BLOCK`, `PGP SIGNATURE`, `CERTIFICATE`, `PUBLIC KEY`.
+   - The label is capped at 40 characters, so a run of letters after BEGIN is bounded.
+3. **PuTTY `.ppk`: a new name, `putty_key`.**
+   ```
+   detect: /PuTTY-User-Key-File-\d{1,2}:/
+   end:    /Private-MAC:[ \t]*[0-9a-f]{1,128}/i
+   ```
+   - Case-sensitive, as PuTTY reads it.
+   - The span runs from the header through the end of the Private-MAC line. That covers v2 and v3, and v3's
+     Argon2 lines.
+   - **Not matched:** prose naming the header without its colon. Prose quoting the header with its colon is
+     withheld.
+   - A new name is additive. Nothing branches on the name; it appears only in the broker's error text.
+4. **Spans (AF2's rule for every kind).** A BEGIN or header redacts through the first END of its kind after it.
+   With no such END, it redacts only its own line (Casper Q2). The span code must be **linear in the text**: find
+   each kind's ENDs once per text, not once per BEGIN.
+   - A lazy BEGIN..END regex without `|$`, replaced globally, took 367 ms on 200 KB of BEGIN lines and grows
+     quadratically. Loop-until-no-BEGIN for nested keys has the same problem.
+   - The bound: 200 KB of BEGIN lines with no END, and 200 KB of `.ppk` headers, each redact in under 50 ms.
+   - Luigi was told during BOB-79 (m_cf9d46ac).
+5. **One detector both sides.** The target's `withholdBody` and the broker both call the one `findSecret`, so
+   AC 6 holds by construction once both run the same release.
+   - The added test runs the new corpus through `withholdBody`, then `findSecret` on the result: null.
+   - The stand-in texts and refusal messages above stay non-matching. That is the loop guard.
+6. **Not in scope:** camelCase names (`dbPassword=`), a quoted JSON key (`"password": "…"`), and the RFC 4716
+   SSH2 format (four dashes). Each needs a question to Casper first.
+
+**Rollout: laptops first, then the broker (confirmed).**
+- A broker that refuses what a target still passes reopens F1's window (a copy left running, nobody told). A
+  target stricter than the broker only withholds more.
+- So the order is:
+  1. the release carrying BOB-80, installed and restarted on both mbp-1 and ubu1;
+  2. then a broker deploy, poe's window, with Toad's go.
+- A client that is older than the broker gets `secret_detected` back on a send or a close. That is a refusal it
+  sees, not a stall. Captures drop it as permanent (`capture-queue.ts:38`).
+- After the deploy, rolling a laptop back below that release reopens the window. BOB-78 bounds it to one notice
+  per copy.
+- If B6 (BOB-71) deploys after both laptops carry BOB-80, that one deploy carries BOB-80's widening and B6's mark.
+  Otherwise BOB-80 has its own deploy.
+
+**Build: BOB-80 can join BOB-79's build** (Luigi's BOB-78/79/81).
+- Order: after BOB-79, as its own commit. BOB-80 adds the PGP and `.ppk` kinds to BOB-79's span code. The
+  linear pairing above belongs to BOB-79.
+- BOB-79 and BOB-81 need no broker deploy, and BOB-78 has none of its own. The release that carries all four
+  goes to the laptops first, and the broker deploy follows (above).
