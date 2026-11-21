@@ -28,7 +28,7 @@ one. A restart ends you too: leave a handoff first.
 
 **From rc.42 on** (BOB-83, ADR 0008): once mbp-1 runs rc.42, the workers' guard covers
 `~/.local/share/bobnet`, you included, so you stop at the tag and the push. rc.42 itself is the last
-hand install on each laptop (`lead/bob44/rc42-notes-draft.md`, finalised when it's cut). After it, tell
+hand install on each laptop (`lead/bob44/rc42-notes.md`). After it, tell
 poe the tag; poe rolls it to each laptop with `upgrade_supervisor` (`restart: now` once you've left
 your handoff: a live lead holds `when_idle` for ever). Any later hand install is poe's or Casper's.
 

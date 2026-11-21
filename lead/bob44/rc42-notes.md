@@ -1,6 +1,8 @@
-# rc.42 notes, draft: the remote supervisor upgrade (BOB-83, ADR 0008)
+# rc.42 notes: the remote supervisor upgrade (BOB-83, ADR 0008)
 
-Draft by Luigi for Mario, 2026-11-21. Mario owns these notes and the release; poe does the restarts; the
+Drafted by Luigi, finalised by Mario 2026-11-21 after review A-fixes-4 (`lead/bob44/review-a-fixes-4.md`; its M1 moves
+the upgrade clone under `<root>`). rc.42 carries A-fixes-3 (BOB-84..87), BOB-89 and BOB-83. ubu1's hand install,
+exactly: `lead/bob44/rc42-ubu1-install.md`. Mario owns these notes and the release; poe does the restarts; the
 config is Casper's. `<root>` is `~/.local/share/bobnet` unless `upgrade.root` says otherwise. `<tag>` is
 `v2.0.0-rc.42`, the first release that carries the `upgrade` op (its `packages/supervisor/package.json` has
 `bobnet.upgradable: true`).
@@ -66,7 +68,7 @@ supervisor refuses a `remote` entry that has no `spawn`):
 
 ```yaml
 upgrade:
-  repo: ~/Code/bobnet-releases.git   # a clone the supervisor fetches tags in (below)
+  repo: ~/.local/share/bobnet/.src.git   # the bare clone the supervisor fetches tags in (below)
   # root: ~/.local/share/bobnet      # the default
   # line: v2                         # the default: a tag must be on origin/v2
 ```
@@ -83,14 +85,18 @@ mbp-1 upgrading itself needs no grant (in-process, the tool's token is the autho
 The config is read at start: a restart (poe) after the edit.
 
 Before relying on it, on each laptop:
-- **The clone.** Prefer one of its own (`git clone --bare <origin url> ~/Code/bobnet-releases.git`),
-  not a worktree's repository and not under `<root>`: the op runs `git fetch --no-tags origin
+- **The clone (review A-fixes-4 M1, Toad).** A bare clone of its own **under `<root>`**, which the guard
+  denies to every worker: `git clone --bare https://github.com/cath42/bobnet-mcp.git ~/.local/share/bobnet/.src.git`.
+  Never a worktree's repository and never a clone outside `<root>` (e.g. under `~/Code`): its `.git/config`
+  (`remote.origin.url`, `core.sshCommand`, `credential.helper`) is code the supervisor runs, and a worker could
+  rewrite it there. The dot-name keeps it apart from the releases. The op runs `git fetch --no-tags origin
   +refs/heads/v2:refs/remotes/origin/v2 +refs/tags/<tag>:refs/tags/<tag>` in it (a local tag of the same
-  name is replaced by origin's) and `git archive` from it.
+  name is replaced by origin's) and `git archive` from it. (From the next build the guard also covers
+  whatever `upgrade.repo` names; until then, only under `<root>` is guarded.)
 - **The fetch must work from the service, without a prompt** (`GIT_TERMINAL_PROMPT=0`, 60 s): an ssh
   remote needs a key the service's environment can use with no agent and no passphrase prompt, or use an
   https remote with a credential helper that needs no prompt. Try it as the service would:
-  `env -i HOME="$HOME" PATH="<the unit's or plist's PATH>" GIT_TERMINAL_PROMPT=0 git -C ~/Code/bobnet-releases.git fetch origin`.
+  `env -i HOME="$HOME" PATH="<the unit's or plist's PATH>" GIT_TERMINAL_PROMPT=0 git -C ~/.local/share/bobnet/.src.git fetch --no-tags origin +refs/heads/v2:refs/remotes/origin/v2`.
 - **pnpm on the service's PATH**: the PATH in the unit or plist (node's folder first). Without it the op
   is refused, saying so.
 
