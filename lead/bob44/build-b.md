@@ -50,3 +50,9 @@ has an `upgrade:` section yet (Casper's step 6). C must ship before Casper turns
   For Toad in review B: those three, and that the `request` reply carries the full RequestRow (input) through
   withholdBody.
 - 13:57Z L3 Luigi w_0720a815 on BOB-69, BOB-75. Peach: accept BOB-66..68, BOB-69/75 In Progress.
+- 14:2xZ BOB-69 landed 0f738c7, BOB-75 674cc6c (Luigi w_0720a815; suites 481 + 165 + 88 green). BOB-69 renamed B2's
+  `answer` reply field `worker` to `worker_id` (a string `worker` failed the requester's RemoteReply schema, so the
+  reply was dropped): B2's tests didn't cover the requester parsing it. Unreleased, so nothing in the field. For
+  review B: the test gap. BOB-69 AC 6 (real-broker §4 check) waits on a release on both laptops; steps in
+  ~/.local/state/bobnet/handoffs/bobnet/w_0720a815.md "BOB-69 AC 6".
+- L4 Luigi on BOB-70, BOB-71 (no deploy).
