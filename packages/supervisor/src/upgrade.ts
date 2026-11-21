@@ -26,6 +26,8 @@ const INSTALL_TIMEOUT_MS = 10 * 60_000;
 const CHECK_TIMEOUT_MS = 2 * 60_000;
 /** Where a release's supervisor starts, inside the release. */
 const BIN = join("packages", "supervisor", "src", "bin.ts");
+/** A full object name, SHA-1 or SHA-256. */
+const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /** A request refused before any work (§3): its message is the reply's error. */
 export class UpgradeRefused extends Error {}
@@ -48,7 +50,7 @@ export interface Releases {
   installed(tag: string): Promise<string | null>;
   /** Fetches the tag and checks it: on the line, its version its name, upgradable. Its version. */
   verify(tag: string): Promise<string>;
-  /** git archive and pnpm install into <root>/.<tag>.partial, then renamed to <root>/<tag>. */
+  /** git archive (of the commit verify checked) and pnpm install into <root>/.<tag>.partial, then renamed to <root>/<tag>. */
   build(tag: string): Promise<void>;
   /** The release's own preflight, `bin.ts check`, with this supervisor's config dir. */
   check(tag: string): Promise<void>;
@@ -148,6 +150,8 @@ export class GitReleases implements Releases {
   private readonly configDir: string | undefined;
   private readonly self: string | undefined;
   private readonly env: NodeJS.ProcessEnv;
+  /** Each tag's commit as verify resolved and checked it: build archives that commit, never the tag again. */
+  private readonly verified = new Map<string, string>();
 
   constructor(
     config: UpgradeConfig,
@@ -203,8 +207,8 @@ export class GitReleases implements Releases {
     return exec(["git", "-C", this.repo, ...args], { env: { ...this.env, GIT_TERMINAL_PROMPT: "0" }, timeoutMs });
   }
 
-  private async show(tag: string, file: string): Promise<ReturnType<typeof readJson>> {
-    const r = await this.git(["show", `refs/tags/${tag}:${file}`]);
+  private async show(tag: string, commit: string, file: string): Promise<ReturnType<typeof readJson>> {
+    const r = await this.git(["show", `${commit}:${file}`]);
     if (r.code !== 0) throw new UpgradeRefused(`${tag} has no ${file}: ${lastLines(r.output, 3)}`);
     try {
       return readJson(r.output);
@@ -217,12 +221,18 @@ export class GitReleases implements Releases {
     // The tag and the line both from origin, the tag forced over any local one: origin's tag is the trust root.
     const fetched = await this.git(["fetch", "--no-tags", "origin", `+refs/heads/${this.line}:refs/remotes/origin/${this.line}`, `+refs/tags/${tag}:refs/tags/${tag}`]);
     if (fetched.code !== 0) throw new UpgradeRefused(`git fetch of ${tag} in ${this.repo} failed: ${lastLines(fetched.output, 5)}`);
-    const on = await this.git(["merge-base", "--is-ancestor", `refs/tags/${tag}^{commit}`, `refs/remotes/origin/${this.line}`]);
+    // The tag resolved once: the checks and the archive are all of this commit, whatever moves the tag after.
+    this.verified.delete(tag);
+    const resolved = await this.git(["rev-parse", "--verify", "--quiet", `refs/tags/${tag}^{commit}`]);
+    const commit = resolved.output.trim();
+    if (resolved.code !== 0 || !COMMIT.test(commit)) throw new UpgradeRefused(`couldn't resolve ${tag} to a commit in ${this.repo}: ${lastLines(resolved.output, 3)}`);
+    const on = await this.git(["merge-base", "--is-ancestor", commit, `refs/remotes/origin/${this.line}`]);
     if (on.code === 1) throw new UpgradeRefused(`${tag} isn't on origin/${this.line}: only a tag on the line is installed`);
     if (on.code !== 0) throw new UpgradeRefused(`couldn't check that ${tag} is on origin/${this.line}: ${lastLines(on.output, 3)}`);
-    const version = (await this.show(tag, "package.json")).version;
+    const version = (await this.show(tag, commit, "package.json")).version;
     if (version !== tag.slice(1)) throw new UpgradeRefused(`${tag}'s package.json says version ${String(version)}, not ${tag.slice(1)}`);
-    if ((await this.show(tag, "packages/supervisor/package.json")).bobnet?.upgradable !== true) throw new UpgradeRefused(tooOld(tag));
+    if ((await this.show(tag, commit, "packages/supervisor/package.json")).bobnet?.upgradable !== true) throw new UpgradeRefused(tooOld(tag));
+    this.verified.set(tag, commit);
     return version;
   }
 
@@ -236,7 +246,9 @@ export class GitReleases implements Releases {
     clean();
     try {
       mkdirSync(partial, { recursive: true });
-      const archived = await this.git(["archive", "--format=tar", `--output=${tar}`, `refs/tags/${tag}`], ARCHIVE_TIMEOUT_MS);
+      const commit = this.verified.get(tag);
+      if (!commit) throw new UpgradeStepError("git archive", `${tag} wasn't verified by this supervisor`);
+      const archived = await this.git(["archive", "--format=tar", `--output=${tar}`, commit], ARCHIVE_TIMEOUT_MS);
       if (archived.code !== 0) throw new UpgradeStepError("git archive", lastLines(archived.output));
       const unpacked = await exec(["tar", "-xf", tar, "-C", partial], { timeoutMs: ARCHIVE_TIMEOUT_MS });
       if (unpacked.code !== 0) throw new UpgradeStepError("git archive", lastLines(unpacked.output));

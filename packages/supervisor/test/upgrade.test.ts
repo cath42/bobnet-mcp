@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as rc41 from "../../protocol/test/fixtures/remote-rc41.ts";
 import { preflight, satisfies } from "../src/check.ts";
 import { GhCiPoll } from "../src/ci-poll.ts";
-import { DEFAULT_RELEASE_ROOT, parseSupervisorConfig, releaseRoot } from "../src/config.ts";
+import { DEFAULT_RELEASE_ROOT, guardedFolders, parseSupervisorConfig, releaseRoot } from "../src/config.ts";
 import { callTool, handlers, ORCHESTRATOR_ONLY } from "../src/mcp.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
@@ -683,6 +683,36 @@ describe("GitReleases: only a tag on the line, built here (AC 3)", () => {
     expect(git(r.clone, "rev-parse", `${TAG}^{commit}`)).toBe(git(r.origin, "rev-parse", `${TAG}^{commit}`));
   });
 
+  it("the archive is the commit verify checked: the tag moved after the check changes nothing, and is resolved once (BOB-91 AC 2)", async () => {
+    const r = fakeRepo();
+    // A git on the PATH that logs each call, then runs the real one.
+    const bin = temp("bobnet-git-");
+    const log = join(bin, "calls.log");
+    const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexec "${real}" "$@"\n`, { mode: 0o755 });
+    const g = releasesFor(r, { env: { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}` } });
+    expect(await g.verify(TAG)).toBe("2.0.0-rc.43");
+    const verified = git(r.clone, "rev-parse", `${TAG}^{commit}`).trim();
+    // Between the check and the archive, the tag is moved to rc.50's commit.
+    git(r.clone, "tag", "-f", TAG, "origin/v2");
+    expect(git(r.clone, "rev-parse", `${TAG}^{commit}`).trim()).not.toBe(verified);
+    await g.build(TAG);
+    expect(JSON.parse(readFileSync(join(r.root, TAG, "package.json"), "utf8")).version).toBe("2.0.0-rc.43");
+    const calls = readFileSync(log, "utf8").trim().split("\n").map((l) => l.replace(`-C ${r.clone} `, ""));
+    expect(calls.filter((c) => c.startsWith("rev-parse"))).toEqual([`rev-parse --verify --quiet refs/tags/${TAG}^{commit}`]);
+    // After the fetch and the one rev-parse, every call names the commit, never the tag.
+    expect(calls.slice(2)).toEqual([
+      `merge-base --is-ancestor ${verified} refs/remotes/origin/v2`,
+      `show ${verified}:package.json`,
+      `show ${verified}:packages/supervisor/package.json`,
+      `archive --format=tar --output=${join(r.root, `.${TAG}.partial.tar`)} ${verified}`,
+    ]);
+    // A build of a tag this supervisor didn't verify archives nothing.
+    rmSync(join(r.root, TAG), { recursive: true });
+    await expect(releasesFor(r).build(TAG)).rejects.toMatchObject({ step: "git archive", message: `${TAG} wasn't verified by this supervisor` });
+    expect(readdirSync(r.root)).toEqual([]);
+  });
+
   it("a failed install removes the partial directory and reports the step with the end of its output", async () => {
     const r = fakeRepo();
     const g = releasesFor(r, { install: ["sh", "-c", "echo ERR_PNPM_OUTDATED_LOCKFILE >&2; exit 1"] });
@@ -797,6 +827,36 @@ describe("workers never touch the releases (AC 6, Toad's criterion)", () => {
     }
     // The config folder stays covered.
     expect(p.evaluate("Read", { file_path: join(cfg, "supervisor.token") }, { project: "p", role: "r", writeRoots: ["/w"], cwd: "/w" })).toMatchObject({ rule: "builtin:supervisor" });
+  });
+});
+
+describe("workers never touch the clone upgrades come from (BOB-91 AC 1, ADR 0008 ruling 5)", () => {
+  it("bin.ts guards guardedFolders(config): <root>, upgrade.root and upgrade.repo, wherever the clone sits; the lead too", () => {
+    const base = `orchestrator: Bob\nprojects:\n  p:\n    path: /w\n    roles:\n      a: { dir: /w/a }\n`;
+    const none = parseSupervisorConfig(base, (d) => d);
+    expect(guardedFolders(none)).toEqual([DEFAULT_RELEASE_ROOT]);
+    const c = parseSupervisorConfig(`${base}upgrade:\n  repo: ~/Code/bobnet-releases.git\n  root: /opt/bobnet\n`, (d) => d);
+    const clone = join(homedir(), "Code", "bobnet-releases.git");
+    expect(guardedFolders(c)).toEqual([DEFAULT_RELEASE_ROOT, "/opt/bobnet", clone]);
+    // The clone under <root>, as rc.42's notes have it: <root> covers it, besides its own entry.
+    const under = join(DEFAULT_RELEASE_ROOT, ".src.git");
+    expect(guardedFolders(parseSupervisorConfig(`${base}upgrade:\n  repo: ${under}\n`, (d) => d))).toEqual([DEFAULT_RELEASE_ROOT, under]);
+    const cfg = temp("bobnet-policy-");
+    writeFileSync(join(cfg, "policy.yaml"), `rules:\n  - { id: any, tools: ["*"], decision: allow }\n  - { id: bash, tools: [Bash], command: ".", decision: allow, allow_compound: true }\n`);
+    const p = Policy.load(cfg, guardedFolders(c));
+    for (const ctx of [
+      { project: "p", role: "r", writeRoots: ["/w", join(homedir(), "Code")], cwd: "/w" },
+      { project: "p", role: "mario", writeRoots: ["/w"], cwd: "/w", orchestrator: true },
+    ]) {
+      const no = (tool: string, input: Record<string, unknown>) => expect(p.evaluate(tool, input, ctx)).toMatchObject({ decision: "deny", rule: "builtin:supervisor" });
+      no("Edit", { file_path: join(clone, "config"), old_string: "a", new_string: "b" });
+      no("Write", { file_path: join(clone, "hooks", "post-checkout"), content: "x" });
+      no("Bash", { command: "git -C ~/Code/bobnet-releases.git config core.sshCommand 'sh /tmp/x'" });
+      no("Bash", { command: `git -C ${clone} remote set-url origin https://example.invalid/x.git` });
+      no("Write", { file_path: "/opt/bobnet/current/x", content: "x" });
+      no("Read", { file_path: join(DEFAULT_RELEASE_ROOT, "previous") });
+      expect(p.evaluate("Read", { file_path: join(homedir(), "Code", "bobnet-releases") }, ctx).rule).not.toBe("builtin:supervisor");
+    }
   });
 });
 

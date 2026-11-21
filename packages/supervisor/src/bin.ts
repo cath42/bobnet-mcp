@@ -9,7 +9,7 @@ import ownPackage from "../package.json" with { type: "json" };
 import { importBacklogCommand } from "./backlog-import.ts";
 import { BoardBackup, exportFetcher, importPoster } from "./board-backup.ts";
 import { preflight } from "./check.ts";
-import { configDir, DEFAULT_RELEASE_ROOT, loadSupervisorConfig, releaseRoot, strandedState } from "./config.ts";
+import { configDir, guardedFolders, loadSupervisorConfig, releaseRoot, strandedState } from "./config.ts";
 import { installLaunchAgent } from "./launchd.ts";
 import { installSystemdUnit } from "./systemd.ts";
 import { ensureToken, serveMcp } from "./mcp.ts";
@@ -77,8 +77,8 @@ if (existsSync(pidFile)) {
     process.exit(1);
   }
 }
-// Workers never touch the releases (ADR 0008, Consequences): the default folder, and upgrade.root's.
-const policy = Policy.load(dir, [...new Set([DEFAULT_RELEASE_ROOT, config.releaseRoot])]);
+// Workers never touch the releases (ADR 0008, Consequences) or the clone upgrades come from (ruling 5).
+const policy = Policy.load(dir, guardedFolders(config));
 const brokerConfig = loadConfig();
 const store = new Store(join(config.stateDir, "supervisor.db"));
 

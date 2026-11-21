@@ -369,6 +369,14 @@ export function releaseRoot(dir = configDir()): string {
   }
 }
 
+/**
+ * The folders besides the config folder that no worker may touch (ADR 0008, rulings 4 and 5): the
+ * releases' (the default and upgrade.root's), and the clone upgrades come from, wherever it is.
+ */
+export function guardedFolders(config: Pick<SupervisorConfig, "releaseRoot" | "upgrade">): string[] {
+  return [...new Set([DEFAULT_RELEASE_ROOT, config.releaseRoot, ...(config.upgrade ? [config.upgrade.repo] : [])])];
+}
+
 export function configDir(env: NodeJS.ProcessEnv = process.env): string {
   return expand(env["BOBNET_CONFIG_DIR"] ?? "~/.config/bobnet");
 }
