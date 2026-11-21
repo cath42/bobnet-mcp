@@ -44,3 +44,9 @@ has an `upgrade:` section yet (Casper's step 6). C must ship before Casper turns
   field names (`request` not `id`; `resumed` {worker: new, previous}). **No release between B1 and B4**: a v: 2
   worker's request goes only to remote_asks until B2/B4 let poe see and answer it.
 - 13:45Z L2 Luigi w_8af6163d on BOB-67, BOB-68.
+- 13:55Z BOB-67 landed 8cf77a7, BOB-68 7a166f8 (Luigi w_8af6163d). Read the BOB-67 diff: ownRequest checks the
+  worker before the entry (no existence leak), entry read from the config at the last start (no reload), answer goes
+  through the local router (human tier needs user_decided, which the remote orchestrator asserts as a local one does).
+  For Toad in review B: those three, and that the `request` reply carries the full RequestRow (input) through
+  withholdBody.
+- 13:57Z L3 Luigi w_0720a815 on BOB-69, BOB-75. Peach: accept BOB-66..68, BOB-69/75 In Progress.
