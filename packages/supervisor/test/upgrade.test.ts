@@ -102,7 +102,7 @@ const temp = (prefix: string) => {
   return d;
 };
 
-async function boot(net: FakeNetwork, laptop: string, over: string, opts: { version?: string; releases?: Releases | null; dir?: string } = {}) {
+async function boot(net: FakeNetwork, laptop: string, over: string, opts: { version?: string; releases?: Releases | null; dir?: string; holdRoles?: Promise<void> } = {}) {
   const dir = opts.dir ?? temp("bobnet-upgrade-");
   const store = new Store(join(dir, "supervisor.db"));
   stores.add(store);
@@ -112,6 +112,12 @@ async function boot(net: FakeNetwork, laptop: string, over: string, opts: { vers
     throw new Error("no gh in tests");
   });
   const restarts: number[] = [];
+  // Held: the supervisor's own name registers, its roles' wait, so start() is caught before resume().
+  const hold = opts.holdRoles;
+  if (hold) {
+    const register = link.register.bind(link);
+    link.register = async (identity) => (!identity.supervisor && identity.purpose?.includes("(headless") ? hold.then(() => register(identity)) : register(identity));
+  }
   const sup = new Supervisor({
     config: testConfig(dir, over),
     policy: POLICY,
@@ -132,9 +138,10 @@ async function boot(net: FakeNetwork, laptop: string, over: string, opts: { vers
     frames.push(f);
     sup.onPush(f);
   };
-  await sup.start();
+  const started = sup.start();
   running.push(sup);
-  return { sup, store, link, sessions, restarts, frames, dir };
+  if (!hold) await started;
+  return { sup, store, link, sessions, restarts, frames, dir, started };
 }
 
 /** A tool as an orchestrator calls it: its JSON result, or its error text thrown. */
@@ -566,6 +573,39 @@ describe("check, switch, exit (AC 4, AC 6)", () => {
     expect(s.releases.calls).not.toContain(`discard ${TAG}`);
   });
 
+  it("an upgrade asked during start(), before resume(), is refused: not failed, nothing discarded, no restart; once started it runs (BOB-105 AC 1, AC 3)", async () => {
+    const net = new FakeNetwork();
+    net.clients.set(SUP_UBU, { package: "@bobnet/supervisor", version: RUNNING, protocol: 1 });
+    const releases = new FakeReleases();
+    // A build that never ends: without the refusal, resume() would take its row for a dead process's.
+    releases.gate = new Promise(() => {});
+    let letRolesRegister!: () => void;
+    const ubu = await boot(net, "ubu1", UBU, { releases, holdRoles: new Promise((r) => (letRolesRegister = r)) });
+    await ubu.link.register({ name: "Bob" });
+    const mbp = await boot(net, "mbp-1", "");
+    await mbp.link.register({ name: "Bob" });
+    const toMbp = () => net.between(SUP_UBU, SUP_MBP).map((b) => JSON.parse(b) as Record<string, unknown>);
+    const upgrade = () => call(handlers(mbp.sup), "upgrade_supervisor", { laptop: "ubu1", tag: TAG });
+    // ubu1's supervisor name is registered, its roles not yet: start() is short of resume().
+    await until(() => [...ubu.link.hosted.values()].some((i) => i.supervisor));
+    await expect(upgrade()).rejects.toThrow("this supervisor is starting; ask again once it is ready");
+    letRolesRegister();
+    await ubu.started;
+    await tick(20);
+    // The reply was the whole story: no event, no row, nothing built or discarded, no exit.
+    expect(toMbp().filter((m) => m["event"] === "upgrade")).toEqual([]);
+    expect(ubu.store.upgradesOpen()).toEqual([]);
+    expect(releases.calls).toEqual([]);
+    expect(ubu.restarts).toEqual([]);
+    // Asked again once started, it runs, and what it says is what happens.
+    releases.gate = null;
+    await upgrade();
+    await until(() => ubu.restarts.length === 1);
+    expect(toMbp().filter((m) => m["event"] === "upgrade").map((m) => m["stage"])).toEqual(["installed", "restarting"]);
+    expect(ubu.store.upgrade(String(toMbp().at(-1)!["req"]))).toMatchObject({ stage: "restarting" });
+    expect(releases.calls).not.toContain(`discard ${TAG}`);
+  });
+
   it("a new process on another version (current switched back by hand) says failed: running X, not Y, and nothing rolls back by itself", async () => {
     const s = await setup();
     await s.upgrade();
@@ -581,6 +621,44 @@ describe("check, switch, exit (AC 4, AC 6)", () => {
     expect(next.store.upgradesRestarting()).toEqual([]);
     expect(next.restarts).toEqual([]);
     expect(s.releases.calls.filter((c) => c.startsWith("switch"))).toEqual([`switch ${TAG}`]);
+  });
+});
+
+describe("the upgrades table: an ended row stays ended (BOB-105 AC 2)", () => {
+  it("moveUpgrade and endUpgrade touch only open rows: an ended row isn't reopened, and its first end stands", () => {
+    const store = new Store(join(temp("bobnet-upgrade-store-"), "supervisor.db"));
+    stores.add(store);
+    store.addUpgrade({ req: "r1", requester: SUP_MBP, from_version: RUNNING, to_version: "2.0.0-rc.43", tag: TAG });
+    expect(store.moveUpgrade("r1", "waiting")).toBe(true);
+    expect(store.endUpgrade("r1", "failed")).toBe(true);
+    const ended = store.upgrade("r1");
+    expect(store.moveUpgrade("r1", "waiting")).toBe(false);
+    expect(store.moveUpgrade("r1", "restarting")).toBe(false);
+    expect(store.endUpgrade("r1", "ready")).toBe(false);
+    expect(store.endUpgrade("r1", "installed")).toBe(false);
+    expect(store.upgrade("r1")).toEqual(ended);
+    expect(store.upgradesOpen()).toEqual([]);
+    expect(store.upgradesRestarting()).toEqual([]);
+  });
+
+  it("an upgrade whose row was ended under it stops: no further event, no switch, no exit", async () => {
+    const s = await setup();
+    let build!: () => void;
+    s.releases.gate = new Promise((r) => (build = r));
+    await s.upgrade();
+    await until(() => s.releases.calls.includes(`build ${TAG}`));
+    const req = String(s.toMbp()[0]!["req"]);
+    // As resume() did in M1: the row failed while its build ran.
+    s.ubu.store.endUpgrade(req, "failed");
+    build();
+    await tick(20);
+    expect(s.ubu.store.upgrade(req)).toMatchObject({ stage: "failed" });
+    expect(s.toMbp().filter((m) => m["event"] === "upgrade")).toEqual([]);
+    expect(s.releases.calls).not.toContain(`switch ${TAG}`);
+    expect(s.ubu.restarts).toEqual([]);
+    // It no longer holds the line: the next upgrade may go.
+    await s.upgrade();
+    await until(() => s.ubu.restarts.length === 1);
   });
 });
 

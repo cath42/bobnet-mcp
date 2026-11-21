@@ -368,6 +368,8 @@ interface Pending {
 export class Upgrades {
   private current: Pending | null = null;
   private verifying = false;
+  /** Set once resume() has run: an ask before it would have its fresh row taken for a dead process's. */
+  private resumed = false;
   private readonly host: UpgradeHost;
 
   constructor(host: UpgradeHost) {
@@ -384,6 +386,7 @@ export class Upgrades {
     const missing = releases.missing();
     if (missing) throw new UpgradeRefused(missing);
     if (!UPGRADE_TAG.test(tag)) throw new UpgradeRefused(`${tag} isn't a release tag (v<x.y.z> or v<x.y.z>-rc.<n>)`);
+    if (!this.resumed) throw new UpgradeRefused("this supervisor is starting; ask again once it is ready");
     const c = this.current;
     if (this.verifying || (c && c.state !== "waiting")) throw new UpgradeRefused(`an upgrade${c ? ` to ${c.tag}` : ""} is under way (${this.verifying ? "checking a tag" : c!.state}); ask again once it has ended`);
     this.verifying = true;
@@ -419,6 +422,7 @@ export class Upgrades {
    * it runs another version; one a restart cut short before its switch says `failed`, its partial build removed.
    */
   resume(): void {
+    this.resumed = true;
     for (const row of this.host.store.upgradesOpen()) {
       const base = { from: row.from_version, to: row.to_version };
       if (row.stage === "installing") {
@@ -448,8 +452,14 @@ export class Upgrades {
 
   private fail(u: Pending, step: string, error: string): void {
     if (this.current === u) this.current = null;
-    this.host.store.endUpgrade(u.req, "failed");
+    if (!this.host.store.endUpgrade(u.req, "failed")) return this.dropped(u);
     this.emit(u, { stage: "failed", step, error });
+  }
+
+  /** Its row was ended under it (it is never reopened): it stops, and says nothing more, since the requester was told. */
+  private dropped(u: Pending): void {
+    if (this.current === u) this.current = null;
+    this.host.log.warn("upgrade: its row was ended under it; stopping", { req: u.req, tag: u.tag, stage: this.host.store.upgrade(u.req)?.stage });
   }
 
   private async run(u: Pending): Promise<void> {
@@ -464,21 +474,21 @@ export class Upgrades {
     }
     if (u.restart === "no") {
       this.current = null;
-      this.host.store.endUpgrade(u.req, "installed");
+      if (!this.host.store.endUpgrade(u.req, "installed")) return this.dropped(u);
       return this.emit(u, { stage: "installed", restart: "no" });
     }
+    if (!this.host.store.moveUpgrade(u.req, "waiting")) return this.dropped(u);
     const waiting = this.host.waitingOn(u.restart);
     this.emit(u, { stage: "installed", restart: u.restart, ...(waiting ? { waiting_on: waiting } : {}) });
     u.state = "waiting";
-    this.host.store.moveUpgrade(u.req, "waiting");
     this.poke();
   }
 
   /** Recorded, switched, reported, then the exit (§4 steps 3-4). Never before the preflight passed. */
   private async switchAndExit(u: Pending): Promise<void> {
+    if (!this.host.store.moveUpgrade(u.req, "restarting")) return this.dropped(u);
     u.state = "restarting";
     const releases = this.host.releases!;
-    this.host.store.moveUpgrade(u.req, "restarting");
     try {
       releases.switch(u.tag);
     } catch (err) {

@@ -130,6 +130,8 @@ CREATE TABLE IF NOT EXISTS remote_upgrades (
 `;
 
 const now = () => new Date().toISOString();
+/** The stages of an upgrade not yet ended (ADR 0008 §4). */
+const OPEN_UPGRADE = "('installing', 'waiting', 'restarting')";
 
 export const newWorkerId = () => `w_${randomUUID().slice(0, 8)}`;
 
@@ -647,8 +649,9 @@ export class Store {
     );
   }
 
-  moveUpgrade(req: string, stage: "waiting" | "restarting"): void {
-    this.run("UPDATE upgrades SET stage = ?, at = ? WHERE req = ?", stage, now(), req);
+  /** Only an open row moves: one already ended (failed by resume(), say) is never reopened. True if it moved. */
+  moveUpgrade(req: string, stage: "waiting" | "restarting"): boolean {
+    return this.db.prepare(`UPDATE upgrades SET stage = ?, at = ? WHERE req = ? AND stage IN ${OPEN_UPGRADE}`).run(stage, now(), req).changes > 0;
   }
 
   /** The upgrades at `restarting`: at start, the one this process was started for. */
@@ -658,15 +661,16 @@ export class Store {
 
   /** The upgrades not yet ended: at start, the one this process was started for, or one a restart cut short. */
   upgradesOpen(): UpgradeRow[] {
-    return this.all("SELECT * FROM upgrades WHERE stage IN ('installing', 'waiting', 'restarting') ORDER BY at");
+    return this.all(`SELECT * FROM upgrades WHERE stage IN ${OPEN_UPGRADE} ORDER BY at`);
   }
 
   upgrade(req: string): UpgradeRow | null {
     return this.one<UpgradeRow>("SELECT * FROM upgrades WHERE req = ?", req) ?? null;
   }
 
-  endUpgrade(req: string, stage: "installed" | "ready" | "failed"): void {
-    this.run("UPDATE upgrades SET stage = ?, done_at = ? WHERE req = ?", stage, now(), req);
+  /** Only an open row ends, once: its first end stands. True if it ended. */
+  endUpgrade(req: string, stage: "installed" | "ready" | "failed"): boolean {
+    return this.db.prepare(`UPDATE upgrades SET stage = ?, done_at = ? WHERE req = ? AND stage IN ${OPEN_UPGRADE}`).run(stage, now(), req).changes > 0;
   }
 
   remoteUpgrade(req: string): RemoteUpgradeRow | null {
