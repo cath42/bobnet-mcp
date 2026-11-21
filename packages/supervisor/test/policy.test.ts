@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Policy, scanCommand } from "../src/policy.ts";
+import { Policy, type PolicyContext, scanCommand } from "../src/policy.ts";
 
 const policy = new Policy(`
 rules:
@@ -182,6 +185,85 @@ rules:
     no("Bash", { command: "cd /tmp && cat supervisor.token" });
     expect(p.preflight("Bash", { command: "cat ~/.config/bobnet/config.json" }, ctx)).toMatchObject({ decision: "deny" });
     expect(p.evaluate("Read", { file_path: `${home}/.config/other/x` }, ctx).decision).toBe("allow");
+  });
+
+  describe("the guard compares by real path and folded case, not as a substring (BOB-94)", () => {
+    const home = homedir();
+    const config = join(home, ".config", "bobnet");
+    const releases = join(home, ".local", "share", "bobnet");
+    const clone = join(home, "Code", "bobnet-releases.git");
+    const allowAll = `rules:\n  - { id: any, tools: ["*"], decision: allow }\n  - { id: bash, tools: [Bash], command: ".", decision: allow, allow_compound: true }`;
+    const p = new Policy(allowAll, { protect: [config, releases, clone] });
+    const ctx: PolicyContext = { project: "p", role: "r", writeRoots: ["/w"], cwd: "/w" };
+    const lead: PolicyContext = { ...ctx, role: "mario", orchestrator: true };
+    const no = (tool: string, input: Record<string, unknown>, c = ctx) =>
+      expect(p.evaluate(tool, input, c), JSON.stringify(input)).toMatchObject({ decision: "deny", rule: "builtin:supervisor" });
+    const yes = (tool: string, input: Record<string, unknown>, c = ctx) =>
+      expect(p.evaluate(tool, input, c).rule, JSON.stringify(input)).not.toBe("builtin:supervisor");
+
+    it("denies another case (BOBNET on APFS), for a file tool and a command (AC 1)", () => {
+      for (const c of [ctx, lead]) {
+        no("Read", { file_path: join(home, ".config", "BOBNET", "config.json") }, c);
+        no("Write", { file_path: join(home, ".Local", "Share", "BobNet", "current", "x"), content: "x" }, c);
+        no("Bash", { command: "cat ~/.config/BOBNET/config.json" }, c);
+        no("Bash", { command: `git -C ${join(home, "Code", "BobNet-Releases.git")} config core.sshCommand x` }, c);
+      }
+    });
+
+    it('denies "$HOME"/..., "${HOME}"/... and a quoted part (AC 1)', () => {
+      no("Bash", { command: 'cat "$HOME"/.config/bobnet/config.json' });
+      no("Bash", { command: 'ln -sfn x "${HOME}"/.local/share/bobnet/current' });
+      no("Bash", { command: "cat ~/'.config'/bobnet/config.json" });
+      no("Bash", { command: 'git -C "$HOME/Code/bobnet-releases.git" remote set-url origin x' });
+    });
+
+    it("denies // and /./ in the path (AC 1)", () => {
+      no("Bash", { command: "cat ~//.config//bobnet/config.json" });
+      no("Bash", { command: `ls ${home}/./.local/share//bobnet` });
+      no("Read", { file_path: `${home}//.config/./bobnet/config.json` });
+    });
+
+    it("denies cd plus a relative path, and a relative path from the worker's cwd (AC 1)", () => {
+      no("Bash", { command: "cd ~/.config && cat bobnet/config.json" });
+      no("Bash", { command: "cd ~ && cd .local; rm -rf share/bobnet/current" });
+      no("Bash", { command: "cd ~/Code\ncat bobnet-releases.git/config" });
+      no("Bash", { command: "cd && cat .config/bobnet/config.json" });
+      no("Bash", { command: "cat ../.config/bobnet/config.json" }, { ...ctx, cwd: join(home, "Code") });
+      no("Read", { file_path: "../.config/bobnet/config.json" }, { ...ctx, cwd: join(home, "Code") });
+    });
+
+    it("denies a path through a symlink to a guarded folder (realpath)", () => {
+      const base = mkdtempSync(join(tmpdir(), "bobnet-guard-"));
+      try {
+        const real = join(base, "real");
+        mkdirSync(real);
+        symlinkSync(real, join(base, "link"));
+        const q = new Policy(allowAll, { protect: [real] });
+        const deny = (tool: string, input: Record<string, unknown>) => expect(q.evaluate(tool, input, ctx), JSON.stringify(input)).toMatchObject({ rule: "builtin:supervisor" });
+        deny("Read", { file_path: join(base, "link", "x") });
+        deny("Bash", { command: `cat ${join(base, "link", "x")}` });
+        deny("Bash", { command: `cd ${base} && cat link/x` });
+        // Guarded by the tmpdir's real path too (/var is /private/var on macOS).
+        deny("Read", { file_path: join(realpathSync(base), "real", "x") });
+        expect(q.evaluate("Read", { file_path: join(base, "linked", "x") }, ctx).rule).not.toBe("builtin:supervisor");
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    });
+
+    it("no false denials: siblings with the same prefix and words that only look alike pass (AC 2)", () => {
+      for (const c of [ctx, lead]) {
+        yes("Read", { file_path: join(home, ".config", "bobnet-old", "config.json") }, c);
+        yes("Read", { file_path: join(home, ".config", "BobNet2", "x") }, c);
+        yes("Bash", { command: "cat ~/.config/bobnet-old/config.json" }, c);
+        yes("Bash", { command: "cd ~/.config && cat bobnet-old/config.json && ls" }, c);
+        yes("Bash", { command: "cd ~/Code/bobnet && git status" }, c);
+        yes("Bash", { command: "cd ~/Code/bobnet-releases && git log" }, c);
+        yes("Bash", { command: 'git commit -m "bobnet: .config/bobnet docs"' }, c);
+        yes("Bash", { command: "ls ~/.local/share" }, c);
+        yes("Write", { file_path: "/w/bobnet/.config/bobnet/x", content: "x" }, c);
+      }
+    });
   });
 
   it("expands {role} in a command regex to the worker's role", () => {

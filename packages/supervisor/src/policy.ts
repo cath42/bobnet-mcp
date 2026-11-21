@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
 
@@ -204,12 +204,66 @@ function inside(root: string, p: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-/** A command naming a path, absolute or from ~ or $HOME; a token file is named anywhere. */
-function mentions(command: string, path: string): boolean {
-  if (!command) return false;
+/**
+ * A path as the guard compares it: symlinks resolved as far as it exists, `//`, `.` and `..`
+ * collapsed, and case folded, as APFS ignores case (on a case-sensitive disk that only withholds more).
+ */
+export function canonical(p: string): string {
+  const rest: string[] = [];
+  let at = resolve(p);
+  for (;;) {
+    try {
+      return join(realpathSync.native(at), ...rest).toLowerCase();
+    } catch {
+      const up = dirname(at);
+      if (up === at) return resolve(p).toLowerCase();
+      rest.unshift(basename(at));
+      at = up;
+    }
+  }
+}
+
+/** A command with its quotes dropped, ~, $HOME and ${HOME} expanded and `//` or `/./` made one `/`. */
+function expandCommand(command: string): string {
   const home = homedir();
-  const forms = [path, ...(path.startsWith(`${home}/`) ? [`~${path.slice(home.length)}`, `$HOME${path.slice(home.length)}`, `\${HOME}${path.slice(home.length)}`] : [])];
-  return forms.some((f) => command.includes(f)) || /\bsupervisor\.token\b/.test(command);
+  return command
+    .replace(/["']/g, "")
+    .replace(/\$\{HOME\}|\$HOME\b|(?<![\w~./-])~(?=\/|\s|$)/g, home)
+    .replace(/\/(?:\.?\/)+/g, "/");
+}
+
+/** The most words of a command the guard resolves as paths: past that, only the text is searched. */
+const MAX_PATH_WORDS = 256;
+const CHANGES_DIR = /^(?:cd|pushd)$/;
+
+/**
+ * A best effort on what a Bash command touches, not a shell parser (the sandbox's allowWrite is
+ * the enforcement): whether it names a guarded folder as text, or has a word that, resolved from
+ * the directory its `cd`s lead to, lies inside one. A token file is named anywhere.
+ */
+function touches(command: string, cwd: string, guarded: string[], named: RegExp[]): boolean {
+  if (!command) return false;
+  if (/\bsupervisor\.token\b/.test(command)) return true;
+  const text = expandCommand(command).toLowerCase();
+  if (named.some((r) => r.test(text))) return true;
+  const segments = scanCommand(command)?.segments ?? command.split(SEGMENTS);
+  let dir = cwd;
+  let budget = MAX_PATH_WORDS;
+  for (const segment of segments) {
+    const words = expandCommand(segment).trim().split(/\s+/).map((w) => w.replace(/^[^=]*=/, "").replace(/^[({]+|[)}]+$/g, ""));
+    for (const w of words) {
+      if (budget-- <= 0) return false;
+      if (!w || w.startsWith("-") || w.includes("$") || w.includes("://")) continue;
+      const abs = canonical(resolve(dir, w));
+      if (guarded.some((g) => inside(g, abs))) return true;
+    }
+    if (CHANGES_DIR.test(words[0] ?? "")) {
+      const to = words[1];
+      if (to === undefined) dir = homedir();
+      else if (to !== "-" && !to.includes("$")) dir = resolve(dir, to);
+    }
+  }
+  return false;
 }
 
 const clip = (s: string) => (s.length > 60 ? `${s.slice(0, 59)}…` : s);
@@ -233,11 +287,17 @@ export class Policy {
   private readonly file: z.infer<typeof PolicyFile>;
   private readonly compiled: Array<{ rule: z.infer<typeof Rule>; command?: RegExp | ((role: string) => RegExp); path?: RegExp }>;
 
-  /** Paths no worker may touch by any tool: the supervisor's own folder, which holds its MCP token. */
+  /**
+   * Paths no worker may touch by any tool: the supervisor's own folder, which holds its MCP token.
+   * Each as written and by its real path, case folded (canonical).
+   */
   private readonly protect: string[];
+  private readonly named: RegExp[];
 
   constructor(text: string, opts: { protect?: string[] } = {}) {
-    this.protect = opts.protect ?? [];
+    this.protect = [...new Set((opts.protect ?? []).flatMap((p) => [resolve(p).toLowerCase(), canonical(p)]))];
+    // Named whole: a sibling that only shares the prefix (bobnet-old) isn't the folder.
+    this.named = this.protect.map((p) => new RegExp(`(?<![\\w.-])${escapeRegex(p)}(?![\\w.-])`));
     this.file = PolicyFile.parse(parse(text) ?? {});
     this.compiled = this.file.rules.map((rule) => ({
       rule,
@@ -291,7 +351,7 @@ export class Policy {
     // Built-in guards, before any rule. The supervisor's folder first: without a sandbox
     // nothing else keeps a worker from its token, which would answer its own requests.
     const command = tool === "Bash" ? String(input["command"] ?? "") : "";
-    if (absPath !== undefined ? this.protect.some((p) => inside(p, absPath)) : this.protect.some((p) => mentions(command, p))) {
+    if (absPath !== undefined ? this.protect.some((p) => inside(p, canonical(absPath))) : touches(command, ctx.cwd, this.protect, this.named)) {
       return { decision: "deny", rule: "builtin:supervisor", tier: "human", reason: "The supervisor's own folder is off limits to workers", slot: false };
     }
     if (tool === "Bash" && /\bgit\b[^\n]*--no-verify\b/.test(String(input["command"] ?? ""))) {
