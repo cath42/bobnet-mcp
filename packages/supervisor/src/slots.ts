@@ -41,6 +41,7 @@ export class RunSlots {
   private readonly holders: SlotEntry[] = [];
   private readonly releases = new Map<SlotEntry, () => void>();
   private queue: Waiter[] = [];
+  private paused = false;
 
   constructor(opts: { size: number; readHold: () => Hold | null; onChange?: () => void; onGrant?: (entry: SlotEntry) => void; onRelease?: (entry: SlotEntry) => void }) {
     this.size = opts.size;
@@ -97,6 +98,11 @@ export class RunSlots {
     return this.readHold();
   }
 
+  /** Gives no slot from now on: the waiters wait (a supervisor about to exit for an upgrade, ADR 0008 §4). */
+  pause(): void {
+    this.paused = true;
+  }
+
   /** Re-reads the hold (for status) and gives any free slot. */
   refresh(): void {
     this.pump();
@@ -108,7 +114,7 @@ export class RunSlots {
   }
 
   private pump(): void {
-    while (this.holders.length < this.size && this.queue.length > 0) {
+    while (!this.paused && this.holders.length < this.size && this.queue.length > 0) {
       const next = this.queue.shift()!;
       const entry: SlotEntry = { holder: next.holder, author: next.author, label: next.label, since: new Date().toISOString() };
       this.holders.push(entry);

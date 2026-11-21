@@ -150,7 +150,7 @@ const remoteTtl = (op: string) => (op === "spawn" || op === "upgrade" ? 30 : 20)
  * How long the requester waits for a reply: the ttl and 30 s; a spawn that joins a board session can
  * take a minute, and an upgrade's reply waits for its git fetch and checks (ADR 0008 §2), so 90 s each.
  */
-const remoteWaitMs = (op: string) => (op === "spawn" || op === "upgrade" ? 90_000 : (remoteTtl(op) + 30) * 1000);
+export const remoteWaitMs = (op: string) => (op === "spawn" || op === "upgrade" ? 90_000 : (remoteTtl(op) + 30) * 1000);
 /**
  * The first release whose supervisor serves `v: 2` (ADR 0007 §9): an older target is refused before
  * anything is sent. The release after rc.38, the first with BOB-62's target; Mario's to move if
@@ -475,6 +475,8 @@ export class Supervisor {
   private readonly ciPoll: GhCiPoll;
   /** This supervisor's upgrades of itself (ADR 0008), one at a time. */
   private readonly upgrades: Upgrades;
+  /** The tag an upgrade has switched to, from the switch to the exit: nothing new starts meanwhile. */
+  private restartingInto: string | null = null;
   /** What an upgrade's exit runs: the shutdown, with EXIT_UPGRADE (bin.ts). */
   private readonly restartForUpgrade: () => void;
   private ciTimer: NodeJS.Timeout | null = null;
@@ -517,6 +519,7 @@ export class Supervisor {
       log: deps.log,
       waitingOn: (restart) => this.upgradeWaitingOn(restart),
       emit: (requester, req, event) => this.upgradeEmit(requester, req, event),
+      hold: (tag) => this.holdForRestart(tag),
       drain: (ms) => this.drainOutbox(ms),
       restart: () => this.restartForUpgrade(),
     });
@@ -750,6 +753,7 @@ export class Supervisor {
   async spawnNow(opts: SpawnOptions): Promise<WorkerRow> {
     const admitted = this.admit(opts);
     const { project, role } = admitted;
+    this.refuseWhileRestarting(role.name);
     const busy = this.busyBecause(project.key, role.key);
     if (busy) throw new SupervisorError(`${role.name} isn't spawned: ${busy}`);
     const key = `${project.key}/${role.key}`;
@@ -760,8 +764,15 @@ export class Supervisor {
     } finally {
       this.reserved.delete(key);
     }
+    // A restart may have begun during the join (the reservation doesn't hold it back): refused, not started under the exit.
+    this.refuseWhileRestarting(role.name);
     // No await from here: the reservation passes straight to the running worker.
     return this.spawn({ ...opts, ...(id ? { id } : {}) }, true);
+  }
+
+  /** A remote spawn while an upgrade restarts this supervisor (ADR 0008 §4): refused, since it is never queued, and it is no limit. */
+  private refuseWhileRestarting(name: string): void {
+    if (this.restartingInto) throw new SupervisorError(`${name} isn't spawned: this supervisor is restarting into ${this.restartingInto}; ask again once it is ready`);
   }
 
   /** Why a worker of this role can't start now (as a local spawn would queue), or null. */
@@ -839,6 +850,7 @@ export class Supervisor {
 
   /** Why a queued worker hasn't started, so a spawn that waits says so. */
   private queuedBecause(w: WorkerRow): string {
+    if (this.restartingInto) return `queued: this supervisor is restarting into ${this.restartingInto}; the new process starts it`;
     const active = this.activeRun(w.project, w.role);
     if (active && isLead(this.store.worker(active))) return `queued: ${this.roleOf(w).name} is running as a lead (${active}), which lives until stopped; it starts after that lead is stopped, or message ${this.roleOf(w).name} instead`;
     if (active) return `queued: ${this.roleOf(w).name} already has a worker running; it starts after that one ends`;
@@ -2116,6 +2128,13 @@ export class Supervisor {
     else this.sendRemote(requester, reply(withholdBody(body, this.detect)));
   }
 
+  /** From the switch to the exit (§4): no queued worker is launched and no run slot given, so the drain cuts none. */
+  private holdForRestart(tag: string): void {
+    this.restartingInto = tag;
+    this.slots.pause();
+    this.writeStatus();
+  }
+
   /** Waits up to `ms` for the outbox to empty: the `restarting` event leaves before the exit, or the new process sends it (§4). */
   private async drainOutbox(ms: number): Promise<void> {
     const end = Date.now() + ms;
@@ -2258,7 +2277,8 @@ export class Supervisor {
 
   // A hold stops neither a spawn nor a slot: only the land command answers "held" (ADR 0093).
   private schedule(): void {
-    for (const w of this.store.queued()) {
+    // Restarting for an upgrade: what is queued stays queued, and the new process starts it.
+    for (const w of this.restartingInto ? [] : this.store.queued()) {
       // A lead holds no worker slot, so it never waits behind its own builders.
       // A remote spawn's reservation (spawnNow) holds its role and a place while it joins.
       if (!isLead(w) && this.workersRunning() + this.reserved.size >= this.config.concurrency) continue;
@@ -2789,6 +2809,12 @@ export class Supervisor {
         "it counts only once you've recorded it in your own file on main; say so if it needs recording.";
       if (running) {
         this.runs.get(running)!.inject(ask);
+        return;
+      }
+      if (this.restartingInto) {
+        clearTimeout(timer);
+        this.consults.delete(id);
+        reject(new SupervisorError(`this supervisor is restarting into ${this.restartingInto}, so ${target.name} isn't started now. Put the question under Open questions in your handoff`));
         return;
       }
       // In the asker's session, on no items: nothing read from the question.

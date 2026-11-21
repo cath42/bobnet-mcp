@@ -12,8 +12,8 @@ import { DEFAULT_RELEASE_ROOT, guardedFolders, parseSupervisorConfig, releaseRoo
 import { callTool, handlers, ORCHESTRATOR_ONLY } from "../src/mcp.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
-import { REMOTE_TOOLS_SINCE, Supervisor } from "../src/supervisor.ts";
-import { EXIT_UPGRADE, GitReleases, type Releases, runningRelease, serviceBin, switchLink, UpgradeRefused, Upgrades, UpgradeStepError } from "../src/upgrade.ts";
+import { REMOTE_TOOLS_SINCE, remoteWaitMs, Supervisor } from "../src/supervisor.ts";
+import { EXIT_UPGRADE, GitReleases, type Releases, runningRelease, serviceBin, switchLink, UpgradeRefused, Upgrades, UpgradeStepError, VERIFY_BUDGET_MS } from "../src/upgrade.ts";
 import { fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 import { FakeNetwork } from "./network.ts";
 
@@ -247,7 +247,7 @@ describe("refused without the configuration (§3)", () => {
   it("a tag that isn't a release tag is refused by the tool, and by the op in-process", async () => {
     const s = await setup();
     await expect(s.upgrade({ tag: "main" })).rejects.toThrow("must be a release tag");
-    const u = new Upgrades({ version: RUNNING, releases: new FakeReleases(), store: s.ubu.store, log: quiet, waitingOn: () => null, emit: () => {}, drain: async () => {}, restart: () => {} });
+    const u = new Upgrades({ version: RUNNING, releases: new FakeReleases(), store: s.ubu.store, log: quiet, waitingOn: () => null, emit: () => {}, hold: () => {}, drain: async () => {}, restart: () => {} });
     await expect(u.ask("r1", "orchestrator", "v2.0.0;touch x")).rejects.toThrow("isn't a release tag");
   });
 
@@ -474,6 +474,36 @@ describe("check, switch, exit (AC 4, AC 6)", () => {
     expect(s.bob()).toEqual(["ubu1: upgrade to 2.0.0-rc.43 failed at pnpm install: ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with frozen-lockfile"]);
     releases.buildFails = null;
     await expect(s.upgrade({ restart: "no" })).resolves.toMatchObject({ to: "2.0.0-rc.43" });
+  });
+
+  it("in the drain, nothing new starts: a spawn stays queued for the new process, a remote spawn is refused, a slot isn't given (BOB-95 AC 3)", async () => {
+    const s = await setup();
+    const h = handlers(s.ubu.sup);
+    await s.upgrade();
+    // The restart has begun: switched, restarting sent, the drain under way (the test's restart doesn't exit).
+    await until(() => s.ubu.restarts.length === 1);
+    // A local spawn, even when idle: queued, never started under the exit.
+    const queued = (await call(h, "spawn_worker", { project: "studio", role: "ann", task: "after" })) as Record<string, unknown>;
+    expect(queued).toMatchObject({ state: "queued", note: "queued: this supervisor is restarting into v2.0.0-rc.43; the new process starts it" });
+    await tick(50);
+    expect(s.ubu.sessions).toHaveLength(0);
+    // A remote spawn is never queued (ADR 0007 §3): refused as transient, with no row and no reservation left.
+    const workers = s.ubu.store.workers({}).length;
+    const r = await s.mbp.sup.remoteRequest(SUP_UBU, { v: 2, op: "spawn", project: "studio", role: "ann", task: "remote", by: "Bob" });
+    expect(r).toMatchObject({ outcome: "reply", reply: { ok: false, error: "Ann isn't spawned: this supervisor is restarting into v2.0.0-rc.43; ask again once it is ready" } });
+    expect(s.ubu.store.workers({})).toHaveLength(workers);
+    expect(s.ubu.store.auditLog(500).filter((a) => a.action === "spawn")).toHaveLength(1);
+    // An interactive agent's slot: queued, not given.
+    await call(h, "take_slot", { project: "studio", name: "Zoe", label: "land" });
+    expect(await call(h, "run_slots")).toMatchObject({ holders: [], queue: [{ holder: "interactive:Zoe" }] });
+    // The new process starts what was held.
+    running.splice(running.indexOf(s.ubu.sup), 1);
+    await s.ubu.sup.shutdown();
+    s.ubu.store.close();
+    stores.delete(s.ubu.store);
+    const next = await boot(s.net, "ubu1", UBU, { releases: s.releases, version: "2.0.0-rc.43", dir: s.ubu.dir });
+    await until(() => next.sessions.length === 1);
+    expect(next.store.worker(String(queued["id"]))!.state).toBe("running");
   });
 
   it("the row survives the restart; the new process says ready with its version once registered", async () => {
@@ -785,6 +815,33 @@ describe("GitReleases: only a tag on the line, built here (AC 3)", () => {
     rmSync(join(r.root, TAG), { recursive: true });
     await expect(releasesFor(r).build(TAG)).rejects.toMatchObject({ step: "git archive", message: `${TAG} wasn't verified by this supervisor` });
     expect(readdirSync(r.root)).toEqual([]);
+  });
+
+  /** A git on the PATH that runs `before` (sh) when its subcommand is `sub`, then the real one. */
+  const wrappedGit = (sub: string, before: string) => {
+    const bin = temp("bobnet-git-");
+    const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ "$3" = "${sub}" ]; then ${before}; fi\nexec "${real}" "$@"\n`, { mode: 0o755 });
+    return { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}` };
+  };
+
+  it("show parses only stdout: what git writes on stderr doesn't break the JSON (BOB-95 AC 1)", async () => {
+    const g = releasesFor(fakeRepo(), { env: wrappedGit("show", "echo 'warning: a hint on stderr {' >&2") });
+    expect(await g.verify(TAG)).toBe("2.0.0-rc.43");
+  });
+
+  it("verify's git calls share one deadline, under the requester's 90 s: slow calls end in time with a clear failure (BOB-95 AC 2)", async () => {
+    expect(VERIFY_BUDGET_MS).toBeLessThan(remoteWaitMs("upgrade") - 10_000);
+    // Each call is fast enough alone (well under the 1.5 s), but together they aren't.
+    const g = releasesFor(fakeRepo(), { env: wrappedGit("show", "sleep 1"), verifyBudgetMs: 1500 });
+    const started = Date.now();
+    await expect(g.verify(TAG)).rejects.toThrow(new UpgradeRefused(`the checks of ${TAG} took longer than their 1.5 s (git show didn't finish in time); ask again`));
+    expect(Date.now() - started).toBeLessThan(2500);
+    // A call that hangs (its own child holding the pipe) is cut at the deadline too, not when it lets go.
+    const hung = releasesFor(fakeRepo(), { env: wrappedGit("merge-base", "sleep 30"), verifyBudgetMs: 1500 });
+    const t = Date.now();
+    await expect(hung.verify(TAG)).rejects.toThrow("(git merge-base didn't finish in time)");
+    expect(Date.now() - t).toBeLessThan(2500);
   });
 
   it("a failed install removes the partial directory and reports the step with the end of its output", async () => {

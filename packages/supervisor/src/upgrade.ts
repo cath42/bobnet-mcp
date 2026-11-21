@@ -21,6 +21,11 @@ export const UPGRADE_DRAIN_MS = 15_000;
 /** How long after `restarting` the requester waits for `ready` before it says so, once (§5). */
 export const UPGRADE_READY_MS = 10 * 60_000;
 const FETCH_TIMEOUT_MS = 60_000;
+/**
+ * The time verify's git calls share, one deadline for all of them: the reply waits for them (ADR 0008,
+ * rulings 6(c)), and a requester waits 90 s for it, so they end inside that with a clear failure.
+ */
+export const VERIFY_BUDGET_MS = 75_000;
 const ARCHIVE_TIMEOUT_MS = 2 * 60_000;
 const INSTALL_TIMEOUT_MS = 10 * 60_000;
 const CHECK_TIMEOUT_MS = 2 * 60_000;
@@ -60,27 +65,38 @@ export interface Releases {
   switch(tag: string): void;
 }
 
-/** A command's exit code (null when it timed out or couldn't start) and the end of its output. */
-async function exec(cmd: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs: number }): Promise<{ code: number | null; output: string }> {
+/**
+ * A command's exit code (null when it timed out or couldn't start), the end of its output (stdout and
+ * stderr, for a failure's report), and its stdout alone, for what is parsed.
+ */
+async function exec(cmd: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs: number }): Promise<{ code: number | null; output: string; stdout: string; timedOut: boolean }> {
   return new Promise((resolve) => {
     let output = "";
+    let stdout = "";
+    let timedOut = false;
     const keep = (b: Buffer) => {
       output = (output + b.toString("utf8")).slice(-64_000);
     };
     const child = spawn(cmd[0]!, cmd.slice(1), { cwd: opts.cwd, env: opts.env ?? process.env, stdio: ["ignore", "pipe", "pipe"] });
     const timer = setTimeout(() => {
+      timedOut = true;
       output += `\n(timed out after ${opts.timeoutMs / 1000} s)`;
       child.kill("SIGKILL");
+      // At once: a child of its own (git's ssh) may hold the pipes open past the kill.
+      resolve({ code: null, output, stdout, timedOut });
     }, opts.timeoutMs);
-    child.stdout.on("data", keep);
+    child.stdout.on("data", (b: Buffer) => {
+      keep(b);
+      stdout = (stdout + b.toString("utf8")).slice(-64_000);
+    });
     child.stderr.on("data", keep);
     child.on("error", (err) => {
       clearTimeout(timer);
-      resolve({ code: null, output: `${output}${err.message}` });
+      resolve({ code: null, output: `${output}${err.message}`, stdout, timedOut });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code, output });
+      resolve({ code, output, stdout, timedOut });
     });
   });
 }
@@ -154,6 +170,7 @@ export class GitReleases implements Releases {
   private readonly env: NodeJS.ProcessEnv;
   /** Each tag's commit as verify resolved and checked it: build archives that commit, never the tag again. */
   private readonly verified = new Map<string, string>();
+  private readonly verifyBudgetMs: number;
 
   constructor(
     config: UpgradeConfig,
@@ -167,6 +184,8 @@ export class GitReleases implements Releases {
       /** This supervisor's own source file, for the running release (tests). */
       self?: string;
       env?: NodeJS.ProcessEnv;
+      /** The time verify's git calls share (default VERIFY_BUDGET_MS; tests). */
+      verifyBudgetMs?: number;
     } = {},
   ) {
     this.root = config.root;
@@ -177,6 +196,7 @@ export class GitReleases implements Releases {
     this.configDir = opts.configDir;
     this.self = opts.self;
     this.env = opts.env ?? process.env;
+    this.verifyBudgetMs = opts.verifyBudgetMs ?? VERIFY_BUDGET_MS;
   }
 
   missing(): string | null {
@@ -209,31 +229,42 @@ export class GitReleases implements Releases {
     return exec(["git", "-C", this.repo, ...args], { env: { ...this.env, GIT_TERMINAL_PROMPT: "0" }, timeoutMs });
   }
 
-  private async show(tag: string, commit: string, file: string): Promise<ReturnType<typeof readJson>> {
-    const r = await this.git(["show", `${commit}:${file}`]);
+  /** One of verify's git calls, inside its deadline: past it, a refusal that says which call and that asking again may do. */
+  private async checked(tag: string, end: number, args: string[]) {
+    const left = end - Date.now();
+    const r = left > 0 ? await this.git(args, left) : null;
+    if (!r || r.timedOut) throw new UpgradeRefused(`the checks of ${tag} took longer than their ${this.verifyBudgetMs / 1000} s (git ${args[0]} didn't finish in time); ask again`);
+    return r;
+  }
+
+  private async show(tag: string, end: number, commit: string, file: string): Promise<ReturnType<typeof readJson>> {
+    const r = await this.checked(tag, end, ["show", `${commit}:${file}`]);
     if (r.code !== 0) throw new UpgradeRefused(`${tag} has no ${file}: ${lastLines(r.output, 3)}`);
     try {
-      return readJson(r.output);
+      // Only stdout: what git says on stderr (a warning, a hint) isn't the file.
+      return readJson(r.stdout);
     } catch {
       throw new UpgradeRefused(`${tag}'s ${file} isn't JSON`);
     }
   }
 
   async verify(tag: string): Promise<string> {
+    // One deadline for every call: the reply waits for them all, and the requester waits 90 s for it.
+    const end = Date.now() + this.verifyBudgetMs;
     // The tag and the line both from origin, the tag forced over any local one: origin's tag is the trust root.
-    const fetched = await this.git(["fetch", "--no-tags", "origin", `+refs/heads/${this.line}:refs/remotes/origin/${this.line}`, `+refs/tags/${tag}:refs/tags/${tag}`]);
+    const fetched = await this.checked(tag, end, ["fetch", "--no-tags", "origin", `+refs/heads/${this.line}:refs/remotes/origin/${this.line}`, `+refs/tags/${tag}:refs/tags/${tag}`]);
     if (fetched.code !== 0) throw new UpgradeRefused(`git fetch of ${tag} in ${this.repo} failed: ${lastLines(fetched.output, 5)}`);
     // The tag resolved once: the checks and the archive are all of this commit, whatever moves the tag after.
     this.verified.delete(tag);
-    const resolved = await this.git(["rev-parse", "--verify", "--quiet", `refs/tags/${tag}^{commit}`]);
-    const commit = resolved.output.trim();
+    const resolved = await this.checked(tag, end, ["rev-parse", "--verify", "--quiet", `refs/tags/${tag}^{commit}`]);
+    const commit = resolved.stdout.trim();
     if (resolved.code !== 0 || !COMMIT.test(commit)) throw new UpgradeRefused(`couldn't resolve ${tag} to a commit in ${this.repo}: ${lastLines(resolved.output, 3)}`);
-    const on = await this.git(["merge-base", "--is-ancestor", commit, `refs/remotes/origin/${this.line}`]);
+    const on = await this.checked(tag, end, ["merge-base", "--is-ancestor", commit, `refs/remotes/origin/${this.line}`]);
     if (on.code === 1) throw new UpgradeRefused(`${tag} isn't on origin/${this.line}: only a tag on the line is installed`);
     if (on.code !== 0) throw new UpgradeRefused(`couldn't check that ${tag} is on origin/${this.line}: ${lastLines(on.output, 3)}`);
-    const version = (await this.show(tag, commit, "package.json")).version;
+    const version = (await this.show(tag, end, commit, "package.json")).version;
     if (version !== tag.slice(1)) throw new UpgradeRefused(`${tag}'s package.json says version ${String(version)}, not ${tag.slice(1)}`);
-    if ((await this.show(tag, commit, "packages/supervisor/package.json")).bobnet?.upgradable !== true) throw new UpgradeRefused(tooOld(tag));
+    if ((await this.show(tag, end, commit, "packages/supervisor/package.json")).bobnet?.upgradable !== true) throw new UpgradeRefused(tooOld(tag));
     this.verified.set(tag, commit);
     return version;
   }
@@ -311,6 +342,8 @@ export interface UpgradeHost {
   waitingOn(restart: UpgradeRestart): WaitingOn | null;
   /** An event (§5) to whoever asked: another laptop's supervisor, or "orchestrator" for this laptop's own. */
   emit(requester: string, req: string, event: Record<string, unknown> & { stage: UpgradeStage }): void;
+  /** From the switch to the exit: starts nothing new (no worker, no slot run), so the drain cuts nothing that began in it. */
+  hold(tag: string): void;
   /** Waits up to `ms` for what was queued to the broker to leave. */
   drain(ms: number): Promise<void>;
   /** Exits EXIT_UPGRADE, as a shutdown otherwise does. */
@@ -451,6 +484,7 @@ export class Upgrades {
     } catch (err) {
       return this.fail(u, "switch", (err as Error).message);
     }
+    this.host.hold(u.tag);
     this.emit(u, { stage: "restarting", root: releases.root });
     this.host.log.info("upgraded: restarting into the new release", { tag: u.tag, from: u.from, to: u.to });
     await this.host.drain(UPGRADE_DRAIN_MS);
