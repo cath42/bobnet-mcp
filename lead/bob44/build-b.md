@@ -56,3 +56,11 @@ has an `upgrade:` section yet (Casper's step 6). C must ship before Casper turns
   review B: the test gap. BOB-69 AC 6 (real-broker §4 check) waits on a release on both laptops; steps in
   ~/.local/state/bobnet/handoffs/bobnet/w_0720a815.md "BOB-69 AC 6".
 - L4 Luigi on BOB-70, BOB-71 (no deploy).
+- 14:3xZ BOB-70 landed 8a0e9a7, BOB-71 b2bc9af (Luigi w_04603501; shots packages/broker/test-ui/shots/bob44-*).
+  Build B is all on v2. Peach: BOB-66..71, 75 In Review; open: BOB-69 AC 6 (real broker), BOB-71 AC 1-2 (Daisy
+  w_b42d4dac checking the shots) and AC 4 (deploy).
+- rc.43: release commit 757058e landed (supervisor 482, broker 165 + 94 green), tag v2.0.0-rc.43 pushed.
+  Notes: rc43-notes.md (requester mbp-1 first: an older requester ignores the `request` event). Casper: A-2 (ubu1
+  rc.42 install + step 6, mbp-1 `upgrade:` section, bob44-probe rule), holds BOB-69, BOB-71.
+- For review B (Toad): mixed versions (§9) for the new events; B2's tests missed the requester parsing the answer
+  reply (the `worker` field, fixed in BOB-69).
