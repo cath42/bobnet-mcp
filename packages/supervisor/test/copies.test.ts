@@ -704,3 +704,160 @@ describe("remote_url on the copy (criterion 9)", () => {
     expect(s.mbp.store.remoteCopy("ubu1", "w_9")!.remote_url).toBe("https://claude.ai/code/s1");
   });
 });
+
+// BOB-75 (B7): a spawn whose broker ack was lost (ADR 0007 §14, the ruling): kept unacked, not failed;
+// reconcile's bare list adopts its worker by project and role; an unknown event from that laptop
+// triggers it; a day on, the row goes; and at start, rows the dead tools left are settled as they would have.
+
+const isSpawn = (f: { body: string }) => (JSON.parse(f.body) as { op?: string }).op === "spawn";
+const LOST = "the broker's ack of the spawn was lost, so spawn_worker couldn't say whether it ran";
+
+describe("a spawn whose broker ack was lost (BOB-75)", () => {
+  it("kept unacked, not failed, its tool saying it may or may not have run; 'not connected' still failed (AC 1)", async () => {
+    const { ubu, mbp, call } = await real();
+    mbp.link.loseAck = (f) => (isSpawn(f) ? "timeout" : null);
+    await expect(call("spawn_worker", ANN)).rejects.toThrow(
+      "no ack from the broker for the spawn to supervisor@ubu1 (No reply to send within 15000 ms): the spawn may or may not have run; if it did, you are told when its worker is found",
+    );
+    expect(mbp.store.remoteSentList().filter((r) => r.op === "spawn")).toMatchObject([{ state: "unacked" }]);
+    await until(() => ubu.sessions.length === 1);
+    // A drop while it waited for the ack: the same.
+    mbp.link.loseAck = (f) => (isSpawn(f) ? "disconnected" : null);
+    await expect(call("spawn_worker", { ...ANN, role: "bea" })).rejects.toThrow("(Connection to the BobNet broker dropped): the spawn may or may not have run");
+    expect(mbp.store.remoteSentList().filter((r) => r.op === "spawn").map((r) => r.state)).toEqual(["unacked", "unacked"]);
+    // Not connected: the frame never left.
+    mbp.link.loseAck = () => null;
+    mbp.link.failSend = (f) => (isSpawn(f) ? "disconnected" : null);
+    await expect(call("spawn_worker", { ...ANN, role: "bea" })).rejects.toThrow("could not send spawn to supervisor@ubu1: Not connected to the BobNet broker; retrying in the background");
+    expect(mbp.store.remoteSentList().filter((r) => r.op === "spawn").at(-1)).toMatchObject({ state: "failed", message_id: null });
+  });
+
+  it("reconcile's bare list adopts each worker for the one unacked spawn of its project and role, never mixing two (AC 2)", async () => {
+    const { ubu, mbp, call, bob } = await real();
+    mbp.link.loseAck = (f) => (isSpawn(f) ? "timeout" : null);
+    // No list gets through until both spawns are unacked, so one list has both workers.
+    mbp.link.failSend = (f) => ((JSON.parse(f.body) as { op?: string }).op === "list" ? "unknown_peer" : null);
+    await expect(call("spawn_worker", ANN)).rejects.toThrow(/may or may not have run/);
+    await expect(call("spawn_worker", { ...ANN, role: "bea" })).rejects.toThrow(/may or may not have run/);
+    await until(() => ubu.sessions.length === 2);
+    expect(mbp.store.remoteCopies("ubu1")).toEqual([]);
+    mbp.link.loseAck = () => null;
+    mbp.link.failSend = () => null;
+    await mbp.sup.reconcile();
+    await until(() => mbp.store.remoteCopies("ubu1").length === 2);
+    for (const w of ubu.store.workers()) {
+      const row = mbp.store.remoteSentByMessage(w.spawn_req!)!;
+      expect(row).toMatchObject({ op: "spawn", state: "unacked" });
+      expect(JSON.parse(row.body)).toMatchObject({ role: w.role });
+      expect(mbp.store.remoteCopy("ubu1", w.id)).toMatchObject({ spawn_req: w.spawn_req, state: "running" });
+    }
+    const [ann, bea] = ubu.store.workers().sort((a, b) => a.role.localeCompare(b.role));
+    await until(() => bob().filter((b) => b.includes("spawned after all")).length === 2);
+    expect(bob().filter((b) => b.includes("spawned after all")).sort()).toEqual([
+      `Ann (${ann!.id}, studio/ann) on ubu1 spawned after all: ${LOST}. worker_status ${ann!.id} for more.`,
+      `Bea (${bea!.id}, studio/bea) on ubu1 spawned after all: ${LOST}. worker_status ${bea!.id} for more.`,
+    ]);
+    // Adopted, its events match: the end reaches the copy.
+    ubu.sessions[0]!.finish();
+    await until(() => mbp.store.remoteCopy("ubu1", ann!.id)?.ended === 1);
+  });
+
+  it("an event for an unknown spawn, from a laptop with an unacked spawn, reconciles and adopts; its open requests come with the list (AC 3)", async () => {
+    const s = await scripted();
+    const bare = () => s.got.filter((g) => g.body["op"] === "list" && !g.body["ids"] && !g.body["reqs"]).length;
+    s.answer["list"] = () => ({ workers: [] });
+    s.mbp.link.loseAck = (f) => (isSpawn(f) ? "timeout" : null);
+    await expect(s.call("spawn_worker", ANN)).rejects.toThrow(/may or may not have run/);
+    // Its reply, matching no message id here, was dropped; the reconcile its loss started found nothing yet.
+    await until(() => bare() === 1);
+    expect(s.mbp.store.remoteCopies("ubu1")).toEqual([]);
+    const ask = { request: "r_1", kind: "approval", tool: "Bash", tier: "orchestrator", rule: "probe", preview: "echo probe", state: "open", created_at: "2026-11-17T12:00:00.000Z" };
+    s.answer["list"] = () => ({ workers: [{ ...view("w_9", s.spawnReq()), requests: [ask] }] });
+    await s.send({ v: 2, event: "request", worker: "w_9", spawn_req: s.spawnReq(), ...ask });
+    await until(() => bare() === 2);
+    await until(() => s.mbp.store.remoteCopy("ubu1", "w_9") !== null);
+    expect(s.mbp.store.remoteSentByMessage(s.spawnReq())).toMatchObject({ op: "spawn", state: "unacked" });
+    await until(() => s.mbp.store.remoteAsk("ubu1", "r_1") !== null);
+    expect(s.mbp.store.remoteAsk("ubu1", "r_1")).toMatchObject({ worker: "w_9", state: "open", tool: "Bash" });
+    await until(() => s.bob().length === 2);
+    expect(s.bob()).toEqual([
+      `Ann (w_9, studio/ann) on ubu1 spawned after all: ${LOST}. worker_status w_9 for more.`,
+      "Ann@ubu1 needs approval for Bash (r_1, ubu1, orchestrator decides; rule probe): echo probe. See pending_requests and answer with answer_request.",
+    ]);
+  });
+
+  it("an event for an unknown spawn from a laptop with no unacked spawn is only dropped (AC 3)", async () => {
+    const s = await scripted();
+    await s.call("spawn_worker", ANN);
+    s.answer["list"] = () => ({ workers: [view("w_8", "m_nothing", { role: "bea" })] });
+    const { id } = await s.send({ v: 2, event: "remote_control", worker: "w_8", spawn_req: "m_nothing", url: "https://claude.ai/code/x" });
+    await until(() => s.net.acked(id));
+    await tick(20);
+    expect(s.ops()).toEqual(["spawn"]);
+    expect(s.mbp.store.remoteCopy("ubu1", "w_8")).toBeNull();
+  });
+
+  it("a worker a bare list names that no spawn here made, or that two unacked spawns could be, isn't adopted", async () => {
+    const s = await scripted();
+    s.answer["list"] = () => ({ workers: [] });
+    s.mbp.link.loseAck = (f) => (isSpawn(f) ? "timeout" : null);
+    await expect(s.call("spawn_worker", ANN)).rejects.toThrow(/may or may not have run/);
+    await expect(s.call("spawn_worker", ANN)).rejects.toThrow(/may or may not have run/);
+    s.answer["list"] = () => ({ workers: [view("w_9", "m_x1"), view("w_7", "m_x2", { role: "bea" })] });
+    await s.mbp.sup.reconcile();
+    expect(s.mbp.store.remoteCopies("ubu1")).toEqual([]);
+    expect(s.mbp.store.remoteSentList().filter((r) => r.op === "spawn").map((r) => [r.state, r.message_id])).toEqual([
+      ["unacked", null],
+      ["unacked", null],
+    ]);
+  });
+
+  it("an unacked row is dropped after a day (AC 4)", async () => {
+    const s = await scripted();
+    const bare = () => s.got.filter((g) => g.body["op"] === "list" && !g.body["ids"] && !g.body["reqs"]).length;
+    s.answer["list"] = () => ({ workers: [] });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-20T10:00:00.000Z"));
+      s.mbp.store.addRemoteSent({ id: "rs_old", to: SUP_UBU, op: "spawn", target: null, body: JSON.stringify({ v: 2, op: "spawn", project: "studio", role: "ann", task: "x", by: "Bob" }), deadline: "2026-11-20T10:01:30.000Z" });
+      s.mbp.store.settleRemoteSent("rs_old", { state: "unacked" });
+      vi.setSystemTime(new Date("2026-11-21T09:59:00.000Z"));
+      await s.mbp.sup.reconcile();
+      expect(s.mbp.store.remoteSent("rs_old")).toMatchObject({ state: "unacked" });
+      expect(bare()).toBe(1);
+      vi.setSystemTime(new Date("2026-11-21T10:00:01.000Z"));
+      await s.mbp.sup.reconcile();
+      expect(s.mbp.store.remoteSent("rs_old")).toBeNull();
+      expect(bare()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("at the requester's start: sent becomes unanswered, sending unacked, so a spawn whose tool died still gets 'spawned after all' (AC 5)", async () => {
+    const net = new FakeNetwork();
+    net.clients.set(SUP_UBU, { package: "@bobnet/supervisor", version: REMOTE_TOOLS_SINCE, protocol: 1 });
+    const ubu = await boot(net, "ubu1", UBU);
+    const at = newStore();
+    const first = await boot(net, "mbp-1", "", at);
+    await first.link.register({ name: "Bob" });
+    // The spawn tool wrote its row and the frame left, then the process died before the broker's ack.
+    const body = JSON.stringify({ v: 2, op: "spawn", project: "studio", role: "ann", task: "one fix", by: "Bob" });
+    at.store.addRemoteSent({ id: "rs_ann", to: SUP_UBU, op: "spawn", target: null, body, deadline: new Date(Date.now() + 90_000).toISOString() });
+    await first.link.request({ t: "send", as: "supervisor", to: [SUP_UBU], body });
+    // A status whose wait the restart ended, its deadline still ahead.
+    at.store.addRemoteSent({ id: "rs_status", to: SUP_UBU, op: "status", target: "w_1", body: JSON.stringify({ v: 2, op: "status", id: "w_1" }), deadline: new Date(Date.now() + 50_000).toISOString() });
+    at.store.remoteSentAs("rs_status", "m_status");
+    await until(() => ubu.sessions.length === 1);
+    await first.sup.shutdown();
+    running.splice(running.indexOf(first.sup), 1);
+    await boot(net, "mbp-1", "", at);
+    expect(at.store.remoteSent("rs_status")).toMatchObject({ state: "unanswered" });
+    expect(at.store.remoteSent("rs_ann")!.state).toBe("unacked");
+    const ann = ubu.store.workers()[0]!;
+    await until(() => at.store.remoteCopy("ubu1", ann.id) !== null);
+    expect(at.store.remoteSent("rs_ann")).toMatchObject({ state: "unacked", message_id: ann.spawn_req });
+    await until(() => net.between(SUP_MBP, "Bob@mbp-1").some((b) => b.includes("spawned after all")));
+    expect(net.between(SUP_MBP, "Bob@mbp-1").filter((b) => b.includes("spawned after all"))).toEqual([`Ann (${ann.id}, studio/ann) on ubu1 spawned after all: ${LOST}. worker_status ${ann.id} for more.`]);
+  });
+});

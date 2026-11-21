@@ -149,7 +149,9 @@ export interface OutboxRow {
  * One request this supervisor sent another laptop's (ADR 0007 §2, the requester's record): written
  * before the send, its message id once the broker took it, its reply whenever that comes.
  * `sending` (not known to have left), `sent`, `replied`, `unanswered` (its wait ended without a
- * reply; a later one still counts), `failed` (the broker refused it).
+ * reply; a later one still counts), `failed` (the broker refused it, or it never left), `unacked`
+ * (the send threw once the frame may have left: a drop or the ack's timeout, so no message id; a
+ * spawn's is adopted by reconcile, which gives it the worker's `spawn_req`, ADR 0007 §14).
  */
 export interface RemoteSentRow {
   id: string;
@@ -158,7 +160,7 @@ export interface RemoteSentRow {
   op: string;
   target: string | null;
   body: string;
-  state: "sending" | "sent" | "replied" | "unanswered" | "failed";
+  state: "sending" | "sent" | "replied" | "unanswered" | "failed" | "unacked";
   reply: string | null;
   sent_at: string;
   deadline: string | null;
@@ -532,7 +534,7 @@ export class Store {
   }
 
   /** Its outcome; a reply always wins, whenever it comes, and nothing replaces one. */
-  settleRemoteSent(id: string, set: { state: "replied"; reply: string } | { state: "unanswered" | "failed" }): void {
+  settleRemoteSent(id: string, set: { state: "replied"; reply: string } | { state: "unanswered" | "failed" | "unacked" }): void {
     if (set.state === "replied") this.run("UPDATE remote_sent SET state = 'replied', reply = ?, replied_at = ? WHERE id = ? AND state != 'replied'", set.reply, now(), id);
     else this.run("UPDATE remote_sent SET state = ? WHERE id = ? AND state IN ('sending', 'sent')", set.state, id);
   }
@@ -540,6 +542,31 @@ export class Store {
   /** The spawns sent since `since` that have no reply yet, for a reconcile's `reqs` (§7). */
   remoteSpawnsUnanswered(since: string): RemoteSentRow[] {
     return this.all("SELECT * FROM remote_sent WHERE op = 'spawn' AND state IN ('sent', 'unanswered') AND message_id IS NOT NULL AND sent_at >= ? ORDER BY sent_at, rowid", since);
+  }
+
+  /** The spawns sent since `since` whose broker ack was lost and that no worker was adopted for (§14). */
+  remoteSpawnsUnacked(since: string): RemoteSentRow[] {
+    return this.all("SELECT * FROM remote_sent WHERE op = 'spawn' AND state = 'unacked' AND message_id IS NULL AND sent_at >= ? ORDER BY sent_at, rowid", since);
+  }
+
+  /** An unacked spawn's worker found (§14): the row takes its `spawn_req` as the message id it never got. */
+  adoptRemoteSent(id: string, messageId: string): boolean {
+    return this.db.prepare("UPDATE remote_sent SET message_id = ? WHERE id = ? AND state = 'unacked' AND message_id IS NULL").run(messageId, id).changes > 0;
+  }
+
+  /** Unacked rows sent before `before` (a day, the replies' ttl, §14): nothing can still match them. */
+  dropUnacked(before: string): number {
+    return Number(this.db.prepare("DELETE FROM remote_sent WHERE state = 'unacked' AND message_id IS NULL AND sent_at < ?").run(before).changes);
+  }
+
+  /**
+   * At start (§14): a row left `sent` is `unanswered`, one left `sending` `unacked`, as the tool that
+   * died with the restart would have left them. Every wait ended with the process, so a `sent` row
+   * whose deadline is still ahead counts as past it too: nothing waits for its reply any more.
+   */
+  remoteSentAtStart(): void {
+    this.run("UPDATE remote_sent SET state = 'unanswered' WHERE state = 'sent'");
+    this.run("UPDATE remote_sent SET state = 'unacked' WHERE state = 'sending'");
   }
 
   // ---------- Remote workers (the requester's copies, ADR 0007 §7) ----------

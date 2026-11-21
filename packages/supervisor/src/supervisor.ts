@@ -164,6 +164,14 @@ const RECONCILE_MS = 5 * 60_000;
 const RECONCILE_BATCH = 10;
 /** The laptop of a name@laptop address. */
 const laptopOf = (address: string) => address.split("@")[1] ?? address;
+/**
+ * Whether a send that threw may still have reached the broker (§14): a drop while it waited for the
+ * ack, or the ack's timeout. "Not connected" means it never left; a refusal is the broker's answer.
+ */
+const mayHaveLeft = (err: unknown): boolean => {
+  const code = (err as { code?: unknown }).code;
+  return code === "timeout" || (code === "disconnected" && !/not connected/i.test((err as Error).message));
+};
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 /** Whether a copy has had a view from the target, not only what an event said (§7). */
 const filled = (c: RemoteWorkerRow) => c.view !== null && (JSON.parse(c.view) as Record<string, unknown>)["project"] !== undefined;
@@ -575,6 +583,8 @@ export class Supervisor {
       this.store.markOrphaned(r.id);
     }
     this.expireOrphans();
+    // Requests this supervisor sent whose tool died with it (§14): no wait is left, so reconcile tells what ran.
+    this.store.remoteSentAtStart();
     // Remote requests this supervisor died handling: whether they ran, list says (ADR 0007 §2).
     for (const r of this.store.remoteInProgress()) {
       const text = reply(r.v === 2 ? { v: 2, re: r.op, req: r.message_id, ok: false, error: REMOTE_RESTARTED } : { ok: false, op: r.op, error: REMOTE_RESTARTED });
@@ -1287,6 +1297,12 @@ export class Supervisor {
     const spawnReq = json["spawn_req"];
     const sent = typeof spawnReq === "string" ? this.store.remoteSentByMessage(spawnReq) : null;
     let c = sent && typeof id === "string" ? this.store.remoteCopy(laptopOf(sent.to_name), id) : null;
+    if (!sent && typeof spawnReq === "string" && this.unackedTo(from)) {
+      // Maybe the spawn whose ack was lost (§14): reconcile finds its worker by role and adopts it.
+      this.log.info("an event for a spawn not known, from a laptop with an unacked spawn; reconciling", { from, event: json["event"], worker: id });
+      void this.reconcileOn(laptopOf(from));
+      return;
+    }
     if (!sent || sent.op !== "spawn" || typeof id !== "string" || !this.sameAddress(from, sent.to_name) || (c?.spawn_req && c.spawn_req !== spawnReq)) {
       this.log.info("an event from another supervisor, not for a spawn sent there", { from, event: json["event"], worker: id });
       return;
@@ -1379,15 +1395,24 @@ export class Supervisor {
     if (json["ok"] !== true) return;
     const laptop = laptopOf(sent.to_name);
     const asOf = new Date().toISOString();
-    const asked = JSON.parse(sent.body) as { ids?: string[] };
+    const asked = JSON.parse(sent.body) as { ids?: string[]; reqs?: string[] };
     const w = json["worker"];
     if (isRecord(w)) this.copyView(sent.to_name, laptop, w, asOf, sent.op === "summary" && "handoff_text" in json ? handoffFields(json) : undefined);
     if (!Array.isArray(json["workers"])) return;
+    const views = (json["workers"] as unknown[]).filter((v): v is Record<string, unknown> & { id: string } => isRecord(v) && typeof v["id"] === "string");
+    if (sent.op === "list" && !asked.ids && !asked.reqs) this.adopt(sent.to_name, views);
     const seen = new Set<string>();
-    for (const v of json["workers"] as unknown[]) {
-      if (!isRecord(v) || typeof v["id"] !== "string") continue;
-      seen.add(v["id"]);
+    for (const v of views) {
+      // Only a worker this supervisor knows: a copy, or one a spawn sent there made (a bare list names others too).
+      if (!this.store.remoteCopy(laptop, v.id) && !this.spawnSent(sent.to_name, v["spawn_req"])) continue;
+      seen.add(v.id);
       this.copyView(sent.to_name, laptop, v, asOf);
+      // Its open and orphaned requests (§2), should their events have been missed.
+      const c = this.store.remoteCopy(laptop, v.id);
+      for (const r of Array.isArray(v["requests"]) ? (v["requests"] as unknown[]) : []) {
+        if (!c || !isRecord(r)) continue;
+        this.askCopy(c, r["state"] === "open" ? { ...r, event: "request" } : { ...r, event: "settled" }, asOf);
+      }
     }
     // A list cut to fit doesn't say what it left out.
     if (sent.op !== "list" || json["truncated"] === true) return;
@@ -1488,10 +1513,46 @@ export class Supervisor {
   /** A copy made for a spawn its tool gave up on (no reply in time, §3): the worker runs after all, and the orchestrator hears so. */
   private copyMade(c: RemoteWorkerRow): void {
     const sent = c.spawn_req ? this.store.remoteSentByMessage(c.spawn_req) : null;
-    if (!sent || sent.state !== "unanswered" || this.remoteWaits.has(sent.id) || this.remoteDeciding.has(sent.id)) return;
+    if (!sent || (sent.state !== "unanswered" && sent.state !== "unacked") || this.remoteWaits.has(sent.id) || this.remoteDeciding.has(sent.id)) return;
     const { project, role, name } = this.copyNames(c);
+    const why = sent.state === "unacked" ? "the broker's ack of the spawn was lost, so spawn_worker couldn't say whether it ran" : "its reply came after spawn_worker had given up on it";
     this.store.audit(sent.to_name, "remote:spawned_after_all", c.id, { message: sent.message_id });
-    this.notify(`${name} (${c.id}, ${project}/${role}) on ${c.laptop} spawned after all: its reply came after spawn_worker had given up on it. worker_status ${c.id} for more.`, project);
+    this.notify(`${name} (${c.id}, ${project}/${role}) on ${c.laptop} spawned after all: ${why}. worker_status ${c.id} for more.`, project);
+  }
+
+  /** Whether `spawnReq` names a spawn this supervisor sent `to`. */
+  private spawnSent(to: string, spawnReq: unknown): boolean {
+    const s = typeof spawnReq === "string" ? this.store.remoteSentByMessage(spawnReq) : null;
+    return !!s && s.op === "spawn" && this.sameAddress(s.to_name, to);
+  }
+
+  /** Whether `to` has a spawn of the last day whose ack was lost (§14). */
+  private unackedTo(to: string): boolean {
+    const since = new Date(Date.now() - REMOTE_ANSWER_TTL_S * 1000).toISOString();
+    return this.store.remoteSpawnsUnacked(since).some((s) => this.sameAddress(s.to_name, to));
+  }
+
+  /**
+   * A bare list's workers against the spawns to `to` whose ack was lost (§14): a worker whose
+   * `spawn_req` names no spawn known here, and whose project and role match exactly one unacked spawn,
+   * is that spawn's; the row takes its `spawn_req`, and the copy made next says "spawned after all".
+   * One worker per role per laptop (§3) makes the match unique; anything less certain is left.
+   */
+  private adopt(to: string, views: Array<Record<string, unknown> & { id: string }>): void {
+    const since = new Date(Date.now() - REMOTE_ANSWER_TTL_S * 1000).toISOString();
+    const unacked = this.store.remoteSpawnsUnacked(since).filter((s) => this.sameAddress(s.to_name, to));
+    if (unacked.length === 0) return;
+    const laptop = laptopOf(to);
+    const what = (s: RemoteSentRow) => JSON.parse(s.body) as { project?: string; role?: string };
+    const strangers = views.filter((v) => typeof v["spawn_req"] === "string" && !this.store.remoteSentByMessage(v["spawn_req"]) && !this.store.remoteCopy(laptop, v.id));
+    for (const s of unacked) {
+      const { project, role } = what(s);
+      const rivals = unacked.filter((u) => what(u).project === project && what(u).role === role);
+      const ws = strangers.filter((v) => v["project"] === project && v["role"] === role);
+      if (rivals.length !== 1 || ws.length !== 1) continue;
+      const spawnReq = ws[0]!["spawn_req"] as string;
+      if (this.store.adoptRemoteSent(s.id, spawnReq)) this.store.audit(to, "remote:adopted", ws[0]!.id, { sent: s.id, message: spawnReq });
+    }
   }
 
   /** A copy's project, role and name: from its view, else from the spawn that made it. */
@@ -1520,9 +1581,13 @@ export class Supervisor {
   /** Reconciles the copies with each laptop they are on (§7): on start, on each connect, and every 5 minutes while one isn't ended. */
   async reconcile(): Promise<void> {
     if (!this.laptop) return;
+    const since = new Date(Date.now() - REMOTE_ANSWER_TTL_S * 1000).toISOString();
+    // An unacked spawn a day old can't be matched any more: its reply and its worker's events are gone (§14).
+    const dropped = this.store.dropUnacked(since);
+    if (dropped > 0) this.log.info("reconcile: dropped unacked spawns a day old", { dropped });
     const laptops = new Map<string, string>();
     for (const c of this.store.remoteCopies()) if (!c.ended || c.handoff === null) laptops.set(c.laptop.toLowerCase(), c.laptop);
-    for (const s of this.store.remoteSpawnsUnanswered(new Date(Date.now() - REMOTE_ANSWER_TTL_S * 1000).toISOString())) laptops.set(laptopOf(s.to_name).toLowerCase(), laptopOf(s.to_name));
+    for (const s of [...this.store.remoteSpawnsUnanswered(since), ...this.store.remoteSpawnsUnacked(since)]) laptops.set(laptopOf(s.to_name).toLowerCase(), laptopOf(s.to_name));
     await Promise.all([...laptops.values()].map((l) => this.reconcileOn(l)));
   }
 
@@ -1550,7 +1615,8 @@ export class Supervisor {
       .filter((s) => laptopOf(s.to_name).toLowerCase() === laptop.toLowerCase() && !made.has(s.message_id))
       .map((s) => s.message_id!);
     const handoffs = copies.filter((c) => c.ended && c.handoff === null);
-    if (ids.length === 0 && reqs.length === 0 && handoffs.length === 0) return null;
+    const unacked = this.store.remoteSpawnsUnacked(since).filter((s) => laptopOf(s.to_name).toLowerCase() === laptop.toLowerCase());
+    if (ids.length === 0 && reqs.length === 0 && handoffs.length === 0 && unacked.length === 0) return null;
     const withheld: string[] = [];
     let to: string | undefined;
     try {
@@ -1563,6 +1629,13 @@ export class Supervisor {
         const r = await this.remoteAsk(to, { v: 2, op: "list", ...(some(ids).length ? { ids: some(ids) } : {}), ...(some(reqs).length ? { reqs: some(reqs) } : {}) });
         if (!r.reply) return `no reply from ${laptop} within ${remoteWaitMs("list") / 1000} s`;
         if (r.reply["event"] === "withheld") withheld.push(...some(ids), ...some(reqs));
+        else if (r.reply["ok"] !== true) return typeof r.reply["error"] === "string" ? r.reply["error"] : `${laptop} refused the list`;
+      }
+      if (unacked.length > 0) {
+        // A spawn whose ack was lost has no req to ask by (§14): the sender's live workers there, and its reply adopts.
+        const r = await this.remoteAsk(to, { v: 2, op: "list" });
+        if (!r.reply) return `no reply from ${laptop} within ${remoteWaitMs("list") / 1000} s`;
+        if (r.reply["event"] === "withheld") withheld.push("(the live workers)");
         else if (r.reply["ok"] !== true) return typeof r.reply["error"] === "string" ? r.reply["error"] : `${laptop} refused the list`;
       }
       return null;
@@ -1583,7 +1656,8 @@ export class Supervisor {
       await this.sleep(RECONCILE_MS);
       if (this.closing) return;
       this.upgradesOverdue();
-      if (this.store.remoteCopies().some((c) => !c.ended)) await this.reconcile();
+      const since = new Date(Date.now() - REMOTE_ANSWER_TTL_S * 1000).toISOString();
+      if (this.store.remoteCopies().some((c) => !c.ended) || this.store.remoteSpawnsUnacked(since).length > 0) await this.reconcile();
     }
   }
   /**
@@ -1647,6 +1721,15 @@ export class Supervisor {
     } catch (err) {
       if (err instanceof SupervisorError) throw err;
       this.remoteWaits.delete(id);
+      if (mayHaveLeft(err)) {
+        // The frame may have reached the broker (§14): kept, so a spawn's worker can be adopted when reconcile finds it.
+        this.store.settleRemoteSent(id, { state: "unacked" });
+        this.store.audit(to, "remote:unacked", null, { sent: id, op: body.op, err: (err as Error).message });
+        if (body.op === "spawn") void this.reconcileOn(laptopOf(to));
+        throw new SupervisorError(
+          `no ack from the broker for the ${body.op} to ${to} (${(err as Error).message}): the ${body.op} may or may not have run${body.op === "spawn" ? "; if it did, you are told when its worker is found" : ""}`,
+        );
+      }
       this.store.settleRemoteSent(id, { state: "failed" });
       throw new SupervisorError(`could not send ${body.op} to ${to}: ${(err as Error).message}`);
     }

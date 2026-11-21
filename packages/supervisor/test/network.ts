@@ -233,6 +233,8 @@ export class FakeLink implements BrokerLink {
   onPush: (frame: PushFrame) => void = () => {};
   /** A send this returns a code for fails with it before it reaches the network: an outage, or a refusal the fake doesn't make. */
   failSend: (frame: Extract<RequestFrame, { t: "send" }>) => string | null = () => null;
+  /** A send this returns a code for reaches the network and then fails with it: its ack lost to a drop or the ack's timeout. */
+  loseAck: (frame: Extract<RequestFrame, { t: "send" }>) => string | null = () => null;
 
   private readonly net: FakeNetwork;
   readonly laptop: string;
@@ -258,8 +260,12 @@ export class FakeLink implements BrokerLink {
     switch (frame.t) {
       case "send": {
         const code = this.failSend(frame);
-        if (code) throw new BrokerError(code as ConstructorParameters<typeof BrokerError>[0], `failed as the test said: ${code}`);
-        return this.net.send(this, frame) as R;
+        // "disconnected" here is the client's: not connected, so the frame never left (its whenReady).
+        if (code) throw new BrokerError(code as ConstructorParameters<typeof BrokerError>[0], code === "disconnected" ? "Not connected to the BobNet broker; retrying in the background" : `failed as the test said: ${code}`);
+        const sent = this.net.send(this, frame) as R;
+        const lost = this.loseAck(frame);
+        if (lost) throw new BrokerError(lost as ConstructorParameters<typeof BrokerError>[0], lost === "timeout" ? "No reply to send within 15000 ms" : "Connection to the BobNet broker dropped");
+        return sent;
       }
       case "peers":
         return { peers: this.net.peerList() } as R;

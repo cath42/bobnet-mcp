@@ -430,7 +430,7 @@ describe("the requester: deadlines and its record (criterion 5)", () => {
     let atSend: unknown[] = [];
     mbp.link.failSend = (f) => {
       atSend = mbp.store.remoteSentList().filter((r) => r.body === f.body);
-      return "timeout";
+      return "unknown_peer";
     };
     await expect(mbp.sup.remoteRequest(SUP_UBU, { v: 2, op: "list" })).rejects.toThrow(/could not send list to supervisor@ubu1/);
     expect(atSend).toMatchObject([{ op: "list", state: "sending", message_id: null }]);
