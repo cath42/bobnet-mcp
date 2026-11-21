@@ -1,0 +1,41 @@
+# BOB-44 build B (Mario, w_621e3c65, 2026-11-21)
+
+Session `BOB-44 build B`. Input: build-cut.md (B1-B6), review-a-fixes-4.md, rc42-notes.md. mbp-1 runs rc.42 since
+2026-11-21 13:33:23Z; ubu1 is on rc.41 until Casper's hand install (rc42-ubu1-install.md).
+
+## The cut
+
+Build B is the seven `build-B` tasks: BOB-66, 67, 68, 69, 70, 71, 75 (B1-B7). That is Casper's ~7 (2026-11-16), so
+BOB-91 does not ride here.
+
+**Build C (`a-fixes-5`), after review B:** BOB-91 (A-fixes-4 major M1: upgrade.repo in the guard's roots, archive
+pinned to the SHA) and the minors BOB-92 (local upgrade race), BOB-93 (restart mid-install), BOB-94 (substring guard),
+BOB-95 (upgrade robustness). All five are the supervisor's upgrade path and its guard: one package, one review.
+BOB-91's risk is covered for now: rc.42's notes put the clone at <root>/.src.git, under the guard, and no laptop
+has an `upgrade:` section yet (Casper's step 6). C must ship before Casper turns `upgrade:` on with a clone outside
+<root>; I say so when he does.
+
+## Order (one Luigi worktree, sequential; a task lands alone, one commit each)
+
+| Worker | Tasks | Side | Why together |
+|---|---|---|---|
+| L1 | BOB-66 (B1) | target + requester | the lifecycle events and `remote_asks`; everything after reads them |
+| L2 | BOB-67, BOB-68 (B2, B3) | target | the `request`/`answer` ops and the one answerer are one auth path |
+| L3 | BOB-69, BOB-75 (B4, B7) | requester | request tools with remote ids; unacked spawns in the same outbox/reconcile code |
+| L4 | BOB-70, BOB-71 (B5, B6) | protocol, broker, dashboard | the data, then the mark (design/BOB-44/laptop-mark.md) |
+
+## Field steps after the build (not code)
+
+- A release (rc.43) with build B. From rc.42 I stop at tag + push; poe rolls it with `upgrade_supervisor`
+  (mbp-1 needs Casper's `upgrade:` section first; until then poe/Casper install by hand).
+- BOB-69's build B acceptance (the §4 check on the real broker) needs ubu1 on that release and the `bob44-probe`
+  rule on ubu1 (Casper's config).
+- Broker deploys, laptops first: BOB-80 (findSecret wider) once ubu1 runs rc.42; BOB-71's dashboard once the
+  release with B5 runs on both laptops. Window from poe; I deploy (Casper's deploy rule, 2026-11-16).
+
+## Log
+
+- 13:36Z L1 Luigi w_df97ddb7 on BOB-66. Peach w_b34391e8: BOB-66 In Progress; BOB-92..95 into a-fixes-5 with BOB-91;
+  BOB-71 note and AC 4 wording (Mario deploys in poe's window).
+- Daisy (consult c_bf90b74c): BOB-71's cross-project question needs no spec change: mixed-project lists follow each
+  line's own project's rule (laptop-mark.md line 65, 0f8a182).
