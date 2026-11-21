@@ -37,6 +37,8 @@ export interface DeclaredSession {
   feature: string;
   kind: "design" | "build" | "review" | "retro";
   label?: string;
+  /** The feature's release as the board had it at the join ("R2"), for the Remote Control name (BOB-116). */
+  release?: string;
 }
 
 /** A declared session's name, its label as given: "LAND-43 build B", "LAND-43 design". */

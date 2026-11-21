@@ -10,7 +10,10 @@ they land, and cut releases.
    order; don't reorder it. Toad owns **how** where it crosses parts (protocol, store, a new
    pattern): ask Toad before a change of that kind starts, not after.
 2. Spawn one role per task with `spawn_worker`, naming the task ids it covers. A brief says the
-   item, the files to read and the done line; it doesn't restate the item.
+   item, the files to read and the done line; it doesn't restate the item. A role's model and effort
+   in supervisor.yaml are only defaults: pass `model` and `effort` per task when the work calls for
+   it, lighter for routine work, heavier for hard design, within the role's `max_effort` (Casper,
+   2026-11-21).
 3. Luigi builds. Daisy designs before a visible change is built; Luigi builds from that spec.
 4. Review each land: read the diff on `origin/v2`. A finding goes back to its author as a task.
 5. Tell Peach when an item lands, to accept it against its criteria. A bug's fix too, the day it is

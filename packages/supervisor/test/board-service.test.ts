@@ -94,6 +94,22 @@ describe("a spawn into a session", () => {
     expect(ops(broker)[0]).toEqual({ as: "Luigi", ctx: { worker: w.id, role: "luigi", project: "bobnet", session, tasks: ["BOB-1.1"] }, op: { op: "session_join", project: "bobnet", session } });
   });
 
+  it("reads its feature's release from the board, for the Remote Control name; a board that can't say leaves it out (BOB-116)", async () => {
+    const { sup, broker, sessions } = await setup(testConfig(dir, BOBNET), { remoteControl: true });
+    broker.board = (op) => (op.op === "get" ? { item: { ref: "BOB-2", release: "R2" } } : { ref: null, seq: 1 });
+    const w = await sup.spawnJoined({ ...spawn, session: { feature: "BOB-2", kind: "build", label: "A" } });
+    expect(ops(broker, "get")[0]).toMatchObject({ as: "Luigi", op: { op: "get", project: "bobnet", ref: "BOB-2" } });
+    expect(JSON.parse(w.declared_session!)).toEqual({ feature: "BOB-2", kind: "build", label: "A", release: "R2" });
+    await until(() => sessions[0]?.remoteCalls.length === 1);
+    expect(sessions[0]!.remoteCalls[0]![1]).toBe("Luigi@mbp-1 Bob.r2.2.bA");
+    broker.board = (op) => {
+      if (op.op === "get") throw new BrokerError("unavailable", "the board is unavailable since then; wait and retry");
+      return { ref: null, seq: 1 };
+    };
+    const t = await sup.spawnJoined({ ...spawn, role: "toad", session: { feature: "BOB-2", kind: "review", label: "B" } });
+    expect(JSON.parse(t.declared_session!)).toEqual({ feature: "BOB-2", kind: "review", label: "B" });
+  });
+
   it("leaves a project on Backlog.md alone", async () => {
     const { sup, broker } = await setup();
     await sup.spawnJoined({ project: "helix", role: "bill", task: "x" });
@@ -112,7 +128,7 @@ describe("a run's reports", () => {
     sessions[0]!.totals = { inputTokens: 3000, outputTokens: 30, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 1 };
     sessions[0]!.finish();
     await until(() => ops(broker, "run_end").length === 1);
-    expect(ops(broker).map((o) => o.op.op)).toEqual(["session_join", "run_start", "run_remote", "run_end"]);
+    expect(ops(broker).map((o) => o.op.op)).toEqual(["session_join", "get", "run_start", "run_remote", "run_end"]);
     const end = ops(broker, "run_end")[0]!.op as Extract<BoardOpInput, { op: "run_end" }>;
     expect(end).toMatchObject({ id: w.id, calls: 2, tokens: { input: 3000, output: 30, cache_read: 0, cache_write: 0 } });
     expect(end.ctx).toHaveLength(2);
@@ -165,7 +181,7 @@ describe("a run's reports", () => {
     const { sup, broker } = await setup();
     const w = await sup.spawnJoined(spawn);
     await until(() => ops(broker, "run_remote").length === 1);
-    expect(ops(broker).map((o) => o.op.op)).toEqual(["session_join", "run_start", "run_remote"]);
+    expect(ops(broker).map((o) => o.op.op)).toEqual(["session_join", "get", "run_start", "run_remote"]);
     expect(ops(broker, "run_remote")[0]).toMatchObject({ as: "Luigi", ctx: { worker: w.id }, op: { op: "run_remote", project: "bobnet", id: w.id, remote_url: "https://claude.ai/code/session_test" } });
     expect(ops(broker, "run_start")[0]!.op).not.toHaveProperty("remote_url");
 

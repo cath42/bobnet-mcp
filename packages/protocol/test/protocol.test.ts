@@ -155,7 +155,8 @@ describe("redactSecrets", () => {
       "password=".repeat(n / 9),
       "api_key: " + MARK.repeat(n / MARK.length),
     ];
-    for (const text of inputs) expect(fastest(() => redactSecrets(text, MARK)), text.slice(0, 40)).toBeLessThan(50);
+    // A backtracking pattern takes seconds on these; 250 ms leaves a busy laptop room (BOB-117: 52 ms against 50 failed a land).
+    for (const text of inputs) expect(fastest(() => redactSecrets(text, MARK)), text.slice(0, 40)).toBeLessThan(250);
   });
 });
 
@@ -374,7 +375,8 @@ describe("redactSecrets, every span on the original text (BOB-84)", () => {
       `x${PEM_PART}x`.repeat(n / 70),
       "a".repeat(n / 2) + PEM_PART + "b".repeat(n / 2),
     ];
-    for (const text of inputs) expect(fastest(() => redactSecrets(text, MARK)), text.slice(0, 40)).toBeLessThan(50);
+    // A backtracking pattern takes seconds on these; 250 ms leaves a busy laptop room (BOB-117: 52 ms against 50 failed a land).
+    for (const text of inputs) expect(fastest(() => redactSecrets(text, MARK)), text.slice(0, 40)).toBeLessThan(250);
   });
 });
 

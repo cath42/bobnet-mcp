@@ -98,6 +98,8 @@ export interface SpawnOptions {
   as?: "lead" | "worker";
   /** A `v: 2` remote spawn's `by` and its message id (ADR 0007 §3), kept on the row. */
   remoteBy?: string;
+  /** The session's feature's release, read from the board at the join (BOB-116); kept on the declared session. */
+  release?: string;
   spawnReq?: string;
 }
 
@@ -105,6 +107,8 @@ const STALL_CHECK_MS = 60_000;
 /** How long a shutdown waits for its workers' exits to be recorded: past a stop's grace period and kill. */
 const SHUTDOWN_WAIT_MS = 15_000;
 const REGISTER_RETRY_MS = 5_000;
+/** How long a spawn waits on the board for its feature's release, which only names the Remote Control session. */
+const RELEASE_WAIT_MS = 5_000;
 /** Longer than the broker's silence window, so a stale holder of our names has been replaced. */
 const REGISTER_GIVE_UP_MS = 120_000;
 /** At most one snapshot to the broker per this interval, plus one a minute regardless. */
@@ -740,8 +744,8 @@ export class Supervisor {
    */
   async spawnJoined(opts: SpawnOptions): Promise<WorkerRow & { note?: string }> {
     const admitted = this.admit(opts);
-    const id = await this.joinFor(opts, admitted);
-    return this.spawn({ ...opts, ...(id ? { id } : {}) });
+    const joined = await this.joinFor(opts, admitted);
+    return this.spawn({ ...opts, ...joined });
   }
 
   /**
@@ -758,16 +762,16 @@ export class Supervisor {
     if (busy) throw new SupervisorError(`${role.name} isn't spawned: ${busy}`);
     const key = `${project.key}/${role.key}`;
     this.reserved.add(key);
-    let id: string | undefined;
+    let joined: { id: string; release?: string } | undefined;
     try {
-      id = await this.joinFor(opts, admitted);
+      joined = await this.joinFor(opts, admitted);
     } finally {
       this.reserved.delete(key);
     }
     // A restart may have begun during the join (the reservation doesn't hold it back): refused, not started under the exit.
     this.refuseWhileRestarting(role.name);
     // No await from here: the reservation passes straight to the running worker.
-    return this.spawn({ ...opts, ...(id ? { id } : {}) }, true);
+    return this.spawn({ ...opts, ...joined }, true);
   }
 
   /** A remote spawn while an upgrade restarts this supervisor (ADR 0008 §4): refused, since it is never queued, and it is no limit. */
@@ -789,10 +793,10 @@ export class Supervisor {
 
   /**
    * On a project on the board service, a spawn into a session joins it first: the worker id it
-   * joined as, or undefined when there is nothing to join. Fails, saying why, if the board refuses
-   * or can't be reached within a minute.
+   * joined as and its feature's release, or undefined when there is nothing to join. Fails, saying
+   * why, if the board refuses or can't be reached within a minute.
    */
-  private async joinFor(opts: SpawnOptions, { project, role, tasks, declared }: ReturnType<Supervisor["admit"]>): Promise<string | undefined> {
+  private async joinFor(opts: SpawnOptions, { project, role, tasks, declared }: ReturnType<Supervisor["admit"]>): Promise<{ id: string; release?: string } | undefined> {
     const d = declared ? (JSON.parse(declared) as DeclaredSession | null) : null;
     if (project.board !== "service" || !d || opts.carrySession !== undefined) return undefined;
     const id = newWorkerId();
@@ -804,7 +808,14 @@ export class Supervisor {
       const refused = code !== undefined && ["invalid", "forbidden", "conflict"].includes(code);
       throw new SupervisorError(`${role.name} isn't spawned: the board ${refused ? "refused to join" : "can't be reached to join"} ${sessionName(d)}: ${(err as Error).message}`);
     }
-    return id;
+    // The release only names the Remote Control session (BOB-116): one the board doesn't give in time is left out.
+    let release: string | undefined;
+    try {
+      release = (await this.broker.boardOp(role.name, { op: "get", project: project.key, ref: ctx.session!.feature }, ctx, RELEASE_WAIT_MS)).item?.release ?? undefined;
+    } catch (err) {
+      this.log.warn("couldn't read the feature's release for the Remote Control name", { feature: d.feature, err: (err as Error).message });
+    }
+    return { id, ...(release ? { release } : {}) };
   }
 
   /** Checks a spawn before anything is made of it. */
@@ -838,7 +849,7 @@ export class Supervisor {
       if (!SESSION_KINDS.includes(d.kind)) throw new SupervisorError(`session.kind is one of ${SESSION_KINDS.join(", ")}`);
       if (d.label !== undefined && !SESSION_LABEL.test(d.label)) throw new SupervisorError(`session.label ${JSON.stringify(d.label)}: up to 20 letters, digits, . _ or -`);
     }
-    const declared = opts.carrySession !== undefined ? opts.carrySession : JSON.stringify(d ? { feature: d.feature.toUpperCase(), kind: d.kind, ...(d.label ? { label: d.label } : {}) } : null);
+    const declared = opts.carrySession !== undefined ? opts.carrySession : JSON.stringify(d ? { feature: d.feature.toUpperCase(), kind: d.kind, ...(d.label ? { label: d.label } : {}), ...(opts.release ? { release: opts.release } : {}) } : null);
     if (opts.model !== undefined && role.models && !role.models.includes(opts.model)) {
       throw new SupervisorError(`${role.name} may run on ${role.models.join(", ")}, not ${opts.model}`);
     }
@@ -3593,15 +3604,20 @@ function leadAppend(role: RoleConfig, orchestrator: string): string {
 }
 
 /**
- * The name a worker's Remote Control session shows: its BobNet address, then its session, short
- * (Casper, 2026-11-07): "Bob@mbp-1 LAND-43 b1", "Marvin@mbp-1 LAND-42 r2", "Calvin@mbp-1 LAND-44 d",
- * "Bill@mbp-1 LAND-41 retro"; the address alone with no session.
+ * The name a worker's Remote Control session shows: its BobNet address, then its session as
+ * `<Proj>.r<release>.<feature#>.<kind><label>` (BOB-116; Casper, 2026-11-21): "Phelps@ubu1 Env.r1.16.bA",
+ * "Bob@mbp-1 Land.r2.56.bA2", "Bill@mbp-1 Land.41.retro1" with no release; the address alone with no session.
  */
 export function remoteName(role: RoleConfig, w: WorkerRow, laptop: string | null): string {
   const d = w.declared_session ? (JSON.parse(w.declared_session) as DeclaredSession | null) : null;
   const who = laptop ? `${role.name}@${laptop}` : role.name;
   if (!d) return who;
-  return `${who} ${d.feature} ${d.kind === "retro" ? "retro" : `${d.kind[0]}${d.label ?? ""}`}`;
+  const [prefix = "", rest = ""] = d.feature.split("-");
+  const proj = prefix.charAt(0).toUpperCase() + prefix.slice(1).toLowerCase();
+  // The feature's number only, never a task's (BOB-44.1 is .44.).
+  const num = rest.split(".")[0];
+  const release = d.release ? `${d.release.toLowerCase()}.` : "";
+  return `${who} ${proj}.${release}${num}.${d.kind === "retro" ? "retro" : d.kind[0]}${d.label ?? ""}`;
 }
 
 export function systemAppend(role: RoleConfig, orchestrator: string, remote = false): string {

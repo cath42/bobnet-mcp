@@ -84,7 +84,7 @@ export const TOOLS = [
   {
     name: "spawn_worker",
     description:
-      "Start (or queue, past the concurrency cap) a headless worker for a project role, in the role's folder with its own CLAUDE.md, skills and settings. Returns the worker id.",
+      "Start (or queue, past the concurrency cap) a headless worker for a project role, in the role's folder with its own CLAUDE.md, skills and settings. Returns the worker id. A role's model and effort in supervisor.yaml are only defaults: pass model and effort for each task when the work calls for it, lighter for routine work, heavier for hard design, within the role's max_effort.",
     inputSchema: obj(
       {
         project: { type: "string" },

@@ -914,13 +914,14 @@ describe("GitReleases: only a tag on the line, built here (AC 3)", () => {
     const g = releasesFor(fakeRepo(), { env: wrappedGit("show", "sleep 1"), verifyBudgetMs: 1500 });
     const started = Date.now();
     await expect(g.verify(TAG)).rejects.toThrow(new UpgradeRefused(`the checks of ${TAG} took longer than their 1.5 s (git show didn't finish in time); ask again`));
-    expect(Date.now() - started).toBeLessThan(2500);
+    // The bounds leave a busy laptop room (BOB-117): the message says the deadline cut it; time only rules out waiting it out.
+    expect(Date.now() - started).toBeLessThan(5000);
     // A call that hangs (its own child holding the pipe) is cut at the deadline too, not when it lets go.
     const hung = releasesFor(fakeRepo(), { env: wrappedGit("merge-base", "sleep 30"), verifyBudgetMs: 1500 });
     const t = Date.now();
     await expect(hung.verify(TAG)).rejects.toThrow("(git merge-base didn't finish in time)");
-    expect(Date.now() - t).toBeLessThan(2500);
-  });
+    expect(Date.now() - t).toBeLessThan(5000);
+  }, 30_000);
 
   it("a failed install removes the partial directory and reports the step with the end of its output", async () => {
     const r = fakeRepo();

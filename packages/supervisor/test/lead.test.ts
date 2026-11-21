@@ -108,19 +108,30 @@ describe("Remote Control", () => {
     await until(() => sup.status(w.id).remote_control !== null && "url" in sup.status(w.id).remote_control!);
     sessions[0]!.init();
     await tick(20);
-    expect(sessions[0]!.remoteCalls).toEqual([[true, "Ann@mbp-1 LAND-42 b2"]]);
+    expect(sessions[0]!.remoteCalls).toEqual([[true, "Ann@mbp-1 Land.42.b2"]]);
     expect(sup.status(w.id).remote_control).toEqual({ url: "https://claude.ai/code/session_test" });
     expect(snapshot(sup).workers.find((x) => x.id === w.id)!.remote_url).toBe("https://claude.ai/code/session_test");
     expect(store.auditLog(20).some((a) => a.action === "remote-control" && a.worker_id === w.id)).toBe(true);
   });
 
-  it("names a session by the worker's address and its session, short", () => {
+  it("names a session <Role>@<laptop> <Proj>.r<release>.<feature#>.<kind><label> (BOB-116)", () => {
     const role = testConfig(dir, STUDIO).projects.get("studio")!.roles.get("ann")!;
     const w = (session: unknown) => ({ declared_session: session === undefined ? null : JSON.stringify(session) }) as never;
-    expect(remoteName(role, w({ feature: "LAND-43", kind: "build", label: "1" }), "mbp-1")).toBe("Ann@mbp-1 LAND-43 b1");
-    expect(remoteName(role, w({ feature: "LAND-42", kind: "review", label: "2" }), "mbp-1")).toBe("Ann@mbp-1 LAND-42 r2");
-    expect(remoteName(role, w({ feature: "LAND-44", kind: "design" }), "ubu1")).toBe("Ann@ubu1 LAND-44 d");
-    expect(remoteName(role, w({ feature: "LAND-41", kind: "retro", label: "1" }), "mbp-1")).toBe("Ann@mbp-1 LAND-41 retro");
+    const as = (name: string) => ({ ...role, name });
+    // AC 7 and 8: Casper's examples.
+    expect(remoteName(as("Phelps"), w({ feature: "ENV-16", kind: "build", label: "A", release: "R1" }), "ubu1")).toBe("Phelps@ubu1 Env.r1.16.bA");
+    expect(remoteName(as("Bob"), w({ feature: "LAND-56", kind: "build", label: "A2", release: "R2" }), "mbp-1")).toBe("Bob@mbp-1 Land.r2.56.bA2");
+    // AC 1 and 2: the prefix in title case.
+    expect(remoteName(role, w({ feature: "BOB-116", kind: "build", label: "B", release: "R2" }), "mbp-1")).toBe("Ann@mbp-1 Bob.r2.116.bB");
+    // AC 3: no release, no segment.
+    expect(remoteName(role, w({ feature: "ENV-16", kind: "build", label: "A" }), "ubu1")).toBe("Ann@ubu1 Env.16.bA");
+    // AC 4: the feature's number only.
+    expect(remoteName(role, w({ feature: "BOB-44.1", kind: "build", label: "C" }), "mbp-1")).toBe("Ann@mbp-1 Bob.44.bC");
+    // AC 5: b, r, d, retro spelled out, the label as given (none is none).
+    expect(remoteName(role, w({ feature: "LAND-42", kind: "review", label: "2" }), "mbp-1")).toBe("Ann@mbp-1 Land.42.r2");
+    expect(remoteName(role, w({ feature: "LAND-44", kind: "design" }), "ubu1")).toBe("Ann@ubu1 Land.44.d");
+    expect(remoteName(role, w({ feature: "LAND-41", kind: "retro", label: "1", release: "R3" }), "mbp-1")).toBe("Ann@mbp-1 Land.r3.41.retro1");
+    // AC 6: no session, the address alone.
     expect(remoteName(role, w(null), "mbp-1")).toBe("Ann@mbp-1");
     expect(remoteName(role, w(undefined), "mbp-1")).toBe("Ann@mbp-1");
     expect(remoteName(role, w(null), null)).toBe("Ann");
