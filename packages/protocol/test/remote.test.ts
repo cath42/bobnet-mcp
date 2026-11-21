@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { classifyRemote, compareVersions, parseRemoteRequest, readRemoteRequest, RemoteEvent, RemoteExit, RemoteReply, RemoteRequestV1, RemoteRequestV2, RemoteWithheld } from "../src/index.ts";
+import { classifyRemote, compareVersions, parseRemoteRequest, readRemoteRequest, RemoteEvent, RemoteExit, RemoteReply, RemoteRequestV1, RemoteRequestV2, RemoteUpgrade, RemoteWithheld, UPGRADE_TAG } from "../src/index.ts";
+import * as rc41 from "./fixtures/remote-rc41.ts";
 
 // The wire between supervisors (ADR 0007 §2, §9).
 
@@ -20,6 +21,8 @@ describe("v: 2 requests: each op with §2's fields", () => {
     { v: 2, op: "request", id: "r_1" },
     { v: 2, op: "answer", id: "r_1", decision: "allow", user_decided: false, resume: true },
     { v: 2, op: "answer", id: "r_1", decision: "answer", answers: { "Which?": "A" }, message: "go", user_decided: true, resume: false },
+    { v: 2, op: "upgrade", tag: "v2.0.0-rc.43" },
+    { v: 2, op: "upgrade", tag: "v2.1.0", restart: "now" },
   ];
   it.each(valid.map((b) => [b.op, b]))("parses a valid %s", (_op, body) => {
     expect(RemoteRequestV2.parse(body)).toEqual(body);
@@ -42,6 +45,11 @@ describe("v: 2 requests: each op with §2's fields", () => {
     ["answer without resume", { v: 2, op: "answer", id: "r_1", decision: "allow", user_decided: false }, /^bad request: resume /],
     ["answer with a bad decision", { v: 2, op: "answer", id: "r_1", decision: "maybe", user_decided: false, resume: true }, /^bad request: decision /],
     ["an op not in this version", { v: 2, op: "slots" }, /^bad request: op /],
+    ["upgrade without a tag", { v: 2, op: "upgrade" }, /^bad request: tag /],
+    ["upgrade with a branch for a tag", { v: 2, op: "upgrade", tag: "v2" }, /^bad request: tag must be a release tag/],
+    ["upgrade with a bad restart", { v: 2, op: "upgrade", tag: "v2.0.0", restart: "later" }, /^bad request: restart /],
+    ["upgrade with a path", { v: 2, op: "upgrade", tag: "v2.0.0", path: "/tmp/x" }, /^bad request: path is not allowed$/],
+    ["upgrade with an archive", { v: 2, op: "upgrade", tag: "v2.0.0", archive: "H4sI" }, /^bad request: archive is not allowed$/],
   ];
   it.each(invalid)("refuses %s", (_what, body, error) => {
     expect(RemoteRequestV2.safeParse(body).success).toBe(false);
@@ -129,6 +137,42 @@ describe("replies and events", () => {
   it("refuses an event not in this version, and today's v-less ones", () => {
     expect(RemoteEvent.safeParse({ v: 2, event: "party", worker: "w_1", spawn_req: "m_1" }).success).toBe(false);
     expect(RemoteEvent.safeParse({ event: "exit", worker: "w_1", state: "done" }).success).toBe(false);
+  });
+});
+
+describe("upgrade (ADR 0008 §2, §3, §5; BOB-83 AC 1, AC 3)", () => {
+  it("a tag is v<semver> or one of its rcs, nothing else", () => {
+    for (const t of ["v2.0.0", "v2.0.0-rc.42", "v10.20.30-rc.1"]) expect(UPGRADE_TAG.test(t)).toBe(true);
+    for (const t of ["2.0.0", "v2.0", "v2.0.0-rc", "v2.0.0-beta.1", "v2.0.0-rc.1 ", "v2.0.0;touch x", "../v2.0.0", "main", "origin/v2"]) expect(UPGRADE_TAG.test(t)).toBe(false);
+  });
+  it("an event is { v: 2, event: upgrade, req, stage, from, to, ... }, each stage", () => {
+    for (const stage of ["installed", "restarting", "ready", "failed"]) {
+      const body = { v: 2, event: "upgrade", req: "m_1", stage, from: "2.0.0-rc.42", to: "2.0.0-rc.43", extra: "kept" };
+      expect(RemoteUpgrade.parse(body)).toEqual(body);
+    }
+    expect(RemoteUpgrade.safeParse({ v: 2, event: "upgrade", req: "m_1", stage: "ready", from: null, to: "2.0.0" }).success).toBe(true);
+    for (const bad of [{ stage: "installing" }, { req: undefined }, { to: undefined }, { v: 1 }, { event: "exit" }])
+      expect(RemoteUpgrade.safeParse({ v: 2, event: "upgrade", req: "m_1", stage: "ready", from: "a", to: "b", ...bad }).success).toBe(false);
+  });
+  it("it is no RemoteEvent: it names no worker, and isn't one of its events", () => {
+    expect(RemoteEvent.safeParse({ v: 2, event: "upgrade", req: "m_1", stage: "ready", from: "a", to: "b" }).success).toBe(false);
+    expect(classifyRemote(JSON.stringify({ v: 2, event: "upgrade", req: "m_1", stage: "ready", from: "a", to: "b" }))?.kind).toBe("event");
+  });
+  it("an old target (rc.41's wire) refuses the op as a bad request, so it runs nothing", () => {
+    const body = { v: 2, op: "upgrade", tag: "v2.0.0-rc.43" };
+    expect(rc41.parseRemoteRequest(body)).toEqual({ v: 2, re: "upgrade", error: expect.stringMatching(/^bad request: op /) });
+    expect(rc41.readRemoteRequest(JSON.stringify(body))).toMatchObject({ v: 2, re: "upgrade" });
+  });
+  it("an old requester (rc.41's wire) refuses the event, so it is logged and dropped", () => {
+    for (const stage of ["installed", "restarting", "ready", "failed"]) {
+      const body = { v: 2, event: "upgrade", req: "m_1", stage, from: "2.0.0-rc.42", to: "2.0.0-rc.43" };
+      expect(rc41.RemoteEvent.safeParse(body).success).toBe(false);
+      expect(rc41.RemoteExit.safeParse(body).success).toBe(false);
+    }
+  });
+  it("every op the old wire takes, this one takes the same: the change is additive", () => {
+    const bodies = [SPAWN, { v: 2, op: "list", ids: ["w_1"] }, { v: 2, op: "tail", id: "w_1", n: 3 }, { op: "spawn", project: "p", role: "r", task: "t" }];
+    for (const b of bodies) expect(parseRemoteRequest(b)).toEqual(rc41.parseRemoteRequest(b));
   });
 });
 

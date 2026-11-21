@@ -34,6 +34,12 @@ export type RemoteRequestV1 = z.infer<typeof RemoteRequestV1>;
 const v = z.literal(2);
 const id = z.string().min(1);
 
+/** A release tag a supervisor may upgrade to (ADR 0008 §3): v<semver>, or one of its rcs. */
+export const UPGRADE_TAG = /^v\d+\.\d+\.\d+(-rc\.\d+)?$/;
+/** When an upgraded supervisor restarts (§4): at its first idle, now (its workers orphaned), or not. */
+export const UPGRADE_RESTARTS = ["when_idle", "now", "no"] as const;
+export type UpgradeRestart = (typeof UPGRADE_RESTARTS)[number];
+
 /** A `v: 2` request (§2's table). `id` is a worker id, or a request id for `request` and `answer`. */
 export const RemoteRequestV2 = z.discriminatedUnion("op", [
   // Never a lead from afar; `by` is the requester's orchestrator, kept for the record, never authorised on.
@@ -54,6 +60,15 @@ export const RemoteRequestV2 = z.discriminatedUnion("op", [
       answers: z.record(z.string(), z.string()).optional(),
       user_decided: z.boolean(),
       resume: z.boolean(),
+    })
+    .strict(),
+  // A tag on the line, built on the target from its own clone (ADR 0008 §2, §3): never a path, an archive or code.
+  z
+    .object({
+      v,
+      op: z.literal("upgrade"),
+      tag: z.string().regex(UPGRADE_TAG, "must be a release tag, v<x.y.z> or v<x.y.z>-rc.<n>"),
+      restart: z.enum(UPGRADE_RESTARTS).optional(),
     })
     .strict(),
 ]);
@@ -78,6 +93,18 @@ export type RemoteEventName = (typeof REMOTE_EVENTS)[number];
 /** A `v: 2` event, requester-bound and unasked; `spawn_req` is the message id of the spawn that made the worker. */
 export const RemoteEvent = z.looseObject({ v, event: z.enum(REMOTE_EVENTS), worker: id, spawn_req: id });
 export type RemoteEvent = z.infer<typeof RemoteEvent>;
+
+/** An upgrade's stages, as its events report them to the requester (ADR 0008 §5). */
+export const UPGRADE_STAGES = ["installed", "restarting", "ready", "failed"] as const;
+export type UpgradeStage = (typeof UPGRADE_STAGES)[number];
+
+/**
+ * An upgrade's event (§5): about the supervisor, not a worker, so not a RemoteEvent; a requester routes
+ * `event: "upgrade"` here first. `req` is the upgrade's message id; `from` and `to` the versions. An
+ * older requester's RemoteEvent refuses it (no worker, an unknown event), and it is dropped.
+ */
+export const RemoteUpgrade = z.looseObject({ v, event: z.literal("upgrade"), req: id, stage: z.enum(UPGRADE_STAGES), from: z.string().nullable(), to: z.string() });
+export type RemoteUpgrade = z.infer<typeof RemoteUpgrade>;
 
 /** The states that end a worker, as an `exit` says them. */
 export const EXIT_STATES = ["done", "failed", "stopped"] as const;

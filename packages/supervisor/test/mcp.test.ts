@@ -91,6 +91,7 @@ describe("orchestrator MCP server", () => {
         "spawn_worker",
         "stop_worker",
         "tail_worker",
+        "upgrade_supervisor",
         "worker_status",
         "worker_summary",
       ].sort(),

@@ -214,13 +214,28 @@ const SupervisorFile = z.object({
    * Who may ask this supervisor, over BobNet, to spawn: a sender's address (name@laptop, as the
    * broker stamps it) to the roles it may spawn, by project. It may follow and stop only what it
    * spawned; it answers no request and changes no policy or role. Anyone else is refused.
+   * `upgrade: true` also lets it upgrade and restart this supervisor (ADR 0008 §2): off unless said,
+   * apart from `spawn`; an entry has either or both.
    */
   remote: z
     .record(
       z.string().refine((a) => a.split("@").length === 2 && a.split("@").every(isValidSegment), "must be name@laptop"),
-      z.object({ spawn: z.record(z.string(), z.array(z.string()).min(1)) }),
+      z
+        .object({ spawn: z.record(z.string(), z.array(z.string()).min(1)).optional(), upgrade: z.boolean().default(false) })
+        .refine((e) => e.spawn !== undefined || e.upgrade, "must grant spawn, upgrade: true, or both"),
     )
     .default({}),
+  /**
+   * Where this supervisor's releases come from when it upgrades itself (ADR 0008 §3): tags on
+   * `origin/<line>` of the local clone `repo`, installed under `root`. Without it, no upgrade.
+   */
+  upgrade: z
+    .object({
+      repo: path,
+      root: path.optional(),
+      line: z.string().regex(/^[\w.-]+(\/[\w.-]+)*$/, "must be a branch name, e.g. v2").default("v2"),
+    })
+    .optional(),
   /**
    * The board's nightly backup (ADR 0001 §11): at `at` (HH:MM, this laptop's time) the board's export
    * is written to `board.json` in the git repository `repo` and committed. Never read back but by an import.
@@ -311,9 +326,41 @@ export interface SupervisorConfig {
   sandboxWrite: string[];
   /** Remote requesters, by lowercase address: project → roles each may spawn. */
   remote: Map<string, Map<string, Set<string>>>;
+  /** The remote requesters, by lowercase address, that may upgrade this supervisor (ADR 0008 §2). */
+  remoteUpgrade: Set<string>;
+  /** Where upgrades come from and go (§3); undefined without an `upgrade` section, and then none runs. */
+  upgrade: UpgradeConfig | undefined;
+  /** The releases' folder (§1): `upgrade.root`, else ~/.local/share/bobnet. Workers never touch it. */
+  releaseRoot: string;
   /** The board's nightly backup, if this laptop makes it. */
   boardBackup: { repo: string; at: string } | undefined;
   projects: Map<string, ProjectConfig>;
+}
+
+export interface UpgradeConfig {
+  /** The local clone tags are fetched in. */
+  repo: string;
+  /** Releases go in `<root>/<tag>`; `current` and `previous` link to them. */
+  root: string;
+  /** The branch on origin a tag must be on. */
+  line: string;
+}
+
+/** Where releases are installed unless `upgrade.root` says otherwise (ADR 0008 §1). */
+export const DEFAULT_RELEASE_ROOT = expand("~/.local/share/bobnet");
+
+/**
+ * The releases' folder supervisor.yaml names, read loosely: install-systemd and install-launchd run
+ * before (and without) a config that parses, so any problem gives the default.
+ */
+export function releaseRoot(dir = configDir()): string {
+  try {
+    const raw = parse(readFileSync(join(dir, "supervisor.yaml"), "utf8")) as { upgrade?: { root?: unknown } } | null;
+    const root = raw?.upgrade?.root;
+    return typeof root === "string" && root ? expand(root) : DEFAULT_RELEASE_ROOT;
+  } catch {
+    return DEFAULT_RELEASE_ROOT;
+  }
 }
 
 export function configDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -419,9 +466,11 @@ export function parseSupervisorConfig(
   }
 
   const remote = new Map<string, Map<string, Set<string>>>();
+  const remoteUpgrade = new Set<string>();
   for (const [address, r] of Object.entries(file.remote)) {
     const may = new Map<string, Set<string>>();
-    for (const [pKey, roles] of Object.entries(r.spawn)) {
+    if (r.upgrade) remoteUpgrade.add(address.toLowerCase());
+    for (const [pKey, roles] of Object.entries(r.spawn ?? {})) {
       const p = projects.get(pKey);
       if (!p) throw new Error(`remote.${address}: no project ${pKey}`);
       for (const role of roles) if (!p.roles.has(role)) throw new Error(`remote.${address}: no role ${role} in ${pKey}`);
@@ -446,6 +495,9 @@ export function parseSupervisorConfig(
     consultEffort: file.consult_effort,
     sandboxWrite: file.sandbox_write,
     remote,
+    remoteUpgrade,
+    upgrade: file.upgrade ? { repo: file.upgrade.repo, root: file.upgrade.root ?? DEFAULT_RELEASE_ROOT, line: file.upgrade.line } : undefined,
+    releaseRoot: file.upgrade?.root ?? DEFAULT_RELEASE_ROOT,
     boardBackup: file.board_backup,
     projects,
   };

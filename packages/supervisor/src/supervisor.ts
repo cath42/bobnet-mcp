@@ -26,12 +26,14 @@ import {
   RemoteExit,
   RemoteReply,
   RemoteRequestV2,
+  RemoteUpgrade,
   RemoteWithheld,
   RUN_CTX_MAX,
   RUN_REASON_MAX,
   type ServerFrame,
   type SessionRef,
   type TokenCounts,
+  type UpgradeRestart,
   type WorkerSnapshot,
 } from "@bobnet/protocol";
 import type { Identity } from "@bobnet/client/config";
@@ -53,6 +55,8 @@ import { holdReader, RunSlots, type SlotEntry } from "./slots.ts";
 import { ACTIVE_STATES, newWorkerId, type RemoteSentRow, type RemoteWorkerRow, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
 import { type Outcome, type QueryFn, type Usage, WorkerRun, type WorkerRunOptions, workerEnv, ZERO_USAGE } from "./worker.ts";
 import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
+import { GitReleases, overdueNotice, UPGRADE_READY_MS, UpgradeRefused, type Releases, upgradeNotice, Upgrades, type WaitingOn } from "./upgrade.ts";
+import ownPackage from "../package.json" with { type: "json" };
 
 /** What the supervisor needs from its broker connection. */
 export interface BrokerLink {
@@ -140,9 +144,12 @@ const WITHHELD = "[withheld: looks like a credential]";
 const REMOTE_RESTARTED = "the target restarted while handling it; list shows whether it ran";
 
 /** A request's ttl_seconds (§2): one the broker hasn't delivered by then is dropped, so it never starts late. */
-const remoteTtl = (op: string) => (op === "spawn" ? 30 : 20);
-/** How long the requester waits for a reply: the ttl and 30 s; a spawn that joins a board session can take a minute. */
-const remoteWaitMs = (op: string) => (op === "spawn" ? 90_000 : (remoteTtl(op) + 30) * 1000);
+const remoteTtl = (op: string) => (op === "spawn" || op === "upgrade" ? 30 : 20);
+/**
+ * How long the requester waits for a reply: the ttl and 30 s; a spawn that joins a board session can
+ * take a minute, and an upgrade's reply waits for its git fetch and checks (ADR 0008 §2), so 90 s each.
+ */
+const remoteWaitMs = (op: string) => (op === "spawn" || op === "upgrade" ? 90_000 : (remoteTtl(op) + 30) * 1000);
 /**
  * The first release whose supervisor serves `v: 2` (ADR 0007 §9): an older target is refused before
  * anything is sent. The release after rc.38, the first with BOB-62's target; Mario's to move if
@@ -427,6 +434,10 @@ export class Supervisor {
   private lastHold = "";
   private readonly boards: Boards | null;
   private readonly ciPoll: GhCiPoll;
+  /** This supervisor's upgrades of itself (ADR 0008), one at a time. */
+  private readonly upgrades: Upgrades;
+  /** What an upgrade's exit runs: the shutdown, with EXIT_UPGRADE (bin.ts). */
+  private readonly restartForUpgrade: () => void;
   private ciTimer: NodeJS.Timeout | null = null;
 
   constructor(deps: {
@@ -450,8 +461,26 @@ export class Supervisor {
     sleep?: Sleep;
     /** The credential check on replies and events (§2); a test passes one that matches what findSecret doesn't. */
     detect?: Detect;
+    /** The running release's version (ADR 0008 §4): package.json's unless a test says. */
+    version?: string;
+    /** Where upgrades come from (§3): default, `upgrade` in supervisor.yaml through git and pnpm; null for none. */
+    releases?: Releases | null;
+    /** An upgrade's exit (§4): shuts down and exits 75. Without it, an upgrade that switched is only logged. */
+    restart?: () => void;
   }) {
     this.detect = deps.detect ?? findSecret;
+    this.restartForUpgrade = deps.restart ?? (() => this.log.error("an upgrade switched current, but this supervisor has no restart to run: restart it by hand"));
+    const releases = deps.releases !== undefined ? deps.releases : deps.config.upgrade ? new GitReleases(deps.config.upgrade) : null;
+    this.upgrades = new Upgrades({
+      version: deps.version ?? ownPackage.version,
+      releases,
+      store: deps.store,
+      log: deps.log,
+      waitingOn: (restart) => this.upgradeWaitingOn(restart),
+      emit: (requester, req, event) => this.upgradeEmit(requester, req, event),
+      drain: (ms) => this.drainOutbox(ms),
+      restart: () => this.restartForUpgrade(),
+    });
     this.ciPoll = deps.ciPoll ?? new GhCiPoll(deps.log);
     this.sleep = deps.sleep ?? sleepFor;
     this.ownerCheck = deps.ownerCheck ?? null;
@@ -553,6 +582,8 @@ export class Supervisor {
       });
       this.roleStatus(role, this.activeRun(role.project, role.key));
     }
+    // An upgrade this process was started for says ready, once registered (ADR 0008 §4).
+    this.upgrades.resume();
     this.flushOutbox();
 
     for (const p of this.config.projects.values()) {
@@ -571,6 +602,8 @@ export class Supervisor {
     this.startedAt = new Date().toISOString();
     this.stallTimer = setInterval(() => {
       this.checkStalls();
+      // An upgrade waiting for idle looks again each minute too, should an end not have poked it (ADR 0008 §4).
+      this.upgrades.poke();
       if (this.expireOrphans()) this.writeStatus();
       this.flushOutbox();
     }, STALL_CHECK_MS);
@@ -1112,8 +1145,11 @@ export class Supervisor {
     this.store.finishRemote(msg.id, text);
     const worker = (out["worker"] as { id?: string } | undefined)?.id ?? (typeof sent["worker"] === "string" ? sent["worker"] : null);
     if (sent["event"] === "withheld") this.store.audit(msg.from, "remote:withheld", worker, { message: msg.id, re: op });
+    // Every upgrade request is audited as one, refused or not (ADR 0008 §2), with the tag it asked for.
+    else if (op === "upgrade") this.store.audit(msg.from, "remote:upgrade", null, { message: msg.id, ok: out["ok"] === true, ...("request" in read && read.request.op === "upgrade" ? { tag: read.request.tag } : {}), ...(out["ok"] ? { from: out["from"], to: out["to"] } : { error: out["error"] }) });
     else this.store.audit(msg.from, out["ok"] ? `remote:${op}` : "remote:refused", worker, { message: msg.id, ...(out["ok"] ? {} : { error: out["error"] }) });
     this.sendRemote(msg.from, text, msg.id);
+    this.upgrades.poke();
   }
 
   /**
@@ -1127,7 +1163,9 @@ export class Supervisor {
     const withheld = read.json["event"] === "withheld";
     const answers = read.kind === "reply" || (withheld && typeof read.json["req"] === "string");
     // Read against the wire's schemas (§2), loose so a newer target's extra fields pass; what fails is dropped.
-    const schema = withheld ? RemoteWithheld : !answers ? (read.json["event"] === "exit" ? RemoteExit : RemoteEvent) : RemoteReply;
+    // An upgrade's event is about the supervisor, not a worker (ADR 0008 §5): its own schema, before RemoteEvent's.
+    const upgrade = !answers && read.json["event"] === "upgrade";
+    const schema = withheld ? RemoteWithheld : upgrade ? RemoteUpgrade : !answers ? (read.json["event"] === "exit" ? RemoteExit : RemoteEvent) : RemoteReply;
     if (!answers && read.json["v"] !== 2) {
       this.log.info("an event from another supervisor without v: 2", { from: msg.from, id: msg.id });
       return;
@@ -1137,6 +1175,7 @@ export class Supervisor {
       this.log.warn("a reply or event from another supervisor that doesn't parse; dropped", { from: msg.from, id: msg.id, err: checked.error.issues[0]?.message, path: checked.error.issues[0]?.path.join(".") });
       return;
     }
+    if (upgrade) return this.onUpgradeEvent(msg.from, read.json);
     if (!answers) return this.onRemoteEvent(msg.from, read.json);
     const req = read.json["req"];
     const sent = typeof req === "string" ? this.store.remoteSentByMessage(req) : null;
@@ -1414,6 +1453,7 @@ export class Supervisor {
     while (!this.closing) {
       await this.sleep(RECONCILE_MS);
       if (this.closing) return;
+      this.upgradesOverdue();
       if (this.store.remoteCopies().some((c) => !c.ended)) await this.reconcile();
     }
   }
@@ -1710,6 +1750,10 @@ export class Supervisor {
       case "request":
       case "answer":
         throw new SupervisorError(`this supervisor doesn't serve v: 2 ${req.op} yet`);
+      case "upgrade":
+        // Its own grant, apart from spawn (ADR 0008 §2): off unless the entry says upgrade: true.
+        if (!this.config.remoteUpgrade.has(from.toLowerCase())) throw new SupervisorError(`${from} may not upgrade this supervisor: its remote entry has no upgrade: true`);
+        return this.upgradeAsk(msgId, from, req.tag, req.restart);
     }
   }
 
@@ -1732,6 +1776,117 @@ export class Supervisor {
       remote_url: run?.remote && "url" in run.remote ? run.remote.url : null,
       ...(w.spawn_req ? { spawn_req: w.spawn_req } : {}),
     };
+  }
+
+  // ---------- Upgrades (ADR 0008) ----------
+
+  /** An upgrade asked of this supervisor, by another laptop's (`requester` its address) or this laptop's orchestrator. */
+  private async upgradeAsk(req: string, requester: string, tag: string, restart: UpgradeRestart | undefined): Promise<Record<string, unknown>> {
+    try {
+      return await this.upgrades.ask(req, requester, tag, restart);
+    } catch (err) {
+      throw err instanceof UpgradeRefused ? new SupervisorError(err.message) : err;
+    }
+  }
+
+  /**
+   * What a restart now would cut short (§4), null when idle: workers in ACTIVE_STATES (a live lead
+   * among them, by name), unless `now`; runs in a slot (a land mid-push); remote requests in progress.
+   * A queued worker isn't running yet, so it isn't waited for.
+   */
+  private upgradeWaitingOn(restart: UpgradeRestart): WaitingOn | null {
+    const workers = restart === "now" ? [] : this.store.workers({ states: ACTIVE_STATES });
+    const runs = this.slots.status().holders.length;
+    const requests = this.store.remoteInProgress().length;
+    if (workers.length === 0 && runs === 0 && requests === 0) return null;
+    const leads = workers.filter((w) => isLead(w)).map((w) => this.roleOf(w).name);
+    return { workers: workers.length, runs, requests, ...(leads.length ? { leads } : {}) };
+  }
+
+  /** An upgrade's event (§5): audited, then to the laptop that asked through the outbox, or to this laptop's orchestrator as a notice. */
+  private upgradeEmit(requester: string, req: string, event: Record<string, unknown>): void {
+    const body = { v: 2, event: "upgrade", req, ...event };
+    const { v: _v, event: _e, req: _r, ...detail } = body;
+    this.store.audit(requester, "remote:upgrade", null, { message: req, ...detail });
+    if (requester === "orchestrator") this.notify(upgradeNotice(this.laptop ?? "this laptop", body));
+    else this.sendRemote(requester, reply(withholdBody(body, this.detect)));
+  }
+
+  /** Waits up to `ms` for the outbox to empty: the `restarting` event leaves before the exit, or the new process sends it (§4). */
+  private async drainOutbox(ms: number): Promise<void> {
+    const end = Date.now() + ms;
+    while (!this.closing && this.store.outbox().length > 0 && Date.now() < end) {
+      this.flushOutbox();
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+
+  /**
+   * The orchestrator's upgrade_supervisor (§5): this laptop's in-process, as its own orchestrator's
+   * (no grant: the tool's token is the authority; the `upgrade` section still needed); another's as a
+   * `v: 2` request to its supervisor. The result is the reply; the stages come as notices.
+   */
+  async upgradeSupervisor(laptop: string | undefined, tag: string, restart?: UpgradeRestart): Promise<Record<string, unknown>> {
+    const note = "its stages (installed, restarting, ready or failed) come as notices";
+    if (this.isHere(laptop)) {
+      const req = `local_${randomUUID().slice(0, 8)}`;
+      let r: Record<string, unknown>;
+      try {
+        r = await this.upgradeAsk(req, "orchestrator", tag, restart);
+      } catch (err) {
+        this.store.audit("orchestrator", "remote:upgrade", null, { message: req, ok: false, tag, error: (err as Error).message });
+        throw err;
+      }
+      this.store.audit("orchestrator", "remote:upgrade", null, { message: req, ok: true, tag, from: r["from"], to: r["to"] });
+      return { laptop: this.laptop, ...r, restart: restart ?? "when_idle", note };
+    }
+    const to = await this.remoteTarget(laptop!);
+    const out = await this.remoteRequest(to, { v: 2, op: "upgrade", tag, ...(restart ? { restart } : {}) });
+    if (out.outcome !== "reply") throw new SupervisorError(out.outcome === "unknown" ? out.error : `no reply from ${laptop} to the upgrade`);
+    const r = out.reply;
+    if (r["ok"] === false) {
+      const error = typeof r["error"] === "string" ? r["error"] : `${laptop} refused the upgrade`;
+      // An older target's wire has no upgrade op (§2): it is installed there by hand, once (§7).
+      if (/^bad request: op /.test(error)) throw new SupervisorError(`${laptop}'s supervisor has no upgrade op (a release before it): install a release by hand there once (ADR 0008 §7). Its reply: ${error}`);
+      throw new SupervisorError(error);
+    }
+    if (r["ok"] !== true) throw new SupervisorError(`${laptop}'s reply to the upgrade was withheld (it looked like a credential to the broker); its stages still come as notices`);
+    return { laptop: laptopOf(to), from: r["from"], to: r["to"], restart: restart ?? "when_idle", note };
+  }
+
+  /**
+   * An upgrade's event from another laptop's supervisor (§5): taken only from the address the request
+   * went to and only for an upgrade sent; the orchestrator is told once per stage.
+   */
+  private onUpgradeEvent(from: string, json: Record<string, unknown>): void {
+    const req = String(json["req"]);
+    const sent = this.store.remoteSentByMessage(req);
+    if (!sent || sent.op !== "upgrade" || !this.sameAddress(from, sent.to_name)) {
+      this.log.info("an upgrade event from another supervisor, not for an upgrade sent there", { from, req, stage: json["stage"] });
+      return;
+    }
+    const stage = String(json["stage"]);
+    const laptop = laptopOf(sent.to_name);
+    const was = this.store.remoteUpgrade(req) ?? { req, laptop, to_name: sent.to_name, to_version: String(json["to"]), told: "[]", restarting_at: null, root: null, overdue_told: 0 };
+    const told = JSON.parse(was.told) as string[];
+    if (told.includes(stage)) return;
+    this.store.putRemoteUpgrade({
+      ...was,
+      told: JSON.stringify([...told, stage]),
+      ...(stage === "restarting" ? { restarting_at: new Date().toISOString(), root: typeof json["root"] === "string" ? json["root"] : null } : {}),
+    });
+    const { v: _v, event: _e, req: _r, ...detail } = json;
+    this.store.audit(sent.to_name, "remote:upgrade", null, { message: req, ...detail });
+    this.notify(upgradeNotice(laptop, json));
+  }
+
+  /** Each upgrade elsewhere with no `ready` (or `failed`) within 10 minutes of `restarting`, told once (§5); on the 5-minute loop. */
+  private upgradesOverdue(): void {
+    for (const u of this.store.remoteUpgradesOverdue(new Date(Date.now() - UPGRADE_READY_MS).toISOString())) {
+      this.store.putRemoteUpgrade({ ...u, overdue_told: 1 });
+      this.store.audit(u.to_name, "remote:upgrade_overdue", null, { message: u.req, to: u.to_version });
+      this.notify(overdueNotice(u.laptop, u.to_version, u.root));
+    }
   }
 
   /** A reply or event to another laptop's supervisor: always through the outbox, so they leave in the order made (ADR 0007 §2). */
@@ -2339,6 +2494,8 @@ export class Supervisor {
   private onExit(id: string, outcome: Outcome): void {
     const run = this.runs.get(id);
     this.runs.delete(id);
+    // An upgrade waiting for idle looks again once this end is recorded (ADR 0008 §4).
+    setImmediate(() => this.upgrades.poke());
     // Unread input stays unconsumed in the inbox: the role's next worker gets it with its brief.
     const unread = run?.untakenRefs() ?? [];
     const ended = this.store.worker(id);
@@ -2773,6 +2930,7 @@ export class Supervisor {
 
   /** A slot released with no outcome recorded (a refused fetch, a failed rebase, no result) was cancelled. */
   private onSlotReleased(e: SlotEntry): void {
+    this.upgrades.poke();
     const status = this.slotOutcomes.get(e.holder) ?? "cancelled";
     this.slotOutcomes.delete(e.holder);
     const id = this.slotRuns.get(e);

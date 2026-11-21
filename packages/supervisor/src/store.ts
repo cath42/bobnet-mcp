@@ -115,6 +115,14 @@ CREATE TABLE IF NOT EXISTS remote_workers (
   as_of TEXT NOT NULL, ended INTEGER NOT NULL DEFAULT 0, handoff TEXT, remote_url TEXT, told INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, state_withheld INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (laptop, id)
 );
+CREATE TABLE IF NOT EXISTS upgrades (
+  req TEXT PRIMARY KEY, requester TEXT NOT NULL, from_version TEXT, to_version TEXT NOT NULL, tag TEXT NOT NULL,
+  stage TEXT NOT NULL, at TEXT NOT NULL, done_at TEXT
+);
+CREATE TABLE IF NOT EXISTS remote_upgrades (
+  req TEXT PRIMARY KEY, laptop TEXT NOT NULL, to_name TEXT NOT NULL, to_version TEXT NOT NULL, told TEXT NOT NULL,
+  restarting_at TEXT, root TEXT, overdue_told INTEGER NOT NULL DEFAULT 0
+);
 `;
 
 const now = () => new Date().toISOString();
@@ -175,6 +183,37 @@ export interface RemoteWorkerRow {
   told: number;
   created_at: string;
   state_withheld: number;
+}
+
+/**
+ * An upgrade this supervisor switched to and restarted for (ADR 0008 §4), written before the switch:
+ * `restarting` until the new process says `ready` (or `failed`, running another version). `requester`
+ * is the address that asked, or "orchestrator" for this laptop's own.
+ */
+export interface UpgradeRow {
+  req: string;
+  requester: string;
+  from_version: string | null;
+  to_version: string;
+  tag: string;
+  stage: "restarting" | "ready" | "failed";
+  at: string;
+  done_at: string | null;
+}
+
+/**
+ * The requester's record of an upgrade it asked another laptop for (§5): the stages the orchestrator
+ * was told of, once each, and when `restarting` came, for the notice that no `ready` followed.
+ */
+export interface RemoteUpgradeRow {
+  req: string;
+  laptop: string;
+  to_name: string;
+  to_version: string;
+  told: string;
+  restarting_at: string | null;
+  root: string | null;
+  overdue_told: number;
 }
 
 export class Store {
@@ -493,6 +532,47 @@ export class Store {
          as_of = excluded.as_of, ended = excluded.ended, handoff = excluded.handoff, remote_url = excluded.remote_url, told = excluded.told,
          state_withheld = excluded.state_withheld`,
       c.laptop, c.id, c.to_name, c.spawn_req, c.view, c.state, c.as_of, c.ended, c.handoff, c.remote_url, c.told, now(), c.state_withheld,
+    );
+  }
+
+  // ---------- Upgrades (ADR 0008) ----------
+
+  addUpgrade(u: Pick<UpgradeRow, "req" | "requester" | "from_version" | "to_version" | "tag">): void {
+    this.run(
+      "INSERT OR REPLACE INTO upgrades (req, requester, from_version, to_version, tag, stage, at, done_at) VALUES (?, ?, ?, ?, ?, 'restarting', ?, NULL)",
+      u.req, u.requester, u.from_version, u.to_version, u.tag, now(),
+    );
+  }
+
+  /** The upgrades at `restarting`: at start, the one this process was started for. */
+  upgradesRestarting(): UpgradeRow[] {
+    return this.all("SELECT * FROM upgrades WHERE stage = 'restarting' ORDER BY at");
+  }
+
+  upgrade(req: string): UpgradeRow | null {
+    return this.one<UpgradeRow>("SELECT * FROM upgrades WHERE req = ?", req) ?? null;
+  }
+
+  endUpgrade(req: string, stage: "ready" | "failed"): void {
+    this.run("UPDATE upgrades SET stage = ?, done_at = ? WHERE req = ?", stage, now(), req);
+  }
+
+  remoteUpgrade(req: string): RemoteUpgradeRow | null {
+    return this.one<RemoteUpgradeRow>("SELECT * FROM remote_upgrades WHERE req = ?", req) ?? null;
+  }
+
+  putRemoteUpgrade(u: RemoteUpgradeRow): void {
+    this.run(
+      "INSERT OR REPLACE INTO remote_upgrades (req, laptop, to_name, to_version, told, restarting_at, root, overdue_told) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      u.req, u.laptop, u.to_name, u.to_version, u.told, u.restarting_at, u.root, u.overdue_told,
+    );
+  }
+
+  /** Upgrades asked elsewhere that said `restarting` before `since` and have said nothing since, not yet told. */
+  remoteUpgradesOverdue(since: string): RemoteUpgradeRow[] {
+    return this.all(
+      "SELECT * FROM remote_upgrades WHERE restarting_at IS NOT NULL AND restarting_at < ? AND overdue_told = 0 AND told NOT LIKE '%\"ready\"%' AND told NOT LIKE '%\"failed\"%' ORDER BY restarting_at",
+      since,
     );
   }
 

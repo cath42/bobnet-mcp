@@ -246,8 +246,12 @@ export class Policy {
     }));
   }
 
-  static load(dir: string): Policy {
-    return new Policy(readFileSync(join(dir, "policy.yaml"), "utf8"), { protect: [dir] });
+  /**
+   * The config folder `dir` is protected, and so is each of `alsoProtect`: the releases' folder,
+   * which the supervisor writes and runs from (ADR 0008, Consequences).
+   */
+  static load(dir: string, alsoProtect: string[] = []): Policy {
+    return new Policy(readFileSync(join(dir, "policy.yaml"), "utf8"), { protect: [dir, ...alsoProtect] });
   }
 
   /**

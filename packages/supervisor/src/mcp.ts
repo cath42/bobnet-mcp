@@ -5,6 +5,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Logger } from "@bobnet/client/log";
+import { UPGRADE_RESTARTS, UPGRADE_TAG } from "@bobnet/protocol";
 import { z } from "zod";
 import { EFFORTS } from "./config.ts";
 import { AnswerError } from "./router.ts";
@@ -48,6 +49,7 @@ const AnswerArgs = z.object({
   user_decided: z.boolean().default(false),
   resume: z.boolean().default(true),
 });
+const UpgradeArgs = z.object({ laptop: z.string().min(1), tag: z.string().regex(UPGRADE_TAG, "must be a release tag, v<x.y.z> or v<x.y.z>-rc.<n>"), restart: z.enum(UPGRADE_RESTARTS).optional() });
 const AuditArgs = z.object({ limit: z.number().int().positive().max(500).default(50) });
 
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
@@ -179,7 +181,28 @@ export const TOOLS = [
     inputSchema: obj({ names: { type: "array", items: { type: "string" } }, ...HERE }, ["names"]),
   },
   { name: "run_slots", description: "The run slot: the hold if any (read from the projects' hold files, e.g. pnpm integrate hold), who holds the slot and for what, and who is waiting, in order.", inputSchema: obj({ ...HERE }) },
+  {
+    name: "upgrade_supervisor",
+    description:
+      "Upgrade a laptop's supervisor to a release tag on the line (ADR 0008): it fetches the tag in its own clone, installs it beside the running release, checks it, and restarts into it. The result is its reply (from and to versions, or why not); installed, restarting, ready or failed come later as notices. Yours as the laptop's orchestrator, never a lead's.",
+    inputSchema: obj(
+      {
+        laptop: { type: "string", description: "The laptop's BobNet id (e.g. ubu1); this laptop's own supervisor too." },
+        tag: { type: "string", description: "The release tag, e.g. v2.0.0-rc.43: on origin's line, its package.json the same version. An earlier upgradable tag is the way back." },
+        restart: {
+          type: "string",
+          enum: [...UPGRADE_RESTARTS],
+          description:
+            "when_idle (default): at the first moment no worker runs (a live lead counts), no run holds a slot and no remote request is in progress. now: without waiting for workers, which are orphaned as on any restart (a lead too: let it write its handoff first); still after a land in its slot. no: install and check only.",
+        },
+      },
+      ["laptop", "tag"],
+    ),
+  },
 ] as const;
+
+/** Tools that are the laptop orchestrator's own, never a lead worker's (lead-tools.ts leaves them out). */
+export const ORCHESTRATOR_ONLY: ReadonlySet<string> = new Set(["upgrade_supervisor"]);
 
 /**
  * The tools' bodies. With `lead`, they run for a lead worker (its project's orchestrator, run as a
@@ -356,6 +379,12 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
     run_slots: (a) => {
       here(Here.parse(a).laptop, "run_slots");
       return sup.slotStatus();
+    },
+    upgrade_supervisor: (a) => {
+      // A release reaches a laptop when its orchestrator asks (ADR 0008 §7), never from a lead worker.
+      if (opts.lead) throw new SupervisorError("upgrade_supervisor is the laptop's orchestrator's, never a lead's (ADR 0008 §5)");
+      const u = UpgradeArgs.parse(a);
+      return sup.upgradeSupervisor(u.laptop, u.tag, u.restart);
     },
   };
 }
