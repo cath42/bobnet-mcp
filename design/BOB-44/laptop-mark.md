@@ -100,8 +100,9 @@ Phone is 390px, desktop 1440px; tablet (1024px) follows desktop except where sai
 | A session's agents, live and ended runs (`stepItem` → `agentWho`) | same | same as On it now. Ended runs take `laptop` from the board's `RunRecord`. |
 | An agent's state, `waiting on Mario` (`agentState`, orchestrator-tier request) | the project's lead | for a remote-spawned worker, the spawner: `waiting on poe@mbp-1` (the spawner's laptop shown whenever it differs from the worker's). Needs `remote_from`, below. |
 | Detail row (`agentDetail`) | `opus · high · ubu1 · worked 12 min · context …` | unchanged (laptop always, whole), plus a line `spawned by poe@mbp-1` under it when `remote_from` is set. Stop, Reset, Allow, Deny: unchanged; they already go to the laptop it runs on. |
+| A task's agent chips (`taskLi`, "On it now, and…") | names | the mark, per the rule (as built, BOB-71) |
 | Run slot line (`runLine`) | `run slot on ubu1: land` | unchanged |
-| Context per call chart, tooltip | role and run | add the mark to the run's name in the tooltip, per the rule |
+| Context per call chart, Agent column and tooltip | role and run | the mark per the rule, only when all that agent's runs in the session were on one laptop; none on the whole-session series (as built, BOB-71) |
 
 ### Roadmap (kanban, Backlog.md projects)
 
