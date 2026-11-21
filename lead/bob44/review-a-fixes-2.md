@@ -1,11 +1,14 @@
 # BOB-44 review A-fixes-2 (2026-11-20)
 
 Reviewed v2 63c29b5..dd9279e: BOB-79 be04f99, BOB-81 ae52e84, BOB-78 8eb7c5e, BOB-80 dd9279e. Two reviewers:
-- Toad, protocol and store: `architecture/reviews/2026-11-20-bob44-a-fixes-2.md` (pending at this writing).
+- Toad, protocol and store: `architecture/reviews/2026-11-20-bob44-a-fixes-2.md` (b0cc4b6). Not signed off: 0 blockers,
+  3 majors (he confirms and reproduced M1-M3; M2 went against his own point 4), 3 minors. Fixes ruled in ADR 0007 §14
+  "Ruling, A-fixes-3", with a tested sketch: `architecture/reviews/2026-11-20-a-fixes-3-redaction-sketch.mts`.
+  Deploy: no-go for dd9279e; go for the release carrying A-fixes-3 once reviewed and on both laptops.
 - An independent reviewer (Mario's subagent, fresh context, read-only): node snippets against the source, a 2M-input
   redaction fuzzer, a 300k-body `withholdBody` fuzz, timings on 200 KB adversarial inputs. Its findings are below.
 
-**Result (independent + Mario): 3 majors. rc.42 and BOB-80's broker deploy wait for the fixes.** Mario reproduced
+**Result: 3 majors (both reviewers agree). rc.42 and BOB-80's broker deploy wait for the fixes.** Mario reproduced
 all three with node (`password=x;password="RealSecret123"` → `[W]"RealSecret123"`; the nested case below; jwt
 `"eyJ-".repeat(4000)` 372 ms in `findSecret`).
 
@@ -66,6 +69,10 @@ all three with node (`password=x;password="RealSecret123"` → `[W]"RealSecret12
 - Tests: supervisor copies/exit/delivery 80 passed; protocol 108 passed (minor 4 aside).
 
 ## Next
-Toad rules the fixes (M1's approach, M2 against his ruling, M3's pattern) in ADR 0007 §14; Peach makes M1-M3 tasks of
-BOB-44 and the minors backlog or same-build tasks; Luigi builds A-fixes-3; then rc.42, laptops first, then the broker
-deploy (BOB-80 AC8, with M3 riding it).
+- Toad's "Ruling, A-fixes-3" sets the fixes: every span on the original text, unioned, replaced once (M1); each BEGIN
+  through the first END after it (M2); `(?<![A-Za-z0-9_-])eyJ` (M3); `(?!_detected\b)` on `secret` only; same-build
+  minors: `state_withheld` back to 0 on a passing view, the summary stand-in without `ok`, reconcile reports before an
+  early return, the timing tests warm up and take the best of 3.
+- Peach makes these tasks of BOB-44; Luigi builds A-fixes-3 with BOB-83 (Casper, 22:14 CST, option 3: a remote
+  upgrade/restart op), once Toad rules it; review; then rc.42, laptops first (ubu1 by hand, Casper's), then the broker
+  deploy (BOB-80 AC8, M3 riding it).
