@@ -822,3 +822,17 @@ the broker refuses more. Measured with node on 200 KB adversarial inputs: each p
   linear pairing above belongs to BOB-79.
 - BOB-79 and BOB-81 need no broker deploy, and BOB-78 has none of its own. The release that carries all four
   goes to the laptops first, and the broker deploy follows (above).
+
+**As built (A-fixes-2, 63c29b5..dd9279e; `reviews/2026-11-20-bob44-a-fixes-2.md`).**
+- BOB-80's patterns and BOB-79's linear pairing are as ruled (`secrets.ts:9-82`). PuTTY's span ends at the
+  end of the Private-MAC's hex.
+- BOB-81: the target's re-check sends the same stand-in as a broker refusal (`standIn`, `supervisor.ts:207`).
+- BOB-78 keeps `remote_workers.state_withheld`, which is the supervisor's local store, so the broker needs no
+  migration:
+  - 0 means no withheld event;
+  - 1 means `status` was asked after a withheld event;
+  - 2 means the orchestrator was told.
+- As built, `state_withheld` never resets, so the bound is one notice per copy. Minor 1 of that review resets
+  it on a view that passes, which makes the bound one notice per withheld episode.
+- The BOB-80 broker deploy has my go once mbp-1 and ubu1 run the release carrying dd9279e. The conditions are
+  in the review.
