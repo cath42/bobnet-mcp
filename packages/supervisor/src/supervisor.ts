@@ -52,7 +52,7 @@ import { summarize, tail, type Summary } from "./events.ts";
 import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
 import { holdReader, RunSlots, type SlotEntry } from "./slots.ts";
-import { ACTIVE_STATES, newWorkerId, type RemoteSentRow, type RemoteWorkerRow, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
+import { ACTIVE_STATES, newWorkerId, type RemoteAskRow, type RemoteSentRow, type RemoteWorkerRow, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
 import { type Outcome, type QueryFn, type Usage, WorkerRun, type WorkerRunOptions, workerEnv, ZERO_USAGE } from "./worker.ts";
 import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
 import { GitReleases, overdueNotice, UPGRADE_READY_MS, UpgradeRefused, type Releases, upgradeNotice, Upgrades, type WaitingOn } from "./upgrade.ts";
@@ -926,6 +926,40 @@ export class Supervisor {
     return w && isV2(w) ? w.spawned_by : null;
   }
 
+  /**
+   * The open and orphaned requests of the workers this supervisor spawned on other laptops (§4, §5),
+   * from their copies: as pending() shows a local one, with `laptop` and `as_of`.
+   */
+  remotePending(): Array<Record<string, unknown>> {
+    return this.store
+      .remoteAsks()
+      .filter((a) => a.state === "open" || a.state === "orphaned")
+      .map((a) => {
+        const c = this.store.remoteCopy(a.laptop, a.worker);
+        const { project, name } = c ? this.copyNames(c) : { project: undefined, name: "?" };
+        return { id: a.id, worker_id: a.worker, kind: a.kind, tool: a.tool, tier: a.tier, rule: a.rule, state: a.state, created_at: a.created_at, worker: name, project: project ?? "?", preview: a.preview, laptop: a.laptop, as_of: a.as_of };
+      });
+  }
+
+  /**
+   * Where a request id is (§5): null for this laptop, else the laptop of the remote worker it is a
+   * request of. `laptop`, if given, must match; an id on two laptops needs it. An id known nowhere
+   * stays this laptop's, which says it has no such request.
+   */
+  requestWhere(id: string, laptop?: string): string | null {
+    if (laptop !== undefined && this.isHere(laptop)) return null;
+    const here = this.store.request(id) !== undefined;
+    const there = this.store.remoteAsksOf(id).map((a) => a.laptop);
+    if (laptop === undefined) {
+      if (there.length + (here ? 1 : 0) > 1) throw new SupervisorError(`${id} is a request on ${[...(here ? [this.laptop ?? "this laptop"] : []), ...there].join(" and ")}: say which with laptop`);
+      return here || there.length === 0 ? null : there[0]!;
+    }
+    if (there.some((l) => l.toLowerCase() === laptop.toLowerCase())) return laptop;
+    if (here) throw new SupervisorError(`${id} is a request on this laptop (${this.laptop}), not ${laptop}`);
+    if (there.length > 0) throw new SupervisorError(`${id} is a request on ${there.join(" and ")}, not ${laptop}`);
+    throw new SupervisorError(`No request ${id} of a worker spawned on ${laptop} from here`);
+  }
+
   /** One request in full, input included. */
   requestDetail(id: string): RequestRow {
     const r = this.store.request(id);
@@ -1302,7 +1336,7 @@ export class Supervisor {
     const was = this.store.remoteAsk(c.laptop, id);
     if (was && (was.worker !== c.id || ASK_RANK[state]! <= ASK_RANK[was.state]!)) return;
     const str = (k: string) => (typeof json[k] === "string" ? (json[k] as string) : null);
-    this.store.putRemoteAsk({
+    const a: RemoteAskRow = {
       laptop: c.laptop,
       id,
       to_name: c.to_name,
@@ -1317,7 +1351,25 @@ export class Supervisor {
       decision: str("decision"),
       decided_by: str("decided_by"),
       as_of: now,
-    });
+    };
+    this.store.putRemoteAsk(a);
+    // Told as a local one is (§4): a new request, and one a restart left for answering to resume.
+    if (!was && state === "open") this.askNotice(c, a);
+    else if (state === "orphaned") {
+      const { project, name } = this.copyNames(c);
+      this.notify(`${name}@${c.laptop}'s request ${id} (${a.tool ?? a.kind ?? "?"}, ${c.laptop}) was orphaned by a restart there: answering it with answer_request resumes the worker; deny with resume: false closes it.`, project);
+    }
+  }
+
+  /** A remote worker's new request, told to the orchestrator as announce tells a local one (§4). */
+  private askNotice(c: RemoteWorkerRow, a: RemoteAskRow): void {
+    const { project, name } = this.copyNames(c);
+    const who = `${name}@${c.laptop}`;
+    const what =
+      a.kind === "question"
+        ? `${who} asks a question (${a.id}, ${c.laptop})`
+        : `${who} needs approval for ${a.tool} (${a.id}, ${c.laptop}, ${a.tier} decides; rule ${a.rule}): ${a.preview}`;
+    this.notify(`${what}. See pending_requests and answer with answer_request.`, project);
   }
 
   /** A target's ok reply, into the copies of the workers it names (§7); ids a list was asked for and didn't return are `unknown`. */
@@ -1835,7 +1887,7 @@ export class Supervisor {
         const answer: Answer = req.decision === "answer" ? { decision: "answer", answers: req.answers!, ...(req.message ? { message: req.message } : {}) } : { decision: req.decision, ...(req.message ? { message: req.message } : {}) };
         // As a local answer from here on (§4): the router's checks (a human tier needs user_decided, the decision fits the kind), resume for an orphan.
         const done = this.answer(r.id, answer, req.user_decided ? "human" : "orchestrator", req.resume);
-        return { request: done.request.id, worker: r.worker_id, state: done.request.state, decision: done.request.decision, ...(done.resumed ? { resumed: done.resumed.id } : {}) };
+        return { request: done.request.id, worker_id: r.worker_id, state: done.request.state, decision: done.request.decision, ...(done.resumed ? { resumed: done.resumed.id } : {}) };
       }
       case "upgrade":
         // Its own grant, apart from spawn (ADR 0008 §2): off unless the entry says upgrade: true.

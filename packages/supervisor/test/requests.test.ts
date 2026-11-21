@@ -331,13 +331,20 @@ async function playedTarget() {
   net.clients.set(SUP_UBU, { package: "@bobnet/supervisor", version: REMOTE_TOOLS_SINCE, protocol: 1 });
   const ubu = net.link("ubu1");
   let spawnReq = "";
-  const send = (body: unknown) => ubu.request<{ id: string }>({ t: "send", as: "supervisor", to: [SUP_MBP], body: JSON.stringify(body) });
+  /** The requests mbp-1 sent it after the spawn, and what it replies to one: nothing unless the test says. */
+  const asked: Array<Record<string, any>> = [];
+  const replies: { to: (body: Record<string, any>) => Record<string, unknown> | null } = { to: () => null };
+  const send = (body: unknown, inReplyTo?: string) => ubu.request<{ id: string }>({ t: "send", as: "supervisor", to: [SUP_MBP], body: JSON.stringify(body), ...(inReplyTo ? { in_reply_to: inReplyTo } : {}) });
   ubu.onPush = (f) => {
     if (f.t !== "deliver") return;
     const body = JSON.parse(f.msg.body) as Record<string, any>;
     if (body["op"] === "spawn") {
       spawnReq = f.msg.id;
       void send({ v: 2, re: "spawn", req: f.msg.id, ok: true, worker: { id: "w_9", project: "studio", role: "ann", state: "running", spawn_req: f.msg.id } });
+    } else if (typeof body["op"] === "string") {
+      asked.push(body);
+      const out = replies.to(body);
+      if (out) void send({ v: 2, re: body["op"], req: f.msg.id, ...out }, f.msg.id);
     }
   };
   await ubu.register({ name: "supervisor" });
@@ -352,7 +359,7 @@ async function playedTarget() {
     for (const b of bodies) ids.push((await send(b)).id);
     await until(() => ids.every((id) => net.acked(id)));
   };
-  return { mbp, deliver, request, settled, ask: () => mbp.store.remoteAsk("ubu1", "r_1") };
+  return { net, mbp, deliver, request, settled, asked, replies, ask: () => mbp.store.remoteAsk("ubu1", "r_1") };
 }
 
 describe("the requester's remote_asks (AC 6)", () => {
@@ -453,7 +460,7 @@ describe("a passing answer runs as a local one (BOB-67 AC 2, 4)", () => {
   it("an approval: allow runs the call; audited remote:answer besides answer:allow with decided_by", async () => {
     const s = await asking();
     const { id, reply } = await s.mbp.ask(ANSWER(s.rid));
-    expect(reply).toEqual({ v: 2, re: "answer", req: id, ok: true, request: s.rid, worker: s.id, state: "answered", decision: "allow" });
+    expect(reply).toEqual({ v: 2, re: "answer", req: id, ok: true, request: s.rid, worker_id: s.id, state: "answered", decision: "allow" });
     expect(await s.result).toMatchObject({ behavior: "allow" });
     expect(audits(s.ubu.store, "remote:answer")).toEqual([expect.objectContaining({ actor: SUP_MBP, worker_id: s.id, detail: { message: id, request: s.rid, decision: "allow", by: "orchestrator" } })]);
     expect(audits(s.ubu.store, "answer:allow")).toEqual([expect.objectContaining({ actor: "orchestrator", worker_id: s.id })]);
@@ -497,7 +504,7 @@ describe("a passing answer runs as a local one (BOB-67 AC 2, 4)", () => {
     const ubu = await boot(net, "ubu1", UBU, at);
     await until(() => mbp.events("settled").length === 1);
     const { reply } = await mbp.ask(ANSWER(r.id));
-    expect(reply).toMatchObject({ ok: true, request: r.id, worker: w.id, state: "answered", decision: "allow", resumed: expect.stringMatching(/^w_/) });
+    expect(reply).toMatchObject({ ok: true, request: r.id, worker_id: w.id, state: "answered", decision: "allow", resumed: expect.stringMatching(/^w_/) });
     expect(ubu.store.worker(reply["resumed"])).toMatchObject({ spawned_by: SUP_MBP, remote_by: "poe", spawn_req: "m_spawn1", resume_session: "sess-old" });
     await until(() => mbp.events("resumed").length === 1);
     expect(mbp.events("resumed")[0]).toMatchObject({ worker: reply["resumed"], previous: w.id, request: r.id });
@@ -665,5 +672,201 @@ describe("Casper answers a remote worker's request on the dashboard (BOB-68 AC 4
     await until(() => mbp.store.remoteAsk("ubu1", rid)?.state === "answered");
     expect(mbp.store.remoteAsk("ubu1", rid)).toMatchObject({ state: "answered", decision: "allow", decided_by: "human" });
     expect(w.id).toBe(ubu.store.request(rid)!.worker_id);
+  });
+});
+
+// BOB-69 (B4): the requester's request tools with remote ids (ADR 0007 §5, §4 "The requester shows it
+// as its own"): pending_requests lists the remote copies with laptop, request_detail and answer_request
+// resolve a remote id to its laptop, the notice reads as a local one's, and a lead's tools stay home.
+
+/** A tool's error text, from the tool as poe calls it. */
+async function refusal(tools: ReturnType<typeof handlers>, name: string, args: Record<string, unknown>): Promise<string> {
+  const r = await callTool(tools, name, args);
+  expect(r.isError).toBe(true);
+  return r.content[0]!.text;
+}
+
+/** Both supervisors real: one v: 2 worker of mbp-1's on ubu1 with an open request, and its copy on mbp-1. */
+async function remoteAsking() {
+  const r = await real();
+  const w = await r.call("spawn_worker", { project: "studio", role: "ann", task: "one fix", laptop: "ubu1" });
+  await until(() => r.ubu.sessions.length === 1);
+  const cancel = new AbortController();
+  const result = askWith(r.ubu.sessions[0]!, cancel.signal);
+  await until(() => r.mbp.store.remoteAsks("ubu1").length === 1);
+  return { ...r, w, cancel, result, rid: r.mbp.store.remoteAsks("ubu1")[0]!.id };
+}
+
+/** A local worker of mbp-1's (helix/bill) with an open request. */
+async function localAsking(mbp: Awaited<ReturnType<typeof boot>>) {
+  mbp.sup.spawn({ project: "helix", role: "bill", task: "local" });
+  await until(() => mbp.sessions.length === 1);
+  const result = mbp.sessions[0]!.ask("Bash", PROBE);
+  await until(() => mbp.store.requests(["open"]).length === 1);
+  return { result, rid: mbp.store.requests(["open"])[0]!.id };
+}
+
+describe("pending_requests, request_detail and answer_request find a remote id (BOB-69 AC 1)", () => {
+  it("pending_requests lists local and remote together, each with laptop; a remote one from its copy, with as_of", async () => {
+    const s = await remoteAsking();
+    const local = await localAsking(s.mbp);
+    const rows = (await s.call("pending_requests", {})) as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ id: local.rid, laptop: "mbp-1", project: "helix", tool: "Bash", state: "open" });
+    expect(rows[0]).not.toHaveProperty("as_of");
+    expect(rows[1]).toEqual({
+      id: s.rid,
+      worker_id: s.w.id,
+      kind: "approval",
+      tool: "Bash",
+      tier: "orchestrator",
+      rule: "probe",
+      state: "open",
+      created_at: s.ubu.store.request(s.rid)!.created_at,
+      worker: "Ann",
+      project: "studio",
+      preview: "echo probe",
+      laptop: "ubu1",
+      as_of: s.mbp.store.remoteAsk("ubu1", s.rid)!.as_of,
+    });
+  });
+
+  it("request_detail and answer_request resolve a remote id to its laptop; laptop, if given, must match", async () => {
+    const s = await remoteAsking();
+    const tools = handlers(s.mbp.sup);
+    expect(await s.call("request_detail", { id: s.rid })).toMatchObject({ id: s.rid, worker_id: s.w.id, input: JSON.stringify(PROBE), state: "open", laptop: "ubu1" });
+    expect(await s.call("request_detail", { id: s.rid, laptop: "ubu1" })).toMatchObject({ id: s.rid, laptop: "ubu1" });
+    expect(await refusal(tools, "request_detail", { id: s.rid, laptop: "mbp-2" })).toBe(`${s.rid} is a request on ubu1, not mbp-2`);
+    expect(await refusal(tools, "answer_request", { id: s.rid, decision: "allow", laptop: "mbp-2" })).toBe(`${s.rid} is a request on ubu1, not mbp-2`);
+    expect(s.ubu.store.request(s.rid)!.state).toBe("open");
+    expect(await s.call("answer_request", { id: s.rid, decision: "allow", laptop: "ubu1" })).toEqual({ id: s.rid, state: "answered", decision: "allow", laptop: "ubu1" });
+    expect(await s.result).toMatchObject({ behavior: "allow" });
+  });
+
+  it("an id on two laptops asks for laptop", async () => {
+    const r = await real();
+    const local = await localAsking(r.mbp);
+    // The same id on ubu1 too (ids are random; a clash is rare, not impossible).
+    r.mbp.store.putRemoteCopy({ laptop: "ubu1", id: "w_9", to_name: SUP_UBU, spawn_req: null, view: null, state: "running", as_of: "2026-11-17T12:00:00.000Z", ended: 0, handoff: null, remote_url: null, told: 0, state_withheld: 0 });
+    r.mbp.store.putRemoteAsk({ laptop: "ubu1", id: local.rid, to_name: SUP_UBU, worker: "w_9", kind: "approval", tool: "Bash", tier: "orchestrator", rule: "probe", preview: "echo probe", created_at: null, state: "open", decision: null, decided_by: null, as_of: "2026-11-17T12:00:00.000Z" });
+    const tools = handlers(r.mbp.sup);
+    expect(await refusal(tools, "request_detail", { id: local.rid })).toBe(`${local.rid} is a request on mbp-1 and ubu1: say which with laptop`);
+    expect(await refusal(tools, "answer_request", { id: local.rid, decision: "allow" })).toBe(`${local.rid} is a request on mbp-1 and ubu1: say which with laptop`);
+    expect(await r.call("request_detail", { id: local.rid, laptop: "mbp-1" })).toMatchObject({ id: local.rid, input: JSON.stringify(PROBE) });
+  });
+});
+
+describe("answer_request for a remote id: the target's result; the copy clears with settled (BOB-69 AC 2)", () => {
+  it("sends answer, returns the target's reply; the copy stays open until settled comes", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.request());
+    t.replies.to = (b) => (b["op"] === "answer" ? { ok: true, request: "r_1", worker_id: "w_9", state: "answered", decision: "allow" } : null);
+    const tools = handlers(t.mbp.sup);
+    const got = JSON.parse((await callTool(tools, "answer_request", { id: "r_1", decision: "allow", message: "go" })).content[0]!.text);
+    expect(t.asked.filter((b) => b["op"] === "answer")).toEqual([{ v: 2, op: "answer", id: "r_1", decision: "allow", message: "go", user_decided: false, resume: true }]);
+    expect(got).toEqual({ id: "r_1", state: "answered", decision: "allow", laptop: "ubu1" });
+    // Not before its settled: the reply alone leaves the copy as it was.
+    expect(t.ask()).toMatchObject({ state: "open", decision: null });
+    expect(((await callTool(tools, "pending_requests", {})).content[0]!.text)).toContain("r_1");
+    await t.deliver(t.settled("answered", { decision: "allow", decided_by: "orchestrator" }));
+    expect(t.ask()).toMatchObject({ state: "answered", decision: "allow", decided_by: "orchestrator" });
+    expect(JSON.parse((await callTool(tools, "pending_requests", {})).content[0]!.text)).toEqual([]);
+  });
+
+  it("a refusal (another worker's request) comes back as the tool's error", async () => {
+    const s = await remoteAsking();
+    // A local worker of ubu1's asks too; mbp-1 holds a copy naming its request as its own worker's.
+    s.ubu.sup.spawn({ project: "studio", role: "bea", task: "local" });
+    await until(() => s.ubu.sessions.length === 2);
+    void s.ubu.sessions[1]!.ask("Bash", PROBE);
+    await until(() => s.ubu.store.requests(["open"]).length === 2);
+    const theirs = s.ubu.store.requests(["open"]).find((r) => r.id !== s.rid)!.id;
+    s.mbp.store.putRemoteAsk({ ...s.mbp.store.remoteAsk("ubu1", s.rid)!, id: theirs });
+    expect(await refusal(handlers(s.mbp.sup), "answer_request", { id: theirs, decision: "allow" })).toBe(`${theirs} isn't a request of a worker ${SUP_MBP} spawned`);
+    expect(s.ubu.store.request(theirs)!.state).toBe("open");
+  });
+
+  it("a refusal (the entry no longer lists the role) comes back as the tool's error (criterion 6)", async () => {
+    const s = await remoteAsking();
+    const closing = s.ubu.sup.shutdown();
+    s.cancel.abort();
+    await closing;
+    running.splice(running.indexOf(s.ubu.sup), 1);
+    // Casper took ann out of mbp-1's entry; ubu1 read its config again at start, and orphaned the request.
+    const again = await boot(s.net, "ubu1", UBU.replace("studio: [ann, bea]", "studio: [bea]"), s.at);
+    await until(() => s.mbp.store.remoteAsk("ubu1", s.rid)?.state === "orphaned");
+    expect(await refusal(handlers(s.mbp.sup), "answer_request", { id: s.rid, decision: "allow" })).toBe(`${SUP_MBP} may no longer spawn studio/ann here, so it can't act on ${s.rid}`);
+    expect(again.store.request(s.rid)!.state).toBe("orphaned");
+  });
+});
+
+describe("a remote worker's request reaches the orchestrator as a local one's (BOB-69 AC 3)", () => {
+  it("an approval and a question, told through notify with the id and laptop; an orphaned one says answering resumes it", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.request(), t.request({ request: "r_2", kind: "question", tool: "AskUserQuestion", tier: "orchestrator", rule: null, preview: "Which one?" }));
+    await until(() => t.net.between(SUP_MBP, "Bob@mbp-1").length === 2);
+    expect(t.net.between(SUP_MBP, "Bob@mbp-1")).toEqual([
+      "ann@ubu1 needs approval for Bash (r_1, ubu1, orchestrator decides; rule probe): echo probe. See pending_requests and answer with answer_request.",
+      "ann@ubu1 asks a question (r_2, ubu1). See pending_requests and answer with answer_request.",
+    ]);
+    // A request event again (a resend) tells nothing new.
+    await t.deliver(t.request(), t.settled("orphaned"));
+    await until(() => t.net.between(SUP_MBP, "Bob@mbp-1").length === 3);
+    expect(t.net.between(SUP_MBP, "Bob@mbp-1")[2]).toBe("ann@ubu1's request r_1 (Bash, ubu1) was orphaned by a restart there: answering it with answer_request resumes the worker; deny with resume: false closes it.");
+  });
+
+  it("on the real target: the notice names the worker as ubu1 names it, and Bob@ubu1 hears nothing", async () => {
+    const s = await remoteAsking();
+    await until(() => s.net.between(SUP_MBP, "Bob@mbp-1").some((b) => b.includes(s.rid)));
+    expect(s.net.between(SUP_MBP, "Bob@mbp-1").filter((b) => b.includes(s.rid))).toEqual([`Ann@ubu1 needs approval for Bash (${s.rid}, ubu1, orchestrator decides; rule probe): echo probe. See pending_requests and answer with answer_request.`]);
+    expect(s.net.between(SUP_UBU, "Bob@ubu1").filter((b) => b.includes(s.rid))).toEqual([]);
+  });
+});
+
+describe("a lead's tools stay on its laptop (BOB-69 AC 4)", () => {
+  it("a lead's pending_requests lists no remote request; request_detail and answer_request refuse a remote id", async () => {
+    const s = await remoteAsking();
+    const local = await localAsking(s.mbp);
+    const lead = handlers(s.mbp.sup, { lead: "w_lead" });
+    const rows = JSON.parse((await callTool(lead, "pending_requests", {})).content[0]!.text) as Array<Record<string, unknown>>;
+    expect(rows.map((r) => [r["id"], r["laptop"]])).toEqual([[local.rid, "mbp-1"]]);
+    const away = `A lead's tools act on its own laptop only (mbp-1); ${s.rid} is a request on another laptop, the orchestrator's`;
+    expect(await refusal(lead, "request_detail", { id: s.rid })).toBe(away);
+    expect(await refusal(lead, "answer_request", { id: s.rid, decision: "allow" })).toBe(away);
+    expect(await refusal(lead, "answer_request", { id: local.rid, decision: "allow", laptop: "ubu1" })).toBe("A lead's tools act on its own laptop only (mbp-1); laptop ubu1 is the orchestrator's");
+    expect(s.ubu.store.request(s.rid)!.state).toBe("open");
+    expect(await callTool(lead, "answer_request", { id: local.rid, decision: "allow" })).not.toHaveProperty("isError");
+  });
+
+  it("the slot tools and reset_worker refuse another laptop, the orchestrator's and a lead's", async () => {
+    const r = await real();
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ["run_slots", {}],
+      ["take_slot", { project: "helix", name: "x", label: "probe" }],
+      ["free_slot", { name: "x" }],
+      ["order_run_queue", { names: ["x"] }],
+      ["reset_worker", { id: "w_1" }],
+    ];
+    for (const [name, args] of calls) {
+      expect(await refusal(handlers(r.mbp.sup), name, { ...args, laptop: "ubu1" })).toBe(`${name} acts on this laptop only (mbp-1); ubu1's is its own orchestrator's`);
+      expect(await refusal(handlers(r.mbp.sup, { lead: "w_lead" }), name, { ...args, laptop: "ubu1" })).toBe("A lead's tools act on its own laptop only (mbp-1); laptop ubu1 is the orchestrator's");
+    }
+  });
+});
+
+describe("poe answers a remote request exactly as a local one (BOB-69 AC 5)", () => {
+  it("one tool, the same arguments, no laptop: one local and one remote request answered", async () => {
+    const s = await remoteAsking();
+    const local = await localAsking(s.mbp);
+    const out: unknown[] = [];
+    for (const id of [local.rid, s.rid]) out.push(await s.call("answer_request", { id, decision: "allow" }));
+    expect(out).toEqual([
+      { id: local.rid, state: "answered", decision: "allow" },
+      { id: s.rid, state: "answered", decision: "allow", laptop: "ubu1" },
+    ]);
+    expect(await local.result).toMatchObject({ behavior: "allow" });
+    expect(await s.result).toMatchObject({ behavior: "allow" });
+    await until(() => s.mbp.store.remoteAsk("ubu1", s.rid)?.state === "answered");
+    expect(await s.call("pending_requests", {})).toEqual([]);
   });
 });

@@ -583,6 +583,10 @@ export class Store {
       : this.all("SELECT * FROM remote_asks WHERE laptop = ? ORDER BY as_of, rowid", laptop);
   }
 
+  remoteAsksOf(id: string): RemoteAskRow[] {
+    return this.all("SELECT * FROM remote_asks WHERE id = ? ORDER BY as_of, rowid", id);
+  }
+
   putRemoteAsk(a: RemoteAskRow): void {
     this.run(
       `INSERT INTO remote_asks (laptop, id, to_name, worker, kind, tool, tier, rule, preview, created_at, state, decision, decided_by, as_of)

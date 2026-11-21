@@ -31,7 +31,6 @@ const Spawn = z.object({
   as: z.enum(["lead", "worker"]).optional(),
   laptop: Laptop,
 });
-const Id = z.object({ id: z.string() });
 const WorkerId = z.object({ id: z.string(), laptop: Laptop });
 const Reset = z.object({ id: z.string(), model: z.string().optional(), effort: z.enum(EFFORTS).optional(), laptop: Laptop });
 const TakeSlot = z.object({ project: z.string(), name: z.string().min(1), label: z.string().min(1), laptop: Laptop });
@@ -48,7 +47,9 @@ const AnswerArgs = z.object({
   answers: z.record(z.string(), z.string()).optional(),
   user_decided: z.boolean().default(false),
   resume: z.boolean().default(true),
+  laptop: Laptop,
 });
+const RequestId = z.object({ id: z.string(), laptop: Laptop });
 const UpgradeArgs = z.object({ laptop: z.string().min(1), tag: z.string().regex(UPGRADE_TAG, "must be a release tag, v<x.y.z> or v<x.y.z>-rc.<n>"), restart: z.enum(UPGRADE_RESTARTS).optional() });
 const AuditArgs = z.object({ limit: z.number().int().positive().max(500).default(50) });
 
@@ -71,6 +72,10 @@ const AT = {
     type: "string",
     description: "Another laptop's BobNet id (e.g. ubu1): act there, through its supervisor. Default: this laptop. A worker spawned elsewhere is found without it.",
   },
+};
+/** `laptop` on the request tools (§5): only when an id is on two laptops. */
+const AT_REQUEST = {
+  laptop: { type: "string", description: "The laptop the request is on (e.g. ubu1). Not needed: a request of a worker spawned elsewhere is found without it." },
 };
 /** `laptop` on the tools that act on this laptop only (§5): another is refused. */
 const HERE = { laptop: { type: "string", description: "This laptop only; another laptop's is its own orchestrator's." } };
@@ -148,8 +153,13 @@ export const TOOLS = [
   },
   { name: "tail_worker", description: "The worker's last n events, one line each.", inputSchema: obj({ id: { type: "string" }, n: { type: "number" }, ...AT }, ["id"]) },
   { name: "worker_summary", description: "A short digest of what a worker has done: tools used, files changed, last message, result.", inputSchema: obj({ id: { type: "string" }, ...AT }, ["id"]) },
-  { name: "pending_requests", description: "Open approvals and questions across all workers (including ones orphaned by a restart, until they can no longer resume or are a day old), one line each. request_detail gives one in full.", inputSchema: obj({}) },
-  { name: "request_detail", description: "One request in full, its whole input included. Only when the one-line preview isn't enough to decide.", inputSchema: obj({ id: { type: "string" } }, ["id"]) },
+  {
+    name: "pending_requests",
+    description:
+      "Open approvals and questions across all workers (including ones orphaned by a restart, until they can no longer resume or are a day old), one line each, with the laptop each is on: workers you spawned on another laptop too (their rows with as_of). request_detail gives one in full.",
+    inputSchema: obj({}),
+  },
+  { name: "request_detail", description: "One request in full, its whole input included. Only when the one-line preview isn't enough to decide.", inputSchema: obj({ id: { type: "string" }, ...AT_REQUEST }, ["id"]) },
   {
     name: "answer_request",
     description:
@@ -162,6 +172,7 @@ export const TOOLS = [
         answers: { type: "object", additionalProperties: { type: "string" } },
         user_decided: { type: "boolean" },
         resume: { type: "boolean", description: "Orphaned requests only: false closes it without resuming the worker." },
+        ...AT_REQUEST,
       },
       ["id", "decision"],
     ),
@@ -223,6 +234,19 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
   const where = (id: string, laptop: string | undefined, tool: string): string | null => {
     if (!opts.lead) return sup.remoteWhere(id, laptop);
     here(laptop, tool);
+    return null;
+  };
+  /** The laptop a request id is on (§5): null for this one. A lead's are all here, and a remote request id is refused. */
+  const whereRequest = (id: string, laptop: string | undefined, tool: string): string | null => {
+    if (!opts.lead) return sup.requestWhere(id, laptop);
+    here(laptop, tool);
+    let elsewhere: string | null;
+    try {
+      elsewhere = sup.requestWhere(id);
+    } catch {
+      elsewhere = null; // on this laptop and another: the lead's is this one's
+    }
+    if (elsewhere !== null) throw new SupervisorError(`A lead's tools act on its own laptop only (${sup.laptopName}); ${id} is a request on another laptop, the orchestrator's`);
     return null;
   };
   /** A remote worker as a tool shows it: where it is and when that was so. */
@@ -344,11 +368,36 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
       // The handoff the copy keeps (§6), where the reply has none.
       return { ...sup.copyHandoff(sup.remoteCopy(laptop, x.id)), ...fields, laptop, ...fromCopy(r) };
     },
-    pending_requests: () => sup.pending(),
-    request_detail: (a) => sup.requestDetail(Id.parse(a).id),
-    answer_request: (a) => {
+    pending_requests: () => {
+      const local = sup.pending().map((r) => ({ ...r, laptop: sup.laptopName }));
+      // A lead's are its own laptop's (§5); the orchestrator's include its remote workers', from their copies.
+      return opts.lead ? local : [...local, ...sup.remotePending()];
+    },
+    request_detail: async (a) => {
+      const x = RequestId.parse(a);
+      const laptop = whereRequest(x.id, x.laptop, "request_detail");
+      if (laptop === null) return sup.requestDetail(x.id);
+      const r = await sup.remoteCall(laptop, { v: 2, op: "request", id: x.id });
+      return { ...(r["request"] as Record<string, unknown>), laptop, ...(r["truncated"] ? { truncated: true, note: `cut to fit a message from ${laptop}` } : {}) };
+    },
+    answer_request: async (a) => {
       const x = AnswerArgs.parse(a);
       if (x.decision === "answer" && !x.answers) throw new AnswerError("decision \"answer\" needs answers");
+      const laptop = whereRequest(x.id, x.laptop, "answer_request");
+      if (laptop !== null) {
+        // The target answers it as a local one (§4) and its reply is the result; the copy clears with its `settled`.
+        const r = await sup.remoteCall(laptop, {
+          v: 2,
+          op: "answer",
+          id: x.id,
+          decision: x.decision,
+          ...(x.message ? { message: x.message } : {}),
+          ...(x.decision === "answer" ? { answers: x.answers! } : {}),
+          user_decided: x.user_decided,
+          resume: x.resume,
+        });
+        return { id: r["request"], state: r["state"], decision: r["decision"], ...(r["resumed"] ? { resumed: r["resumed"] } : {}), laptop };
+      }
       // A lead's own requests are Casper's: it never approves its own call.
       if (opts.lead && sup.requestDetail(x.id).worker_id === opts.lead) throw new AnswerError(`${x.id} is your own request; Casper answers it`);
       // One answerer (ADR 0007 §4): a worker another laptop spawned is answered there, or by Casper on the dashboard.
