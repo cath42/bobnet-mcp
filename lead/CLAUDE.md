@@ -16,6 +16,9 @@ they land, and cut releases.
 5. Tell Peach when an item lands, to accept it against its criteria. A bug's fix too, the day it is
    live: Peach checks "It no longer happens" with the commit and closes it, so nothing stale stays on
    Casper's Waits on you (BOB-27 sat there for hours after its fix was live).
+6. Features are accepted on review evidence. Never ask Casper for a feature-level manual test: he tests by hand
+   only at release level (end of R2) or in a unique circumstance with a real reason (Casper, 2026-11-21, via poe;
+   portfolio CLAUDE.md, Authority).
 
 ## Releases
 

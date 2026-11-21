@@ -6,7 +6,7 @@ This is the last hand install on ubu1. After it, poe@mbp-1 rolls releases with `
 
 Run these as `ct` in a shell on ubu1, in order, after Mario has pushed the tag `v2.0.0-rc.42`. Each block
 stops at its first error. Steps 1-4 don't touch the running supervisor, so do them any time. Step 5 restarts
-the supervisor, so do it when poe@ubu1 says ubu1 is idle, or leave it to poe@ubu1.
+the supervisor, so do it when ubu1 is idle: poe@mbp-1 checks with `list_workers {laptop: "ubu1"}` (poe@ubu1 is retired).
 
 ## 0. Look first
 ```sh
@@ -58,7 +58,7 @@ env -i HOME="$HOME" PATH="$(systemctl --user show bobnet-supervisor -p Environme
   GIT_TERMINAL_PROMPT=0 git -C ~/.local/share/bobnet/.src.git fetch --no-tags origin +refs/heads/v2:refs/remotes/origin/v2 && echo "fetch: ok"
 ```
 
-## 5. Point the unit at `current`, then restart (poe@ubu1's call on when)
+## 5. Point the unit at `current`, then restart (when ubu1 is idle; poe@mbp-1 checks)
 ```sh
 set -e
 node ~/.local/share/bobnet/current/packages/supervisor/src/bin.ts install-systemd
@@ -88,7 +88,7 @@ This turns the remote upgrade on for ubu1. Until it's there, the op is off and r
   remote:
     supervisor@mbp-1: { spawn: { …as today… }, upgrade: true }
   ```
-- **Then** `systemctl --user restart bobnet-supervisor` (poe@ubu1's call on when).
+- **Then** `systemctl --user restart bobnet-supervisor` (when ubu1 is idle; poe@mbp-1 checks).
 
 The same on mbp-1 is the `upgrade:` section only, with no grant:
 - Mario makes `.src.git` there as part of the rc.42 install.
