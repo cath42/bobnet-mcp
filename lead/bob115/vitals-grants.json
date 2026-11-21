@@ -1,0 +1,14 @@
+[
+  {
+    "project": "vitals",
+    "agent": "Vita",
+    "laptop": "mbp-1",
+    "role": "lead",
+    "read": true,
+    "items": "all",
+    "fields": ["status", "order", "content", "criteria", "triage", "create"],
+    "sessions": true,
+    "questions": true,
+    "admin": false
+  }
+]
