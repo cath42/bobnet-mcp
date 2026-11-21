@@ -41,6 +41,18 @@ describe("findSecret", () => {
   });
 });
 
+/** The fastest of 3 runs after one to warm up: a wall-clock bound, not the JIT's first pass (BOB-87). */
+function fastest(run: () => unknown): number {
+  run();
+  let best = Infinity;
+  for (let i = 0; i < 3; i++) {
+    const t = performance.now();
+    run();
+    best = Math.min(best, performance.now() - t);
+  }
+  return best;
+}
+
 describe("redactSecrets", () => {
   const MARK = "[withheld: looks like a credential]";
   it("replaces each matching span, every one, and keeps the rest", () => {
@@ -97,8 +109,25 @@ describe("redactSecrets", () => {
   it("a nested key leaves no tail of the outer one (BOB-79 AC 3)", () => {
     const out = redactSecrets(`before\n${BEGIN()}\nouter1\n${BEGIN("EC")}\n${BODY}\n${END("EC")}\nouter-tail\n${END()}\nafter`, MARK);
     expect(out).toBe(`before\n${MARK}\nafter`);
-    // The outer END missing: the inner block goes whole, the outer BEGIN its line.
-    expect(redactSecrets(`${BEGIN()}\nprose\n${BEGIN("EC")}\n${BODY}\n${END("EC")}\nafter`, MARK)).toBe(`${MARK}\nprose\n${MARK}\nafter`);
+    // Each BEGIN through the first END after it, unioned with the stack's pairs (Toad, consult on BOB-85).
+    expect(redactSecrets(`before\n${BEGIN()}\nouter1\n${BEGIN()}\n${BODY}\n${END()}\nouter-tail\n${END()}\nafter`, MARK)).toBe(`before\n${MARK}\nafter`);
+  });
+  it("each BEGIN through the first END after it; only one with no END after it is its line (BOB-85, §14 A-fixes-3 2)", () => {
+    // AC 2: the outer key's body goes too (BOB-79's stack left OUTER in clear).
+    const nested = `${BEGIN()}\nOUTERKEYDATA\n${BEGIN()}\nINNER\n${END()}\ntail`;
+    expect(redactSecrets(nested, MARK)).toBe(`${MARK}\ntail`);
+    // A BEGIN quoted in prose before a real key goes through that key's END: more withheld, nothing leaked.
+    const prose = `${BEGIN()}\nprose\n${BEGIN("EC")}\n${BODY}\n${END("EC")}\nafter`;
+    expect(redactSecrets(prose, MARK)).toBe(`${MARK}\nafter`);
+    // As before: a stray END before a key, PGP with CRLF, a v3 .ppk.
+    const stray = `${END()}\nbetween\n${BEGIN()}\n${BODY}\n${END()}`;
+    expect(redactSecrets(stray, MARK)).toBe(`${END()}\nbetween\n${MARK}`);
+    const pgp = `Key:\r\n${PGP.replace(/\n/g, "\r\n")}\r\nkept`;
+    expect(redactSecrets(pgp, MARK)).toBe(`Key:\r\n${MARK}\r\nkept`);
+    expect(redactSecrets(`Key:\n${PPK3}\nkept`, MARK)).toBe(`Key:\n${MARK}\nkept`);
+    // A BEGIN after the last END: its own line, the rest kept.
+    expect(redactSecrets(`${PEM}\n${BEGIN()}\n${BODY}`, MARK)).toBe(`${MARK}\n${MARK}\n${BODY}`);
+    for (const text of [nested, prose, stray, pgp]) expect(findSecret(redactSecrets(text, MARK)), text).toBeNull();
   });
   it("one mark, not a mark after a mark; nothing it gives still matches findSecret (BOB-79 AC 4)", () => {
     const ant = "sk-ant-api03-" + "a".repeat(30);
@@ -125,11 +154,7 @@ describe("redactSecrets", () => {
       "password=".repeat(n / 9),
       "api_key: " + MARK.repeat(n / MARK.length),
     ];
-    for (const text of inputs) {
-      const t = performance.now();
-      redactSecrets(text, MARK);
-      expect(performance.now() - t, text.slice(0, 40)).toBeLessThan(50);
-    }
+    for (const text of inputs) expect(fastest(() => redactSecrets(text, MARK)), text.slice(0, 40)).toBeLessThan(50);
   });
 });
 
@@ -249,11 +274,143 @@ describe("findSecret, widened (BOB-80)", () => {
       "secret_detected ".repeat(n / 16),
     ];
     for (const text of inputs) {
-      for (const run of [() => findSecret(text), () => redactSecrets(text, MARK)]) {
-        const t = performance.now();
-        run();
-        expect(performance.now() - t, text.slice(0, 40)).toBeLessThan(50);
+      for (const run of [() => findSecret(text), () => redactSecrets(text, MARK)]) expect(fastest(run), text.slice(0, 40)).toBeLessThan(50);
+    }
+  });
+});
+
+// A-fixes-3 (ADR 0007 §14, "Ruling, A-fixes-3"). Headers built from parts, as above.
+describe("redactSecrets, every span on the original text (BOB-84)", () => {
+  const MARK = "[withheld: looks like a credential]";
+  const ANT = "sk-ant-api03-" + "a".repeat(30);
+  const PEM_PART = `-----${"BEGIN"} RSA PRIVATE KEY-----\nMIIE\n-----${"END"} RSA PRIVATE KEY-----`;
+  it("a short value doesn't swallow the next assignment's name and leave its value (AC 2)", () => {
+    expect(redactSecrets('password=x;password="RealSecret123"', MARK)).toBe(`${MARK}"`);
+    expect(redactSecrets("DB_PASSWORD=;API_KEY='Hunter2hunter2'", MARK)).toBe(`DB_${MARK}'`);
+    expect(redactSecrets('{api_key:x,password:"Hunter2hunter2"}', MARK)).toBe(`{${MARK}"}`);
+    // One mark: the first value reaches the second assignment's span and goes through it.
+    expect(redactSecrets('api_key=secret:"abcdefgh"', MARK)).toBe(`${MARK}"`);
+    // The token is a span on the original text, not cut out first: the assignment's run goes on past it.
+    expect(redactSecrets(`secret=${ANT}{=Hunter2hunter2 kept`, MARK)).toBe(`${MARK} kept`);
+    for (const text of ['password=x;password="RealSecret123"', "DB_PASSWORD=;API_KEY='Hunter2hunter2'", '{api_key:x,password:"Hunter2hunter2"}', 'api_key=secret:"abcdefgh"', `secret=${ANT}{=Hunter2hunter2`]) {
+      const out = redactSecrets(text, MARK);
+      expect(out.split(MARK).length - 1, text).toBe(1);
+      expect(findSecret(out), text).toBeNull();
+      expect(out, text).not.toMatch(/RealSecret123|Hunter2hunter2|abcdefgh/);
+    }
+  });
+  it("a short value alone stays; one that reaches a span goes through it (AC 1)", () => {
+    expect(redactSecrets("password=x; then", MARK)).toBe("password=x; then");
+    expect(redactSecrets(`api_key=${MARK} then`, MARK)).toBe(`${MARK} then`);
+    expect(redactSecrets(`password=ab-----${"BEGIN"} RSA PRIVATE KEY-----\nMIIE\n-----${"END"} RSA PRIVATE KEY-----\nkept`, MARK)).toBe(`${MARK}\nkept`);
+    // A span that ends inside a word (a Private-MAC's hex) takes the word: nothing glued after it matches once marked.
+    // A mark never sits inside a run of letters and digits: the run goes with it, so nothing beside it matches.
+    const ppk = `${PPK_HEAD(2)} ssh-rsa\nPrivate-MAC: ${"a1".repeat(20)}ghp_${"c".repeat(36)} kept`;
+    expect(redactSecrets(ppk, MARK)).toBe(`${MARK} kept`);
+    expect(redactSecrets(`AKIAIOSFODNN7EXAMPLE${PPK_HEAD(3)} ssh-ed25519\nkept`, MARK)).toBe(`${MARK}\nkept`);
+    expect(redactSecrets(`env DB_PASSWORD=hunter2hunter2 kept`, MARK)).toBe(`env DB_${MARK} kept`);
+    const glued = redactSecrets(`${PEM_PART}eyJ${"h".repeat(12)}.eyJ${"p".repeat(12)}.${"s".repeat(12)}{ kept`, MARK);
+    expect(glued).toBe(`${MARK}.eyJ${"p".repeat(12)}.${"s".repeat(12)}{ kept`);
+    expect(findSecret(glued)).toBeNull();
+  });
+  it("property: nothing redacted still matches, and no assignment value at any keyword survives (AC 3)", () => {
+    // The oracle: password_assignment as findSecret has it, tried at every position.
+    const at = /(?<![A-Za-z0-9])(?:password|passwd|secret(?!_detected\b)|api[_-]?key)(?:_[A-Za-z0-9]{1,32}){0,4}\s*[:=]\s*["']?([^\s"'\\]{8,})/iy;
+    let seed = 0x2f6b1a3d;
+    const rand = (n: number) => {
+      seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) >>> 0;
+      return seed % n;
+    };
+    const pick = <T,>(xs: readonly T[]) => xs[rand(xs.length)]!;
+    const KEYS = ["password", "PASSWORD", "DB_PASSWORD", "passwd", "secret", "SECRET_KEY", "api_key", "API-KEY", "apikey", "AWS_SECRET_ACCESS_KEY", "secret_detected", "password_detected", "x_password", "Xpassword"];
+    const SEPS = ["=", ":", " = ", ': "', "='", '="', ":'", "=\"'", " :\t"];
+    const PUNCT = [";", ",", '"', "'", " ", "\n", "\r\n", "\\", "{", "}", "-", "_", "", "", ""];
+    const SPANS = [ANT, "AKIAIOSFODNN7EXAMPLE", "ghp_" + "c".repeat(36), "Bearer " + "t".repeat(30), MARK, `-----${"BEGIN"} RSA PRIVATE KEY-----`, `-----${"END"} RSA PRIVATE KEY-----`, `${PPK_HEAD(3)} ssh-ed25519`, `Private-MAC: ${"b2".repeat(8)}`, "eyJ" + "h".repeat(12) + ".eyJ" + "p".repeat(12) + "." + "s".repeat(12)];
+    let id = 0;
+    const value = () => (rand(3) === 0 ? pick(["x", "ab", "", "abc-", "1234567"]) : `Tok${id++}Z${"v".repeat(rand(8))}`);
+    let checked = 0;
+    for (let n = 0; n < 20_000; n++) {
+      let text = "";
+      for (let k = 1 + rand(8); k > 0; k--) {
+        const r = rand(10);
+        text += r < 5 ? pick(KEYS) + pick(SEPS) + value() : r < 7 ? pick(SPANS) : r < 9 ? pick(PUNCT) : value();
+        text += pick(PUNCT);
       }
+      const out = redactSecrets(text, MARK);
+      expect(findSecret(out), JSON.stringify(text)).toBeNull();
+      for (let i = 0; i < text.length; i++) {
+        at.lastIndex = i;
+        const m = at.exec(text);
+        if (!m) continue;
+        for (const tok of m[1]!.match(/Tok\d+Z/g) ?? []) {
+          checked++;
+          expect(out.includes(tok), `${tok} in ${JSON.stringify(text)} -> ${JSON.stringify(out)}`).toBe(false);
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(10_000);
+  });
+  it("linear: 200 KB adversarial inputs redact in under 50 ms each (AC 4)", () => {
+    const n = 200_000;
+    const inputs = [
+      "password=".repeat(n / 9),
+      "password=x;".repeat(n / 11),
+      "_password".repeat(n / 9),
+      "api_key: " + MARK.repeat(n / MARK.length),
+      `password=${MARK}`.repeat(n / 45),
+      `password=ab-----${"BEGIN"} RSA PRIVATE KEY-----\n`.repeat(n / 43),
+      `secret=${"-----END RSA PRIVATE KEY-----"}`.repeat(n / 36),
+      `${PPK_HEAD(3)}password=`.repeat(n / 30),
+      `Private-MAC: ab password=`.repeat(n / 25),
+      "password=" + "x".repeat(n),
+      ("password=" + ANT + ";").repeat(n / 52),
+      // The edges: spans glued to words and token runs on either side.
+      "xoxb-aaaaaaaaaa_".repeat(n / 16),
+      "AKIAIOSFODNN7EXAMPLE-".repeat(n / 21),
+      `AKIAIOSFODNN7EXAMPLE${PPK_HEAD(3)}`.repeat(n / 42),
+      `${PPK_HEAD(3)}abcPrivate-MAC: abghp_`.repeat(n / 43),
+      `-----${"END"} RSA PRIVATE KEY-----eyJ`.repeat(n / 32),
+      `x${PEM_PART}x`.repeat(n / 70),
+      "a".repeat(n / 2) + PEM_PART + "b".repeat(n / 2),
+    ];
+    for (const text of inputs) expect(fastest(() => redactSecrets(text, MARK)), text.slice(0, 40)).toBeLessThan(50);
+  });
+});
+
+describe("findSecret, jwt and the `_detected` guard (BOB-86)", () => {
+  const MARK = "[withheld: looks like a credential]";
+  const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+  it("a JWT after a space, =, :, a quote, / or Bearer is detected and redacted (AC 1)", () => {
+    for (const before of ["token ", "t=", "t:", '"', "/", "Bearer ", ""]) {
+      const text = `${before}${JWT} kept`;
+      expect(findSecret(text), before).toBe("jwt");
+      // After `Bearer `, the bearer span takes both.
+      expect(redactSecrets(text, MARK), before).toBe(before === "Bearer " ? `${MARK} kept` : `${before}${MARK} kept`);
+    }
+  });
+  it("one glued after a `-` or a word is no longer detected: the narrowing §14 accepts (AC 1)", () => {
+    for (const text of [`abc-${JWT}`, `x${JWT}`, `_${JWT}`]) {
+      expect(findSecret(text), text).toBeNull();
+      expect(redactSecrets(text, MARK), text).toBe(text);
+    }
+  });
+  it("`eyJ-` repeated to 16 KiB and 200 KB returns in under 50 ms (AC 2)", () => {
+    for (const text of ["eyJ-".repeat(16_384 / 4), "eyJ-".repeat(200_000 / 4), "a-eyJ".repeat(200_000 / 5), "eyJaaaaaaaaaaaa.".repeat(200_000 / 16)]) {
+      for (const run of [() => findSecret(text), () => redactSecrets(text, MARK)]) expect(fastest(run), text.slice(0, 20)).toBeLessThan(50);
+    }
+  });
+  it("the guard is on `secret` only: password_detected is detected, secret_detected and the stand-ins are not (AC 3)", () => {
+    for (const text of ["password_detected=hunter2hunter2", "PASSWD_DETECTED: abcdefghij", "api_key_detected=abcdefghij"]) {
+      expect(findSecret(text), text).toBe("password_assignment");
+      expect(findSecret(redactSecrets(text, MARK)), text).toBeNull();
+    }
+    for (const text of [
+      "secret_detected: password_assignment", "secret_detected: the handoff holds what looks like a credential (password_assignment); take it out and close again",
+      "SECRET_DETECTED=password_assignment", MARK, "[hidden: looks like it contains a credential]",
+      "Message looks like it contains a credential (password_assignment); send a path instead",
+    ]) {
+      expect(findSecret(text), text).toBeNull();
+      expect(redactSecrets(text, MARK), text).toBe(text);
     }
   });
 });
