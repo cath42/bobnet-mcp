@@ -238,6 +238,50 @@ a5ed7dd. Where they say more than §1-§7, they win.
        it doesn't prompt.
      - The rc notes have the as-the-service fetch test.
 
+## As built, build C
+
+Toad, 2026-11-21. This is build C, v2 47b422c..ec3fb35 (BOB-91..95), as reviewed in
+`reviews/2026-11-21-bob44-build-c.md`. Where it says more than §1-§7 and the rulings above, it wins. None of it is on
+the wire.
+
+1. **The guard (ruling 5, BOB-91, BOB-94).**
+   - Guarded: the config folder, the default `<root>`, `upgrade.root` and `upgrade.repo` (`config.ts`
+     `guardedFolders`).
+   - Paths are compared by real path with case folded, on every laptop. A folder is named whole, so a
+     same-prefix sibling isn't it.
+   - Relative words are resolved from the worker's cwd and its `cd`s.
+   - It is still a best effort. The sandbox enforces.
+2. **The commit, not the tag (§3).** `verify` resolves `refs/tags/<tag>^{commit}` once. The ancestry check, both
+   `git show`s and `git archive` use that SHA. `build` archives only a tag this process verified.
+3. **Verify's deadline.**
+   - All of verify's git calls share one deadline of 75 s (`VERIFY_BUDGET_MS`), inside the requester's 90 s. So the
+     fetch has up to 75 s, not ruling 9's 60.
+   - A call that runs out is a refusal that says which call it was.
+   - A timed-out command returns at its deadline, even if a child of it holds the pipe.
+4. **The row's stages (§4.3, §4.5).**
+   - The `upgrades` row is written when the build starts, not at the switch.
+   - Its stages are `installing`, then `waiting` (installed, waiting for idle), then `restarting`.
+   - It ends `ready`, `failed` or `installed` (`restart: "no"`). Every failure ends it.
+   - At start, `resume()` reads every open row:
+     - `installing` fails, step `start`, "restarted while installing", and its `.<tag>.partial` is removed;
+     - `waiting` fails, step `wait`; the tag stays installed, so asking again switches to it;
+     - `restarting` goes as in §4.5.
+   - The values are new text in a TEXT column, so this needs no migration. rc.44 leaves `installing` and `waiting`
+     rows unread, which is harmless.
+5. **A shutdown isn't idle (§4.2).** A worker's exit during a shutdown doesn't trigger the switch. The next process
+   fails the waiting row. Two other paths can still trigger it: a slot's release and a request's finish (review C,
+   m1).
+6. **The drain holds (§4.4).** From the switch to the exit, nothing new starts:
+   - no queued worker is launched; it stays queued, and the new process starts it;
+   - no run slot is given; the waiters wait;
+   - a `v: 2` remote spawn is refused, before or after its board join, with "<Role> isn't spawned: this
+     supervisor is restarting into <tag>; ask again once it is ready". It uses the existing refusal shape. It is a
+     new reason, not a limit.
+   - a consult that would start a worker is refused.
+
+   A refusal after the join leaves the board a join with no run behind it. A crash between the join and the spawn
+   leaves the same. The retry after `ready` joins again as a new worker.
+
 ## Consequences
 
 - A release is one request per laptop. ubu1 needs no poe of its own and no ssh.
