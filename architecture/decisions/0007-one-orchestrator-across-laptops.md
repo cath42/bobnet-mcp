@@ -896,3 +896,18 @@ has 0 leaks and 0 residual matches, and each 200 KB adversarial input takes unde
    - a `summary` stand-in goes out without `ok`;
    - reconcile reports its withheld batches before an early return;
    - the 50 ms timing tests warm up once and take the best of 3.
+
+**As built, A-fixes-3** (bb51add, 5963584; `reviews/2026-11-20-bob44-a-fixes-3.md`). Two departures from the
+points above, both withholding more, never less:
+- **Point 2, unioned with the stack's pairs.** Each BEGIN goes through the first END of its kind after it, and,
+  unioned with that, an END closes the latest open BEGIN (Toad, consult on BOB-85). The first-END rule alone
+  leaves the outer tail of `BEGIN A … BEGIN B … END B tail END A` in clear. Both walks are linear. Point 2's
+  "the stack is withdrawn" holds only for the stack used alone.
+- **Point 1, a mark never starts or ends inside a word.** A letter or digit before a span takes its word with
+  it, and a run of token characters after a span goes with it. Otherwise the text beside a mark matches once
+  marked (`…EXAMPLE` then a PuTTY header; a Private-MAC's hex then `ghp_…`), which the sketch missed.
+  - **Linear:** each character is scanned by the edge once, using a cursor over the merged spans in order.
+  - bb51add rescans a token run once per span (`xoxb-…_-` repeated is quadratic), and A-fixes-4 fixes that.
+- **Test property, widened later (a task, not rc.42):** every match of every pattern, at any start in the input,
+  lies inside one span. Point 1's property covers only `password_assignment`. Bearer and jwt matches that
+  overlap an earlier match of their own pattern still leave their tail (rc.41 does too).
