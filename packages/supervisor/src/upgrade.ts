@@ -358,6 +358,9 @@ export class Upgrades {
     } finally {
       this.verifying = false;
     }
+    // One waiting for idle may have started its restart during the verify (poke doesn't wait for it): refused, not run under the exit.
+    const now = this.current;
+    if (now && now.state !== "waiting") throw new UpgradeRefused(`an upgrade to ${now.tag} is under way (${now.state}); ask again once it has ended`);
     if (this.current?.state === "waiting") this.fail(this.current, "wait", `superseded by ${tag}`);
     const u: Pending = { req, requester, tag, from: this.host.version, to, restart, installed, state: "installing" };
     this.current = u;

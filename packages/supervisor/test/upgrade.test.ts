@@ -49,6 +49,7 @@ class FakeReleases implements Releases {
   missingWhy: string | null = null;
   refuse: Record<string, string> = {};
   gate: Promise<void> | null = null;
+  verifyGate: Promise<void> | null = null;
   buildFails: UpgradeStepError | null = null;
   checkFails: UpgradeStepError | null = null;
   current: string | null = null;
@@ -61,6 +62,7 @@ class FakeReleases implements Releases {
   }
   async verify(tag: string) {
     this.calls.push(`verify ${tag}`);
+    if (this.verifyGate) await this.verifyGate;
     if (this.refuse[tag]) throw new UpgradeRefused(this.refuse[tag]);
     return tag.slice(1);
   }
@@ -294,6 +296,31 @@ describe("the op (AC 1)", () => {
     open();
     await until(() => s.bob().length === 1);
     expect(s.bob()[0]).toContain("2.0.0-rc.43 installed");
+  });
+
+  it("a second local upgrade whose verify ends after the first one's restart began is refused, and builds nothing (BOB-92 AC 1)", async () => {
+    const s = await setup();
+    const own = handlers(s.ubu.sup);
+    await call(own, "spawn_worker", { project: "studio", role: "ann", task: "busy" });
+    await until(() => s.ubu.sessions.length === 1);
+    await call(own, "upgrade_supervisor", { laptop: "ubu1", tag: TAG });
+    await until(() => s.ubuBob().some((b) => b.includes("installed")));
+    // The second is checking its tag when the worker ends: the first switches and starts its exit.
+    let open!: () => void;
+    s.releases.verifyGate = new Promise((r) => (open = r));
+    const second = call(own, "upgrade_supervisor", { laptop: "ubu1", tag: "v2.0.0-rc.44" });
+    await until(() => s.releases.calls.includes("verify v2.0.0-rc.44"));
+    s.ubu.sessions[0]!.finish();
+    await until(() => s.ubu.restarts.length === 1);
+    open();
+    await expect(second).rejects.toThrow(`an upgrade to ${TAG} is under way (restarting); ask again once it has ended`);
+    await tick(20);
+    expect(s.releases.calls.filter((c) => c.startsWith("build") || c.startsWith("switch"))).toEqual([`build ${TAG}`, `switch ${TAG}`]);
+    expect(s.releases.current).toBe(TAG);
+    expect(s.ubuBob().filter((b) => b.startsWith("ubu1: "))).toEqual([
+      "ubu1: supervisor 2.0.0-rc.43 installed, restarting when idle (waiting on 1 worker)",
+      `ubu1: supervisor restarting into 2.0.0-rc.43 (from ${RUNNING})`,
+    ]);
   });
 
   it("idempotent: a redelivered request gets its stored reply again and runs once", async () => {
