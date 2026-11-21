@@ -41,3 +41,11 @@ mbp-1). No rc in this session.
 - Build D is all on v2 (5c8a6c1..a0cfe42). No rc in this session.
 - Next: review D of a0cfe42 (BOB-105; Toad, small fix, an independent read optional; the points for the reviewer
   are in the Log). Then rc.45: tag + push; poe hand-installs on mbp-1. ubu1 stays on rc.41 until Casper's A-2.
+- 17:0xZ First land of the close (docs only) failed on a broker test timeout under load (board-status.test.ts "cuts a
+  list at 100 ...", 5000 ms; Bill's LAND-56 build was running). Unrelated to the change.
+- 17:0xZ A-2: Casper said "go" (to poe, 10:53 CST: "A-2 doesnt look like a question, just an approval to go? go")
+  and marked A-2 done on the dashboard (so the answer can't be written again). poe added mbp-1's `upgrade:`
+  section (live at the rc.45 install). For ubu1, rc42-ubu1-install.md rewritten as a self-contained runbook for
+  one Claude Code session on ubu1: TAG=v2.0.0-rc.44; step 6 grants `upgrade: true` and `athletic: [reviewer]` on
+  `supervisor@mbp-1` (the sender of everything poe's supervisor tools send, BOB-82), `poe@mbp-1` left as is;
+  step 7 the bob44-probe rule (ADR 0007 §4); one restart for both.
