@@ -10,6 +10,9 @@ bf2203f). Two reviewers:
 
 **Result: 0 blockers, 1 major (F1), minors as listed. No secret leaks.** BOB-73 is correct. BOB-74 is signed off.
 
+**F1(a) deploy:** poe opened a window. Mario's `pnpm run deploy` was denied by his session's permission
+classifier (not worked around), and poe was told (m_e85ce084).
+
 ## F1 (major): until the broker carries the narrowed detector, a copy can stay "running" with nobody told
 
 Both reviewers found this. Toad rated it minor 1, the independent reviewer major 1. Mario rates it **major**.
@@ -78,7 +81,10 @@ words: **"1. Yes, 2. No, 3. I dont understand the question"**. poe is asking Q3 
 - **Q2: no.** A BEGIN line with no END must not withhold the rest of the field. That is task F2: redact only the
   BEGIN line when no END follows. BEGIN..END is still redacted whole. It changes redaction only, so it needs no
   broker deploy.
-- **Q3: pending**, until poe brings Casper's answer.
+- **Q3: yes** (asked again in plain words, with the cost of occasional false withholds named; m_8b3e1c0e,
+  ~20:14 CST, verbatim "3. Yes"). That is task F3:
+  - detect `X_PASSWORD=`-style names, PGP private key blocks, lowercase PEM headers and PuTTY `.ppk` keys;
+  - it widens `findSecret`, so it needs a broker deploy after the laptops carry it (Toad rules the order).
 
 The questions as asked:
 
