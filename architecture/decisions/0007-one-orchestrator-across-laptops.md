@@ -911,3 +911,57 @@ points above, both withholding more, never less:
 - **Test property, widened later (a task, not rc.42):** every match of every pattern, at any start in the input,
   lies inside one span. Point 1's property covers only `password_assignment`. Bearer and jwt matches that
   overlap an earlier match of their own pattern still leave their tail (rc.41 does too).
+
+**As built, build B** (BOB-66..71, 75; b289bfe..b2bc9af, rc.43; `reviews/2026-11-21-bob44-build-b.md`). The decisions
+stand. Where the build differs, by section:
+
+- **§2, the events' fields.**
+  - `request`: `{worker, spawn_req, request, kind, tool, tier, rule, preview, created_at}`.
+  - `settled`: `{…, request, state, decision, decided_by}`.
+  - `resumed`: `{worker: <the new id>, spawn_req, previous: <the old id>, request}`.
+  - The request id is `request`, never `id`.
+- **§2, the replies.**
+  - `answer` replies `{request, worker_id, state, decision, resumed?}`. A string `worker` failed the requester's
+    `RemoteReply`, which types it as a view.
+  - `request` replies `{request: <the row in full>, truncated?}`, redacted field by field like any reply.
+  - `list` gives each worker `requests` (its open and orphaned ones, the `request` event's fields and `state`).
+- **§4, routing.** The one test is `isV2()` (`remote_by`, `spawn_req`, and `spawned_by` an address, set together).
+  Every target path calls it.
+- **§4, the abort path.** It settles the row (`expired`, by `stop`) on a stop, a reset or a dashboard stop, but not
+  during a shutdown or a crash. That row stays open, and the next start orphans it, so answering still resumes the
+  worker.
+- **§4, the answer's auth, in order:**
+  1. the sender is in `remote`;
+  2. the request is a worker's that the sender spawned (an unknown request and another sender's are refused alike);
+  3. the entry still lists that worker's project and role;
+  4. the request is open or orphaned.
+  
+  "The config at the time of the answer" is the one read at the last start. So an entry's removal ends answering
+  from the next restart, which also fails the worker. Casper stops a live one on the dashboard.
+- **§4, the target's audit.** `remote:answer` / `remote:refused` with `{message, request, decision, by}`, where `by`
+  is `human` when `user_decided`.
+- **§5.**
+  - A remote `answer_request` returns `{id, state, decision, resumed?, laptop}`.
+  - `request_detail` doesn't fall back to the copy.
+  - A copy moving to orphaned is told once.
+- **§7.** A `list`'s unknown workers make no copy, apart from one adopted for an unacked spawn.
+- **§9.** "Either order is safe" no longer holds from rc.43. An older requester parses `request`, `settled` and
+  `resumed` (in `REMOTE_EVENTS` since build A) but tells nobody. The rc.43 target no longer tells its own
+  orchestrator. So the requester goes first, and no cross-laptop spawn is made while only the target runs rc.43.
+  The new snapshot fields are safe in any order.
+- **§14, the lost-ack ruling** (BOB-75), as ruled, with these changes:
+  - `unacked` applies to every op, but only spawns are adopted;
+  - an adopted row keeps `unacked` and takes the `spawn_req`;
+  - at start, every `sent` row becomes `unanswered`, not only those past the deadline;
+  - a spawn's loss reconciles at once.
+  
+  The client's "not connected" is told apart by its message. A distinct code is in the backlog.
+- **Open after review B** (build-B-fixes):
+  - M1: a request copy that missed its `settled` stays open. A full list's `requests` closes the copies it omits,
+    and a copy over a day old leaves `pending_requests`.
+  - m1: `answer` refuses a `v`-less worker's request.
+  - m2: the target refuses a `by` that isn't a segment.
+  - m3: "spawned after all" once per spawn.
+  - m4, m5: `request` fit and the withheld reply's text.
+  - m7: tests with both ends real.
+- **The broker's part** (BOB-70/71) has Toad's go, under BOB-80's laptops-first order.
