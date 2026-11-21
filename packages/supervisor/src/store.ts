@@ -215,9 +215,11 @@ export interface RemoteAskRow {
 }
 
 /**
- * An upgrade this supervisor switched to and restarted for (ADR 0008 §4), written before the switch:
- * `restarting` until the new process says `ready` (or `failed`, running another version). `requester`
- * is the address that asked, or "orchestrator" for this laptop's own.
+ * An upgrade this supervisor runs (ADR 0008 §4), written when its build starts: `installing`, then
+ * `waiting` for idle, then `restarting` from just before the switch until the new process says `ready`
+ * (or `failed`, running another version); `installed` when it ends without a restart (restart: no).
+ * A process that starts on an `installing` or `waiting` row was restarted mid-upgrade and fails it.
+ * `requester` is the address that asked, or "orchestrator" for this laptop's own.
  */
 export interface UpgradeRow {
   req: string;
@@ -225,7 +227,7 @@ export interface UpgradeRow {
   from_version: string | null;
   to_version: string;
   tag: string;
-  stage: "restarting" | "ready" | "failed";
+  stage: "installing" | "waiting" | "restarting" | "installed" | "ready" | "failed";
   at: string;
   done_at: string | null;
 }
@@ -640,9 +642,13 @@ export class Store {
 
   addUpgrade(u: Pick<UpgradeRow, "req" | "requester" | "from_version" | "to_version" | "tag">): void {
     this.run(
-      "INSERT OR REPLACE INTO upgrades (req, requester, from_version, to_version, tag, stage, at, done_at) VALUES (?, ?, ?, ?, ?, 'restarting', ?, NULL)",
+      "INSERT OR REPLACE INTO upgrades (req, requester, from_version, to_version, tag, stage, at, done_at) VALUES (?, ?, ?, ?, ?, 'installing', ?, NULL)",
       u.req, u.requester, u.from_version, u.to_version, u.tag, now(),
     );
+  }
+
+  moveUpgrade(req: string, stage: "waiting" | "restarting"): void {
+    this.run("UPDATE upgrades SET stage = ?, at = ? WHERE req = ?", stage, now(), req);
   }
 
   /** The upgrades at `restarting`: at start, the one this process was started for. */
@@ -650,11 +656,16 @@ export class Store {
     return this.all("SELECT * FROM upgrades WHERE stage = 'restarting' ORDER BY at");
   }
 
+  /** The upgrades not yet ended: at start, the one this process was started for, or one a restart cut short. */
+  upgradesOpen(): UpgradeRow[] {
+    return this.all("SELECT * FROM upgrades WHERE stage IN ('installing', 'waiting', 'restarting') ORDER BY at");
+  }
+
   upgrade(req: string): UpgradeRow | null {
     return this.one<UpgradeRow>("SELECT * FROM upgrades WHERE req = ?", req) ?? null;
   }
 
-  endUpgrade(req: string, stage: "ready" | "failed"): void {
+  endUpgrade(req: string, stage: "installed" | "ready" | "failed"): void {
     this.run("UPDATE upgrades SET stage = ?, done_at = ? WHERE req = ?", stage, now(), req);
   }
 

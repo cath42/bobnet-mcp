@@ -72,6 +72,9 @@ class FakeReleases implements Releases {
     if (this.buildFails) throw this.buildFails;
     this.installedTags.set(tag, tag.slice(1));
   }
+  discard(tag: string) {
+    this.calls.push(`discard ${tag}`);
+  }
   async check(tag: string) {
     this.calls.push(`check ${tag}`);
     if (this.checkFails) throw this.checkFails;
@@ -444,6 +447,7 @@ describe("check, switch, exit (AC 4, AC 6)", () => {
     await tick(50);
     expect(s.releases.calls).not.toContain(`switch ${TAG}`);
     expect(s.ubu.store.upgradesRestarting()).toEqual([]);
+    expect(s.ubu.store.upgrade(String(s.toMbp()[0]!["req"]))).toMatchObject({ stage: "installed" });
     expect(s.ubu.restarts).toEqual([]);
   });
 
@@ -457,6 +461,7 @@ describe("check, switch, exit (AC 4, AC 6)", () => {
     expect(s.toMbp().at(-1)).toMatchObject({ stage: "failed", step: "check" });
     expect(releases.calls).not.toContain(`switch ${TAG}`);
     expect(s.ubu.store.upgradesRestarting()).toEqual([]);
+    expect(s.ubu.store.upgrade(String(s.toMbp()[0]!["req"]))).toMatchObject({ stage: "failed" });
     expect(s.ubu.restarts).toEqual([]);
   });
 
@@ -487,6 +492,48 @@ describe("check, switch, exit (AC 4, AC 6)", () => {
     expect(s.toMbp().at(-1)).toMatchObject({ v: 2, event: "upgrade", stage: "ready", version: "2.0.0-rc.43", from: RUNNING, to: "2.0.0-rc.43" });
     expect(next.store.upgradesRestarting()).toEqual([]);
     expect(next.store.upgrade(String(s.toMbp()[0]!["req"]))).toMatchObject({ stage: "ready" });
+  });
+
+  it("a restart mid-install: the installing row is failed by the new process, the requester told, the partial discarded (BOB-93 AC 1, AC 2)", async () => {
+    const s = await setup();
+    s.releases.gate = new Promise(() => {});
+    await s.upgrade();
+    await until(() => s.releases.calls.includes(`build ${TAG}`));
+    const req = String(s.toMbp()[0]!["req"]);
+    expect(s.ubu.store.upgrade(req)).toMatchObject({ requester: SUP_MBP, to_version: "2.0.0-rc.43", tag: TAG, stage: "installing" });
+    // The service restarts it mid-build, on the release it ran: no switch was made.
+    running.splice(running.indexOf(s.ubu.sup), 1);
+    await s.ubu.sup.shutdown();
+    s.ubu.store.close();
+    stores.delete(s.ubu.store);
+    const next = await boot(s.net, "ubu1", UBU, { releases: s.releases, dir: s.ubu.dir });
+    await until(() => s.bob().length === 1);
+    expect(s.bob()).toEqual(["ubu1: upgrade to 2.0.0-rc.43 failed at start: restarted while installing"]);
+    expect(s.toMbp().at(-1)).toMatchObject({ v: 2, event: "upgrade", req, stage: "failed", step: "start", error: "restarted while installing", from: RUNNING, to: "2.0.0-rc.43" });
+    expect(s.releases.calls.filter((c) => !c.startsWith("installed") && !c.startsWith("verify"))).toEqual([`build ${TAG}`, `discard ${TAG}`]);
+    expect(next.store.upgrade(req)).toMatchObject({ stage: "failed" });
+    expect(next.store.upgradesOpen()).toEqual([]);
+    expect(next.restarts).toEqual([]);
+  });
+
+  it("a restart while waiting for idle: the new process fails the row before the switch, and says asking again switches to it", async () => {
+    const s = await setup();
+    await call(handlers(s.ubu.sup), "spawn_worker", { project: "studio", role: "ann", task: "busy" });
+    await until(() => s.ubu.sessions.length === 1);
+    await s.upgrade();
+    await until(() => s.bob().length === 1);
+    const req = String(s.toMbp()[0]!["req"]);
+    expect(s.ubu.store.upgrade(req)).toMatchObject({ stage: "waiting" });
+    running.splice(running.indexOf(s.ubu.sup), 1);
+    await s.ubu.sup.shutdown();
+    s.ubu.store.close();
+    stores.delete(s.ubu.store);
+    const next = await boot(s.net, "ubu1", UBU, { releases: s.releases, dir: s.ubu.dir });
+    await until(() => s.bob().length === 2);
+    expect(s.bob()[1]).toBe(`ubu1: upgrade to 2.0.0-rc.43 not done: restarted before the switch; ${TAG} stays installed, so asking again switches to it`);
+    expect(next.store.upgrade(req)).toMatchObject({ stage: "failed" });
+    expect(s.releases.calls).not.toContain(`switch ${TAG}`);
+    expect(s.releases.calls).not.toContain(`discard ${TAG}`);
   });
 
   it("a new process on another version (current switched back by hand) says failed: running X, not Y, and nothing rolls back by itself", async () => {
@@ -748,6 +795,25 @@ describe("GitReleases: only a tag on the line, built here (AC 3)", () => {
     expect(err).toBeInstanceOf(UpgradeStepError);
     expect(err).toMatchObject({ step: "sh -c", message: "ERR_PNPM_OUTDATED_LOCKFILE" });
     expect(readdirSync(r.root)).toEqual([]);
+  });
+
+  it("a build cut short leaves .<tag>.partial: discard removes it, and a retry of the tag clears it before building (BOB-93 AC 2)", async () => {
+    const r = fakeRepo();
+    const g = releasesFor(r);
+    const partial = join(r.root, `.${TAG}.partial`);
+    const left = () => {
+      mkdirSync(join(partial, "node_modules"), { recursive: true });
+      writeFileSync(join(partial, "stale.txt"), "from the cut-short build");
+      writeFileSync(`${partial}.tar`, "");
+    };
+    left();
+    g.discard(TAG);
+    expect(readdirSync(r.root)).toEqual([]);
+    left();
+    await g.verify(TAG);
+    await g.build(TAG);
+    expect(readdirSync(r.root)).toEqual([TAG]);
+    expect(existsSync(join(r.root, TAG, "stale.txt"))).toBe(false);
   });
 
   it("a failed preflight throws with its output; the release's own bin.ts runs it", async () => {

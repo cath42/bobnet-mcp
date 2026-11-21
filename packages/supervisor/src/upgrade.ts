@@ -52,6 +52,8 @@ export interface Releases {
   verify(tag: string): Promise<string>;
   /** git archive (of the commit verify checked) and pnpm install into <root>/.<tag>.partial, then renamed to <root>/<tag>. */
   build(tag: string): Promise<void>;
+  /** Removes what a build of the tag cut short left behind: <root>/.<tag>.partial and its tar. */
+  discard(tag: string): void;
   /** The release's own preflight, `bin.ts check`, with this supervisor's config dir. */
   check(tag: string): Promise<void>;
   /** `previous` to the running release and `current` to the tag, each switched atomically. */
@@ -236,13 +238,16 @@ export class GitReleases implements Releases {
     return version;
   }
 
+  discard(tag: string): void {
+    const partial = join(this.root, `.${tag}.partial`);
+    rmSync(partial, { recursive: true, force: true });
+    rmSync(`${partial}.tar`, { force: true });
+  }
+
   async build(tag: string): Promise<void> {
     const partial = join(this.root, `.${tag}.partial`);
     const tar = `${partial}.tar`;
-    const clean = () => {
-      rmSync(partial, { recursive: true, force: true });
-      rmSync(tar, { force: true });
-    };
+    const clean = () => this.discard(tag);
     clean();
     try {
       mkdirSync(partial, { recursive: true });
@@ -376,11 +381,25 @@ export class Upgrades {
     void this.switchAndExit(u);
   }
 
-  /** At start, once registered (§4 step 5): the upgrade this process was started for says `ready`, or that it runs another version. */
+  /**
+   * At start, once registered (§4 step 5): the upgrade this process was started for says `ready`, or that
+   * it runs another version; one a restart cut short before its switch says `failed`, its partial build removed.
+   */
   resume(): void {
-    for (const row of this.host.store.upgradesRestarting()) {
+    for (const row of this.host.store.upgradesOpen()) {
       const base = { from: row.from_version, to: row.to_version };
-      if (row.to_version === this.host.version) {
+      if (row.stage === "installing") {
+        this.host.store.endUpgrade(row.req, "failed");
+        try {
+          this.host.releases?.discard(row.tag);
+        } catch (err) {
+          this.host.log.warn("upgrade: couldn't remove a partial build", { tag: row.tag, error: (err as Error).message });
+        }
+        this.host.emit(row.requester, row.req, { ...base, stage: "failed", step: "start", error: "restarted while installing" });
+      } else if (row.stage === "waiting") {
+        this.host.store.endUpgrade(row.req, "failed");
+        this.host.emit(row.requester, row.req, { ...base, stage: "failed", step: "wait", error: `restarted before the switch; ${row.tag} stays installed, so asking again switches to it` });
+      } else if (row.to_version === this.host.version) {
         this.host.store.endUpgrade(row.req, "ready");
         this.host.emit(row.requester, row.req, { ...base, stage: "ready", version: this.host.version });
       } else {
@@ -396,11 +415,14 @@ export class Upgrades {
 
   private fail(u: Pending, step: string, error: string): void {
     if (this.current === u) this.current = null;
+    this.host.store.endUpgrade(u.req, "failed");
     this.emit(u, { stage: "failed", step, error });
   }
 
   private async run(u: Pending): Promise<void> {
     const releases = this.host.releases!;
+    // Before any build: a restart from here on finds the row, and the new process tells the requester (resume).
+    this.host.store.addUpgrade({ req: u.req, requester: u.requester, from_version: u.from, to_version: u.to, tag: u.tag });
     try {
       if (!u.installed) await releases.build(u.tag);
       await releases.check(u.tag);
@@ -409,11 +431,13 @@ export class Upgrades {
     }
     if (u.restart === "no") {
       this.current = null;
+      this.host.store.endUpgrade(u.req, "installed");
       return this.emit(u, { stage: "installed", restart: "no" });
     }
     const waiting = this.host.waitingOn(u.restart);
     this.emit(u, { stage: "installed", restart: u.restart, ...(waiting ? { waiting_on: waiting } : {}) });
     u.state = "waiting";
+    this.host.store.moveUpgrade(u.req, "waiting");
     this.poke();
   }
 
@@ -421,11 +445,10 @@ export class Upgrades {
   private async switchAndExit(u: Pending): Promise<void> {
     u.state = "restarting";
     const releases = this.host.releases!;
-    this.host.store.addUpgrade({ req: u.req, requester: u.requester, from_version: u.from, to_version: u.to, tag: u.tag });
+    this.host.store.moveUpgrade(u.req, "restarting");
     try {
       releases.switch(u.tag);
     } catch (err) {
-      this.host.store.endUpgrade(u.req, "failed");
       return this.fail(u, "switch", (err as Error).message);
     }
     this.emit(u, { stage: "restarting", root: releases.root });

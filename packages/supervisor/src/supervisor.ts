@@ -2820,8 +2820,11 @@ export class Supervisor {
     const run = this.runs.get(id);
     this.runs.delete(id);
     this.stopping.delete(id);
-    // An upgrade waiting for idle looks again once this end is recorded (ADR 0008 §4).
-    setImmediate(() => this.upgrades.poke());
+    // An upgrade waiting for idle looks again once this end is recorded (ADR 0008 §4); not in a shutdown,
+    // whose stops aren't idle: the next process fails the waiting row (BOB-93).
+    setImmediate(() => {
+      if (!this.closing) this.upgrades.poke();
+    });
     // Unread input stays unconsumed in the inbox: the role's next worker gets it with its brief.
     const unread = run?.untakenRefs() ?? [];
     const ended = this.store.worker(id);
