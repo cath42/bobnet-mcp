@@ -391,18 +391,18 @@ describe("an end the broker withholds (BOB-72)", () => {
   });
 });
 
-describe("a withheld list or status (BOB-78)", () => {
-  /** 25 copies on ubu1 not ended, three batches of list: w_00..w_09, w_10..w_19, w_20..w_24. */
-  async function many(log: Logger = quiet) {
-    const s = await scripted(log);
-    s.answer["summary"] = () => null;
-    const now = new Date(s.net.now).toISOString();
-    const ids = Array.from({ length: 25 }, (_, i) => `w_${String(i).padStart(2, "0")}`);
-    for (const id of ids) s.mbp.store.putRemoteCopy({ laptop: "ubu1", id, to_name: SUP_UBU, spawn_req: null, view: null, state: "running", as_of: now, ended: 0, handoff: null, remote_url: null, told: 0, state_withheld: 0 });
-    const lists = () => s.got.filter((g) => g.body["op"] === "list").map((g) => g.body["ids"] as string[]);
-    return { ...s, ids, lists };
-  }
+/** 25 copies on ubu1 not ended, three batches of list: w_00..w_09, w_10..w_19, w_20..w_24. */
+async function many(log: Logger = quiet) {
+  const s = await scripted(log);
+  s.answer["summary"] = () => null;
+  const now = new Date(s.net.now).toISOString();
+  const ids = Array.from({ length: 25 }, (_, i) => `w_${String(i).padStart(2, "0")}`);
+  for (const id of ids) s.mbp.store.putRemoteCopy({ laptop: "ubu1", id, to_name: SUP_UBU, spawn_req: null, view: null, state: "running", as_of: now, ended: 0, handoff: null, remote_url: null, told: 0, state_withheld: 0 });
+  const lists = () => s.got.filter((g) => g.body["op"] === "list").map((g) => g.body["ids"] as string[]);
+  return { ...s, ids, lists };
+}
 
+describe("a withheld list or status (BOB-78)", () => {
   it("the middle of three batches withheld: the later batch is still asked and its copies update; the withheld one reported once (AC 1)", async () => {
     const { log, said } = logged();
     const s = await many(log);
@@ -474,6 +474,61 @@ describe("a withheld list or status (BOB-78)", () => {
     await until(() => s.bob().length === 2);
     expect(s.bob()[1]).toBe("Ann (w_9, studio/ann) on ubu1 done: fixed; handoff in worker_summary.");
     expect(s.mbp.store.remoteCopy("ubu1", "w_9")).toMatchObject({ state: "done", ended: 1, told: 1 });
+  });
+});
+
+describe("A-fixes-2's minors (BOB-87)", () => {
+  /** One withheld episode: a withheld event, then a withheld status; the orchestrator told. */
+  async function episode(s: Awaited<ReturnType<typeof scripted>>, notices: number) {
+    s.answer["status"] = () => ({ event: "withheld" });
+    await s.send({ v: 2, event: "withheld", worker: "w_9", spawn_req: s.spawnReq() });
+    await until(() => s.bob().length === notices);
+    expect(s.mbp.store.remoteCopy("ubu1", "w_9")).toMatchObject({ ended: 0, state_withheld: 2 });
+  }
+
+  it("state_withheld goes back to 0 on a view that passes: two episodes on one copy, one notice each (AC 1)", async () => {
+    const s = await scripted();
+    await s.call("spawn_worker", ANN);
+    await episode(s, 1);
+    // A list that passes, the worker still running: the episode is over.
+    s.answer["list"] = () => ({ workers: [view("w_9", s.spawnReq(), { checkpoint: "half way" })] });
+    expect(await s.mbp.sup.reconcileOn("ubu1")).toBeNull();
+    expect(s.mbp.store.remoteCopy("ubu1", "w_9")).toMatchObject({ state: "running", ended: 0, state_withheld: 0 });
+    const asked = s.ops().length;
+    await episode(s, 2);
+    expect(s.ops().slice(asked)).toEqual(["status"]);
+    expect(s.bob()).toEqual(["Ann on ubu1: state withheld, ask there.", "Ann on ubu1: state withheld, ask there."]);
+    // Without a passing view between, a third withheld event is no new episode.
+    await s.send({ v: 2, event: "withheld", worker: "w_9", spawn_req: s.spawnReq() });
+    await tick(20);
+    expect(s.bob().length).toBe(2);
+  });
+
+  it("and on an event that passes (AC 1)", async () => {
+    const s = await scripted();
+    await s.call("spawn_worker", ANN);
+    await episode(s, 1);
+    const { id } = await s.send({ v: 2, event: "remote_control", worker: "w_9", spawn_req: s.spawnReq(), url: "https://claude.ai/code/s1" });
+    await until(() => s.net.acked(id));
+    expect(s.mbp.store.remoteCopy("ubu1", "w_9")).toMatchObject({ remote_url: "https://claude.ai/code/s1", state_withheld: 0 });
+    await episode(s, 2);
+    expect(s.bob().length).toBe(2);
+  });
+
+  it.each([
+    ["no reply", () => null, "no reply from ubu1 within 50 s"],
+    ["ok: false", () => ({ ok: false, error: "busy" }), "busy"],
+  ])("reconcile reports a withheld batch before it stops at %s (AC 3)", async (_, stopping, why) => {
+    const { log, said } = logged();
+    const s = await many(log);
+    s.answer["list"] = (b) => (b["ids"].includes("w_00") ? { event: "withheld" } : stopping());
+    const pass = s.mbp.sup.reconcileOn("ubu1");
+    await until(() => s.lists().length === 2);
+    s.net.advance(50);
+    expect(await pass).toBe(why);
+    expect(s.lists()).toEqual([s.ids.slice(0, 10), s.ids.slice(10, 20)]);
+    expect(said.filter((l) => l.msg.includes("withheld a list reply"))).toEqual([expect.objectContaining({ level: "warn", laptop: "ubu1", withheld: s.ids.slice(0, 10) })]);
+    expect(s.mbp.store.auditLog(50).filter((a) => a.action === "remote:list_withheld").map((a) => JSON.parse(a.detail))).toEqual([{ withheld: s.ids.slice(0, 10) }]);
   });
 });
 

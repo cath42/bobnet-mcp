@@ -1094,7 +1094,8 @@ export class Supervisor {
     if (read.v === 2) {
       try {
         if ("error" in read) throw new SupervisorError(read.error);
-        out = { v: 2, re: op, req: msg.id, ok: true, ...(await this.remoteDoV2(msg.from, msg.id, read.request)) };
+        const done = await this.remoteDoV2(msg.from, msg.id, read.request);
+        out = done["event"] === "withheld" ? done : { v: 2, re: op, req: msg.id, ok: true, ...done };
       } catch (err) {
         out = { v: 2, re: op, req: msg.id, ok: false, error: (err as Error).message };
       }
@@ -1106,9 +1107,12 @@ export class Supervisor {
         out = { ok: false, op, error: (err as Error).message };
       }
     }
-    const text = reply(withholdBody(out, this.detect));
+    const sent = withholdBody(out, this.detect);
+    const text = reply(sent);
     this.store.finishRemote(msg.id, text);
-    this.store.audit(msg.from, out["ok"] ? `remote:${op}` : "remote:refused", (out["worker"] as { id?: string } | undefined)?.id ?? null, { message: msg.id, ...(out["ok"] ? {} : { error: out["error"] }) });
+    const worker = (out["worker"] as { id?: string } | undefined)?.id ?? (typeof sent["worker"] === "string" ? sent["worker"] : null);
+    if (sent["event"] === "withheld") this.store.audit(msg.from, "remote:withheld", worker, { message: msg.id, re: op });
+    else this.store.audit(msg.from, out["ok"] ? `remote:${op}` : "remote:refused", worker, { message: msg.id, ...(out["ok"] ? {} : { error: out["error"] }) });
     this.sendRemote(msg.from, text, msg.id);
   }
 
@@ -1181,6 +1185,10 @@ export class Supervisor {
       c = { ...c, state_withheld: 1 };
       this.store.putRemoteCopy(c);
       this.remoteAskQuietly(c.to_name, { v: 2, op: "status", id });
+    } else if (json["event"] !== "withheld" && c.state_withheld !== 0) {
+      // An event that passes ends the withheld episode: the next one is told again (§14, A-fixes-3 point 6).
+      c = { ...c, state_withheld: 0 };
+      this.store.putRemoteCopy(c);
     }
     if (json["event"] === "exit") {
       if (!c.ended) {
@@ -1224,6 +1232,7 @@ export class Supervisor {
   /**
    * The target's view of a worker into its copy (§7): only forward, an ended copy final, a url never
    * cleared by a null. A copy made from an event takes the first view that comes, its state kept.
+   * A view that passed ends a withheld episode (`state_withheld` back to 0).
    */
   private copyView(to: string, laptop: string, view: Record<string, unknown>, asOf: string, handoff?: string): void {
     const id = view["id"] as string;
@@ -1249,7 +1258,7 @@ export class Supervisor {
       remote_url: url ?? was?.remote_url ?? null,
       told: was?.told ?? 0,
       created_at: was?.created_at ?? asOf,
-      state_withheld: was?.state_withheld ?? 0,
+      state_withheld: 0,
     };
     this.store.putRemoteCopy(c);
     if (!was) this.copyMade(c);
@@ -1374,11 +1383,13 @@ export class Supervisor {
       .map((s) => s.message_id!);
     const handoffs = copies.filter((c) => c.ended && c.handoff === null);
     if (ids.length === 0 && reqs.length === 0 && handoffs.length === 0) return null;
+    const withheld: string[] = [];
+    let to: string | undefined;
     try {
-      const to = await this.remoteTarget(laptop);
+      to = await this.remoteTarget(laptop);
       for (const c of handoffs) this.askSummary(c);
-      // A batch whose reply the broker withheld (§2) doesn't stop the batches behind it; it is reported once, at the end.
-      const withheld: string[] = [];
+      // A batch whose reply the broker withheld (§2) doesn't stop the batches behind it; it is reported once,
+      // at the end of the pass or where it stops.
       for (let i = 0; i < Math.max(ids.length, reqs.length); i += RECONCILE_BATCH) {
         const some = (xs: string[]) => xs.slice(i, i + RECONCILE_BATCH);
         const r = await this.remoteAsk(to, { v: 2, op: "list", ...(some(ids).length ? { ids: some(ids) } : {}), ...(some(reqs).length ? { reqs: some(reqs) } : {}) });
@@ -1386,14 +1397,15 @@ export class Supervisor {
         if (r.reply["event"] === "withheld") withheld.push(...some(ids), ...some(reqs));
         else if (r.reply["ok"] !== true) return typeof r.reply["error"] === "string" ? r.reply["error"] : `${laptop} refused the list`;
       }
-      if (withheld.length > 0) {
-        this.log.warn("reconcile: the broker withheld a list reply as a credential; those copies are as they were", { laptop, withheld });
-        this.store.audit(to, "remote:list_withheld", null, { withheld });
-      }
       return null;
     } catch (err) {
       this.log.info("reconcile: couldn't ask", { laptop, err: (err as Error).message });
       return (err as Error).message;
+    } finally {
+      if (withheld.length > 0) {
+        this.log.warn("reconcile: the broker withheld a list reply as a credential; those copies are as they were", { laptop, withheld });
+        this.store.audit(to ?? laptop, "remote:list_withheld", null, { withheld });
+      }
     }
   }
 
@@ -1689,8 +1701,11 @@ export class Supervisor {
         const out = { worker: this.remoteView(w), ...fitSummary(this.summary(w.id)) };
         // Once it ended, its handoff too (§6), sized with the reply's own envelope.
         if (ACTIVE_STATES.includes(w.state) || w.state === "queued") return out;
-        const { v: _v, re: _re, req: _req, ok: _ok, ...fitted } = withHandoff({ v: 2, re: "summary", req: msgId, ok: true, ...out }, this.handoffText(w), this.detect);
-        return fitted;
+        const fitted = withHandoff({ v: 2, re: "summary", req: msgId, ok: true, ...out }, this.handoffText(w), this.detect);
+        // Withheld, the stand-in goes as it is, without `ok` (§2), as withholdBody sends it for every other op.
+        if (fitted["event"] === "withheld") return fitted;
+        const { v: _v, re: _re, req: _req, ok: _ok, ...rest } = fitted;
+        return rest;
       }
       case "request":
       case "answer":

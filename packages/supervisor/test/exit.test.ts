@@ -70,6 +70,18 @@ async function boot(net: FakeNetwork, laptop: string, over: string, at = newStor
   return { sup, store: at.store, link, sessions: query.sessions, dir: at.dir, writeHandoff };
 }
 
+/** The fastest of 3 runs after one to warm up: a wall-clock bound, not the JIT's first pass (BOB-87). */
+function fastest(run: () => unknown): number {
+  run();
+  let best = Infinity;
+  for (let i = 0; i < 3; i++) {
+    const t = performance.now();
+    run();
+    best = Math.min(best, performance.now() - t);
+  }
+  return best;
+}
+
 /** mbp-1's supervisor scripted: it sends requests and keeps what it gets. */
 async function scripted(net: FakeNetwork) {
   const link = net.link("mbp-1");
@@ -305,6 +317,32 @@ describe("summary carries the handoff once ended (criterion 4)", () => {
     expect(reply).toMatchObject({ ok: true, handoff_truncated: true, handoff_length: 40_000 });
     expect(s.mbp.got.at(-1)!.body.length).toBeLessThanOrEqual(16 * 1024);
     expect(s.mbp.got.at(-1)).not.toBe(msg);
+  });
+});
+
+describe("A-fixes-2's minors (BOB-87)", () => {
+  it("a summary withHandoff withholds goes as the stand-in without ok, audited as withheld (AC 2)", async () => {
+    // Matches the summary's ok reply serialised, field by field and whole, but not its stand-in.
+    const tripped: Detect = (t) => findSecret(t) ?? (/"re":"summary","req":"[^"]+","ok":true,"worker":\{/.test(t) ? "test_trip" : null);
+    const s = await spawned(fakeQuery(), tripped);
+    await endWith(s, "the handoff");
+    const { id: req, reply } = await s.mbp.ask({ v: 2, op: "summary", id: s.id });
+    expect(reply).toEqual({ v: 2, event: "withheld", worker: s.id, re: "summary", req });
+    const audit = s.ubu.store.auditLog(50).filter((a) => JSON.parse(a.detail)["message"] === req);
+    expect(audit).toEqual([expect.objectContaining({ action: "remote:withheld", worker_id: s.id })]);
+    expect(JSON.parse(audit[0]!.detail)).toEqual({ message: req, re: "summary" });
+    expect(s.net.refused.filter((r) => r.to.includes(SUP_MBP))).toEqual([]);
+  });
+
+  it("the supervisor's 200 KB adversarial handoffs: withHandoff under 50 ms, warmed up, best of 3 (AC 4)", () => {
+    const event = { v: 2, event: "exit", worker: "w_1", spawn_req: "m_1", state: "done", checkpoint: "fixed", lands: [] };
+    const n = 200_000;
+    const fill = (unit: string) => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
+    const inputs = [fill("eyJ-"), fill("_password="), fill("password=x;"), fill("-----BEGIN PRIVATE KEY-----\n"), fill("-----END PRIVATE KEY-----\n"), fill(`PuTTY-User-Key-File-3${":"} x\n`), fill("Private-MAC: "), fill("AKIA")];
+    for (const text of inputs) {
+      expect(fastest(() => withHandoff(event, text)), text.slice(0, 20)).toBeLessThan(50);
+      expect(findSecret(JSON.stringify(withHandoff(event, text))), text.slice(0, 20)).toBeNull();
+    }
   });
 });
 
