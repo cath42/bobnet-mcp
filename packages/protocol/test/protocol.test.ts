@@ -71,11 +71,65 @@ describe("redactSecrets", () => {
     // Two blocks: each its own span, the text between them kept.
     expect(redactSecrets(`${PEM}\nand\n${PEM}`, MARK)).toBe(`${MARK}\nand\n${MARK}`);
   });
-  it("a private key with no END line: to the end of the text (BOB-73)", () => {
-    const cutOff = PEM.split("\n").slice(0, 3).join("\n");
-    const out = redactSecrets(`Key below.\n${cutOff}\n`, MARK);
-    expect(out).toBe(`Key below.\n${MARK}`);
-    expect(out).not.toContain("b3BlbnNzaC1rZXkt");
+  // Built from parts: a header pasted whole into a message is refused by the broker.
+  const BEGIN = (kind = "RSA") => `-----${"BEGIN"} ${kind} PRIVATE KEY-----`;
+  const END = (kind = "RSA") => `-----${"END"} ${kind} PRIVATE KEY-----`;
+  const BODY = "MIIEowIBAAKCAQEAsecretbodyline";
+  it("a BEGIN line with no END: only that line, the rest of the field kept (BOB-79 AC 1)", () => {
+    const text = `# Handoff\n\nThe file starts with ${BEGIN()} and that was all.\nNext: rotate it.\n\nDone.`;
+    const out = redactSecrets(text, MARK);
+    expect(out).toBe(`# Handoff\n\nThe file starts with ${MARK}\nNext: rotate it.\n\nDone.`);
+    expect(findSecret(out)).toBeNull();
+    // CRLF ends the line too; a cut-off key keeps its body lines (Casper, 2026-11-20: "No" to withholding the rest).
+    expect(redactSecrets(`Key below.\r\n${BEGIN()}\r\n${BODY}\r\n`, MARK)).toBe(`Key below.\r\n${MARK}\r\n${BODY}\r\n`);
+    expect(redactSecrets(`Key below.\n${PEM.split("\n").slice(0, 3).join("\n")}`, MARK)).toBe(`Key below.\n${MARK}\n${PEM.split("\n").slice(1, 3).join("\n")}`);
+  });
+  it("BEGIN..END still whole: CRLF, an END of another type, END before BEGIN, Proc-Type/DEK-Info, JSON-escaped (BOB-79 AC 2; BOB-73)", () => {
+    expect(redactSecrets(`a\r\n${BEGIN()}\r\n${BODY}\r\n${END()}\r\nb`, MARK)).toBe(`a\r\n${MARK}\r\nb`);
+    expect(redactSecrets(`${BEGIN("EC")}\n${BODY}\n${END("RSA")}\nafter`, MARK)).toBe(`${MARK}\nafter`);
+    expect(redactSecrets(`${END()}\nbetween\n${BEGIN()}\n${BODY}\n${END()}`, MARK)).toBe(`${END()}\nbetween\n${MARK}`);
+    expect(redactSecrets(`${BEGIN()}\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0011\n\n${BODY}\n${END()}\nkept`, MARK)).toBe(`${MARK}\nkept`);
+    const escaped = JSON.stringify(`${BEGIN()}\n${BODY}\n${END()}`).slice(1, -1);
+    expect(redactSecrets(`key: ${escaped} kept`, MARK)).toBe(`key: ${MARK} kept`);
+    // A certificate's END closes no private key.
+    expect(redactSecrets(`${BEGIN()}\n${BODY}\n-----END CERTIFICATE-----\nkept`, MARK)).toBe(`${MARK}\n${BODY}\n-----END CERTIFICATE-----\nkept`);
+  });
+  it("a nested key leaves no tail of the outer one (BOB-79 AC 3)", () => {
+    const out = redactSecrets(`before\n${BEGIN()}\nouter1\n${BEGIN("EC")}\n${BODY}\n${END("EC")}\nouter-tail\n${END()}\nafter`, MARK);
+    expect(out).toBe(`before\n${MARK}\nafter`);
+    // The outer END missing: the inner block goes whole, the outer BEGIN its line.
+    expect(redactSecrets(`${BEGIN()}\nprose\n${BEGIN("EC")}\n${BODY}\n${END("EC")}\nafter`, MARK)).toBe(`${MARK}\nprose\n${MARK}\nafter`);
+  });
+  it("one mark, not a mark after a mark; nothing it gives still matches findSecret (BOB-79 AC 4)", () => {
+    const ant = "sk-ant-api03-" + "a".repeat(30);
+    expect(redactSecrets(`api_key = ${ant} then`, MARK)).toBe(`${MARK} then`);
+    expect(redactSecrets(`password: ${BEGIN()}\n${BODY}\n${END()}`, MARK)).toBe(MARK);
+    for (const text of [
+      `api_key = ${ant}`, `secret="${ant}"`, `password: ${BEGIN()}`, `token AKIAIOSFODNN7EXAMPLE and password=hunter2hunter2`,
+      `${BEGIN()} ${BEGIN("EC")}\n${BODY}\n${END("EC")}`, `Bearer ${"x".repeat(30)} api-key:${"y".repeat(9)}`,
+    ]) {
+      const out = redactSecrets(text, MARK);
+      expect(out.split(MARK).length - 1, text).toBeGreaterThan(0);
+      expect(findSecret(out), text).toBeNull();
+      expect(out, text).not.toContain(`${MARK} looks like`);
+    }
+  });
+  it("linear in the text: 200 KB adversarial inputs in a few ms (BOB-79 AC 5)", () => {
+    const n = 200_000;
+    const inputs = [
+      `${BEGIN()}\n`.repeat(n / 31),
+      BEGIN().repeat(n / 30),
+      `${END()}\n`.repeat(n / 30),
+      `${BEGIN()}\n${END()}\n`.repeat(n / 60),
+      "-----BEGIN " + "A ".repeat(n / 2),
+      "password=".repeat(n / 9),
+      "api_key: " + MARK.repeat(n / MARK.length),
+    ];
+    for (const text of inputs) {
+      const t = performance.now();
+      redactSecrets(text, MARK);
+      expect(performance.now() - t, text.slice(0, 40)).toBeLessThan(50);
+    }
   });
 });
 
