@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS remote_sent (
 CREATE TABLE IF NOT EXISTS remote_workers (
   laptop TEXT NOT NULL COLLATE NOCASE, id TEXT NOT NULL, to_name TEXT NOT NULL, spawn_req TEXT, view TEXT, state TEXT NOT NULL,
   as_of TEXT NOT NULL, ended INTEGER NOT NULL DEFAULT 0, handoff TEXT, remote_url TEXT, told INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL, PRIMARY KEY (laptop, id)
+  created_at TEXT NOT NULL, state_withheld INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (laptop, id)
 );
 `;
 
@@ -158,7 +158,8 @@ export interface RemoteSentRow {
  * target's replies and events, and only forward. `view` is the target's last remoteView (null until
  * one came: a copy made from an event); `state` its state, or `unknown` (asked for, not returned, or
  * not yet asked); `handoff` the handoff fields once ended (`handoff_text`, null for no file), null
- * until they came; `told` once the orchestrator heard of its end.
+ * until they came; `told` once the orchestrator heard of its end. `state_withheld` 1 once an event of
+ * it came withheld and `status` was asked, 2 once that came withheld too and the orchestrator was told.
  */
 export interface RemoteWorkerRow {
   laptop: string;
@@ -173,6 +174,7 @@ export interface RemoteWorkerRow {
   remote_url: string | null;
   told: number;
   created_at: string;
+  state_withheld: number;
 }
 
 export class Store {
@@ -201,6 +203,8 @@ export class Store {
     // Kind remote (ADR 0007 §2): a reply or event, sent verbatim with these.
     if (!outCols.has("in_reply_to")) this.db.exec("ALTER TABLE outbox ADD COLUMN in_reply_to TEXT");
     if (!outCols.has("ttl_seconds")) this.db.exec("ALTER TABLE outbox ADD COLUMN ttl_seconds INTEGER");
+    const copyCols = new Set((this.db.prepare("PRAGMA table_info(remote_workers)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!copyCols.has("state_withheld")) this.db.exec("ALTER TABLE remote_workers ADD COLUMN state_withheld INTEGER NOT NULL DEFAULT 0");
     // A remote request is recorded in progress (reply null) before any work: the table before that had reply NOT NULL.
     const reqCols = this.db.prepare("PRAGMA table_info(remote_requests)").all() as Array<{ name: string; notnull: number }>;
     // One transaction: a crash or a busy db midway leaves the old table and its dedupe rows, and the next start rebuilds.
@@ -483,11 +487,12 @@ export class Store {
 
   putRemoteCopy(c: Omit<RemoteWorkerRow, "created_at">): void {
     this.run(
-      `INSERT INTO remote_workers (laptop, id, to_name, spawn_req, view, state, as_of, ended, handoff, remote_url, told, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO remote_workers (laptop, id, to_name, spawn_req, view, state, as_of, ended, handoff, remote_url, told, created_at, state_withheld)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (laptop, id) DO UPDATE SET to_name = excluded.to_name, spawn_req = excluded.spawn_req, view = excluded.view, state = excluded.state,
-         as_of = excluded.as_of, ended = excluded.ended, handoff = excluded.handoff, remote_url = excluded.remote_url, told = excluded.told`,
-      c.laptop, c.id, c.to_name, c.spawn_req, c.view, c.state, c.as_of, c.ended, c.handoff, c.remote_url, c.told, now(),
+         as_of = excluded.as_of, ended = excluded.ended, handoff = excluded.handoff, remote_url = excluded.remote_url, told = excluded.told,
+         state_withheld = excluded.state_withheld`,
+      c.laptop, c.id, c.to_name, c.spawn_req, c.view, c.state, c.as_of, c.ended, c.handoff, c.remote_url, c.told, now(), c.state_withheld,
     );
   }
 

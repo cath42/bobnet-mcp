@@ -29,6 +29,12 @@ import's `--post` tests get 30 s), BOB-74 bf2203f. Evidence per criterion: Luigi
   It ends through BOB-72 AC2 (stand-in, `status`, `summary` stand-in, copy ended, one notice); the exit's state
   arrives by `status`. review-a.md's "the target's body check guards until then" no longer holds. No
   old-pattern check on the target: that would widen what is withheld.
+  **Corrected (BOB-78 AC4, review-a-fixes.md F1):** "the exit's state arrives by `status`" holds only when the
+  match is in the handoff. When the text is in the worker's `error` or `checkpoint`, `remoteView` carries it, so
+  the window also covers `status` and `list`: both come back withheld, and before BOB-78 the copy stayed
+  `running` with nobody told and each reconcile stopped at that `list`. BOB-78 tells the orchestrator once
+  ("<name> on <laptop>: state withheld, ask there") and lets a reconcile go on past a withheld batch. The
+  window closed with the broker deploy of the narrowed `findSecret` (2a36f1e6, 2026-11-21 02:35Z).
 - `withholdBody`'s whole-field fallback can't split a match that spans two fields; with the supervisor's own
   field names none can form (`"` sits between a value and the next `:`), and the broker's stand-in covers it.
 - The land's final attempt reported exit 1 after both ranges had landed (nothing left to push); v2 is at bf2203f.

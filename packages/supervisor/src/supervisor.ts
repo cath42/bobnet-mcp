@@ -1170,12 +1170,16 @@ export class Supervisor {
     }
     const now = new Date().toISOString();
     if (!c) {
-      c = { laptop: laptopOf(sent.to_name), id, to_name: sent.to_name, spawn_req: sent.message_id, view: null, state: "unknown", as_of: now, ended: 0, handoff: null, remote_url: null, told: 0, created_at: now };
+      const withheld = json["event"] === "withheld" ? 1 : 0;
+      c = { laptop: laptopOf(sent.to_name), id, to_name: sent.to_name, spawn_req: sent.message_id, view: null, state: "unknown", as_of: now, ended: 0, handoff: null, remote_url: null, told: 0, created_at: now, state_withheld: withheld };
       this.store.putRemoteCopy(c);
       this.copyMade(c);
       this.remoteAskQuietly(c.to_name, { v: 2, op: "status", id });
-    } else if (json["event"] === "withheld" && !c.ended) {
+    } else if (json["event"] === "withheld" && !c.ended && c.state_withheld < 2) {
       // An event the broker refused (an exit, or a url): status says whether it ended, and an end asks summary.
+      // Once its status came withheld too, the orchestrator was told: reconcile's list is left to heal it.
+      c = { ...c, state_withheld: 1 };
+      this.store.putRemoteCopy(c);
       this.remoteAskQuietly(c.to_name, { v: 2, op: "status", id });
     }
     if (json["event"] === "exit") {
@@ -1195,6 +1199,7 @@ export class Supervisor {
   /** A target's ok reply, into the copies of the workers it names (§7); ids a list was asked for and didn't return are `unknown`. */
   private copyFromReply(sent: RemoteSentRow, json: Record<string, unknown>): void {
     if (json["event"] === "withheld" && sent.op === "summary" && sent.target) this.summaryWithheld(laptopOf(sent.to_name), sent.target);
+    if (json["event"] === "withheld" && sent.op === "status" && sent.target) this.statusWithheld(laptopOf(sent.to_name), sent.target);
     if (json["ok"] !== true) return;
     const laptop = laptopOf(sent.to_name);
     const asOf = new Date().toISOString();
@@ -1244,6 +1249,7 @@ export class Supervisor {
       remote_url: url ?? was?.remote_url ?? null,
       told: was?.told ?? 0,
       created_at: was?.created_at ?? asOf,
+      state_withheld: was?.state_withheld ?? 0,
     };
     this.store.putRemoteCopy(c);
     if (!was) this.copyMade(c);
@@ -1258,6 +1264,20 @@ export class Supervisor {
   private summaryWithheld(laptop: string, id: string): void {
     const c = this.store.remoteCopy(laptop, id);
     if (c?.ended && c.handoff === null) this.copyEnd({ ...c, handoff: WITHHELD_HANDOFF }, []);
+  }
+
+  /**
+   * A `status` the broker refused as a credential (§2) for a copy whose event it refused too: nothing
+   * here says what the worker is doing, so the orchestrator is told once to ask the role on the target,
+   * and the copy isn't asked again for it. A later list or event that passes still updates and ends it.
+   */
+  private statusWithheld(laptop: string, id: string): void {
+    const c = this.store.remoteCopy(laptop, id);
+    if (!c || c.ended || c.state_withheld !== 1) return;
+    this.store.putRemoteCopy({ ...c, state_withheld: 2 });
+    const { project, name } = this.copyNames(c);
+    this.store.audit(c.to_name, "remote:state_withheld", c.id, { message: c.spawn_req });
+    this.notify(`${name} on ${c.laptop}: state withheld, ask there.`, project);
   }
 
   /**
@@ -1357,11 +1377,18 @@ export class Supervisor {
     try {
       const to = await this.remoteTarget(laptop);
       for (const c of handoffs) this.askSummary(c);
+      // A batch whose reply the broker withheld (§2) doesn't stop the batches behind it; it is reported once, at the end.
+      const withheld: string[] = [];
       for (let i = 0; i < Math.max(ids.length, reqs.length); i += RECONCILE_BATCH) {
         const some = (xs: string[]) => xs.slice(i, i + RECONCILE_BATCH);
         const r = await this.remoteAsk(to, { v: 2, op: "list", ...(some(ids).length ? { ids: some(ids) } : {}), ...(some(reqs).length ? { reqs: some(reqs) } : {}) });
         if (!r.reply) return `no reply from ${laptop} within ${remoteWaitMs("list") / 1000} s`;
-        if (r.reply["ok"] !== true) return typeof r.reply["error"] === "string" ? r.reply["error"] : `${laptop}'s reply to the list was withheld`;
+        if (r.reply["event"] === "withheld") withheld.push(...some(ids), ...some(reqs));
+        else if (r.reply["ok"] !== true) return typeof r.reply["error"] === "string" ? r.reply["error"] : `${laptop} refused the list`;
+      }
+      if (withheld.length > 0) {
+        this.log.warn("reconcile: the broker withheld a list reply as a credential; those copies are as they were", { laptop, withheld });
+        this.store.audit(to, "remote:list_withheld", null, { withheld });
       }
       return null;
     } catch (err) {
