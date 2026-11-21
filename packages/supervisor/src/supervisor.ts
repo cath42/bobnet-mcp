@@ -15,6 +15,7 @@ import {
   findSecret,
   fromBoard,
   type Envelope,
+  isValidSegment,
   ItemRef,
   type LaptopSnapshot,
   LIMITS,
@@ -1948,6 +1949,8 @@ export class Supervisor {
           const listed = [...may].flatMap(([p, rs]) => [...rs].map((r) => `${p}/${r}`)).join(", ");
           throw new SupervisorError(`${from} may not spawn ${req.project}/${req.role}; it may spawn ${listed || "nothing"}`);
         }
+        // `by` becomes the worker's remote_by, in its preamble and under the snapshot's max 40: a BobNet name (BOB-98).
+        if (!isValidSegment(req.by)) throw new SupervisorError(`by "${cut(req.by, 40)}" isn't a BobNet name (a letter, then up to 31 letters, digits, _ or -)`);
         const w = await this.spawnNow({
           project: req.project,
           role: req.role,
@@ -2015,7 +2018,7 @@ export class Supervisor {
    * A request a `request` or `answer` op names, checked in §4's order: the sender is in `remote`
    * (remoteDoV2's first check); the request's worker is the sender's; its entry still lists that
    * worker's project and role, read from the config now, not at the spawn; and, to answer, the
-   * request is open or orphaned. The worker is checked before the entry, so another sender's
+   * worker is v: 2 (BOB-98) and the request is open or orphaned. The worker is checked before the entry, so another sender's
    * request is refused the same way whether it exists or not.
    */
   private ownRequest(from: string, may: Map<string, Set<string>>, id: string, answering: boolean): RequestRow {
@@ -2023,6 +2026,8 @@ export class Supervisor {
     const w = r ? this.store.worker(r.worker_id) : null;
     if (!r || !w || w.spawned_by?.toLowerCase() !== from.toLowerCase()) throw new SupervisorError(`${id} isn't a request of a worker ${from} spawned`);
     if (!may.get(w.project)?.has(w.role)) throw new SupervisorError(`${from} may no longer spawn ${w.project}/${w.role} here, so it can't act on ${id}`);
+    // A worker spawned without v: 2 has its requests answered by this laptop's orchestrator (§4, §9): one answerer (BOB-98).
+    if (answering && !isV2(w)) throw new SupervisorError(`${id} is a request of a worker spawned without v: 2: its requests are answered on ${this.laptop ?? "this laptop"}`);
     if (answering && r.state !== "open" && r.state !== "orphaned") throw new SupervisorError(`${id} is already ${r.state}`);
     return r;
   }

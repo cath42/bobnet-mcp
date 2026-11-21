@@ -1006,3 +1006,37 @@ describe("a copy keeps no stale requests list (BOB-97 AC 3)", () => {
     expect((await s.call("list_workers", { laptop: "ubu1" })).find((r: Record<string, unknown>) => r["id"] === s.w.id)).not.toHaveProperty("requests");
   });
 });
+
+describe("one answerer for a worker spawned without v: 2; a v: 2 spawn's by is a BobNet name (BOB-98)", () => {
+  it("the answer op refuses a v-less worker's request: its requests are answered on the target (AC 1); request still reads it", async () => {
+    const net = new FakeNetwork();
+    const ubu = await boot(net, "ubu1", UBU);
+    await ubu.link.register({ name: "Bob" });
+    const mbp = await scripted(net);
+    const { reply: spawn } = await mbp.ask({ op: "spawn", project: "studio", role: "ann", task: "one fix" });
+    expect(spawn).toMatchObject({ ok: true });
+    await until(() => ubu.sessions.length === 1);
+    const result = ubu.sessions[0]!.ask("Bash", PROBE);
+    await until(() => ubu.store.requests(["open"]).length === 1);
+    const r = ubu.store.requests(["open"])[0]!;
+    const { reply } = await mbp.ask(ANSWER(r.id));
+    expect(reply).toMatchObject({ v: 2, re: "answer", ok: false, error: `${r.id} is a request of a worker spawned without v: 2: its requests are answered on ubu1` });
+    expect(ubu.store.request(r.id)!.state).toBe("open");
+    expect(audits(ubu.store, "remote:refused")[0]).toMatchObject({ actor: SUP_MBP, detail: { request: r.id, decision: "allow" } });
+    expect((await mbp.ask({ v: 2, op: "request", id: r.id })).reply).toMatchObject({ ok: true, request: { id: r.id, state: "open" } });
+    expect(mbp.events("request")).toEqual([]);
+    void result;
+  });
+
+  it("a v: 2 spawn whose by isn't a valid segment is refused, and nothing is spawned (AC 2)", async () => {
+    const net = new FakeNetwork();
+    const ubu = await boot(net, "ubu1", UBU);
+    const mbp = await scripted(net);
+    for (const by of ["p".repeat(41), "poe the lead", "1poe", "poe@mbp-1"]) {
+      const { reply } = await mbp.ask({ ...SPAWN, by });
+      expect(reply).toMatchObject({ v: 2, re: "spawn", ok: false, error: expect.stringMatching(/^by ".*" isn't a BobNet name/) });
+    }
+    expect(ubu.store.workers()).toEqual([]);
+    expect((await mbp.ask({ ...SPAWN, by: "p".repeat(32) })).reply).toMatchObject({ ok: true, worker: { state: expect.any(String) } });
+  });
+});
