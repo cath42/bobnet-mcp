@@ -64,3 +64,6 @@ has an `upgrade:` section yet (Casper's step 6). C must ship before Casper turns
   rc.42 install + step 6, mbp-1 `upgrade:` section, bob44-probe rule), holds BOB-69, BOB-71.
 - For review B (Toad): mixed versions (§9) for the new events; B2's tests missed the requester parsing the answer
   reply (the `worker` field, fixed in BOB-69).
+- 14:45Z Daisy's check d55092f: pass (AC 1-3, departures accepted); F1 phone wrap is BOB-96 (build-B-fixes, review
+  B's fix loop, before the laptop-mark deploy). Peach checked BOB-71 AC 1-2. Session closed; handoff
+  ~/.local/state/bobnet/handoffs/bobnet/w_621e3c65.md.
