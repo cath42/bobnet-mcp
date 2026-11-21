@@ -39,3 +39,8 @@ has an `upgrade:` section yet (Casper's step 6). C must ship before Casper turns
   BOB-71 note and AC 4 wording (Mario deploys in poe's window).
 - Daisy (consult c_bf90b74c): BOB-71's cross-project question needs no spec change: mixed-project lists follow each
   line's own project's rule (laptop-mark.md line 65, 0f8a182).
+- 13:43Z BOB-66 landed b289bfe (Luigi w_df97ddb7; 17 tests, requests.test.ts). Read: matches §4. For Toad in review B:
+  a shutdown leaves waiting requests open (so the next start orphans and resume still works), a stop settles them;
+  field names (`request` not `id`; `resumed` {worker: new, previous}). **No release between B1 and B4**: a v: 2
+  worker's request goes only to remote_asks until B2/B4 let poe see and answer it.
+- 13:45Z L2 Luigi w_8af6163d on BOB-67, BOB-68.
