@@ -70,7 +70,17 @@ Noted, no fix: Toad's two notes on the `:315` comment and the mark's length afte
 
 ## Policy questions (what counts as a secret): Casper's
 
-Asked in Mario's session. His answers are recorded below as given.
+Asked in Mario's session. Casper answered through poe@mbp-1 (m_af453927), 2026-11-20 20:11 CST, in his
+words: **"1. Yes, 2. No, 3. I dont understand the question"**. poe is asking Q3 again in plain words.
+
+- **Q1: yes.** The `\` gap is accepted, so F1(a) is clear: the broker deploy of the narrowed `findSecret`. poe
+  runs it in a window under the standing BobNet deploy go.
+- **Q2: no.** A BEGIN line with no END must not withhold the rest of the field. That is task F2: redact only the
+  BEGIN line when no END follows. BEGIN..END is still redacted whole. It changes redaction only, so it needs no
+  broker deploy.
+- **Q3: pending**, until poe brings Casper's answer.
+
+The questions as asked:
 
 - Q1. After the deploy, a `password=`/`secret=`/`api_key=` value with a `\` in its first 8 characters isn't
   caught. Examples: `password=Pa\ssw0rd!!`, a Windows path.
