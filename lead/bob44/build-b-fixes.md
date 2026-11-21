@@ -26,3 +26,11 @@ Rollback rule (rc43-notes.md): roll the target (ubu1) back first, never mbp-1 al
   answered/expired still replaces `gone`; `decided_by` derived from the `user_decided` sent; the BOB-69 AC 2 test
   changed (it asserted open-until-settled).
 - 15:13Z L2 Luigi w_d1b6c57d on BOB-98, BOB-99 (queued behind w_3163fee6 ending).
+- 15:20Z BOB-98 landed 9bbf292, BOB-99 8261176 (Luigi w_d1b6c57d; supervisor 502). Read: the answer op refuses a
+  non-v2 worker's request after the ownership and entry checks (no leak); a v: 2 spawn's `by` must be a BobNet name
+  (after the grant check); fitRequest cuts answers, then stubs input; withheld advice by op; the answer op audits a
+  withheld-but-applied answer and catches a resume failure after the answer applied (rethrows unless the orphan is
+  now answered). For Toad: `resume_error` is an additive field on an ok reply (the requester shows `not_resumed`);
+  fitRequest never cuts `tool`/`rule` (config-bounded). Backlog BOB-104 (captured): the local answer_request path
+  still throws the bare error on the same resume failure.
+- 15:22Z L3 Luigi w_8fe79e5e on BOB-100, BOB-101.
