@@ -133,6 +133,131 @@ describe("redactSecrets", () => {
   });
 });
 
+// BOB-80 (ADR 0007 §14, "Ruling, BOB-80"): the widened findSecret. Headers are built from parts, as above.
+const PW = (name: string, value = "hunter2hunter2") => `${name}=${value}`;
+const PGP_BEGIN = `-----${"BEGIN"} PGP PRIVATE KEY BLOCK-----`;
+const PGP_END = `-----${"END"} PGP PRIVATE KEY BLOCK-----`;
+const PGP = [PGP_BEGIN, "", "lQOYBGXyAbcBCADsecretpgpbodyline", "=Ab1c", PGP_END].join("\n");
+const PPK_HEAD = (n: number) => `PuTTY-User-Key-File-${n}${":"}`;
+const PPK2 = [`${PPK_HEAD(2)} ssh-rsa`, "Encryption: none", "Comment: rsa-key-20201120", "Public-Lines: 1", "AAAAB3NzaC1yc2EAAAABJQAAAQEA", "Private-Lines: 1", "AAABAQCsecretppkv2bodyline", `Private-MAC: ${"a1".repeat(20)}`].join("\n");
+const PPK3 = [
+  `${PPK_HEAD(3)} ssh-ed25519`, "Encryption: aes256-cbc", "Comment: ed25519-key-20261120", "Public-Lines: 2", "AAAAC3NzaC1lZDI1NTE5AAAAIOx", "dGVzdA==",
+  "Key-Derivation: Argon2id", "Argon2-Memory: 8192", "Argon2-Passes: 13", "Argon2-Parallelism: 1", "Argon2-Salt: 0123456789abcdef0123456789abcdef",
+  "Private-Lines: 1", "AAAAIMsecretppkv3bodyline", `Private-MAC: ${"b2".repeat(32)}`,
+].join("\n");
+/**
+ * What BOB-80 now withholds though it is no secret: the cost Casper accepted (Q3), bounded to these
+ * shapes. Each ends as a stand-in in its place, the rest of the text kept, and nothing left matches.
+ */
+const NOW_WITHHELD: ReadonlyArray<readonly [string, string]> = [
+  ["PASSWORD_RESET_URL=https://example.com/reset", "PASSWORD_RESET_URL=…"],
+  ["DB_PASSWORD=${DB_PASSWORD}", "a variable, not its value"],
+  ["PASSWORD_FILE=/run/secrets/db", "a path to the secret"],
+  ["SECRET_NAME=prod-db-creds", "the secret's name"],
+  [`The file begins with ${PPK_HEAD(3)} and then the key type.`, "docs quoting a .ppk header with its colon"],
+  [`A PGP key starts ${PGP_BEGIN.toLowerCase()} in a doc.`, "docs quoting a header"],
+];
+
+describe("findSecret, widened (BOB-80)", () => {
+  const MARK = "[withheld: looks like a credential]";
+  it("X_PASSWORD names: `_` before or inside the name, the same value rule (AC 2)", () => {
+    for (const text of [
+      PW("DB_PASSWORD"), "MYSQL_ROOT_PASSWORD: 'abcdefgh1'", PW("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMIK7MDENGbPxRfiCY"),
+      'export GH_PASSWORD = "abcdefghi"', PW("password"), PW("X_API_KEY"), PW("SECRET_KEY"), PW("PASSWORD_HASH"), PW("db_passwd"),
+    ]) expect(findSecret(text), text).toBe("password_assignment");
+    // The match starts at the keyword: the prefix stays, the rest is one mark.
+    expect(redactSecrets(`env: ${PW("DB_PASSWORD")} then`, MARK)).toBe(`env: DB_${MARK} then`);
+    expect(redactSecrets("MYSQL_ROOT_PASSWORD: 'abcdefgh1' ok", MARK)).toBe(`MYSQL_ROOT_${MARK}' ok`);
+    expect(redactSecrets(PW("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMIK7MDENGbPxRfiCY"), MARK)).toBe(`AWS_${MARK}`);
+  });
+  it("X_PASSWORD near-misses stay unmatched (AC 2; §14 1)", () => {
+    for (const text of [
+      "password reset", "Set PASSWORD in the env.", "PASSWORD", PW("passwordless", "abcdefghijk"), PW("MYPASSWORD"), PW("DB_PASSWORDS"),
+      PW("DB_PASSWORD", "short"), PW("DB_PASSWORD", "Pa\\ssw0rd!!"), '"password": "hunter2hunter2"', PW("DB_PASSWORD_A_B_C_D_E"),
+      `DB_PASSWORD_${"x".repeat(33)}=hunter2hunter2`,
+      // BobNet's own texts: the refusal and the stand-ins.
+      "secret_detected: password_assignment", "secret_detected: the handoff holds what looks like a credential (password_assignment); take it out and close again",
+      "Message looks like it contains a credential (password_assignment); send a path instead", MARK, "[hidden: looks like it contains a credential]",
+    ]) {
+      expect(findSecret(text), text).toBeNull();
+      expect(redactSecrets(text, MARK), text).toBe(text);
+    }
+  });
+  it("a PGP private key block: BEGIN through END whole; a BEGIN with no END only its line (AC 3)", () => {
+    const out = redactSecrets(`Key:\n${PGP}\nkept`, MARK);
+    expect(findSecret(PGP)).toBe("private_key");
+    expect(out).toBe(`Key:\n${MARK}\nkept`);
+    expect(findSecret(out)).toBeNull();
+    const cut = PGP.split("\n").slice(0, 3).join("\n");
+    expect(redactSecrets(`Key:\n${cut}\nkept`, MARK)).toBe(`Key:\n${MARK}\n${cut.split("\n").slice(1).join("\n")}\nkept`);
+    // A public block, a signature, a certificate and a public key are none.
+    for (const label of ["PGP PUBLIC KEY BLOCK", "PGP SIGNATURE", "CERTIFICATE", "PUBLIC KEY", "RSA PUBLIC KEY"]) {
+      expect(findSecret(`-----${"BEGIN"} ${label}-----\nAbc\n-----${"END"} ${label}-----`), label).toBeNull();
+    }
+  });
+  it("lowercase PEM headers, as uppercase ones (AC 4)", () => {
+    const pem = [`-----${"begin"} private key-----`, "MIIEvQIBADANBgkqhkiGsecret", `-----${"end"} private key-----`].join("\n");
+    expect(findSecret(pem)).toBe("private_key");
+    expect(redactSecrets(`a\n${pem}\nb`, MARK)).toBe(`a\n${MARK}\nb`);
+    expect(findSecret(`-----${"Begin"} Rsa Private Key-----`)).toBe("private_key");
+    // Mixed case pairs: a lowercase END closes an uppercase BEGIN.
+    expect(redactSecrets(`-----${"BEGIN"} EC PRIVATE KEY-----\nMHcCAQEE\n-----${"end"} ec private key-----\nb`, MARK)).toBe(`${MARK}\nb`);
+  });
+  it("a PuTTY .ppk key, v2 and v3: header through Private-MAC (AC 5)", () => {
+    for (const ppk of [PPK2, PPK3]) {
+      expect(findSecret(ppk)).toBe("putty_key");
+      const out = redactSecrets(`Key:\n${ppk}\nkept`, MARK);
+      expect(out).toBe(`Key:\n${MARK}\nkept`);
+      expect(findSecret(out)).toBeNull();
+    }
+    // A header with no Private-MAC: only its line. CRLF too.
+    expect(redactSecrets(`${PPK_HEAD(3)} ssh-ed25519\r\nEncryption: none\r\n`, MARK)).toBe(`${MARK}\r\nEncryption: none\r\n`);
+    expect(redactSecrets(PPK3.replace(/\n/g, "\r\n"), MARK)).toBe(MARK);
+    // Case-sensitive, as PuTTY reads it; the header without its colon is prose.
+    expect(findSecret("putty-user-key-file-3: ssh-ed25519")).toBeNull();
+    expect(findSecret("the PuTTY-User-Key-File-3 header names the version")).toBeNull();
+    // A Private-MAC with no header closes nothing.
+    expect(redactSecrets(`Private-MAC: ${"ab".repeat(20)}`, MARK)).toBe(`Private-MAC: ${"ab".repeat(20)}`);
+  });
+  it("what is now withheld though no secret, each a stand-in in its place (AC 7)", () => {
+    for (const [text, why] of NOW_WITHHELD) {
+      expect(findSecret(text), why).not.toBeNull();
+      const out = redactSecrets(text, MARK);
+      expect(out, why).toContain(MARK);
+      expect(findSecret(out), why).toBeNull();
+    }
+    expect(redactSecrets("PASSWORD_RESET_URL=https://example.com/reset", MARK)).toBe(MARK);
+    expect(redactSecrets("DB_PASSWORD=${DB_PASSWORD}", MARK)).toBe(`DB_${MARK}`);
+  });
+  it("linear in the text: 200 KB adversarial inputs in under 50 ms each (AC 7; §14 4)", () => {
+    const n = 200_000;
+    const inputs = [
+      `${PGP_BEGIN}\n`.repeat(n / PGP_BEGIN.length),
+      PGP_BEGIN.toLowerCase().repeat(n / PGP_BEGIN.length),
+      `${PGP_BEGIN}\n${PGP_END}\n`.repeat(n / 80),
+      "-----BEGIN " + "a ".repeat(n / 2),
+      ("-----BEGIN " + "A".repeat(39) + " ").repeat(n / 51),
+      `${PPK_HEAD(3)} ssh-ed25519\n`.repeat(n / 36),
+      PPK_HEAD(2).repeat(n / 22),
+      "Private-MAC: ".repeat(n / 13),
+      `Private-MAC:${" ".repeat(n)}`,
+      `${PPK3}\n`.repeat(n / PPK3.length),
+      "_password".repeat(n / 9),
+      "DB_PASSWORD_A_B_C_D".repeat(n / 19),
+      "X_PASSWORD" + "_abcdefgh".repeat(n / 9),
+      "password" + "_".repeat(n) + "=",
+      "secret_detected ".repeat(n / 16),
+    ];
+    for (const text of inputs) {
+      for (const run of [() => findSecret(text), () => redactSecrets(text, MARK)]) {
+        const t = performance.now();
+        run();
+        expect(performance.now() - t, text.slice(0, 40)).toBeLessThan(50);
+      }
+    }
+  });
+});
+
 describe("ClientFrame", () => {
   it("parses a send", () => {
     const f = ClientFrame.parse({ t: "send", rid: "1", as: "Bob", to: ["Bill"], body: "hi" });

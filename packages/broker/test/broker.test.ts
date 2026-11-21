@@ -168,6 +168,17 @@ describe("direct messages", () => {
     await agent(1, "Bender");
     expect(await errorCode(bob.request({ t: "send", as: "Bob", to: ["Bender"], body: "use ghp_" + "x".repeat(36) }))).toBe("secret_detected");
   });
+
+  it("refuses BOB-80's widened kinds, and passes the target's stand-ins for them (BOB-80 AC 6)", async () => {
+    const bob = await agent(1, "Bob");
+    await agent(1, "Bender");
+    for (const body of [
+      "DB_PASSWORD=hunter2hunter2", `-----${"begin"} private key-----`, `-----${"BEGIN"} PGP PRIVATE KEY BLOCK-----`, `PuTTY-User-Key-File-3${":"} ssh-ed25519`,
+    ]) expect(await errorCode(bob.request({ t: "send", as: "Bob", to: ["Bender"], body })), body).toBe("secret_detected");
+    for (const body of ["DB_[withheld: looks like a credential]", "[hidden: looks like it contains a credential]", "secret_detected: password_assignment"]) {
+      await expect(bob.request({ t: "send", as: "Bob", to: ["Bender"], body }), body).resolves.toBeDefined();
+    }
+  });
 });
 
 describe("broadcasts", () => {

@@ -261,6 +261,28 @@ describe("credentials (criterion 3)", () => {
     for (const out of [across, withholdBody(key)]) expect(findSecret(JSON.stringify(out))).toBeNull();
   });
 
+  it("BOB-80's corpus through withholdBody, then the broker's findSecret: null, each a mark in its place, no stand-in loop (BOB-80 AC 6, 7)", () => {
+    const pgp = [`-----${"BEGIN"} PGP PRIVATE KEY BLOCK-----`, "", "lQOYBGXyAbcBCADsecretpgpbodyline", `-----${"END"} PGP PRIVATE KEY BLOCK-----`].join("\n");
+    const ppk = (n: number) => [`PuTTY-User-Key-File-${n}${":"} ssh-ed25519`, "Encryption: none", "Private-Lines: 1", "AAAAIMsecretppkbodyline", `Private-MAC: ${"c3".repeat(n === 2 ? 20 : 32)}`].join("\n");
+    const corpus = [
+      "DB_PASSWORD=hunter2hunter2", "MYSQL_ROOT_PASSWORD: 'abcdefgh1'", "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCY", 'export GH_PASSWORD = "abcdefghi"',
+      pgp, `-----${"begin"} private key-----\nMIIEvQIBADANsecret\n-----${"end"} private key-----`, `-----${"BEGIN"} PGP PRIVATE KEY BLOCK-----\ncut off`, ppk(2), ppk(3), `PuTTY-User-Key-File-3${":"} cut off`,
+      // Now withheld, though no secret (AC 7).
+      "PASSWORD_RESET_URL=https://example.com/reset", "DB_PASSWORD=${DB_PASSWORD}", "PASSWORD_FILE=/run/secrets/db", "SECRET_NAME=prod-db-creds",
+    ];
+    for (const text of corpus) {
+      expect(findSecret(text), text).not.toBeNull();
+      const exit = { v: 2, event: "exit", worker: "w_1", spawn_req: "m_1", state: "done", checkpoint: `step: ${text}` };
+      const out = withHandoff(exit, `# Handoff\n\n${text}\n\nNext: rotate it.\n`);
+      expect(findSecret(JSON.stringify(out)), text).toBeNull();
+      expect(out["handoff_text"], text).toContain("[withheld: looks like a credential]");
+      expect(out["handoff_text"], text).toMatch(/^# Handoff\n\n[^]*\n\nNext: rotate it\.\n$/);
+      expect(out["checkpoint"], text).toMatch(/^step: [^]*\[withheld: looks like a credential\]/);
+      // Withheld again, it stays as it is: nothing in a stand-in matches.
+      expect(withholdBody(out), text).toEqual(out);
+    }
+  });
+
   it("on the wire, against the fake's detector: the exit goes, with its state, the handoff withheld (BOB-72)", async () => {
     const s = await spawned(fakeQuery(), OLD_DETECT);
     const { body, exit } = await endWith(s, MULTILINE);
