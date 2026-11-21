@@ -351,6 +351,9 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
       if (x.decision === "answer" && !x.answers) throw new AnswerError("decision \"answer\" needs answers");
       // A lead's own requests are Casper's: it never approves its own call.
       if (opts.lead && sup.requestDetail(x.id).worker_id === opts.lead) throw new AnswerError(`${x.id} is your own request; Casper answers it`);
+      // One answerer (ADR 0007 §4): a worker another laptop spawned is answered there, or by Casper on the dashboard.
+      const spawner = sup.remoteAnswerer(x.id);
+      if (spawner) throw new AnswerError(`${x.id} is ${spawner}'s worker's; it answers`);
       const answer =
         x.decision === "answer"
           ? { decision: "answer" as const, answers: x.answers!, ...(x.message ? { message: x.message } : {}) }

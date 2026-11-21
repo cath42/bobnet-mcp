@@ -608,8 +608,12 @@ export class Supervisor {
     this.flushOutbox();
 
     for (const p of this.config.projects.values()) {
-      const lost = orphaned.filter((w) => w.project === p.key);
-      const open = orphanedRequests.filter((r) => this.store.request(r.id)?.state === "orphaned" && this.store.worker(r.worker_id)?.project === p.key);
+      // A v: 2 worker and its requests are its spawner's: told by `exit` and `settled` (§4), not here.
+      const lost = orphaned.filter((w) => w.project === p.key && !isV2(w));
+      const open = orphanedRequests.filter((r) => {
+        const w = this.store.worker(r.worker_id);
+        return this.store.request(r.id)?.state === "orphaned" && w?.project === p.key && !isV2(w);
+      });
       if (lost.length === 0 && open.length === 0) continue;
       this.notify(
         `Supervisor restarted. ${p.key} workers that were running and are now failed: ${lost.map((w) => `${this.roleOf(w).name} (${w.id})`).join(", ") || "none"}. ` +
@@ -891,10 +895,14 @@ export class Supervisor {
     return { state: w.state, task: w.task, checkpoint: this.checkpoints.get(id) ?? w.checkpoint, ...summarize(this.logPath(w)) };
   }
 
-  /** Open requests, one line each: the full input is request_detail's, so a check costs the orchestrator little. */
+  /**
+   * Open requests, one line each: the full input is request_detail's, so a check costs the orchestrator little.
+   * A `v: 2` worker's are left out: its spawner answers them (ADR 0007 §4, one answerer); the dashboard still shows them.
+   */
   pending(): Array<Pick<RequestRow, "id" | "worker_id" | "kind" | "tool" | "tier" | "rule" | "state" | "created_at"> & { worker: string; project: string; preview: string }> {
-    return this.store.requests(["open", "orphaned"]).map((r) => {
+    return this.store.requests(["open", "orphaned"]).flatMap((r) => {
       const w = this.store.worker(r.worker_id);
+      if (w && isV2(w)) return [];
       return {
         id: r.id,
         worker_id: r.worker_id,
@@ -909,6 +917,13 @@ export class Supervisor {
         preview: oneLine(r),
       };
     });
+  }
+
+  /** The spawner that answers a request, when it is a `v: 2` worker's (§4): this laptop's orchestrator doesn't. Null for any other. */
+  remoteAnswerer(id: string): string | null {
+    const r = this.store.request(id);
+    const w = r ? this.store.worker(r.worker_id) : null;
+    return w && isV2(w) ? w.spawned_by : null;
   }
 
   /** One request in full, input included. */
@@ -1996,10 +2011,10 @@ export class Supervisor {
    * fields redacted (§2); flushed once registered. False, and nothing sent, for any other worker.
    */
   private v2Event(w: WorkerRow, fields: Record<string, unknown> & { event: string }): boolean {
-    if (!w.remote_by || !w.spawn_req || !w.spawned_by?.includes("@")) return false;
+    if (!isV2(w)) return false;
     const { event, ...rest } = fields;
     const body = withholdBody({ v: 2, event, worker: w.id, spawn_req: w.spawn_req, ...rest }, this.detect);
-    this.store.addOutbox(w.spawned_by, reply(body), "remote", { inReplyTo: null, ttlSeconds: REMOTE_ANSWER_TTL_S });
+    this.store.addOutbox(w.spawned_by!, reply(body), "remote", { inReplyTo: null, ttlSeconds: REMOTE_ANSWER_TTL_S });
     if (this.registered) this.flushOutbox();
     return true;
   }
@@ -2081,7 +2096,8 @@ export class Supervisor {
       promptRefs: waiting.map((m) => m.id),
       // Consumed only once a turn takes it: a worker that ends first leaves it for the role's next one.
       onInputTaken: (refs) => this.store.consumeInbox(refs, w.id),
-      systemAppend: role.lead ? leadAppend(role, project.orchestrator) : systemAppend(role, project.orchestrator),
+      // A v: 2 worker's orchestrator is on the requester's laptop (§3): named in full, since a bare name resolves here.
+      systemAppend: role.lead ? leadAppend(role, project.orchestrator) : isV2(w) ? systemAppend(role, `${w.remote_by}@${laptopOf(w.spawned_by!)}`, true) : systemAppend(role, project.orchestrator),
       resumeSession: w.resume_session,
       logPath: this.logPath(w),
       queryFn: this.queryFn,
@@ -2132,7 +2148,8 @@ export class Supervisor {
               // The board learns the link after run_start, through the same outbox, so it lands on the run's row.
               const row = this.store.worker(w.id);
               if ("url" in rc && row) this.boardReport(row, { op: "run_remote", project: w.project, id: w.id, remote_url: rc.url });
-              if ("error" in rc) this.notify(`${role.name} (${w.id}) runs without Remote Control: ${rc.error}.`, w.project);
+              // A v: 2 worker's is its spawner's to know, from the event above (§4), never the target's orchestrator's.
+              if ("error" in rc && !isV2(w)) this.notify(`${role.name} (${w.id}) runs without Remote Control: ${rc.error}.`, w.project);
               this.report();
             },
           }
@@ -2682,7 +2699,8 @@ export class Supervisor {
     this.exitEvent(exitedRow, checkpoint, lands);
     if (!consultWorker) {
       const landed = lands.length ? ` Land: ${lands.join("; ")}.` : "";
-      this.notify(`${role.name} (${id}, ${w.project}/${w.role}) ${what}.${landed} Handoff: ${w.handoff ?? "none"}.`, w.project);
+      // A v: 2 worker's end goes to its spawner as `exit` (above), not to this laptop's orchestrator (§4).
+      if (!isV2(exitedRow)) this.notify(`${role.name} (${id}, ${w.project}/${w.role}) ${what}.${landed} Handoff: ${w.handoff ?? "none"}.`, w.project);
       this.progress(w, outcome.state === "done" ? "done" : what);
     }
     this.schedule();
@@ -3255,6 +3273,11 @@ export class Supervisor {
 /** A request copy's states in the order they may move (§7): answered and expired are final. */
 const ASK_RANK: Record<string, number> = { open: 0, orphaned: 1, answered: 2, expired: 2 };
 
+/** A `v: 2` worker (§4): its spawner, another laptop's supervisor, hears of it and answers it; the target's orchestrator doesn't. */
+function isV2(w: WorkerRow): boolean {
+  return !!w.remote_by && !!w.spawn_req && !!w.spawned_by?.includes("@");
+}
+
 /** What makes a worker `v: 2` (§7), for a worker that continues it: a resume or a reset. */
 function remoteOf(w: WorkerRow): { remoteBy?: string; spawnReq?: string } {
   return w.remote_by && w.spawn_req ? { remoteBy: w.remote_by, spawnReq: w.spawn_req } : {};
@@ -3347,10 +3370,11 @@ export function remoteName(role: RoleConfig, w: WorkerRow, laptop: string | null
   return `${who} ${d.feature} ${d.kind === "retro" ? "retro" : `${d.kind[0]}${d.label ?? ""}`}`;
 }
 
-function systemAppend(role: RoleConfig, orchestrator: string): string {
+export function systemAppend(role: RoleConfig, orchestrator: string, remote = false): string {
   return [
     `You are ${role.name}, the ${role.key} agent for project ${role.project}, running headless under the BobNet supervisor. Nobody is watching this session.`,
     `Permission requests and AskUserQuestion go to the orchestrator (${orchestrator}) and may take a while or be denied. When a denial carries an instruction, follow it.`,
+    ...(remote ? [`Your orchestrator is on another laptop: message it as ${orchestrator}, in full. A bare name reaches an agent on this laptop.`] : []),
     "Questions you can't get answered go in your handoff file under Open questions; don't wait on them.",
     "Your state lives in files: anything you decide or learn that matters later goes in the handoff file or the files your role owns.",
     `When a tool's output is too large and saved to a file, don't read the file back, whatever its notice says: re-run the command narrower (grep, head, tail, a filter) or Grep the file. A Read of it over ${SAVED_READ_MAX / 1000} KB is refused.`,

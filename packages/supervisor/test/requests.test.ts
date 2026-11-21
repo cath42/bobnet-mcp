@@ -64,13 +64,13 @@ function newStore(): { dir: string; store: Store } {
   return { dir, store };
 }
 
-async function boot(net: FakeNetwork, laptop: string, over: string, at = newStore()) {
+async function boot(net: FakeNetwork, laptop: string, over: string, at = newStore(), opts: { remoteControl?: boolean } = {}) {
   const link = net.link(laptop);
-  const query = fakeQuery();
+  const query = fakeQuery(opts);
   const ciPoll = new GhCiPoll(quiet, async () => {
     throw new Error("no gh in tests");
   });
-  const sup = new Supervisor({ config: testConfig(at.dir, over), policy: POLICY, store: at.store, broker: link, queryFn: query.queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async () => false, sleep: net.sleep, ciPoll });
+  const sup = new Supervisor({ config: testConfig(at.dir, over), policy: POLICY, store: at.store, broker: link, queryFn: query.queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async (token) => token === "owner-token", sleep: net.sleep, ciPoll });
   link.onPush = (f) => sup.onPush(f);
   await sup.start();
   running.push(sup);
@@ -541,5 +541,129 @@ describe("list carries each worker's open and orphaned requests (ADR 0007 §2)",
     expect(listed.reply["workers"][0]["requests"]).toEqual([{ request: s.rid, kind: "approval", tool: "Bash", tier: "orchestrator", rule: "probe", preview: "echo probe", state: "open", created_at: r.created_at }]);
     await s.mbp.ask(ANSWER(s.rid));
     expect((await s.mbp.ask({ v: 2, op: "list", ids: [s.id] })).reply["workers"][0]["requests"]).toEqual([]);
+  });
+});
+
+// BOB-68 (B3): one answerer on the target (ADR 0007 §4): its orchestrator neither lists nor answers a
+// v: 2 worker's request, nor hears of its end, its Remote Control failing or its restart; its spawner
+// does, as events. The worker's preamble names that orchestrator in full (§3).
+
+/** ubu1's MCP tools as its own orchestrator calls them; an error comes back as its text. */
+const toolsOf = (sup: Supervisor) => {
+  const tools = handlers(sup);
+  return async (name: string, args: Record<string, unknown> = {}) => {
+    const r = await callTool(tools, name, args);
+    return r.isError ? { error: r.content[0]!.text } : JSON.parse(r.content[0]!.text);
+  };
+};
+
+describe("one answerer on the target (BOB-68 AC 1)", () => {
+  it("pending_requests leaves out a v: 2 worker's request and answer_request refuses it, naming the spawner; a local one's as today; the dashboard lists both", async () => {
+    const s = await asking();
+    s.ubu.sup.spawn({ project: "studio", role: "bea", task: "local" });
+    await until(() => s.ubu.sessions.length === 2);
+    const local = s.ubu.sessions[1]!.ask("Bash", PROBE);
+    await until(() => s.ubu.store.requests(["open"]).length === 2);
+    const lid = s.ubu.store.requests(["open"]).find((r) => r.id !== s.rid)!.id;
+    const call = toolsOf(s.ubu.sup);
+    expect((await call("pending_requests")).map((r: { id: string }) => r.id)).toEqual([lid]);
+    expect(await call("answer_request", { id: s.rid, decision: "allow" })).toEqual({ error: `${s.rid} is ${SUP_MBP}'s worker's; it answers` });
+    expect(s.ubu.store.request(s.rid)!.state).toBe("open");
+    expect(await call("answer_request", { id: lid, decision: "allow" })).toMatchObject({ id: lid, state: "answered", decision: "allow" });
+    expect(await local).toMatchObject({ behavior: "allow" });
+    // The dashboard's report still carries the v: 2 worker's request.
+    expect(s.ubu.sup.snapshot().pending.map((r) => r.id)).toContain(s.rid);
+  });
+});
+
+describe("a v: 2 worker's other notices go to its spawner, never the target's orchestrator (BOB-68 AC 2)", () => {
+  it("its end: an exit event, no notice to Bob@ubu1; a local worker's end still notifies", async () => {
+    const s = await spawned();
+    s.ubu.sessions[0]!.finish();
+    await until(() => s.mbp.events("exit").length === 1);
+    expect(s.mbp.events("exit")[0]).toMatchObject({ worker: s.id, state: "done" });
+    s.ubu.sup.spawn({ project: "studio", role: "bea", task: "local" });
+    await until(() => s.ubu.sessions.length === 2);
+    s.ubu.sessions[1]!.finish();
+    await until(() => s.bob().some((b) => b.startsWith("Bea (")));
+    expect(s.bob().filter((b) => b.includes(s.id))).toEqual([]);
+  });
+
+  it("Remote Control failing: a remote_control event with the error, no notice to Bob@ubu1; a local worker's still notifies", async () => {
+    const net = new FakeNetwork();
+    const ubu = await boot(net, "ubu1", UBU, newStore(), { remoteControl: false });
+    await ubu.link.register({ name: "Bob" });
+    const mbp = await scripted(net);
+    const id = (await mbp.ask(SPAWN)).reply["worker"].id as string;
+    await until(() => mbp.events("remote_control").length === 1);
+    expect(mbp.events("remote_control")[0]).toMatchObject({ worker: id, error: expect.stringMatching(/no enableRemoteControl/) });
+    const local = ubu.sup.spawn({ project: "studio", role: "bea", task: "local" });
+    await until(() => net.between(SUP_UBU, "Bob@ubu1").some((b) => b.includes(`(${local.id}) runs without Remote Control`)));
+    expect(net.between(SUP_UBU, "Bob@ubu1").filter((b) => b.includes(id))).toEqual([]);
+  });
+
+  it("the restart notice: a v: 2 worker failed and its orphaned request go as exit and settled; the notice names only local ones", async () => {
+    const { at, w, r } = leftBehind();
+    const lw = at.store.createWorker({ project: "studio", role: "bea", task: "local", handoff: null, priority: 0, resume_session: null });
+    at.store.updateWorker(lw.id, { state: "waiting-approval", session_id: "sess-local" });
+    const lr = at.store.createRequest({ worker_id: lw.id, kind: "approval", tool: "Bash", input: JSON.stringify(PROBE), tier: "orchestrator", rule: "probe", reason: "the probe" });
+    const net = new FakeNetwork();
+    const mbp = await scripted(net);
+    const bob = net.link("ubu1");
+    await bob.register({ name: "Bob" });
+    await boot(net, "ubu1", UBU, at);
+    await until(() => net.between(SUP_UBU, "Bob@ubu1").some((b) => b.startsWith("Supervisor restarted.")));
+    const notice = net.between(SUP_UBU, "Bob@ubu1").find((b) => b.startsWith("Supervisor restarted."))!;
+    expect(notice).toContain(`Bea (${lw.id})`);
+    expect(notice).toContain(lr.id);
+    expect(notice).not.toContain(w.id);
+    expect(notice).not.toContain(r.id);
+    await until(() => mbp.events("settled").length === 1);
+    expect(mbp.events("exit")[0]).toMatchObject({ worker: w.id, state: "failed", error: "supervisor restarted" });
+    expect(mbp.events("settled")[0]).toMatchObject({ request: r.id, state: "orphaned" });
+  });
+
+  it("the restart notice: none at all when only v: 2 workers were left behind", async () => {
+    const { at } = leftBehind();
+    const net = new FakeNetwork();
+    const mbp = await scripted(net);
+    const bob = net.link("ubu1");
+    await bob.register({ name: "Bob" });
+    await boot(net, "ubu1", UBU, at);
+    await until(() => mbp.events("settled").length === 1);
+    await tick(20);
+    expect(net.between(SUP_UBU, "Bob@ubu1")).toEqual([]);
+  });
+});
+
+describe("a v: 2 worker's preamble names its orchestrator in full (BOB-68 AC 3)", () => {
+  it("<by>@<the requester's laptop>, never a bare name; a local worker's names its project's orchestrator", async () => {
+    const s = await spawned();
+    const append = (i: number) => (s.ubu.sessions[i]!.options.systemPrompt as { append: string }).append;
+    expect(append(0)).toContain("Permission requests and AskUserQuestion go to the orchestrator (poe@mbp-1)");
+    expect(append(0)).toContain("message it as poe@mbp-1, in full. A bare name reaches an agent on this laptop.");
+    expect(append(0)).not.toMatch(/\(poe\)|\bpoe\b(?!@)/);
+    s.ubu.sup.spawn({ project: "studio", role: "bea", task: "local" });
+    await until(() => s.ubu.sessions.length === 2);
+    expect(append(1)).toMatch(/go to the orchestrator \([^@)]+\)/);
+    expect(append(1)).not.toContain("another laptop");
+  });
+});
+
+describe("Casper answers a remote worker's request on the dashboard (BOB-68 AC 4)", () => {
+  it("decided by human on the target; the requester learns from settled and its copy clears", async () => {
+    const { ubu, mbp, call } = await real();
+    const w = await call("spawn_worker", { project: "studio", role: "ann", task: "one fix", laptop: "ubu1" });
+    await until(() => ubu.sessions.length === 1);
+    const result = ubu.sessions[0]!.ask("Bash", PROBE);
+    await until(() => mbp.store.remoteAsks("ubu1").length === 1);
+    const rid = mbp.store.remoteAsks("ubu1")[0]!.id;
+    expect(mbp.store.remoteAsk("ubu1", rid)).toMatchObject({ state: "open" });
+    ubu.sup.onPush({ t: "action", id: "a_1", to: SUP_UBU, by: "owner@example.com", token: "owner-token", action: { kind: "answer", request: rid, decision: "allow" } } as never);
+    expect(await result).toMatchObject({ behavior: "allow" });
+    expect(ubu.store.request(rid)).toMatchObject({ state: "answered", decided_by: "human" });
+    await until(() => mbp.store.remoteAsk("ubu1", rid)?.state === "answered");
+    expect(mbp.store.remoteAsk("ubu1", rid)).toMatchObject({ state: "answered", decision: "allow", decided_by: "human" });
+    expect(w.id).toBe(ubu.store.request(rid)!.worker_id);
   });
 });
