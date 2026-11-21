@@ -73,3 +73,16 @@ their team field: it goes with them.
 supervisor's credentials (same env as its unit):
 `node forget-alexa-peers.ts ~/.local/share/bobnet/<installed tag>`, which prints `removed Canva@ubu1` and `removed Dot@ubu1`.
 That's poe@ubu1's (or Casper's) to run; no broker deploy, no code change. Check: `list_peers` shows neither.
+
+## Outcome, 2026-11-21
+
+- Config: poe staged `supervisor.yaml.staged-2026-11-21-vitalsboard` in mbp-1's config dir (vitals gets
+  `board: service`; it had no backlog block), backup `.bak-2026-11-21-vitalsboard`, rc.45 `check` on a copy: ok.
+  poe applies it at a restart.
+- poe: don't wait on PR #29 ("Casper never merges"). Final dry run at b2797afa37ca: 15 features, 0 problems. Posted:
+  `{"ok":true,"projects":[{"key":"vitals","items":15,"events":0,"next_item":16}]}`. `board_list`: R1 closed 11/11,
+  R2 open 3/4 (VIT-13 open). Grants: Vita's row and Mario's `*` backup row.
+- Vita (OK'd the mapping, all six): adds HAC grades as a backlog card, closes PR #29 unmerged, settles VIT-13,
+  cuts the repo over (§ Order 4).
+- Canva/Dot@ubu1: Casper ruled to retire them (in Vita's session, today). poe: leave them to the broker's sweep
+  (about 2026-12-17), not worth a ubu1 run. The script stays here if poe wants them gone sooner.
