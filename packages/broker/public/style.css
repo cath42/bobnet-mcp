@@ -337,6 +337,8 @@ a.more-t { text-decoration: none; justify-self: start; padding: 0; min-height: 0
 .now-list .a-btn { display: grid; gap: 2px 10px; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; }
 .now-list .l-path { grid-column: 1 / -1; grid-row: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 14px; }
 .now-list .l-path .id { margin-right: 4px; }
+.now-list .l-who { padding-left: 14px; text-indent: -14px; }
+.now-list .l-who * { text-indent: 0; }
 .now-list .l-task { color: var(--text); text-decoration: none; }
 .now-list .l-m { white-space: nowrap; font-variant-numeric: tabular-nums; text-align: right; }
 .dot.warn { background: var(--warn); }
