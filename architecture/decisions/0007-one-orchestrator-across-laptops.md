@@ -965,3 +965,37 @@ stand. Where the build differs, by section:
   - m4, m5: `request` fit and the withheld reply's text.
   - m7: tests with both ends real.
 - **The broker's part** (BOB-70/71) has Toad's go, under BOB-80's laptops-first order.
+
+**As built, build B-fixes** (BOB-97..101; aeb897b..c334cd9, rc.44; `reviews/2026-11-21-bob44-build-b-fixes.md`).
+This closes review B's M1, m1-m5 and m7. m6 stays open as BOB-102. Where the fixes add to the decisions above:
+
+- **§7, a request copy's states.** A copy's state moves open, then orphaned, then one final state: `answered`,
+  `expired` or `gone`.
+  - `gone` means a full list (not `truncated`) left the copy out. The copy was open or orphaned, and the list's view
+    of its worker carried a `requests` array that didn't name it.
+  - Only copies last changed before the list's `sent_at` can become `gone`. Both times are on the requester's clock.
+  - A view without `requests` (a target before rc.43) changes nothing.
+  - The target's own `answered` or `expired` still replaces `gone`. Nothing else does.
+- **§5, `pending_requests`.** It leaves out an open or orphaned copy over a day old, aged from `created_at`, else
+  `as_of`. That is the bound `expireOrphans` puts on a local orphan.
+- **§7, pruning.** Reconcile deletes final copies a day old.
+- **§7, the worker copy.** It stores its view without `requests`.
+- **§4, the `answer` reply.** The reply goes into the request's copy, as its `settled` would. `decided_by` comes from
+  the `user_decided` that was sent.
+- **§4, the `answer` op's checks.** After the ownership and entry checks, the op refuses a worker spawned without
+  `v: 2`. That worker's requests are answered on the target.
+- **§3, the spawn's `by`.** The target refuses a `v: 2` spawn whose `by` isn't a BobNet segment. The check comes
+  after the grant check.
+- **§4, an orphan whose resume fails.**
+  - The answer applied, so the reply is `ok` with `state: answered` and an additive `resume_error`.
+  - The requester's `answer_request` shows it as `not_resumed`.
+  - The audit is `remote:answer` with `resumed: false`.
+  - When an answer applied but its reply was withheld, the audit also gets `remote:answer` with `withheld: true`.
+- **§4, the abort path.** A stop asked through `Supervisor.stop()` settles the request even if a shutdown starts
+  before the worker exits. Only a shutdown's own stop leaves it open.
+- **§2, `request` fit.** `answers` is cut too. If the request still doesn't fit, `input` goes as `…`, with
+  `truncated`.
+- **§14, "spawned after all".** It is told only for a spawn's first copy.
+- **§9.** rc.44 and rc.43 are compatible in either order. The rc.43 rules stand for anything below rc.43: on install
+  the requester goes first, and on rollback the target goes first. A requester rolled back from rc.44 to rc.43 keeps
+  its `gone` rows. rc.43 doesn't show them.
