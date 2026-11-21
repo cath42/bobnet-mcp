@@ -757,7 +757,7 @@ describe("pending_requests, request_detail and answer_request find a remote id (
 });
 
 describe("answer_request for a remote id: the target's result; the copy clears with settled (BOB-69 AC 2)", () => {
-  it("sends answer, returns the target's reply; the copy stays open until settled comes", async () => {
+  it("sends answer, returns the target's reply; the reply's state updates the copy, and its settled changes nothing more (BOB-97 AC 3)", async () => {
     const t = await playedTarget();
     await t.deliver(t.request());
     t.replies.to = (b) => (b["op"] === "answer" ? { ok: true, request: "r_1", worker_id: "w_9", state: "answered", decision: "allow" } : null);
@@ -765,12 +765,11 @@ describe("answer_request for a remote id: the target's result; the copy clears w
     const got = JSON.parse((await callTool(tools, "answer_request", { id: "r_1", decision: "allow", message: "go" })).content[0]!.text);
     expect(t.asked.filter((b) => b["op"] === "answer")).toEqual([{ v: 2, op: "answer", id: "r_1", decision: "allow", message: "go", user_decided: false, resume: true }]);
     expect(got).toEqual({ id: "r_1", state: "answered", decision: "allow", laptop: "ubu1" });
-    // Not before its settled: the reply alone leaves the copy as it was.
-    expect(t.ask()).toMatchObject({ state: "open", decision: null });
-    expect(((await callTool(tools, "pending_requests", {})).content[0]!.text)).toContain("r_1");
-    await t.deliver(t.settled("answered", { decision: "allow", decided_by: "orchestrator" }));
+    // The reply alone settles the copy, should its settled be missed; decided by whom the answer said.
     expect(t.ask()).toMatchObject({ state: "answered", decision: "allow", decided_by: "orchestrator" });
     expect(JSON.parse((await callTool(tools, "pending_requests", {})).content[0]!.text)).toEqual([]);
+    await t.deliver(t.settled("answered", { decision: "allow", decided_by: "orchestrator" }));
+    expect(t.ask()).toMatchObject({ state: "answered", decision: "allow", decided_by: "orchestrator" });
   });
 
   it("a refusal (another worker's request) comes back as the tool's error", async () => {
@@ -868,5 +867,142 @@ describe("poe answers a remote request exactly as a local one (BOB-69 AC 5)", ()
     expect(await s.result).toMatchObject({ behavior: "allow" });
     await until(() => s.mbp.store.remoteAsk("ubu1", s.rid)?.state === "answered");
     expect(await s.call("pending_requests", {})).toEqual([]);
+  });
+});
+
+// BOB-97 (review B F1; Toad's M1, independent m2, m3): a request copy whose `settled` was missed is
+// finalised by a full list that leaves it out (`gone`), bounded to a day in pending_requests, pruned a
+// day after it is final, settled by the `answer` reply too; and a copy's view keeps no `requests`.
+
+const DAY_MS = 86_400_000;
+const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+
+/** The played target's list reply: w_9 as ubu1 shows it, with `requests` as given (none: an older target's view). */
+function listReply(t: Awaited<ReturnType<typeof playedTarget>>, requests?: unknown[], over: Record<string, unknown> = {}) {
+  t.replies.to = (b) => (b["op"] === "list" ? { ok: true, workers: [{ id: "w_9", project: "studio", role: "ann", state: "running", spawn_req: t.request()["spawn_req"], ...(requests ? { requests } : {}) }], ...over } : null);
+}
+
+describe("a copy that missed its settled is finalised by a full list (BOB-97 AC 1)", () => {
+  it("open with no settled, then a list showing the worker with requests: [] makes it gone, and pending_requests is empty (Toad M1)", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.request({ created_at: new Date().toISOString() }));
+    expect(JSON.parse((await callTool(handlers(t.mbp.sup), "pending_requests", {})).content[0]!.text)).toHaveLength(1);
+    listReply(t, []);
+    await t.mbp.sup.reconcile();
+    expect(t.asked.filter((b) => b["op"] === "list")).toHaveLength(1);
+    expect(t.ask()).toMatchObject({ state: "gone", decision: null, decided_by: null, preview: "echo probe" });
+    expect(JSON.parse((await callTool(handlers(t.mbp.sup), "pending_requests", {})).content[0]!.text)).toEqual([]);
+  });
+
+  it("an orphaned copy left out is gone too; one the list still names stays as it is", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.request(), t.settled("orphaned"), t.request({ request: "r_2" }));
+    listReply(t, [{ request: "r_2", kind: "approval", tool: "Bash", tier: "orchestrator", rule: "probe", preview: "echo probe", state: "open", created_at: "2026-11-17T12:00:00.000Z" }]);
+    await t.mbp.sup.reconcile();
+    expect(t.ask()).toMatchObject({ state: "gone" });
+    expect(t.mbp.store.remoteAsk("ubu1", "r_2")).toMatchObject({ state: "open" });
+  });
+
+  it("a view with no requests key (a target before rc.43) changes nothing (Toad M1)", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.request());
+    listReply(t);
+    await t.mbp.sup.reconcile();
+    expect(t.asked.filter((b) => b["op"] === "list")).toHaveLength(1);
+    expect(t.ask()).toMatchObject({ state: "open" });
+  });
+
+  it("a list cut to fit (truncated) changes nothing", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.request());
+    listReply(t, [], { truncated: true });
+    await t.mbp.sup.reconcile();
+    expect(t.ask()).toMatchObject({ state: "open" });
+  });
+
+  it("a copy changed after the list was sent (its request event overtook the reply) is left open", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.request());
+    t.mbp.store.putRemoteAsk({ ...t.ask()!, as_of: new Date(Date.now() + 60_000).toISOString() });
+    listReply(t, []);
+    await t.mbp.sup.reconcile();
+    expect(t.ask()).toMatchObject({ state: "open" });
+  });
+
+  it("gone is final against a request or orphaned, but the target's own answered or expired replaces it", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.request());
+    listReply(t, []);
+    await t.mbp.sup.reconcile();
+    await t.deliver(t.request(), t.settled("orphaned"));
+    expect(t.ask()).toMatchObject({ state: "gone" });
+    await t.deliver(t.settled("answered", { decision: "allow", decided_by: "human" }));
+    expect(t.ask()).toMatchObject({ state: "answered", decision: "allow", decided_by: "human" });
+  });
+
+  it("both ends real: a settled lost while mbp-1 was away a day; list_workers finalises the copy (the independent probe's case)", async () => {
+    const s = await remoteAsking();
+    s.net.disconnect("mbp-1");
+    s.ubu.sup.answer(s.rid, { decision: "allow" }, "orchestrator");
+    expect(await s.result).toMatchObject({ behavior: "allow" });
+    expect(s.ubu.store.request(s.rid)).toMatchObject({ state: "answered" });
+    // The settled expires at the broker before mbp-1 is back.
+    s.net.advance(86_401);
+    s.net.sweep();
+    expect(s.mbp.store.remoteAsk("ubu1", s.rid)).toMatchObject({ state: "open" });
+    // Back, its reconcile on connect lists the worker with requests: [], so the copy is final.
+    await s.net.reconnect("mbp-1");
+    await until(() => s.mbp.store.remoteAsk("ubu1", s.rid)?.state === "gone");
+    expect(await s.call("pending_requests", {})).toEqual([]);
+    const rows = (await s.call("list_workers", { laptop: "ubu1" })) as Array<Record<string, unknown>>;
+    expect(rows.find((r) => r["id"] === s.w.id)).not.toHaveProperty("requests");
+    expect(s.mbp.store.remoteAsk("ubu1", s.rid)).toMatchObject({ state: "gone" });
+  });
+});
+
+describe("pending_requests and the copies are bounded to a day (BOB-97 AC 2)", () => {
+  it("leaves out an open or orphaned copy over a day old", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.request());
+    const ask = (id: string, state: string, created_at: string) => t.mbp.store.putRemoteAsk({ ...t.ask()!, id, state, created_at });
+    ask("r_old", "open", ago(DAY_MS + 60_000));
+    ask("r_orph", "orphaned", ago(DAY_MS + 60_000));
+    ask("r_new", "orphaned", ago(DAY_MS - 60_000));
+    ask("r_1", "open", ago(1000));
+    const rows = JSON.parse((await callTool(handlers(t.mbp.sup), "pending_requests", {})).content[0]!.text) as Array<Record<string, unknown>>;
+    expect(rows.map((r) => r["id"]).sort()).toEqual(["r_1", "r_new"]);
+  });
+
+  it("a copy with no created_at (made by a settled) is aged by its as_of", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.settled("orphaned"));
+    t.mbp.store.putRemoteAsk({ ...t.ask()!, as_of: ago(DAY_MS + 60_000) });
+    expect(t.mbp.sup.remotePending()).toEqual([]);
+  });
+
+  it("reconcile prunes final copies a day old; open ones and newer final ones stay", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.request());
+    const ask = (id: string, state: string, as_of: string) => t.mbp.store.putRemoteAsk({ ...t.ask()!, id, state, as_of });
+    for (const state of ["answered", "expired", "gone"]) ask(`r_${state}`, state, ago(DAY_MS + 60_000));
+    ask("r_open", "open", ago(DAY_MS + 60_000));
+    ask("r_fresh", "answered", ago(60_000));
+    listReply(t, [{ request: "r_1", state: "open" }, { request: "r_open", state: "open" }]);
+    await t.mbp.sup.reconcile();
+    expect(t.mbp.store.remoteAsks("ubu1").map((a) => a.id).sort()).toEqual(["r_1", "r_fresh", "r_open"]);
+  });
+});
+
+describe("a copy keeps no stale requests list (BOB-97 AC 3)", () => {
+  it("copyView strips requests: list_workers and worker_status show none, before and after the answer", async () => {
+    const s = await remoteAsking();
+    await s.call("list_workers", { laptop: "ubu1" });
+    const c = s.mbp.store.remoteCopy("ubu1", s.w.id)!;
+    expect(JSON.parse(c.view!)).not.toHaveProperty("requests");
+    expect(s.mbp.sup.copyRow(c)).not.toHaveProperty("requests");
+    expect(await s.call("answer_request", { id: s.rid, decision: "allow" })).toEqual({ id: s.rid, state: "answered", decision: "allow", laptop: "ubu1" });
+    expect(s.mbp.store.remoteAsk("ubu1", s.rid)).toMatchObject({ state: "answered", decision: "allow", decided_by: "orchestrator" });
+    expect(await s.call("worker_status", { id: s.w.id })).not.toHaveProperty("requests");
+    expect((await s.call("list_workers", { laptop: "ubu1" })).find((r: Record<string, unknown>) => r["id"] === s.w.id)).not.toHaveProperty("requests");
   });
 });

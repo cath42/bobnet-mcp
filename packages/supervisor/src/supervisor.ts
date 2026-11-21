@@ -938,12 +938,13 @@ export class Supervisor {
 
   /**
    * The open and orphaned requests of the workers this supervisor spawned on other laptops (§4, §5),
-   * from their copies: as pending() shows a local one, with `laptop` and `as_of`.
+   * from their copies: as pending() shows a local one, with `laptop` and `as_of`. One over a day old is
+   * left out, the bound a local orphan has: its `settled` was missed, and no list can say so (§14).
    */
-  remotePending(): Array<Record<string, unknown>> {
+  remotePending(at = Date.now()): Array<Record<string, unknown>> {
     return this.store
       .remoteAsks()
-      .filter((a) => a.state === "open" || a.state === "orphaned")
+      .filter((a) => (a.state === "open" || a.state === "orphaned") && at - Date.parse(a.created_at ?? a.as_of) <= ORPHAN_TTL_MS)
       .map((a) => {
         const c = this.store.remoteCopy(a.laptop, a.worker);
         const { project, name } = c ? this.copyNames(c) : { project: undefined, name: "?" };
@@ -1344,13 +1345,14 @@ export class Supervisor {
   /**
    * A request copy (§7), from the target's `request` or `settled`: only forward, a settle final. A
    * `settled` for a request with no copy makes it in that state, so a `request` after it changes nothing.
+   * `gone` (a list left it out) is final too, but the target's own answered or expired still replaces it.
    */
   private askCopy(c: RemoteWorkerRow, json: Record<string, unknown>, now: string): void {
     const id = json["request"];
     const state = json["event"] === "request" ? "open" : json["state"];
     if (typeof id !== "string" || typeof state !== "string" || !(state in ASK_RANK)) return;
     const was = this.store.remoteAsk(c.laptop, id);
-    if (was && (was.worker !== c.id || ASK_RANK[state]! <= ASK_RANK[was.state]!)) return;
+    if (was && (was.worker !== c.id || (ASK_RANK[state]! <= ASK_RANK[was.state]! && !(was.state === "gone" && (state === "answered" || state === "expired"))))) return;
     const str = (k: string) => (typeof json[k] === "string" ? (json[k] as string) : null);
     const a: RemoteAskRow = {
       laptop: c.laptop,
@@ -1398,10 +1400,13 @@ export class Supervisor {
     const asked = JSON.parse(sent.body) as { ids?: string[]; reqs?: string[] };
     const w = json["worker"];
     if (isRecord(w)) this.copyView(sent.to_name, laptop, w, asOf, sent.op === "summary" && "handoff_text" in json ? handoffFields(json) : undefined);
+    if (sent.op === "answer") this.answeredCopy(laptop, json, JSON.parse(sent.body) as { user_decided?: boolean }, asOf);
     if (!Array.isArray(json["workers"])) return;
     const views = (json["workers"] as unknown[]).filter((v): v is Record<string, unknown> & { id: string } => isRecord(v) && typeof v["id"] === "string");
     if (sent.op === "list" && !asked.ids && !asked.reqs) this.adopt(sent.to_name, views);
     const seen = new Set<string>();
+    // A list cut to fit doesn't say what it left out.
+    const full = sent.op === "list" && json["truncated"] !== true;
     for (const v of views) {
       // Only a worker this supervisor knows: a copy, or one a spawn sent there made (a bare list names others too).
       if (!this.store.remoteCopy(laptop, v.id) && !this.spawnSent(sent.to_name, v["spawn_req"])) continue;
@@ -1413,13 +1418,35 @@ export class Supervisor {
         if (!c || !isRecord(r)) continue;
         this.askCopy(c, r["state"] === "open" ? { ...r, event: "request" } : { ...r, event: "settled" }, asOf);
       }
+      if (c && full && Array.isArray(v["requests"])) this.askCopiesGone(c, v["requests"] as unknown[], sent.sent_at, asOf);
     }
-    // A list cut to fit doesn't say what it left out.
-    if (sent.op !== "list" || json["truncated"] === true) return;
+    if (!full) return;
     for (const id of asked.ids ?? []) {
       const c = seen.has(id) ? null : this.store.remoteCopy(laptop, id);
       if (c && !c.ended) this.store.putRemoteCopy({ ...c, state: "unknown", as_of: asOf });
     }
+  }
+
+  /**
+   * A worker's open and orphaned request copies a full list left out (§14, BOB-97): their `settled` was
+   * missed, so they are final, `gone`, not guessed answered or expired. Only copies last changed before
+   * the list was sent: a request event that overtook the reply is newer than what the list could name.
+   * A view without `requests` (a target before rc.43) never comes here.
+   */
+  private askCopiesGone(c: RemoteWorkerRow, listed: unknown[], sentAt: string, asOf: string): void {
+    const ids = new Set(listed.map((r) => (isRecord(r) ? r["request"] : null)));
+    for (const a of this.store.remoteAsks(c.laptop)) {
+      if (a.worker !== c.id || (a.state !== "open" && a.state !== "orphaned") || ids.has(a.id) || a.as_of > sentAt) continue;
+      this.askCopy(c, { event: "settled", request: a.id, state: "gone" }, asOf);
+    }
+  }
+
+  /** The `answer` reply's result into the request's copy (§4), as its `settled` would, should that be missed. */
+  private answeredCopy(laptop: string, json: Record<string, unknown>, sent: { user_decided?: boolean }, asOf: string): void {
+    const c = typeof json["worker_id"] === "string" ? this.store.remoteCopy(laptop, json["worker_id"]) : null;
+    if (!c || typeof json["request"] !== "string" || typeof json["state"] !== "string") return;
+    const decided_by = json["state"] === "answered" ? (sent.user_decided ? "human" : "orchestrator") : null;
+    this.askCopy(c, { event: "settled", request: json["request"], state: json["state"], decision: json["decision"], decided_by }, asOf);
   }
 
   /**
@@ -1438,12 +1465,14 @@ export class Supervisor {
     const state = typeof view["state"] === "string" ? view["state"] : "unknown";
     const url = typeof view["remote_url"] === "string" ? view["remote_url"] : null;
     const ended = was?.ended === 1 || ENDED_STATES.has(state);
+    // A list's `requests` go to the request copies; kept here, they would show stale in list_workers and worker_status.
+    const { requests: _, ...kept } = view;
     const c: RemoteWorkerRow = {
       laptop: was?.laptop ?? laptop,
       id,
       to_name: to,
       spawn_req: typeof view["spawn_req"] === "string" ? view["spawn_req"] : (was?.spawn_req ?? null),
-      view: JSON.stringify(view),
+      view: JSON.stringify(kept),
       state: was?.ended ? was.state : state,
       as_of: was?.ended ? was.as_of : asOf,
       ended: ended ? 1 : 0,
@@ -1585,6 +1614,9 @@ export class Supervisor {
     // An unacked spawn a day old can't be matched any more: its reply and its worker's events are gone (§14).
     const dropped = this.store.dropUnacked(since);
     if (dropped > 0) this.log.info("reconcile: dropped unacked spawns a day old", { dropped });
+    // So are final request copies: nothing lists or answers them any more (BOB-97).
+    const asks = this.store.dropFinalRemoteAsks(since);
+    if (asks > 0) this.log.info("reconcile: dropped final request copies a day old", { dropped: asks });
     const laptops = new Map<string, string>();
     for (const c of this.store.remoteCopies()) if (!c.ended || c.handoff === null) laptops.set(c.laptop.toLowerCase(), c.laptop);
     for (const s of [...this.store.remoteSpawnsUnanswered(since), ...this.store.remoteSpawnsUnacked(since)]) laptops.set(laptopOf(s.to_name).toLowerCase(), laptopOf(s.to_name));
@@ -3408,8 +3440,8 @@ export class Supervisor {
   }
 }
 
-/** A request copy's states in the order they may move (§7): answered and expired are final. */
-const ASK_RANK: Record<string, number> = { open: 0, orphaned: 1, answered: 2, expired: 2 };
+/** A request copy's states in the order they may move (§7): answered, expired and gone (a list left it out, BOB-97) are final. */
+const ASK_RANK: Record<string, number> = { open: 0, orphaned: 1, answered: 2, expired: 2, gone: 2 };
 
 /** A `v: 2` worker (§4): its spawner, another laptop's supervisor, hears of it and answers it; the target's orchestrator doesn't. */
 function isV2(w: WorkerRow): boolean {

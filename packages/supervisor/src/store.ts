@@ -194,7 +194,8 @@ export interface RemoteWorkerRow {
 /**
  * The requester's copy of a request of a worker it spawned on another laptop (ADR 0007 §7): made by
  * the target's `request` event, or by a `settled` that came first (its preview fields null then).
- * `state` only moves forward, open to orphaned to answered or expired, the last two final.
+ * `state` only moves forward, open to orphaned to answered or expired, the last two final; or to `gone`,
+ * final too, when a full list left it out (BOB-97).
  */
 export interface RemoteAskRow {
   laptop: string;
@@ -623,6 +624,11 @@ export class Store {
          decision = excluded.decision, decided_by = excluded.decided_by, as_of = excluded.as_of`,
       a.laptop, a.id, a.to_name, a.worker, a.kind, a.tool, a.tier, a.rule, a.preview, a.created_at, a.state, a.decision, a.decided_by, a.as_of,
     );
+  }
+
+  /** Final request copies last changed before `before` (a day, BOB-97): only open and orphaned ones are shown or answered. */
+  dropFinalRemoteAsks(before: string): number {
+    return Number(this.db.prepare("DELETE FROM remote_asks WHERE state IN ('answered', 'expired', 'gone') AND as_of < ?").run(before).changes);
   }
 
   // ---------- Upgrades (ADR 0008) ----------

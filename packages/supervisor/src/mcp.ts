@@ -385,7 +385,7 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
       if (x.decision === "answer" && !x.answers) throw new AnswerError("decision \"answer\" needs answers");
       const laptop = whereRequest(x.id, x.laptop, "answer_request");
       if (laptop !== null) {
-        // The target answers it as a local one (§4) and its reply is the result; the copy clears with its `settled`.
+        // The target answers it as a local one (§4) and its reply is the result, into the copy too (BOB-97); its `settled` changes nothing more.
         const r = await sup.remoteCall(laptop, {
           v: 2,
           op: "answer",
