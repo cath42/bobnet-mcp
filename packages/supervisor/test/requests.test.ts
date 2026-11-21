@@ -1,13 +1,14 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Envelope } from "@bobnet/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { type Envelope, LIMITS } from "@bobnet/protocol";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GhCiPoll } from "../src/ci-poll.ts";
 import { callTool, handlers } from "../src/mcp.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
-import { REMOTE_TOOLS_SINCE, Supervisor } from "../src/supervisor.ts";
+import type { RequestRow } from "../src/store.ts";
+import { type Detect, fitRequest, REMOTE_TOOLS_SINCE, Supervisor, SupervisorError } from "../src/supervisor.ts";
 import { type FakeSession, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 import { FakeNetwork } from "./network.ts";
 
@@ -64,13 +65,13 @@ function newStore(): { dir: string; store: Store } {
   return { dir, store };
 }
 
-async function boot(net: FakeNetwork, laptop: string, over: string, at = newStore(), opts: { remoteControl?: boolean } = {}) {
+async function boot(net: FakeNetwork, laptop: string, over: string, at = newStore(), opts: { remoteControl?: boolean; detect?: Detect } = {}) {
   const link = net.link(laptop);
   const query = fakeQuery(opts);
   const ciPoll = new GhCiPoll(quiet, async () => {
     throw new Error("no gh in tests");
   });
-  const sup = new Supervisor({ config: testConfig(at.dir, over), policy: POLICY, store: at.store, broker: link, queryFn: query.queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async (token) => token === "owner-token", sleep: net.sleep, ciPoll });
+  const sup = new Supervisor({ config: testConfig(at.dir, over), policy: POLICY, store: at.store, broker: link, queryFn: query.queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async (token) => token === "owner-token", sleep: net.sleep, ciPoll, ...(opts.detect ? { detect: opts.detect } : {}) });
   link.onPush = (f) => sup.onPush(f);
   await sup.start();
   running.push(sup);
@@ -1038,5 +1039,98 @@ describe("one answerer for a worker spawned without v: 2; a v: 2 spawn's by is a
     }
     expect(ubu.store.workers()).toEqual([]);
     expect((await mbp.ask({ ...SPAWN, by: "p".repeat(32) })).reply).toMatchObject({ ok: true, worker: { state: expect.any(String) } });
+  });
+});
+
+describe("fitRequest cuts answers, and a request still over goes with its input a stub (BOB-99 AC 1)", () => {
+  const FIT = LIMITS.bodyChars - 1024;
+  const row = (over: Partial<RequestRow> = {}): RequestRow => ({ id: "r_1", worker_id: "w_1", kind: "question", tool: "AskUserQuestion", input: "{}", tier: "orchestrator", rule: "probe", reason: "the probe", state: "answered", decision: "answer", message: null, answers: null, decided_by: "orchestrator", created_at: "2026-11-21T10:00:00.000Z", decided_at: "2026-11-21T10:01:00.000Z", ...over });
+
+  it("large answers are cut until the request fits, truncated: true", () => {
+    const answers = JSON.stringify({ "Which index?": "GiST ".repeat(8_000) });
+    const out = fitRequest(row({ input: "x".repeat(4_000), answers }));
+    expect(out.truncated).toBe(true);
+    expect(JSON.stringify({ request: out.request }).length).toBeLessThanOrEqual(FIT);
+    expect(out.request.answers!.length).toBeLessThan(answers.length);
+    expect(out.request.answers).toMatch(/^\{"Which index\?":"GiST .*…$/);
+  });
+
+  it("over with every field cut (a long tool), the input goes as a stub, and the result fits", () => {
+    const pad = FIT - JSON.stringify({ request: row({ input: "…", tool: "" }) }).length - 10;
+    const out = fitRequest(row({ input: "x".repeat(4_000), tool: "T".repeat(pad) }));
+    expect(out).toMatchObject({ truncated: true, request: { input: "…", tool: "T".repeat(pad) } });
+    expect(JSON.stringify({ request: out.request }).length).toBeLessThanOrEqual(FIT);
+  });
+
+  it("both ends real: a question answered with large answers reads back through the request op in 16 KiB, truncated", async () => {
+    const input = { questions: [{ question: "Which index?", header: "Index", options: [{ label: "GiST" }, { label: "BRIN" }], multiSelect: false }] };
+    const s = await asking("AskUserQuestion", input);
+    s.ubu.store.settleRequest(s.rid, { state: "answered", decision: "answer", message: null, answers: JSON.stringify({ "Which index?": "GiST ".repeat(8_000) }), decided_by: "orchestrator" });
+    const { raw, reply } = await s.mbp.ask({ v: 2, op: "request", id: s.rid });
+    expect(raw.length).toBeLessThanOrEqual(16 * 1024);
+    expect(reply).toMatchObject({ ok: true, truncated: true, request: { id: s.rid, state: "answered", answers: expect.stringMatching(/…$/) } });
+  });
+});
+
+describe("a withheld reply's advice fits its op (BOB-99 AC 2, Toad m5)", () => {
+  it("answer: the answer may have been taken; request: ask the role there or the dashboard; tail: list_workers", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.request());
+    t.replies.to = () => ({ event: "withheld" });
+    const tools = handlers(t.mbp.sup);
+    expect(await refusal(tools, "answer_request", { id: "r_1", decision: "allow" })).toBe("ubu1's reply to the answer was withheld (it looked like a credential to the broker); the answer may have been taken: pending_requests drops r_1 when its settled comes");
+    expect(await refusal(tools, "request_detail", { id: "r_1" })).toBe("ubu1's reply to the request was withheld (it looked like a credential to the broker); ask the role on ubu1, or see r_1 on the dashboard");
+    expect(await refusal(tools, "tail_worker", { id: "w_9", laptop: "ubu1" })).toMatch(/was withheld .*; list_workers with laptop "ubu1" shows what ran$/);
+    expect(t.ask()).toMatchObject({ state: "open" });
+  });
+});
+
+describe("the answer op audits what happened (BOB-99 AC 3, independent m5)", () => {
+  it("an answer applied whose reply is withheld: audited remote:answer (withheld: true) besides remote:withheld, not refused", async () => {
+    const net = new FakeNetwork();
+    const ubu = await boot(net, "ubu1", UBU, newStore(), { detect: (t) => (/"re":"answer".*"state":"answered"/.test(t) ? "test_secret" : null) });
+    await ubu.link.register({ name: "Bob" });
+    const mbp = await scripted(net);
+    const id = (await mbp.ask(SPAWN)).reply["worker"].id as string;
+    await until(() => ubu.sessions.length === 1);
+    const result = ubu.sessions[0]!.ask("Bash", PROBE);
+    await until(() => mbp.events("request").length === 1);
+    const rid = mbp.events("request")[0]!["request"] as string;
+    const { id: msg, reply } = await mbp.ask(ANSWER(rid));
+    expect(reply).toEqual({ v: 2, event: "withheld", re: "answer", req: msg });
+    expect(await result).toMatchObject({ behavior: "allow" });
+    expect(ubu.store.request(rid)!.state).toBe("answered");
+    expect(audits(ubu.store, "remote:answer")).toEqual([expect.objectContaining({ actor: SUP_MBP, worker_id: id, detail: { message: msg, request: rid, decision: "allow", by: "orchestrator", withheld: true } })]);
+    expect(audits(ubu.store, "remote:withheld")).toEqual([expect.objectContaining({ detail: { message: msg, re: "answer" } })]);
+    expect(audits(ubu.store, "remote:refused")).toEqual([]);
+  });
+
+  it("an orphan whose resume spawn() throws: answered, not resumed, audited remote:answer with the error, and the reply says so", async () => {
+    const { at, w, r } = leftBehind();
+    const net = new FakeNetwork();
+    const mbp = await scripted(net);
+    const ubu = await boot(net, "ubu1", UBU, at);
+    await until(() => mbp.events("settled").length === 1);
+    vi.spyOn(ubu.sup, "spawn").mockImplementation(() => {
+      throw new SupervisorError("no room");
+    });
+    const { id: msg, reply } = await mbp.ask(ANSWER(r.id));
+    const said = `${r.id} is answered, but ${w.id} didn't resume: no room`;
+    expect(reply).toEqual({ v: 2, re: "answer", req: msg, ok: true, request: r.id, worker_id: w.id, state: "answered", decision: "allow", resume_error: said });
+    expect(ubu.store.request(r.id)).toMatchObject({ state: "answered", decision: "allow" });
+    expect(audits(ubu.store, "remote:answer")).toEqual([expect.objectContaining({ worker_id: w.id, detail: { message: msg, request: r.id, decision: "allow", by: "orchestrator", resumed: false, resume_error: said } })]);
+    expect(audits(ubu.store, "remote:refused")).toEqual([]);
+    expect(mbp.events("resumed")).toEqual([]);
+    // Asked again, it is already answered: nothing resumes later by surprise.
+    expect((await mbp.ask(ANSWER(r.id))).reply).toMatchObject({ ok: false, error: `${r.id} is already answered` });
+  });
+
+  it("the requester's answer_request passes it on as not_resumed, and the copy is answered", async () => {
+    const t = await playedTarget();
+    await t.deliver(t.request(), t.settled("orphaned"));
+    t.replies.to = (b) => (b["op"] === "answer" ? { ok: true, request: "r_1", worker_id: "w_9", state: "answered", decision: "allow", resume_error: "r_1 is answered, but w_9 didn't resume: no room" } : null);
+    const out = JSON.parse((await callTool(handlers(t.mbp.sup), "answer_request", { id: "r_1", decision: "allow" })).content[0]!.text);
+    expect(out).toEqual({ id: "r_1", state: "answered", decision: "allow", not_resumed: "r_1 is answered, but w_9 didn't resume: no room", laptop: "ubu1" });
+    expect(t.ask()).toMatchObject({ state: "answered", decision: "allow" });
   });
 });

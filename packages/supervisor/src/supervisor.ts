@@ -240,6 +240,13 @@ function withheldBody(body: string): string | null {
   return reply(standIn(json));
 }
 
+/** What to do about a reply the broker withheld, by its op (BOB-99): what may have happened, and where to look. */
+function withheldAdvice(request: RemoteRequestV2, laptop: string): string {
+  if (request.op === "answer") return `the answer may have been taken: pending_requests drops ${request.id} when its settled comes`;
+  if (request.op === "request") return `ask the role on ${laptop}, or see ${request.id} on the dashboard`;
+  return `list_workers with laptop "${laptop}" shows what ran`;
+}
+
 /** The most workers a `v: 2` list returns. */
 const REMOTE_LIST_MAX = 100;
 /** What a reply's own fields may take of a message body (§2, 16 KiB whole): the rest is its envelope and a withheld span's growth. */
@@ -267,13 +274,17 @@ function askView(r: RequestRow): Record<string, unknown> {
   return { request: r.id, kind: r.kind, tool: r.tool, tier: r.tier, rule: r.rule, preview: oneLine(r), state: r.state, created_at: r.created_at };
 }
 
-/** A request in full, cut to fit the body (§2): its input, then its reason and message, shortened in turn. */
-function fitRequest(r: RequestRow): { request: RequestRow; truncated?: true } {
+/**
+ * A request in full, cut to fit the body (§2): its input, then its reason, message and answers,
+ * shortened in turn. Still over (a long tool or rule), its input goes as a stub (BOB-99).
+ */
+export function fitRequest(r: RequestRow): { request: RequestRow; truncated?: true } {
   const request = { ...r };
   if (fits({ request })) return { request };
-  for (const field of ["input", "reason", "message"] as const) {
+  for (const field of ["input", "reason", "message", "answers"] as const) {
     while (!fits({ request }) && (request[field]?.length ?? 0) > 200) request[field] = cut(request[field]!, Math.floor(request[field]!.length / 2));
   }
+  if (!fits({ request })) request.input = "…";
   return { request, truncated: true };
 }
 
@@ -1231,15 +1242,19 @@ export class Supervisor {
     const text = reply(sent);
     this.store.finishRemote(msg.id, text);
     const worker = (out["worker"] as { id?: string } | undefined)?.id ?? (typeof sent["worker"] === "string" ? sent["worker"] : null);
-    if (sent["event"] === "withheld") this.store.audit(msg.from, "remote:withheld", worker, { message: msg.id, re: op });
-    // Every upgrade request is audited as one, refused or not (ADR 0008 §2), with the tag it asked for.
-    else if (op === "upgrade") this.store.audit(msg.from, "remote:upgrade", null, { message: msg.id, ok: out["ok"] === true, ...("request" in read && read.request.op === "upgrade" ? { tag: read.request.tag } : {}), ...(out["ok"] ? { from: out["from"], to: out["to"] } : { error: out["error"] }) });
-    // An answer's row names the request, its decision and who decided (§4), allowed or refused.
-    else if ("request" in read && read.request.op === "answer") {
+    const withheld = sent["event"] === "withheld";
+    if (withheld) this.store.audit(msg.from, "remote:withheld", worker, { message: msg.id, re: op });
+    // An answer's row names the request, its decision and who decided (§4), allowed or refused; and
+    // what happened (BOB-99): applied though its reply was withheld, or answered but not resumed.
+    if ("request" in read && read.request.op === "answer") {
       const a = read.request;
-      const detail = { message: msg.id, request: a.id, decision: a.decision, by: a.user_decided ? "human" : "orchestrator" };
-      this.store.audit(msg.from, out["ok"] ? "remote:answer" : "remote:refused", this.store.request(a.id)?.worker_id ?? null, { ...detail, ...(out["ok"] ? {} : { error: out["error"] }) });
-    } else this.store.audit(msg.from, out["ok"] ? `remote:${op}` : "remote:refused", worker, { message: msg.id, ...(out["ok"] ? {} : { error: out["error"] }) });
+      const detail = { message: msg.id, request: a.id, decision: a.decision, by: a.user_decided ? "human" : "orchestrator", ...(withheld ? { withheld: true } : {}) };
+      const notResumed = typeof out["resume_error"] === "string" ? { resumed: false, resume_error: out["resume_error"] } : {};
+      this.store.audit(msg.from, out["ok"] ? "remote:answer" : "remote:refused", this.store.request(a.id)?.worker_id ?? null, { ...detail, ...notResumed, ...(out["ok"] ? {} : { error: out["error"] }) });
+    }
+    // Every upgrade request is audited as one, refused or not (ADR 0008 §2), with the tag it asked for.
+    else if (!withheld && op === "upgrade") this.store.audit(msg.from, "remote:upgrade", null, { message: msg.id, ok: out["ok"] === true, ...("request" in read && read.request.op === "upgrade" ? { tag: read.request.tag } : {}), ...(out["ok"] ? { from: out["from"], to: out["to"] } : { error: out["error"] }) });
+    else if (!withheld) this.store.audit(msg.from, out["ok"] ? `remote:${op}` : "remote:refused", worker, { message: msg.id, ...(out["ok"] ? {} : { error: out["error"] }) });
     this.sendRemote(msg.from, text, msg.id);
     this.upgrades.poke();
   }
@@ -1889,7 +1904,7 @@ export class Supervisor {
     }
     const r = out.reply;
     if (r["ok"] === false) throw new SupervisorError(typeof r["error"] === "string" ? r["error"] : `${laptop} refused the ${request.op}`);
-    if (r["ok"] !== true) throw new SupervisorError(`${laptop}'s reply to the ${request.op} was withheld (it looked like a credential to the broker); list_workers with laptop "${laptop}" shows what ran`);
+    if (r["ok"] !== true) throw new SupervisorError(`${laptop}'s reply to the ${request.op} was withheld (it looked like a credential to the broker); ${withheldAdvice(request, laptop)}`);
     const { v: _v, re: _re, req: _req, ok: _ok, ...fields } = r;
     return { ...fields, as_of };
   }
@@ -2004,7 +2019,15 @@ export class Supervisor {
         if (req.decision === "answer" && !req.answers) throw new SupervisorError(`decision "answer" needs answers`);
         const answer: Answer = req.decision === "answer" ? { decision: "answer", answers: req.answers!, ...(req.message ? { message: req.message } : {}) } : { decision: req.decision, ...(req.message ? { message: req.message } : {}) };
         // As a local answer from here on (§4): the router's checks (a human tier needs user_decided, the decision fits the kind), resume for an orphan.
-        const done = this.answer(r.id, answer, req.user_decided ? "human" : "orchestrator", req.resume);
+        let done: { request: RequestRow; resumed?: WorkerRow };
+        try {
+          done = this.answer(r.id, answer, req.user_decided ? "human" : "orchestrator", req.resume);
+        } catch (err) {
+          // The answer applied and only the orphan's resume failed (BOB-99): answered, not resumed, and the reply says so.
+          const now = this.store.request(r.id);
+          if (r.state !== "orphaned" || now?.state !== "answered") throw err;
+          return { request: r.id, worker_id: r.worker_id, state: now.state, decision: now.decision, resume_error: `${r.id} is answered, but ${r.worker_id} didn't resume: ${(err as Error).message}` };
+        }
         return { request: done.request.id, worker_id: r.worker_id, state: done.request.state, decision: done.request.decision, ...(done.resumed ? { resumed: done.resumed.id } : {}) };
       }
       case "upgrade":

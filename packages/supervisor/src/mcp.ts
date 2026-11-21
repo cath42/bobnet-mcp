@@ -396,7 +396,8 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
           user_decided: x.user_decided,
           resume: x.resume,
         });
-        return { id: r["request"], state: r["state"], decision: r["decision"], ...(r["resumed"] ? { resumed: r["resumed"] } : {}), laptop };
+        // An orphan answered whose resume failed there says so (BOB-99).
+        return { id: r["request"], state: r["state"], decision: r["decision"], ...(r["resumed"] ? { resumed: r["resumed"] } : {}), ...(typeof r["resume_error"] === "string" ? { not_resumed: r["resume_error"] } : {}), laptop };
       }
       // A lead's own requests are Casper's: it never approves its own call.
       if (opts.lead && sup.requestDetail(x.id).worker_id === opts.lead) throw new AnswerError(`${x.id} is your own request; Casper answers it`);
