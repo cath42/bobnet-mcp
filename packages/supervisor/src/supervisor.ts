@@ -405,6 +405,8 @@ export class Supervisor {
   private readonly interactive = new Map<string, string>();
   /** This laptop's id on BobNet, once the supervisor has registered. */
   private laptop: string | null = null;
+  /** Registered: until then a `v: 2` event only waits in the outbox (at start, the orphans'). */
+  private registered = false;
   private readonly sandboxCheck: () => Promise<string | null>;
   private readonly sleep: Sleep;
   /** The credential check on what goes to another laptop (§2): the broker's, as this release knows it. */
@@ -509,8 +511,11 @@ export class Supervisor {
       timeoutMs: deps.config.requestTimeoutMinutes * 60_000,
       announce: (req, name) => this.announce(req, name),
       setWorkerState: (id, state) => this.setState(id, state),
+      closing: () => this.closing,
       takeSlot: (workerId, author, toolUseId, label, signal) => this.takeCallSlot(workerId, author, toolUseId, label, signal),
     });
+    // Every settle and orphaning of a request, wherever it is made, tells a v: 2 worker's spawner (ADR 0007 §4).
+    deps.store.onRequestChange = (r) => this.settledEvent(r);
     this.boards = deps.boards
       ? new Boards({
           projects: deps.config.projects,
@@ -584,6 +589,7 @@ export class Supervisor {
     }
     // An upgrade this process was started for says ready, once registered (ADR 0008 §4).
     this.upgrades.resume();
+    this.registered = true;
     this.flushOutbox();
 
     for (const p of this.config.projects.values()) {
@@ -821,7 +827,9 @@ export class Supervisor {
     const model = power.model ?? w.model ?? undefined;
     const effort = power.effort ?? (w.effort as Effort | null) ?? undefined;
     const spawnedBy = by ?? w.spawned_by ?? undefined;
-    return this.spawn({ project: w.project, role: w.role, task: w.task, tasks: storedTasks(w), carrySession: w.declared_session, ...(w.handoff ? { handoff: w.handoff } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(spawnedBy ? { spawnedBy } : {}), as: isLead(w) ? "lead" : "worker" });
+    // A v: 2 worker's fresh start is still its spawner's: its events go there, and reconcile finds it by spawn_req (ADR 0007 §4).
+    const remote = spawnedBy === w.spawned_by ? remoteOf(w) : {};
+    return this.spawn({ project: w.project, role: w.role, task: w.task, tasks: storedTasks(w), carrySession: w.declared_session, ...(w.handoff ? { handoff: w.handoff } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(spawnedBy ? { spawnedBy } : {}), ...remote, as: isLead(w) ? "lead" : "worker" });
   }
 
   /** Live workers (queued or running) unless `all`, tasks cut short: the full history is too big for a tool result. */
@@ -922,9 +930,12 @@ export class Supervisor {
       ...(w.handoff ? { handoff: w.handoff } : {}),
       resume_session: w.session_id,
       ...(w.spawned_by ? { spawnedBy: w.spawned_by } : {}),
+      ...remoteOf(w),
       as: isLead(w) ? "lead" : "worker",
     });
     if (answer.decision === "allow") this.preapproved.set(resumed.id, [{ tool: request.tool, input: request.input }]);
+    // Its spawner's copies follow the session to the new id (ADR 0007 §4).
+    this.v2Event(resumed, { event: "resumed", previous: w.id, request: request.id });
     return { request, resumed };
   }
 
@@ -1240,7 +1251,38 @@ export class Supervisor {
       this.copyEnd(c, lands);
     } else if (json["event"] === "remote_control" && typeof json["url"] === "string" && !c.ended) {
       this.store.putRemoteCopy({ ...c, remote_url: json["url"] });
+    } else if (json["event"] === "request" || json["event"] === "settled") {
+      this.askCopy(c, json, now);
     }
+  }
+
+  /**
+   * A request copy (§7), from the target's `request` or `settled`: only forward, a settle final. A
+   * `settled` for a request with no copy makes it in that state, so a `request` after it changes nothing.
+   */
+  private askCopy(c: RemoteWorkerRow, json: Record<string, unknown>, now: string): void {
+    const id = json["request"];
+    const state = json["event"] === "request" ? "open" : json["state"];
+    if (typeof id !== "string" || typeof state !== "string" || !(state in ASK_RANK)) return;
+    const was = this.store.remoteAsk(c.laptop, id);
+    if (was && (was.worker !== c.id || ASK_RANK[state]! <= ASK_RANK[was.state]!)) return;
+    const str = (k: string) => (typeof json[k] === "string" ? (json[k] as string) : null);
+    this.store.putRemoteAsk({
+      laptop: c.laptop,
+      id,
+      to_name: c.to_name,
+      worker: c.id,
+      kind: was?.kind ?? str("kind"),
+      tool: was?.tool ?? str("tool"),
+      tier: was?.tier ?? str("tier"),
+      rule: was?.rule ?? str("rule"),
+      preview: was?.preview ?? str("preview"),
+      created_at: was?.created_at ?? str("created_at"),
+      state,
+      decision: str("decision"),
+      decided_by: str("decided_by"),
+      as_of: now,
+    });
   }
 
   /** A target's ok reply, into the copies of the workers it names (§7); ids a list was asked for and didn't return are `unknown`. */
@@ -1901,6 +1943,25 @@ export class Supervisor {
     // A v: 2 spawn's worker: its events say so and name the spawn that made it (ADR 0007 §2).
     const v2 = w.spawn_req ? { v: 2, event: event["event"], worker: w.id, spawn_req: w.spawn_req } : { event: event["event"], worker: w.id };
     this.sendRemote(w.spawned_by, reply(withholdBody({ ...v2, ...event }, this.detect)));
+  }
+
+  /**
+   * An event about a `v: 2` worker (one with `remote_by`, §4) to its spawner, through the outbox, its
+   * fields redacted (§2); flushed once registered. False, and nothing sent, for any other worker.
+   */
+  private v2Event(w: WorkerRow, fields: Record<string, unknown> & { event: string }): boolean {
+    if (!w.remote_by || !w.spawn_req || !w.spawned_by?.includes("@")) return false;
+    const { event, ...rest } = fields;
+    const body = withholdBody({ v: 2, event, worker: w.id, spawn_req: w.spawn_req, ...rest }, this.detect);
+    this.store.addOutbox(w.spawned_by, reply(body), "remote", { inReplyTo: null, ttlSeconds: REMOTE_ANSWER_TTL_S });
+    if (this.registered) this.flushOutbox();
+    return true;
+  }
+
+  /** The store's hook (§4): a `v: 2` worker's request answered, expired, dismissed or orphaned, and by whom. */
+  private settledEvent(r: RequestRow): void {
+    const w = this.store.worker(r.worker_id);
+    if (w) this.v2Event(w, { event: "settled", request: r.id, state: r.state, decision: r.decision, decided_by: r.decided_by });
   }
 
   /** A dashboard action: only after the owner's own token checks out. */
@@ -2663,6 +2724,11 @@ export class Supervisor {
       this.writeStatus();
       return;
     }
+    // A v: 2 worker's request is its spawner's to answer (ADR 0007 §4): the event goes there instead.
+    if (w && this.v2Event(w, { event: "request", request: req.id, kind: req.kind, tool: req.tool, tier: req.tier, rule: req.rule, preview: oneLine(req), created_at: req.created_at })) {
+      this.writeStatus();
+      return;
+    }
     const what =
       req.kind === "question"
         ? `${workerName} asks a question (${req.id})`
@@ -3138,6 +3204,14 @@ export class Supervisor {
     if (!w) throw new SupervisorError(`No worker ${id}`);
     return w;
   }
+}
+
+/** A request copy's states in the order they may move (§7): answered and expired are final. */
+const ASK_RANK: Record<string, number> = { open: 0, orphaned: 1, answered: 2, expired: 2 };
+
+/** What makes a worker `v: 2` (§7), for a worker that continues it: a resume or a reset. */
+function remoteOf(w: WorkerRow): { remoteBy?: string; spawnReq?: string } {
+  return w.remote_by && w.spawn_req ? { remoteBy: w.remote_by, spawnReq: w.spawn_req } : {};
 }
 
 /** What a request asks, short enough for the dashboard; never a credential. */

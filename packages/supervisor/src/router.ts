@@ -16,7 +16,7 @@ export type Answer =
   | { decision: "deny"; message?: string }
   | { decision: "answer"; answers: Record<string, string>; message?: string };
 
-export type DecidedBy = "orchestrator" | "human" | "policy" | "timeout";
+export type DecidedBy = "orchestrator" | "human" | "policy" | "timeout" | "stop";
 
 export interface RouterDeps {
   store: Store;
@@ -25,6 +25,8 @@ export interface RouterDeps {
   /** Tells the orchestrator a request is waiting (over BobNet). */
   announce: (req: RequestRow, workerName: string) => void;
   setWorkerState: (workerId: string, state: WorkerState) => void;
+  /** True while the supervisor shuts down: a request its workers leave stays open, to be orphaned at the next start. */
+  closing: () => boolean;
   /** Resolves once the call holds a run slot; the slot is freed when the call returns. */
   takeSlot: (workerId: string, author: string, toolUseId: string, label: string, signal: AbortSignal) => Promise<void>;
 }
@@ -108,7 +110,7 @@ export class Router {
    * Settles an open request. `decidedBy` "human" is required for human-tier
    * requests. Returns the request so the caller can resume an orphaned worker.
    */
-  answer(requestId: string, answer: Answer, decidedBy: Exclude<DecidedBy, "policy" | "timeout">): RequestRow {
+  answer(requestId: string, answer: Answer, decidedBy: Exclude<DecidedBy, "policy" | "timeout" | "stop">): RequestRow {
     const { store } = this.deps;
     const req = store.request(requestId);
     if (!req) throw new AnswerError(`No request ${requestId}`);
@@ -194,6 +196,12 @@ export class Router {
           if (!w) return;
           if (w.timer) clearTimeout(w.timer);
           this.waiting.delete(req.id);
+          // A stop settles it now, not left open until a restart orphans it (ADR 0007 §4). A shutdown's
+          // stays open: the next start orphans it, and answering it resumes the worker.
+          if (!this.deps.closing()) {
+            store.settleRequest(req.id, { state: "expired", decision: "deny", message: "worker stopped", answers: null, decided_by: "stop" });
+            store.audit("stop", "expire", workerId, { request: req.id });
+          }
           resolve({ behavior: "deny", message: "Worker stopped", interrupt: true });
         },
         { once: true },

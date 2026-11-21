@@ -115,6 +115,10 @@ CREATE TABLE IF NOT EXISTS remote_workers (
   as_of TEXT NOT NULL, ended INTEGER NOT NULL DEFAULT 0, handoff TEXT, remote_url TEXT, told INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, state_withheld INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (laptop, id)
 );
+CREATE TABLE IF NOT EXISTS remote_asks (
+  laptop TEXT NOT NULL COLLATE NOCASE, id TEXT NOT NULL, to_name TEXT NOT NULL, worker TEXT NOT NULL, kind TEXT, tool TEXT, tier TEXT,
+  rule TEXT, preview TEXT, created_at TEXT, state TEXT NOT NULL, decision TEXT, decided_by TEXT, as_of TEXT NOT NULL, PRIMARY KEY (laptop, id)
+);
 CREATE TABLE IF NOT EXISTS upgrades (
   req TEXT PRIMARY KEY, requester TEXT NOT NULL, from_version TEXT, to_version TEXT NOT NULL, tag TEXT NOT NULL,
   stage TEXT NOT NULL, at TEXT NOT NULL, done_at TEXT
@@ -186,6 +190,28 @@ export interface RemoteWorkerRow {
 }
 
 /**
+ * The requester's copy of a request of a worker it spawned on another laptop (ADR 0007 §7): made by
+ * the target's `request` event, or by a `settled` that came first (its preview fields null then).
+ * `state` only moves forward, open to orphaned to answered or expired, the last two final.
+ */
+export interface RemoteAskRow {
+  laptop: string;
+  id: string;
+  to_name: string;
+  worker: string;
+  kind: string | null;
+  tool: string | null;
+  tier: string | null;
+  rule: string | null;
+  preview: string | null;
+  created_at: string | null;
+  state: string;
+  decision: string | null;
+  decided_by: string | null;
+  as_of: string;
+}
+
+/**
  * An upgrade this supervisor switched to and restarted for (ADR 0008 §4), written before the switch:
  * `restarting` until the new process says `ready` (or `failed`, running another version). `requester`
  * is the address that asked, or "orchestrator" for this laptop's own.
@@ -218,6 +244,11 @@ export interface RemoteUpgradeRow {
 
 export class Store {
   private readonly db: DatabaseSync;
+  /**
+   * Told of each request a settle or an orphaning changed, after the write (ADR 0007 §4, "Every settle
+   * is told, from one place"): the supervisor sends `settled` for a `v: 2` worker's from here.
+   */
+  onRequestChange: ((r: RequestRow) => void) | null = null;
 
   constructor(file: string) {
     if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true });
@@ -381,12 +412,16 @@ export class Store {
       "UPDATE requests SET state = ?, decision = ?, message = ?, answers = ?, decided_by = ?, decided_at = ? WHERE id = ?",
       patch.state, patch.decision, patch.message, patch.answers, patch.decided_by, now(), id,
     );
+    this.onRequestChange?.(this.request(id)!);
     return true;
   }
 
   /** An open request whose worker died with the supervisor; answering it resumes the worker. */
   markOrphaned(id: string): void {
+    const before = this.request(id);
+    if (before?.state !== "open") return;
     this.run("UPDATE requests SET state = 'orphaned' WHERE id = ? AND state = 'open'", id);
+    this.onRequestChange?.(this.request(id)!);
   }
 
   /** Whether a worker after this one resumed its Claude session: an orphan on it would fork the work. */
@@ -532,6 +567,30 @@ export class Store {
          as_of = excluded.as_of, ended = excluded.ended, handoff = excluded.handoff, remote_url = excluded.remote_url, told = excluded.told,
          state_withheld = excluded.state_withheld`,
       c.laptop, c.id, c.to_name, c.spawn_req, c.view, c.state, c.as_of, c.ended, c.handoff, c.remote_url, c.told, now(), c.state_withheld,
+    );
+  }
+
+  // ---------- Remote requests (the requester's copies, ADR 0007 §7) ----------
+
+  remoteAsk(laptop: string, id: string): RemoteAskRow | null {
+    return this.one<RemoteAskRow>("SELECT * FROM remote_asks WHERE laptop = ? AND id = ?", laptop, id) ?? null;
+  }
+
+  /** Every request copy, or those on `laptop`, oldest first. */
+  remoteAsks(laptop?: string): RemoteAskRow[] {
+    return laptop === undefined
+      ? this.all("SELECT * FROM remote_asks ORDER BY as_of, rowid")
+      : this.all("SELECT * FROM remote_asks WHERE laptop = ? ORDER BY as_of, rowid", laptop);
+  }
+
+  putRemoteAsk(a: RemoteAskRow): void {
+    this.run(
+      `INSERT INTO remote_asks (laptop, id, to_name, worker, kind, tool, tier, rule, preview, created_at, state, decision, decided_by, as_of)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (laptop, id) DO UPDATE SET to_name = excluded.to_name, worker = excluded.worker, kind = excluded.kind, tool = excluded.tool,
+         tier = excluded.tier, rule = excluded.rule, preview = excluded.preview, created_at = excluded.created_at, state = excluded.state,
+         decision = excluded.decision, decided_by = excluded.decided_by, as_of = excluded.as_of`,
+      a.laptop, a.id, a.to_name, a.worker, a.kind, a.tool, a.tier, a.rule, a.preview, a.created_at, a.state, a.decision, a.decided_by, a.as_of,
     );
   }
 
