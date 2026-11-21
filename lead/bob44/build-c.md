@@ -51,3 +51,29 @@ fixes should be live (tag + push; poe hand-installs on mbp-1).
     - rollback to rc.44 leaves installing/waiting rows unread (rc.44's resume reads only `restarting`), which is
       harmless.
 - 16:07Z L3 Luigi w_e402f419 on BOB-95.
+- 16:2xZ BOB-95 landed ec3fb35 (Luigi w_e402f419; supervisor 523). Read:
+  - (a) exec keeps stdout apart; show and rev-parse parse only stdout.
+  - (b) VERIFY_BUDGET_MS 75 s is one deadline for verify's five git calls (`checked()`), under remoteWaitMs 90 s.
+    On timeout exec resolves at once, even if a grandchild holds the pipe.
+  - (c) holdForRestart(tag) runs after a successful switch:
+    - schedule() launches nothing (queued workers wait for the new process);
+    - slots pause();
+    - spawnNow refuses before and after the board join (a v2 remote spawn can't be queued, ADR 0007 §3);
+    - a consult that would start a worker is refused.
+  - Toad advised (consult c_81760beb, not recorded).
+  - For Toad:
+    - wire-visible: a new refusal reason on the existing shape, no protocol change;
+    - should ADR 0008 §4 record the drain hold;
+    - exec's early resolve affects every caller;
+    - a take_slot queued in the drain is lost with the process (never granted, its orchestrator not told);
+    - a board join can finish with no worker behind it.
+  - **Build C is all on v2 (47b422c..ec3fb35).**
+- Peach spawned for the moves: BOB-91..95 to In Review, ACs checked.
+
+## Close
+- No rc in this session. Review C (Toad) comes first, then rc.45, as with rc.44.
+  - Nothing in the field needs these fixes before then: no laptop has an `upgrade:` section yet, so no upgrade
+    runs.
+  - BOB-94's guard is hardening; the sandbox enforces.
+- Next: review C of v2 47b422c..ec3fb35 (fd534aa, 3560b95, d3ce4ac, b860909, ec3fb35), for Toad. The departures
+  are in the log above and in the three Luigi handoffs.
