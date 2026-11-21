@@ -19,3 +19,10 @@ Rollback rule (rc43-notes.md): roll the target (ubu1) back first, never mbp-1 al
 ## Log
 
 - 15:06Z L1 Luigi w_3163fee6 on BOB-97.
+- 15:10Z BOB-97 landed aeb897b (Luigi w_3163fee6; supervisor 493). Read the diff: a full list finalises omitted
+  open/orphaned copies `gone`; `pending_requests` bounded to a day; final copies pruned in reconcile; the `answer`
+  reply into the copy; `copyView` drops `requests`. For Toad in review B-fixes, the departures (w_3163fee6.md):
+  the race guard (only copies with `as_of` <= the list's `sent_at`, both requester clock, so no skew); the target's
+  answered/expired still replaces `gone`; `decided_by` derived from the `user_decided` sent; the BOB-69 AC 2 test
+  changed (it asserted open-until-settled).
+- 15:13Z L2 Luigi w_d1b6c57d on BOB-98, BOB-99 (queued behind w_3163fee6 ending).
