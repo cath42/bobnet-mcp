@@ -798,6 +798,67 @@ describe("pending_requests, request_detail and answer_request find a remote id (
   });
 });
 
+// BOB-101 (Toad m7): what a reply or event carries, read by the real requester from the real target.
+describe("answer_request with both ends real (BOB-101)", () => {
+  /** A remote request left open by a restart of ubu1, orphaned at its next start, and that start. */
+  async function orphaned() {
+    const s = await remoteAsking();
+    const closing = s.ubu.sup.shutdown();
+    s.cancel.abort();
+    await closing;
+    running.splice(running.indexOf(s.ubu.sup), 1);
+    const again = await boot(s.net, "ubu1", UBU, s.at);
+    await until(() => s.mbp.store.remoteAsk("ubu1", s.rid)?.state === "orphaned");
+    return { ...s, again };
+  }
+
+  it("resume on an orphaned remote request: the reply's resumed, and the resumed event's new copy (AC 1)", async () => {
+    const s = await orphaned();
+    const spawnReq = s.ubu.store.worker(s.w.id)!.spawn_req;
+    const out = await s.call("answer_request", { id: s.rid, decision: "allow" });
+    expect(out).toEqual({ id: s.rid, state: "answered", decision: "allow", resumed: expect.stringMatching(/^w_/), laptop: "ubu1" });
+    expect(out.resumed).not.toBe(s.w.id);
+    expect(s.again.store.worker(out.resumed)).toMatchObject({ spawned_by: SUP_MBP, remote_by: "Bob", spawn_req: spawnReq });
+    // The resumed event makes the new worker's copy: same spawn, no "spawned after all".
+    await until(() => s.mbp.store.remoteCopy("ubu1", out.resumed) !== null);
+    expect(s.mbp.store.remoteCopy("ubu1", out.resumed)).toMatchObject({ to_name: SUP_UBU, spawn_req: spawnReq, ended: 0 });
+    expect(s.mbp.store.auditLog(50).filter((a) => a.action === "remote:spawned_after_all")).toEqual([]);
+    expect(s.mbp.store.remoteAsk("ubu1", s.rid)).toMatchObject({ state: "answered", decision: "allow" });
+    expect(await s.call("pending_requests", {})).toEqual([]);
+    await until(() => s.again.sessions.length === 1);
+    s.again.sessions[0]!.finish();
+    await until(() => s.mbp.store.remoteCopy("ubu1", out.resumed)?.ended === 1);
+  });
+
+  it("an orphan whose resume fails on the target: not_resumed through the requester's tool, and no new copy (AC 1, BOB-99)", async () => {
+    const s = await orphaned();
+    vi.spyOn(s.again.sup, "spawn").mockImplementation(() => {
+      throw new SupervisorError("no room");
+    });
+    const out = await s.call("answer_request", { id: s.rid, decision: "allow" });
+    expect(out).toEqual({ id: s.rid, state: "answered", decision: "allow", not_resumed: `${s.rid} is answered, but ${s.w.id} didn't resume: no room`, laptop: "ubu1" });
+    expect(s.mbp.store.remoteAsk("ubu1", s.rid)).toMatchObject({ state: "answered" });
+    await tick(20);
+    expect(s.mbp.store.remoteCopies("ubu1").map((c) => c.id)).toEqual([s.w.id]);
+  });
+
+  it("a question answered through the requester's tool: answers reach the worker (AC 2)", async () => {
+    const r = await real();
+    await r.call("spawn_worker", { project: "studio", role: "ann", task: "one fix", laptop: "ubu1" });
+    await until(() => r.ubu.sessions.length === 1);
+    const input = { questions: [{ question: "Which index?", header: "Index", options: [{ label: "GiST" }, { label: "BRIN" }], multiSelect: false }] };
+    const result = r.ubu.sessions[0]!.ask("AskUserQuestion", input);
+    await until(() => r.mbp.store.remoteAsks("ubu1").length === 1);
+    const rid = r.mbp.store.remoteAsks("ubu1")[0]!.id;
+    expect(r.mbp.store.remoteAsk("ubu1", rid)).toMatchObject({ kind: "question", tool: "AskUserQuestion", state: "open" });
+    const out = await r.call("answer_request", { id: rid, decision: "answer", answers: { "Which index?": "GiST" } });
+    expect(out).toEqual({ id: rid, state: "answered", decision: "answer", laptop: "ubu1" });
+    expect(await result).toEqual({ behavior: "allow", updatedInput: { ...input, answers: { "Which index?": "GiST" } } });
+    expect(r.ubu.store.request(rid)).toMatchObject({ state: "answered", decision: "answer", answers: JSON.stringify({ "Which index?": "GiST" }) });
+    expect(r.mbp.store.remoteAsk("ubu1", rid)).toMatchObject({ state: "answered", decision: "answer" });
+  });
+});
+
 describe("answer_request for a remote id: the target's result; the copy clears with settled (BOB-69 AC 2)", () => {
   it("sends answer, returns the target's reply; the reply's state updates the copy, and its settled changes nothing more (BOB-97 AC 3)", async () => {
     const t = await playedTarget();
