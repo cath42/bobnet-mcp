@@ -141,17 +141,25 @@ function assignmentSpans(text: string, other: readonly Span[]): Span[] {
  */
 export function redactSecrets(text: string, mark: string): string {
   const found: Span[] = [];
-  for (const block of Object.values(BLOCKS)) found.push(...blockSpans(text, block));
-  for (const [name, re] of PATTERNS) if (!(name in BLOCKS) && name !== "password_assignment") found.push(...spansOf(text, re));
+  // A loop, not push(...spans): a spread passes every span as an argument, a RangeError at ~125k of them.
+  for (const block of Object.values(BLOCKS)) for (const span of blockSpans(text, block)) found.push(span);
+  for (const [name, re] of PATTERNS) if (!(name in BLOCKS) && name !== "password_assignment") for (const span of spansOf(text, re)) found.push(span);
   if (mark) for (let i = text.indexOf(mark); i >= 0; i = text.indexOf(mark, i + mark.length)) found.push([i, i + mark.length]);
   const other = merge(found);
   // A mark never starts or ends inside a word: one there would give the text beside it a boundary it didn't
   // have, and a match (`…EXAMPLE` + a PuTTY header; a Private-MAC's hex + `ghp_…`; an END's `-----` + `eyJ…`).
   // Before a span, a letter or digit takes its word back (`DB_` stays: `_` is no boundary for the keyword);
-  // after one, the run of token characters goes with it.
-  const edged = merge([...other, ...assignmentSpans(text, other)]).map(([s, e]): Span => {
+  // after one, the run of token characters goes with it. Linear (Toad, A-fixes-3 review M1): `scanned` is how
+  // far the last run went, and the spans are merged and in order, so one ending before it ends inside that run.
+  const spans = merge(other.concat(assignmentSpans(text, other)));
+  let scanned = 0;
+  const edged = spans.map(([s, e]): Span => {
     if (s > 0 && ALNUM.test(text[s - 1]!) && WORD.test(text[s]!)) while (s > 0 && WORD.test(text[s - 1]!)) s--;
-    if (e < text.length && TOKEN.test(text[e - 1]!) && WORD.test(text[e]!)) while (e < text.length && TOKEN.test(text[e]!)) e++;
+    if (e < scanned) e = scanned;
+    else if (e < text.length && TOKEN.test(text[e - 1]!) && WORD.test(text[e]!)) {
+      while (e < text.length && TOKEN.test(text[e]!)) e++;
+      scanned = e;
+    }
     return [s, e];
   });
   let out = "";

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { addressKey, CLIENT_FRAME_TYPES, ClientFrame, findSecret, LaptopSnapshot, redactSecrets, parseRecipient, PROTOCOL_VERSION, WorkerSnapshot } from "../src/index.ts";
+import { redactSecrets as redactSecretsBb51add } from "./fixtures/secrets-bb51add.ts";
 
 describe("parseRecipient", () => {
   it("resolves a bare name to the sender's laptop", () => {
@@ -374,6 +375,58 @@ describe("redactSecrets, every span on the original text (BOB-84)", () => {
       "a".repeat(n / 2) + PEM_PART + "b".repeat(n / 2),
     ];
     for (const text of inputs) expect(fastest(() => redactSecrets(text, MARK)), text.slice(0, 40)).toBeLessThan(50);
+  });
+});
+
+describe("redactSecrets, a linear word edge (BOB-89)", () => {
+  const MARK = "[withheld: looks like a credential]";
+  const SLACK = "xoxb-" + "a".repeat(10);
+  it("the slack-token chain from the A-fixes-3 review's M1 redacts 200 KB in under 50 ms (AC 1)", () => {
+    const n = 200_000;
+    for (const text of [`${SLACK}_-`.repeat(16_384 / 17), `${SLACK}_-`.repeat(n / 17), `${SLACK}_`.repeat(n / 16), `${SLACK}_-ghp_`.repeat(n / 22), `a${SLACK}_-x`.repeat(n / 19)]) {
+      expect(fastest(() => redactSecrets(text, MARK)), text.slice(0, 40)).toBeLessThan(50);
+    }
+    expect(redactSecrets(`${SLACK}_-`.repeat(n / 17) + " kept", MARK)).toBe(`${MARK} kept`);
+  });
+  it("output identical to bb51add's on a fuzz of glued fragments (AC 2)", () => {
+    // Toad's generator (reviews/2026-11-20-a-fixes-3-fuzz.mts): fragments glued with no separator, so every
+    // junction between a token, a block line, a keyword, a mark and a word is tried; plus slack-token runs.
+    const B = "BEGIN", E = "END";
+    const FRAG = [
+      "password", "PASSWORD", "DB_PASSWORD", "passwd", "secret", "SECRET_KEY", "api_key", "API-KEY", "apikey", "AWS_SECRET_ACCESS_KEY",
+      "secret_detected", "password_detected", "x_password", "Xpassword", "_", "-", "=", ":", " = ", '"', "'", "\\", " ", "\n", "\r\n", ";", ",", "{", "}", ".",
+      "sk-ant-api03-" + "a".repeat(22), "sk-" + "p".repeat(33), "AKIAIOSFODNN7EXAMPLE", "ASIA" + "Q".repeat(16), "ghp_" + "c".repeat(36), "github_pat_" + "d".repeat(60),
+      "xoxb-" + "1".repeat(10), SLACK, `${SLACK}_-`, `${SLACK}_`, "Bearer ", "Bearer " + "t".repeat(24), "eyJ", "eyJ" + "h".repeat(10), ".eyJ" + "p".repeat(10), "." + "s".repeat(10),
+      `-----${B} RSA PRIVATE KEY-----`, `-----${E} RSA PRIVATE KEY-----`, `-----${B} PGP PRIVATE KEY BLOCK-----`, `-----${E} PGP PRIVATE KEY BLOCK-----`, `-----${B} private key-----`,
+      `${PPK_HEAD(3)}`, `${PPK_HEAD(2)} ssh-rsa`, "Private-MAC: ", "Private-MAC: a1b2", "ab12", "MIIE", "body",
+      MARK, "[withheld", "credential]", "abc", "X", "9", "Tok",
+    ];
+    let seed = 0x5eed0089;
+    const rand = (n: number) => {
+      seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) >>> 0;
+      return seed % n;
+    };
+    let differences = 0;
+    let edged = 0;
+    for (let n = 0; n < 40_000; n++) {
+      let text = "";
+      for (let k = 1 + rand(14); k > 0; k--) text += rand(5) === 0 ? `Tok${seed % 100_000}Z${"v".repeat(rand(9))}` : FRAG[rand(FRAG.length)]!;
+      const out = redactSecrets(text, MARK);
+      if (out !== redactSecretsBb51add(text, MARK)) differences++;
+      if (/xox[a-z]-[A-Za-z0-9-]{10,}_/.test(text) && out !== text) edged++;
+    }
+    expect(differences).toBe(0);
+    // The fuzz reaches the word edge it is about: slack tokens glued to a word.
+    expect(edged).toBeGreaterThan(1_000);
+  });
+  it("2 MB with 125k matches redacts without a RangeError (AC 3)", () => {
+    const text = `${SLACK} `.repeat(2_000_000 / 16);
+    expect(text.length).toBe(2_000_000);
+    let out = "";
+    expect(() => (out = redactSecrets(text, MARK))).not.toThrow();
+    expect(out).toBe(`${MARK} `.repeat(125_000));
+    const glued = `${SLACK}_-`.repeat(2_000_000 / 17);
+    expect(redactSecrets(glued, MARK)).toBe(MARK);
   });
 });
 
