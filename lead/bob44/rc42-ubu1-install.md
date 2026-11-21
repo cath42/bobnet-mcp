@@ -27,8 +27,8 @@ git clone --bare https://github.com/cath42/bobnet-mcp.git "$ROOT/.src.git"
 ```sh
 set -e
 ROOT=~/.local/share/bobnet; TAG=v2.0.0-rc.42
-git -C "$ROOT/.src.git" fetch --no-tags origin "+refs/heads/v2:refs/remotes/origin/v2" "+refs/tags/$TAG:refs/tags/$TAG"
-git -C "$ROOT/.src.git" merge-base --is-ancestor "refs/tags/$TAG^{commit}" refs/remotes/origin/v2 && echo "on v2: ok"
+git -C "$ROOT/.src.git" fetch --no-tags origin "+refs/heads/v2:refs/remotes/origin/v2" "+refs/tags/${TAG}:refs/tags/${TAG}"
+git -C "$ROOT/.src.git" merge-base --is-ancestor "refs/tags/${TAG}^{commit}" refs/remotes/origin/v2 && echo "on v2: ok"
 mkdir "$ROOT/$TAG"
 git -C "$ROOT/.src.git" archive "$TAG" | tar -x -C "$ROOT/$TAG"
 (cd "$ROOT/$TAG" && pnpm install --frozen-lockfile)
