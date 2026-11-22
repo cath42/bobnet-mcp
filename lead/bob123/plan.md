@@ -51,3 +51,11 @@ then cuts the supervisor rc. poe rolls the rc and stages the config.
   pipeline/cache or pipeline/out, even though they're gitignored. They stay out of helix's paths list. The default
   `ignored` globs stay narrow (.turbo, dist, test-results, .wrangler), and `ignored` deletes only what its globs match,
   never every ignored path. A test keeps a gitignored cache/ and out/. The 15 GB stays; the close says so.
+- **Scope added** (poe's measurements, portfolio-orchestrator/research/disk-2026-11-21.md):
+  - `old-pnpm-stores`: an old store version goes only if it isn't the current store and no .modules.yaml names it
+    (v3 is 1.0 GB).
+  - Rotation of the supervisor's own logs (1.4 GB), never a live worker's open log.
+  - `runner`: superseded _update versions and the _tool cache, only while no job runs (about 1.3 GB in two dirs).
+  - playwright: keep the builds the installed versions need.
+  - docker: system prune; Docker.raw compaction isn't in scope.
+  - `pnpm store prune` frees about 0 while clones share blocks; df reports that honestly.
