@@ -126,3 +126,13 @@ Nothing rolls back by itself, and no install is removed by the op (pruning old t
   hand, as before rc.42 (its own install-* writes its own path). Upgrades are by hand again from there.
 - The database stays usable by the release before: the new tables (`upgrades`, `remote_upgrades`) are
   additive and the older release ignores them.
+
+## Known limit until the broker carries BOB-80's findSecret (BOB-78 AC 4)
+
+Added 2026-11-22 by Mario (the a-fixes.md half: `lead/bob44/a-fixes.md:32`, 8eb7c5e). Between a laptop on this
+release and a broker still on the older findSecret, a body the target lets through can be refused by the broker. The
+window covers `exit` and `summary` when the match is in the handoff, and `status` and `list` too when the text is in
+the worker's `error` or `checkpoint` (`remoteView` carries them): both then come back withheld. rc.42 carries BOB-78:
+the orchestrator is told once ("<name> on <laptop>: state withheld, ask there"), and a reconcile goes on past a
+withheld batch. The window closed with broker version d5e4c9b6 (2026-11-22T02:25Z, from 067d246), deployed after
+both laptops ran rc.42 or later.
