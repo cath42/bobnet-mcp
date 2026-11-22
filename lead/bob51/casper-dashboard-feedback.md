@@ -46,3 +46,12 @@ The dashboard half (task 7) waits for a use-case-driven redesign that starts fro
   by model/effort. Today it is raw tokens; model and effort are only a label (app.js:145), not factored in.
 - Sessions: Casper never looks at it. Mario's take: drop it as a tab; what's useful in it (who ran, tokens per session,
   review evidence) moves to the project page and the feature page.
+
+## Third message (verbatim, 2026-11-22, in Mario's session)
+
+> That was it for now, I'd also like a full prototype not just anything you believe are changes
+
+## As Mario reads it
+- The feedback is complete for now: the redesign feature can be written.
+- The prototype covers the whole dashboard, every view (Overview, Needs you, Projects and the project page, Status,
+  Roadmap, Features, Triage, Usage, and wherever Sessions' useful parts land), not only the views that change.
