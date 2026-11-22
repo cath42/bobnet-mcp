@@ -47,3 +47,7 @@ then cuts the supervisor rc. poe rolls the rc and stages the config.
   pipeline/out is 1.8 GB. Both are gitignored, so BOB-123's `ignored`/`paths` step can clean them once helix's config
   lists them. Next: landmanagement-features 2.3 GB, land-v5 0.7 GB, and everything else under 0.6 GB. The helix
   worktrees share one .git (517 MB in helix-navigator).
+- **Casper's ruling** (via poe, 2026-11-21 ~22:2x, "it won't work"): the cleanup never touches helix-navigator-maps'
+  pipeline/cache or pipeline/out, even though they're gitignored. They stay out of helix's paths list. The default
+  `ignored` globs stay narrow (.turbo, dist, test-results, .wrangler), and `ignored` deletes only what its globs match,
+  never every ignored path. A test keeps a gitignored cache/ and out/. The 15 GB stays; the close says so.
