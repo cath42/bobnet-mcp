@@ -319,7 +319,7 @@ describe("who may write what (ADR 0001 §5)", () => {
   it("lets a global admin, made by the owner from the dashboard, set a project's rules (BOB-118)", async () => {
     await helix();
     await helixRules();
-    const poe = { op: "grant", project: "*", agent: "poe", laptop: "mbp-1", role: "admin", read: true, items: "none", fields: [], admin: true } as const;
+    const poe = { op: "grant" as const, project: "*", agent: "poe", laptop: "mbp-1", role: "admin", read: true, items: "none" as const, fields: [], admin: true };
     expect(await refused(agent("Picard"), poe)).toMatchObject({ code: "forbidden" });
     await ok(owner, poe);
     await ok(agent("poe"), { op: "grant", project: "helix", agent: "Bill", role: "builder", read: true, items: "none", fields: [] });
