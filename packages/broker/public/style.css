@@ -58,6 +58,8 @@ section { min-width: 0; }
 .card .task { overflow-wrap: anywhere; }
 .card .meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* A laptop's last cleanup (BOB-123): a muted line, a project per row, a failed step in red. */
+.card .outbox { font-size: 13px; color: var(--warn); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.card .outbox b { font-weight: 600; }
 .card .cleanup { display: grid; gap: 2px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .card .cleanup b { color: var(--text); font-weight: 600; }
 .card .cleanup ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
@@ -561,7 +563,9 @@ pre.handoff { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wra
 .events details.chg summary::-webkit-details-marker { display: none; }
 .events.with-tasks .ev-h { display: grid; grid-template-columns: var(--idw) auto minmax(0, 1fr); }
 .events .ev-task .id { font-size: 12.5px; }
-.ov .stale-line { border-top: 0; padding-top: 4px; }
+.stale-banners { display: grid; gap: 8px; }
+.stale-banners a { color: var(--accent); text-decoration: none; white-space: nowrap; }
+.stale-banners a:hover { text-decoration: underline; }
 .ov .ci-line { border-top: 0; padding-top: 4px; }
 .ov .ci-line[data-failed] { color: var(--bad); }
 .events details.chg .show { color: var(--accent); font-size: 12.5px; }

@@ -153,6 +153,15 @@ const fmtBytes = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `$
 const freedText = (n) => (n === null || n === undefined ? "unknown" : fmtBytes(n));
 const CLEANUP_TRIGGER = { schedule: "scheduled", floor: "disk low", demand: "asked for" };
 
+/** A board outbox is stuck once its oldest report has waited this long; below it the reports are in flight (ADR 0012 §3). */
+const OUTBOX_STUCK_MS = 5 * 60_000;
+/** A laptop's board reports it couldn't send (BOB-28; design/BOB-48/spec.md §2b): only when stuck, never "0", nothing from an older supervisor. */
+function outboxLine(o) {
+  if (!o || !o.count || !o.oldest_at || brokerNow() - Date.parse(o.oldest_at) <= OUTBOX_STUCK_MS) return null;
+  return h("div", { class: "outbox", title: `This laptop's supervisor has board reports it couldn't send since ${new Date(o.oldest_at).toLocaleString()}. It retries every minute; the board on the dashboard is behind until they go through.` },
+    h("b", null, "Board reports stuck"), ` · ${o.count} waiting · oldest `, ago(o.oldest_at), o.code ? ` · last error ${o.code}` : null);
+}
+
 /** A laptop's last cleanup on its row (BOB-123): when, what started it, what it freed per project (unknown said so), each failed or skipped step. */
 function cleanupLine(c) {
   if (!c) return h("div", { class: "cleanup" }, "No cleanup yet");
@@ -1223,8 +1232,12 @@ let skew = 0;
 const brokerNow = () => Date.now() - skew;
 /** A laptop whose supervisor hasn't reported for three heartbeats (60 s each): it is down or cut off, so its last report is history. */
 const staleReport = (l) => brokerNow() - Date.parse(l.at) > 3 * 60_000;
+/** A request lives a day wherever it is shown: the supervisor's ORPHAN_TTL_MS, applied here too for an older supervisor or a stale report (ADR 0012 §1). */
+const REQUEST_MAX_AGE_MS = 24 * 3600_000;
+/** A laptop's pending rows under a day old, by the broker's clock. */
+const livePending = (l) => l.snapshot.pending.filter((p) => brokerNow() - Date.parse(p.created_at) <= REQUEST_MAX_AGE_MS);
 /** Requests a live supervisor can still act on: a stale laptop's last list is never offered (BOB-26). */
-const pendingAll = () => [...state.laptops.values()].filter((l) => !staleReport(l)).flatMap((l) => l.snapshot.pending.map((p) => ({ ...p, laptop: l.laptop })));
+const pendingAll = () => [...state.laptops.values()].filter((l) => !staleReport(l)).flatMap((l) => livePending(l).map((p) => ({ ...p, laptop: l.laptop })));
 const projectName = (key) => svc.projects?.find((p) => p.key === key)?.name ?? key;
 /** The laptops a project runs on: its supervisor's board, and its agents'. */
 const laptopsOf = (key) => [...new Set([...projects().filter((e) => e.board.project === key).map((e) => e.laptop), ...workers().filter((w) => w.project === key).map((w) => w.laptop)])];
@@ -1304,6 +1317,7 @@ function viewOverview() {
   const legacy = projects().map((e) => e.board.project).filter((k) => !svcKeys.has(k));
   return [
     ov.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, ov.error)) : null,
+    staleBanners(),
     h("div", { class: "ov" },
       statusLine(),
       h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count", id: "needs-count" }, waitCount() || "")),
@@ -1311,8 +1325,7 @@ function viewOverview() {
           !ov.waits && !perms.length ? h("p", { class: "muted", style: "margin:0" }, "Reading the board…")
             : holding ? h("ul", { class: "lines", id: "needs" }, oldestFirst(perms, blocking).map((x) => (x.p ? permissionLine(x.p) : waitLine(x.w))))
             : h("p", { class: "muted", style: "margin:0" }, "Nothing is held up by you."),
-          holding || rest ? h("a", { class: "more", href: "#waits" }, rest ? `${holding} ${holding === 1 ? "holds" : "hold"} work up · ${rest} more when you have time →` : "Waits on you →") : null,
-          staleLines())),
+          holding || rest ? h("a", { class: "more", href: "#waits" }, rest ? `${holding} ${holding === 1 ? "holds" : "hold"} work up · ${rest} more when you have time →` : "Waits on you →") : null)),
       h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length || "")),
         now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map(nowLine)), queuedLine(), ciLines()) : h("div", { class: "empty-card" }, "No agent is working.", queuedLine(), ciLines())),
       h("section", { class: "ov-proj" }, h("h2", null, "Projects"),
@@ -1322,13 +1335,26 @@ function viewOverview() {
   ];
 }
 
-/** A stale laptop's requests for Casper aren't dropped silently: one muted line each (spec, BOB-4 as built; Toad, BOB-26). */
-function staleLines() {
-  return [...state.laptops.values()].filter(staleReport).map((l) => {
-    const n = l.snapshot.pending.filter((p) => p.tier === "human").length;
-    const min = Math.floor((brokerNow() - Date.parse(l.at)) / 60_000);
-    return n ? h("p", { class: "more stale-line" }, `${l.laptop} hasn't reported for ${min} min: ${plural(n, "request")} from it wait${n === 1 ? "s" : ""} until it does.`) : null;
-  });
+/**
+ * A laptop that stopped reporting, at the top of Overview and Waits (design/BOB-48/spec.md §1): one banner each, oldest
+ * report first, or one for three or more. Only for a report under a day old, and never while this page itself is cut off.
+ */
+function staleBanners() {
+  if ($("conn").dataset.state !== "live") return null;
+  const quiet = [...state.laptops.values()].filter((l) => staleReport(l) && brokerNow() - Date.parse(l.at) < REQUEST_MAX_AGE_MS).sort((a, b) => a.at.localeCompare(b.at));
+  if (!quiet.length) return null;
+  const forYou = (l) => livePending(l).filter((p) => p.tier === "human").length;
+  const waits = (n, one) => (n ? h("span", null, `${plural(n, "request")} for you from ${one ? "it" : "them"} wait${n === 1 ? "s" : ""} until ${one ? "it reports" : "they report"} again`) : null);
+  const link = () => h("a", { href: "#sessions" }, "Laptops →");
+  const when = (l) => new Date(l.at).toLocaleString();
+  const banners = quiet.length < 3
+    ? quiet.map((l) => h("div", { class: "banner", title: `No report from ${l.laptop}'s supervisor since ${when(l)}. Its requests are not offered here until it reports; nothing is lost.` },
+      h("b", null, `${l.laptop} stopped reporting`), h("span", null, "last report ", ago(l.at), " ago"), waits(forYou(l), true), link()))
+    : [h("div", { class: "banner", title: `No report from ${quiet.map((l) => `${l.laptop} since ${when(l)}`).join(", ")}. Their requests are not offered here until they report; nothing is lost.` },
+      h("b", null, `${quiet.length} laptops stopped reporting`),
+      h("span", null, quiet.map((l, i) => [i ? " · " : null, `${l.laptop} `, ago(l.at)])),
+      waits(quiet.reduce((n, l) => n + forYou(l), 0), false), link())];
+  return h("div", { class: "stale-banners" }, banners);
 }
 
 const CI_FAILED = new Set(["failure", "timed_out", "startup_failure"]);
@@ -1754,6 +1780,7 @@ function viewWaits() {
   const seg = (v, label) => h("button", { type: "button", "aria-pressed": String(pick === v), onclick: () => { state.waitsProject = v; render(); } }, label);
   return [
     ov.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, ov.error)) : null,
+    staleBanners(),
     h("div", { class: "bar-row" },
       keys.length > 1 ? h("span", { class: "seg filters" }, seg("all", `All projects ${all.length}`), keys.map((k) => seg(k, `${projectName(k)} ${all.filter((x) => x.project === k).length}`))) : null,
       h("span", { class: "muted" }, `${plural(shown.length, "item")}, oldest first`)),
@@ -2801,14 +2828,15 @@ function viewSessions() {
     h("section", null, h("h2", null, "Messages"), h("ul", { class: "feed", id: "traffic" }, state.traffic.length
       ? state.traffic.map((t) => h("li", null, h("time", { datetime: t.at, title: t.at }, clock(t.at)), h("span", null, t.from, t.type === "broadcast" ? ` broadcast to ${t.to.length}` : ` → ${t.to.join(", ")}`, t.urgent ? " (urgent)" : "")))
       : h("li", { class: "empty" }, "No messages in the last 24 hours.")), h("p", { class: "note" }, "Who messaged whom, never what was said.")),
-    h("section", null, h("h2", null, "Laptops"), h("div", { class: "cards", id: "laptops" }, [...state.laptops.values()].map((l) => {
-      const sup = l.snapshot.supervisor, stale = staleReport(l);
+    h("section", null, h("h2", null, "Laptops"), h("div", { class: "cards", id: "laptops" }, state.laptops.size ? [...state.laptops.values()].map((l) => {
+      const sup = l.snapshot.supervisor, stale = staleReport(l), n = livePending(l).length;
       return h("div", { class: "card" },
         h("div", { class: "top" }, h("span", { class: "name" }, l.laptop), h("span", { class: "badge", dataset: { state: stale ? "stopped" : "running" } }, stale ? "no recent report" : "supervisor up")),
         h("div", { class: "meta" }, h("span", null, `${sup.active} of ${sup.concurrency} slots busy`), h("span", null, `${sup.queued} queued`), h("span", null, "up ", ago(sup.started_at)), h("span", null, "reported ", ago(l.at), " ago"),
-          stale && l.snapshot.pending.length ? h("span", null, `${l.snapshot.pending.length} ${l.snapshot.pending.length === 1 ? "request" : "requests"} from its last report not offered`) : null),
+          stale && n ? h("span", null, `${plural(n, "request")} wait${n === 1 ? "s" : ""} until it reports again`) : null),
+        outboxLine(l.snapshot.board_outbox),
         cleanupLine(l.snapshot.cleanup ?? null));
-    }))),
+    }) : h("div", { class: "empty" }, "No laptop has reported in the last 30 days."))),
     h("section", null, h("h2", null, "Agents ", h("span", { class: "count", id: "agents-count" }, `${peers.filter((p) => p.online).length} online of ${peers.length}`)),
       h("div", { class: "table-wrap" }, h("table", { id: "agents" },
         h("thead", null, h("tr", null, h("th", null, "Agent"), h("th", null, "Status"), h("th", { class: "num" }, "Up"), h("th", { class: "num" }, "In / out 24h"), h("th", { class: "num" }, "Inbox"))),
@@ -2977,6 +3005,8 @@ setInterval(() => {
 
 function setConn(st) {
   if (st === "down" && $("conn").dataset.state !== "down") connDownAt = new Date().toISOString();
+  // Leaving live hides the stale banners (design/BOB-48/spec.md §1): every laptop looks stale to a page cut off.
+  if ($("conn").dataset.state === "live" && st !== "live") scheduleRender();
   $("conn").dataset.state = st;
   $("conn").textContent = st === "live" ? "live" : st === "down" ? "reconnecting" : "connecting";
 }
@@ -3041,8 +3071,9 @@ function connect() {
           state.boards = new Map((f.result.boards ?? []).map((b) => [`${b.laptop}|${b.board.project}`, b]));
           state.updates = f.result.updates;
           state.traffic = f.result.traffic;
-          render();
+          // Live before the render: the stale banners draw only on a live page.
           setConn("live");
+          render();
         }
         break;
       case "presence": {

@@ -110,7 +110,9 @@ beforeAll(async () => {
   const ws = FakeSocket.last;
   ws.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
   const req = ws.sent.find((f) => f["t"] === "dashboard")!;
-  ws.frame({ t: "ok", rid: req["rid"], result: dashboard });
+  // As the broker answers from ADR 0012 on: no boards in the reply, then one frame each.
+  ws.frame({ t: "ok", rid: req["rid"], result: { ...dashboard, boards: [] } });
+  for (const b of dashboard.boards) ws.frame({ t: "board", ...b });
 });
 
 describe("Now's parts on the Overview (BOB-5 as built 3)", () => {
@@ -258,13 +260,13 @@ describe("Sessions", () => {
     await settle();
     const card = [...$("laptops").children].find((c) => c.textContent!.includes("mbp-2"))!;
     expect(card.textContent).toContain("no recent report");
-    expect(card.textContent).toContain("1 request from its last report not offered");
+    expect(card.textContent).toContain("1 request waits until it reports again");
     await go("#waits");
     expect(view().querySelector('[data-ref="r_old"]')).toBeNull();
     await go("#overview");
     expect(view().textContent).not.toContain("rm -rf dist");
-    // Not dropped silently: Needs you ends with a line naming the laptop (spec, BOB-4 as built).
-    expect(view().querySelector(".ov-needs .stale-line")!.textContent).toBe("mbp-2 hasn't reported for 10 min: 1 request from it waits until it does.");
+    // Not dropped silently: a banner names the laptop (design/BOB-48/spec.md §1).
+    expect(view().querySelector(".stale-banners .banner")!.textContent).toBe("mbp-2 stopped reportinglast report 10m ago1 request for you from it waits until it reports againLaptops →");
     // Reporting again makes it live: its requests are offered.
     ws.frame({ t: "report", laptop: "mbp-2", at: iso(0), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [old], usage: [] } });
     await settle();
@@ -330,6 +332,119 @@ describe("Sessions", () => {
     ($("updates").querySelector(".chip") as HTMLButtonElement).click();
     expect($("updates").children).toHaveLength(1);
     expect($("updates-filter").textContent).toContain("LAND-41.16 only");
+  });
+});
+
+describe("laptops that stopped reporting, dead requests and a stuck board outbox (BOB-48; design/BOB-48/spec.md)", () => {
+  const snap = (pending: unknown[] = []) => ({ supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending, usage: [] });
+  const ask = (id: string, minAgo: number, tier = "human") => ({ id, worker_id: "w_1", name: "records-agent", kind: "approval", tool: "Bash", tier, created_at: iso(minAgo), preview: `${id} preview` });
+  /** Each laptop's report, then mbp-1's, last: the latest report sets the broker's clock. */
+  const reports = async (rs: Array<[string, number, unknown]>, mbp: Record<string, unknown> = {}) => {
+    for (const [laptop, at, snapshot] of rs) FakeSocket.last.frame({ t: "report", laptop, at: iso(at), snapshot });
+    FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: { ...dashboard.laptops[0]!.snapshot, ...mbp } });
+    await settle();
+  };
+  const banners = () => [...view().querySelectorAll(".stale-banners .banner")];
+  const card = (name: string) => [...$("laptops").children].find((c) => c.querySelector(".name")?.textContent === name)!;
+  const DAY = 24 * 60;
+
+  it("never shows, offers or counts a request over a day old, from a fresh laptop too (BOB-26; ADR 0012 §1)", async () => {
+    await reports([], { pending: [ask("r_dead", DAY + 60), ask("r_live", 5)] });
+    await go("#waits");
+    expect(view().querySelector('[data-ref="r_live"]')).not.toBeNull();
+    expect(view().querySelector('[data-ref="r_dead"]')).toBeNull();
+    await go("#overview");
+    expect($("needs").querySelector('li[data-id*="r_live"]')).not.toBeNull();
+    expect($("needs").querySelector('li[data-id*="r_dead"]')).toBeNull();
+    await reports([]);
+  });
+
+  it("shows a stale laptop's banner on Overview and Waits, counting only its requests for you under a day old (BOB-23 AC 3)", async () => {
+    await reports([["mbp-2", 12, snap([ask("r_h", 30), ask("r_o", 30, "orchestrator"), ask("r_old", DAY + 5)])]]);
+    for (const page of ["#overview", "#waits"]) {
+      await go(page);
+      expect(banners()).toHaveLength(1);
+      const b = banners()[0]!;
+      expect([...b.children].map((c) => c.textContent)).toEqual(["mbp-2 stopped reporting", "last report 12m ago", "1 request for you from it waits until it reports again", "Laptops →"]);
+      expect(b.querySelector("b")).not.toBeNull();
+      expect(b.querySelector("a")!.getAttribute("href")).toBe("#sessions");
+      expect(b.querySelector("[data-ago]")!.getAttribute("data-ago")).toBe(iso(12));
+      expect(b.getAttribute("title")).toMatch(/^No report from mbp-2's supervisor since .+\. Its requests are not offered here until it reports; nothing is lost\.$/);
+    }
+    // First on Overview, above Needs you.
+    await go("#overview");
+    expect(view().firstElementChild!.classList.contains("stale-banners")).toBe(true);
+    // Its card: all tiers under a day, marked, never offered.
+    await go("#sessions");
+    expect(card("mbp-2").querySelector(".meta")!.textContent).toContain("2 requests wait until it reports again");
+    // With none for you: no count, never "0".
+    await reports([["mbp-2", 12, snap([ask("r_o", 30, "orchestrator")])]]);
+    await go("#overview");
+    expect(banners()[0]!.textContent).toBe("mbp-2 stopped reportinglast report 12m agoLaptops →");
+  });
+
+  it("draws two banners oldest report first, and one for three or more", async () => {
+    await reports([["ubu1", 200, snap([ask("r_u", 60)])], ["mbp-2", 12, snap([ask("r_h", 30)])]]);
+    await go("#overview");
+    expect(banners().map((b) => b.querySelector("b")!.textContent)).toEqual(["ubu1 stopped reporting", "mbp-2 stopped reporting"]);
+    await reports([["ubu1", 200, snap([ask("r_u", 60)])], ["mini", 40, snap()], ["mbp-2", 12, snap([ask("r_h", 30), ask("r_h2", 20)])]]);
+    expect(banners()).toHaveLength(1);
+    expect([...banners()[0]!.children].map((c) => c.textContent)).toEqual([
+      "3 laptops stopped reporting",
+      "ubu1 3h 20m · mini 40m · mbp-2 12m",
+      "3 requests for you from them wait until they report again",
+      "Laptops →",
+    ]);
+  });
+
+  it("draws none while this page is cut off, nor for a report over a day old, which its card still marks", async () => {
+    $("conn").dataset["state"] = "down";
+    await go("#overview");
+    expect(view().querySelector(".stale-banners")).toBeNull();
+    $("conn").dataset["state"] = "live";
+    await reports([["ubu1", DAY + 10, snap([ask("r_u", DAY + 60)])], ["mini", DAY + 10, snap()], ["mbp-2", DAY + 10, snap([ask("r_h", DAY + 30)])]]);
+    await go("#overview");
+    expect(view().querySelector(".stale-banners")).toBeNull();
+    await go("#sessions");
+    expect(card("mbp-2").querySelector(".badge")!.textContent).toBe("no recent report");
+    expect(card("mbp-2").querySelector(".meta")!.textContent).not.toContain("wait");
+  });
+
+  it("shows a stuck board outbox on the Laptops card: at 6 min, not at 2, with its last error when there is one (BOB-28 AC 1)", async () => {
+    await go("#sessions");
+    const line = () => card("mbp-1").querySelector(".outbox");
+    await reports([], { board_outbox: { count: 14, oldest_at: iso(2), code: "unavailable" } });
+    expect(line()).toBeNull();
+    await reports([], { board_outbox: { count: 14, oldest_at: iso(6), code: "unavailable" } });
+    expect(line()!.textContent).toBe("Board reports stuck · 14 waiting · oldest 6m · last error unavailable");
+    expect(line()!.querySelector("b")!.textContent).toBe("Board reports stuck");
+    expect(line()!.getAttribute("title")).toMatch(/^This laptop's supervisor has board reports it couldn't send since .+\. It retries every minute; the board on the dashboard is behind until they go through\.$/);
+    // After the meta row, before the cleanup line.
+    expect(line()!.previousElementSibling!.classList.contains("meta")).toBe(true);
+    expect(line()!.nextElementSibling!.classList.contains("cleanup")).toBe(true);
+    await reports([], { board_outbox: { count: 3, oldest_at: iso(660), code: null } });
+    expect(line()!.textContent).toBe("Board reports stuck · 3 waiting · oldest 11h 0m");
+    // Empty, or an older supervisor's snapshot without the field: no line, never "0".
+    await reports([], { board_outbox: { count: 0, oldest_at: null, code: null } });
+    expect(line()).toBeNull();
+    await reports([]);
+    expect(dashboard.laptops[0]!.snapshot).not.toHaveProperty("board_outbox");
+    expect(line()).toBeNull();
+    expect($("laptops").textContent).not.toMatch(/\b0 waiting|\b0 requests/);
+  });
+
+  it("says so when no laptop has reported in 30 days, and a fresh reply clears the old boards before its frames", async () => {
+    const reply = (result: unknown) => FakeSocket.last.frame({ t: "ok", rid: FakeSocket.last.sent.filter((f) => f["t"] === "dashboard").at(-1)!["rid"], result });
+    reply({ ...dashboard, laptops: [], boards: [] });
+    await settle();
+    expect($("laptops").querySelector(".empty")!.textContent).toBe("No laptop has reported in the last 30 days.");
+    await go("#roadmap");
+    expect(view().textContent).not.toContain("Switch to a company");
+    reply({ ...dashboard, boards: [] });
+    for (const b of dashboard.boards) FakeSocket.last.frame({ t: "board", ...b });
+    await settle();
+    await go("#sessions");
+    expect($("laptops").querySelector(".empty")).toBeNull();
   });
 });
 
@@ -1612,7 +1727,14 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       const q15 = wait("Q-15", "question", "Keep the old tab?", false, { feature: "BOB-6", since: iso(60 * 30), kept: { by: "Mario@mbp-1", at: iso(90), reason: "Still waits on the move, which is Friday" } });
       const meta = (ref: string) => item(ref).querySelector(".meta")!;
 
+      // Its rows' times are from when the file loaded, and the suite runs past a minute: the clock is held there.
+      afterAll(() => {
+        vi.useRealTimers();
+      });
+
       beforeAll(async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(now);
         // Luigi in BOB-6 build A, so Q-14 holds him up by name.
         const snap = structuredClone(dashboard.laptops[0]!.snapshot);
         snap.workers = [worker({ id: "w_6", name: "Luigi", project: "bobnet", role: "engineer", session: "BOB-6 build A", task_ref: null, task_refs: [] })] as never;
