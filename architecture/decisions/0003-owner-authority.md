@@ -159,3 +159,35 @@ Steps 2 and 3 are one board item for Peach, size M, after BOB-2's core.
   Rejected for §3. The supervisor command can still revoke on the laptop.
 - **Laptop-verified board gates:** each gate signed and checked by... nobody: the board lives in
   the broker, so the broker is the only checker. Rejected (§1).
+
+## Addendum (2026-11-21, BOB-122): a feature's release is a grant, not a name
+
+**Context.** ADR 0001 §5 made a feature's release one of Casper's gates, owner-only (`setRelease` was
+`ownerOnly`). Casper ruled on 2026-11-21 that slotting a feature into a release is the project's PO's
+job (board-writes 4 amended; BOB-122). The question was how the PO gets it: a check for "owner or the
+project's PO" by name, or a grant.
+
+**Decision** (advice c_0201d124; built in b1ba363, reviewed in `reviews/bob122-review.md`):
+
+- `release` is a grant field (`GrantField`, `packages/protocol/src/board.ts:37`; board migration 5
+  remakes `grant_fields` with it in its CHECK, `packages/broker/src/board/schema.ts:407-418`). A rule
+  holding it moves a feature into, between and out of releases (`set_release`), and makes a feature in
+  a release (`store.ts:1209, 1534`).
+- The owner holds every grant (`rules.ts:97`), so Casper keeps the move, from the dashboard, with Undo
+  of his own move as before. No name is checked: who is a project's PO is said by its rules, which
+  Peach decides and an admin applies, and a refusal names the field and who holds it.
+- The rule's `items` applies as for any feature write: `not_open_feature` moves features that aren't
+  open; `open_feature` only the feature the caller's session is on.
+- Still Casper's alone, owner-only and no grant: the order of releases, closing a release, and `undo`
+  (of his own events). ADR 0001 §5's "Casper's gates" list loses "a feature's release"; the rest stands.
+
+**Consequences.** An `admin` rule can now hand out a power that was the owner's; admin was already
+trusted with every other field. `set_release` is a `board_write` op in the client. An old client can
+neither use it nor grant `release` (its own protocol refuses it), so the PO uses it only after a
+release carrying b1ba363 and a restart, besides the broker deploy. An export holding `release` imports
+only into a broker from b1ba363 on.
+
+**Alternatives.** "Owner or the project's PO" by name in `setRelease`: a second authority beside the
+rules, invisible in `board_grants`, and wrong for Helix's two-PO rules. Folding it into `triage`:
+`triage` already slots backlog items, but every holder of `triage` would gain release moves; a field of
+its own lets a project give one without the other.
