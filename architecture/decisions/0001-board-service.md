@@ -340,6 +340,11 @@ message to the project's `lead` and to `asked_by`, minus the recorder, saying it
 conversation and by whom. The dashboard sends its answers, done marks and undos with §12's `key`, so
 a reply lost between `Board` and `Broker` is replayed with its message, not lost.
 
+**Amendment, 2026-11-21** (BOB-111): superseded in part by ADR 0009. The message is no longer
+returned in the reply. The answer writes a `notices` row in its own transaction, and `Broker`
+consumes that row, sending the text to the lead and the asker and a JSON event to the project's
+supervisor, which wakes its orchestrator.
+
 ### 8. Operations, the protocol and the MCP tools
 
 `packages/protocol/src/board.ts` defines every operation once, as a zod discriminated union
