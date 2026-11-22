@@ -67,6 +67,7 @@ const runId = z.string().regex(/^[A-Za-z0-9_./-]{1,60}$/);
 /** A run's Remote Control link: a claude.ai page, as the snapshot's (frames.ts), since the dashboard renders it as an href. */
 const remoteUrl = z.string().url().startsWith("https://claude.ai/").max(500);
 const sha = z.string().regex(/^[0-9a-f]{7,40}$/);
+const fullSha = z.string().regex(/^[0-9a-f]{40}$/);
 
 /** A session by what a spawn declares: the feature, the kind and a label ("3"). */
 export const SessionRef = z.object({ feature: ItemRef, kind: BoardSessionKind, label: z.string().trim().min(1).max(40) });
@@ -351,6 +352,13 @@ export const BoardOp = z.discriminatedUnion("op", [
       .strict(),
     reason: reason.optional(),
   }),
+  /**
+   * A row on Waits is still current (ADR 0011 §2): an event on its record, so its day starts again.
+   * A question's or action's asker or a `questions` holder; for an item, a `status` holder.
+   */
+  z.object({ op: z.literal("keep"), ...project, ref: ItemRef, reason }),
+  /** An open question or action that is moot leaves Waits and holds nothing (ADR 0011 §2): its asker or a `questions` holder. */
+  z.object({ op: z.literal("withdraw"), ...project, ref: QuestionRef, reason }),
   /** Casper's answer given in conversation, verbatim (§7): write-once. */
   z.object({
     op: z.literal("record_answer"),
@@ -417,19 +425,23 @@ export const BoardOp = z.discriminatedUnion("op", [
     /** The error or the stop reason; none for `done`. */
     reason: z.string().max(RUN_REASON_MAX).nullable().optional(),
   }),
-  /** What a land pushed (§10), which ties a CI run on that commit to its worker. */
+  /**
+   * What a land pushed (§10), which ties a CI run on that commit to its worker. `fixes`: the landed
+   * commits' `Fixes:` trailers (ADR 0011 §1), each marking an open bug of the project; an older
+   * supervisor sends none.
+   */
   z.object({
     op: z.literal("push"),
     ...project,
     repo: z.string().min(1).max(200),
     branch: z.string().min(1).max(200),
     sha,
+    fixes: z.array(z.object({ ref: ItemRef, sha: fullSha, subject: z.string().max(200) })).max(20).optional(),
   }),
   /**
    * A CI run from anywhere (§10), posted to /v1/runs with a CI token at its start and its end: upserted
    * by the token's source and `external_id`. `project` may be left out when `repo` is one project's.
-   * A supervisor's gh adapter sends it too, ctx-less, as source github-actions, for a project it serves:
-   * the one supervisor operation without a worker, and no precedent for another.
+   * A supervisor's gh adapter sends it too, ctx-less, as source github-actions, for a project it serves.
    */
   z.object({
     op: z.literal("ci_run"),
@@ -439,10 +451,22 @@ export const BoardOp = z.discriminatedUnion("op", [
     url: z.string().url().max(500).nullable().optional(),
     repo: z.string().min(1).max(200).nullable().optional(),
     branch: z.string().min(1).max(200).nullable().optional(),
-    sha: z.string().regex(/^[0-9a-f]{40}$/).nullable().optional(),
+    sha: fullSha.nullable().optional(),
     status: CiStatus,
     started_at: at.nullable().optional(),
     ended_at: at.nullable().optional(),
+  }),
+  /**
+   * A release tag the supervisor's upgrade verified (ADR 0011 §1): the fixes landed in its repo and
+   * branch up to its push are in it. Like `ci_run`, it has no worker; `project` may be left out when
+   * `repo` is one project's.
+   */
+  z.object({
+    op: z.literal("release_tag"),
+    project: ProjectKey.optional(),
+    repo: z.string().min(1).max(200),
+    tag: z.string().min(1).max(100),
+    sha: fullSha,
   }),
   /** A run-slot run (§10), reported at its grant and again at its release; external_id is unique to the laptop's run. */
   z.object({
@@ -462,7 +486,7 @@ export type BoardOpName = BoardOp["op"];
 export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview" | "status";
 export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview", "status"] satisfies BoardReadName[];
 /** The supervisor's own operations, which only its connection makes (§8). */
-export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_remote", "run_end", "push", "slot_run", "ci_run"];
+export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_remote", "run_end", "push", "slot_run", "ci_run", "release_tag"];
 
 // ---------- Records ----------
 
@@ -530,6 +554,15 @@ export interface WaitRecord {
   blocking: boolean;
   /** A question's or action's edits since it was asked (BOB-119), oldest first; none for a review gate or a bug. An older broker sends no field. */
   edits: QuestionEdit[];
+  /**
+   * A bug's latest landed fix (ADR 0011 §3): a bug with one is not `blocking`, and waits on its PO.
+   * `tags_known`: its repo has reported a release tag, so a null `release` means not in one yet.
+   */
+  fix?: { sha: string; subject: string; landed_at: string; release: string | null; tags_known: boolean } | null;
+  /** Over a day unchanged on its own record (ADR 0011 §2): its owner, if any, and when they were told since that change. */
+  stale?: { changed_at: string; owner: string | null; flagged_at: string | null } | null;
+  /** The owner's latest keep since the record's last other change. */
+  kept?: { by: string; at: string; reason: string } | null;
 }
 
 /** One edit of an open question or action (BOB-119): the fields it changed, before and after, who, when and why. */
@@ -886,7 +919,12 @@ export interface BoardResults {
   run_start: BoardWritten & { unknown_tasks: string[] };
   run_remote: BoardWritten;
   run_end: BoardWritten;
-  push: BoardWritten;
+  /** `fixed`: the bugs its fixes marked; `fixes_ignored`: refs that aren't an open bug of the project. */
+  push: BoardWritten & { fixed: string[]; fixes_ignored: string[] };
+  /** `released`: the bugs whose fixes it put in a release. */
+  release_tag: BoardWritten & { released: string[] };
+  keep: BoardWritten;
+  withdraw: BoardWritten;
   /** `tied`: the worker whose push the run ran on, once known. */
   ci_run: BoardWritten & { tied: string | null };
   slot_run: BoardWritten;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BoardAnswerEvent, classifyRemote, compareVersions, parseRemoteRequest, readRemoteRequest, RemoteEvent, RemoteExit, RemoteReply, RemoteRequestV1, RemoteRequestV2, RemoteUpgrade, RemoteWithheld, UPGRADE_TAG } from "../src/index.ts";
+import { BoardAnswerEvent, BoardNoticeEvent, classifyRemote, compareVersions, parseRemoteRequest, readRemoteRequest, RemoteEvent, RemoteExit, RemoteReply, RemoteRequestV1, RemoteRequestV2, RemoteUpgrade, RemoteWithheld, UPGRADE_TAG } from "../src/index.ts";
 import * as rc41 from "./fixtures/remote-rc41.ts";
 
 // The wire between supervisors (ADR 0007 §2, §9).
@@ -276,5 +276,24 @@ describe("an answer's event (ADR 0009 §3; BOB-111 AC2)", () => {
     expect(readRemoteRequest(JSON.stringify(ANSWER))).toBeNull();
     expect(RemoteEvent.safeParse(ANSWER).success).toBe(false);
     expect(rc41.RemoteEvent.safeParse(ANSWER).success).toBe(false);
+  });
+});
+
+describe("a board notice's event (ADR 0011 §4; BOB-49)", () => {
+  const NOTICE = {
+    v: 2, event: "board_notice", seq: 6001, project: "bobnet", ref: "BOB-27", kind: "fix_landed", to: ["Peach@mbp-1"], lead: "Mario@mbp-1", asked_by: "Peach@mbp-1",
+    text: "BOB-27's fix landed: 5d4617f", at: "2026-11-15T16:11:00Z",
+  };
+  it("parses §4's object, loosely, in each kind", () => {
+    expect(BoardNoticeEvent.parse({ ...NOTICE, extra: 1 })).toEqual({ ...NOTICE, extra: 1 });
+    for (const kind of ["fix_landed", "fix_released", "stale"]) expect(BoardNoticeEvent.safeParse({ ...NOTICE, kind }).success).toBe(true);
+    expect(BoardNoticeEvent.safeParse({ ...NOTICE, to: [], lead: null, asked_by: null }).success).toBe(true);
+    for (const bad of [{ kind: "answered" }, { event: "answer" }, { v: 1 }, { text: undefined }, { to: "Peach@mbp-1" }])
+      expect(BoardNoticeEvent.safeParse({ ...NOTICE, ...bad }).success).toBe(false);
+  });
+  it("is an event, never a request, and no RemoteEvent", () => {
+    expect(classifyRemote(JSON.stringify(NOTICE))?.kind).toBe("event");
+    expect(readRemoteRequest(JSON.stringify(NOTICE))).toBeNull();
+    expect(RemoteEvent.safeParse(NOTICE).success).toBe(false);
   });
 });

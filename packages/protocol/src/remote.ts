@@ -140,6 +140,29 @@ export const BoardAnswerEvent = z.looseObject({
 });
 export type BoardAnswerEvent = z.infer<typeof BoardAnswerEvent>;
 
+/** What a board notice other than an answer says (ADR 0011 §4): a bug's fix landed or was released, or a row went stale. */
+export const BOARD_NOTICE_KINDS = ["fix_landed", "fix_released", "stale"] as const;
+
+/**
+ * A board notice (ADR 0011 §4): from the board (`BobNet@board`), to the supervisor that runs its
+ * project, which forwards `text` to its orchestrator as it does an answer. `to`: whom the text went to;
+ * `asked_by`: the row's owner. An older supervisor drops it as an unknown event.
+ */
+export const BoardNoticeEvent = z.looseObject({
+  v,
+  event: z.literal("board_notice"),
+  seq: z.number().int(),
+  project: z.string().min(1),
+  ref: z.string().min(1),
+  kind: z.enum(BOARD_NOTICE_KINDS),
+  to: z.array(z.string()),
+  lead: z.string().nullable(),
+  asked_by: z.string().nullable(),
+  text: z.string(),
+  at: z.string(),
+});
+export type BoardNoticeEvent = z.infer<typeof BoardNoticeEvent>;
+
 /** The states that end a worker, as an `exit` says them. */
 export const EXIT_STATES = ["done", "failed", "stopped"] as const;
 

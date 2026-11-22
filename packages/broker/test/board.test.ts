@@ -1181,7 +1181,7 @@ describe("answer notices (ADR 0009 §1, §3; BOB-111 AC1, AC3)", () => {
     const { t1, session } = await asking();
     const { seq } = await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a", words: "Bars, thin" });
     const n = (await noticeOf(seq))!;
-    expect(n).toMatchObject({ project: "helix", question: "Q-1", state: "answered", to: ["Picard@mbp-1"], except: null });
+    expect(n).toMatchObject({ project: "helix", kind: "answer", subject: "Q-1", state: "answered", to: ["Picard@mbp-1"], except: null });
     expect(n.text).toContain(`Holds: ${t1}; session ${session.feature} build 1`);
     expect(n.text).toContain(`Still held by: Q-2 (session ${session.feature} build 1)`);
     expect(n.notice).toEqual({

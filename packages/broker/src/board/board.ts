@@ -11,7 +11,7 @@ import { BoardStore, type NoticeRow } from "./store.ts";
  * on its own and its reads don't queue messages. Only the broker calls it, with
  * the caller it verified; it answers the result and what changed. An answer's
  * messages are notice rows in its transaction, which the broker drains and sends
- * (ADR 0009 §1).
+ * (ADR 0009 §1), as are a fix's and a stale row's (ADR 0011 §4).
  */
 export class Board extends DurableObject<Env> {
   private readonly store: BoardStore;
@@ -61,6 +61,14 @@ export class Board extends DurableObject<Env> {
   /** Marks notices taken once the broker has stored their messages; taken ones go after 30 days. */
   async noticesTaken(seqs: number[]): Promise<void> {
     this.ctx.storage.transactionSync(() => this.store.noticesTaken(seqs));
+  }
+
+  /**
+   * Tells the owners of rows a day unchanged on Waits, once a day each, as notices for the broker to
+   * drain (ADR 0011 §2); the alarm calls it hourly. The rows flagged, and those with no owner to tell.
+   */
+  async flagStale(): Promise<ReturnType<BoardStore["flagStale"]>> {
+    return this.ctx.storage.transactionSync(() => this.store.flagStale());
   }
 
   /** Runs one operation, answering a refusal or a bug as a reply. */

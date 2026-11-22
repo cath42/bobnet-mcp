@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BoardOp, ClientFrame, ItemRef, PeerAddress, type WaitRecord } from "../src/index.ts";
+import { BoardOp, ClientFrame, ItemRef, PeerAddress, SUPERVISOR_OPS, type WaitRecord } from "../src/index.ts";
 
 describe("BoardOp", () => {
   it("parses an item's create with its criteria, defaulting each to an acceptance criterion", () => {
@@ -129,5 +129,34 @@ describe("edit_question (BOB-119)", () => {
     expect(edit({ state: "open" }).success).toBe(false);
     expect(edit({ text: " " }).success).toBe(false);
     expect(BoardOp.safeParse({ op: "edit_question", project: "helix", ref: "LAND-1", set: {} }).success).toBe(false);
+  });
+});
+
+describe("Waits is never stale (ADR 0011; BOB-49)", () => {
+  const SHA = "5d4617f4bed3884d73deb1a9cc71e1ed366215f4";
+  const push = { op: "push", project: "bobnet", repo: "cath42/bobnet", branch: "v2", sha: SHA };
+
+  it("parses a push without fixes, as an older supervisor sends it, and with them", () => {
+    expect(BoardOp.parse(push)).toEqual(push);
+    const fixes = [{ ref: "BOB-27", sha: SHA, subject: "v2: BOB-27: board reports no longer stall behind a row the protocol won't take" }];
+    expect(BoardOp.parse({ ...push, fixes })).toEqual({ ...push, fixes });
+  });
+
+  it("refuses a fix with a short sha, a long subject, a bad ref, or more than 20", () => {
+    const fix = { ref: "BOB-27", sha: SHA, subject: "x" };
+    for (const bad of [{ sha: SHA.slice(0, 7) }, { subject: "x".repeat(201) }, { ref: "bob-27" }])
+      expect(BoardOp.safeParse({ ...push, fixes: [{ ...fix, ...bad }] }).success).toBe(false);
+    expect(BoardOp.safeParse({ ...push, fixes: Array.from({ length: 21 }, () => fix) }).success).toBe(false);
+  });
+
+  it("parses release_tag with or without its project, keep and withdraw with a reason", () => {
+    expect(BoardOp.parse({ op: "release_tag", repo: "cath42/bobnet", tag: "v2.0.0-rc.34", sha: SHA })).toMatchObject({ op: "release_tag", tag: "v2.0.0-rc.34" });
+    expect(BoardOp.safeParse({ op: "release_tag", repo: "cath42/bobnet", tag: "x".repeat(101), sha: SHA }).success).toBe(false);
+    expect(BoardOp.parse({ op: "keep", project: "helix", ref: "Q-14", reason: "Still open upstream" })).toMatchObject({ ref: "Q-14" });
+    expect(BoardOp.parse({ op: "keep", project: "helix", ref: "LAND-56", reason: "Casper reviews it Monday" })).toMatchObject({ ref: "LAND-56" });
+    expect(BoardOp.safeParse({ op: "keep", project: "helix", ref: "Q-14", reason: " " }).success).toBe(false);
+    expect(BoardOp.parse({ op: "withdraw", project: "helix", ref: "A-3", reason: "Moot" })).toMatchObject({ op: "withdraw" });
+    expect(BoardOp.safeParse({ op: "withdraw", project: "helix", ref: "LAND-56", reason: "Moot" }).success).toBe(false);
+    expect(SUPERVISOR_OPS).toContain("release_tag");
   });
 });

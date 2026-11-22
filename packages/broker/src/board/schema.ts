@@ -432,4 +432,60 @@ export const BOARD_MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX notices_untaken ON notices (seq) WHERE taken_at IS NULL;
   `,
+  // 7: Waits is never stale (ADR 0011). A landed fix marks its bug (`bug_fixes`), a release tag the
+  // upgrade verified fills its release (`release_tags`), and a row a day unchanged is flagged to its
+  // owner once a day (`wait_flags`, not board data: never exported, never read by an operation).
+  // `notices` is made again (§4, ADR 0010's shape): `question` is `subject`, with a `kind`.
+  `
+  CREATE TABLE release_tags (
+    pk      INTEGER PRIMARY KEY,
+    project INTEGER NOT NULL REFERENCES projects (pk),
+    repo    TEXT NOT NULL,
+    tag     TEXT NOT NULL,
+    sha     TEXT NOT NULL,
+    push    INTEGER REFERENCES pushes (pk),        -- the tag's own push; NULL: never pushed, marks nothing
+    at      TEXT NOT NULL,
+    UNIQUE (repo, tag)
+  );
+
+  CREATE TABLE bug_fixes (
+    pk      INTEGER PRIMARY KEY,
+    project INTEGER NOT NULL REFERENCES projects (pk),
+    item    INTEGER NOT NULL REFERENCES items (pk),
+    sha     TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    push    INTEGER NOT NULL REFERENCES pushes (pk),
+    release TEXT,                                  -- the first release tag at or after its push
+    at      TEXT NOT NULL,
+    UNIQUE (item, sha)
+  );
+  CREATE INDEX bug_fixes_unreleased ON bug_fixes (project, push) WHERE release IS NULL;
+
+  CREATE TABLE wait_flags (
+    project    INTEGER NOT NULL REFERENCES projects (pk),
+    ref        TEXT NOT NULL,
+    owner      TEXT,
+    changed_at TEXT NOT NULL,
+    flagged_at TEXT NOT NULL,
+    PRIMARY KEY (project, ref)
+  );
+
+  CREATE TABLE notices_new (
+    seq      INTEGER PRIMARY KEY,
+    project  TEXT NOT NULL,
+    kind     TEXT NOT NULL CHECK (kind IN ('answer', 'fix', 'stale')),
+    subject  TEXT NOT NULL,                       -- the question's or the item's ref
+    state    TEXT NOT NULL CHECK (state IN ('answered', 'done', 'withdrawn', 'fix_landed', 'fix_released', 'stale')),
+    to_json  TEXT NOT NULL,
+    "except" TEXT,
+    text     TEXT NOT NULL,
+    notice   TEXT NOT NULL,
+    taken_at TEXT
+  );
+  INSERT INTO notices_new (seq, project, kind, subject, state, to_json, "except", text, notice, taken_at)
+  SELECT seq, project, 'answer', question, state, to_json, "except", text, notice, taken_at FROM notices;
+  DROP TABLE notices;
+  ALTER TABLE notices_new RENAME TO notices;
+  CREATE INDEX notices_untaken ON notices (seq) WHERE taken_at IS NULL;
+  `,
 ];

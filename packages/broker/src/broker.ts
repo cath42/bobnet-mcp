@@ -864,7 +864,10 @@ export class Broker extends DurableObject<Env> {
     );
   }
 
-  /** Drops expired messages, long-gone peers and old audit rows, and sends any notice a drain left (ADR 0009 §1). */
+  /**
+   * Drops expired messages, long-gone peers and old audit rows, has the board flag rows a day unchanged
+   * on Waits (ADR 0011 §2), and sends their notices and any a drain left (ADR 0009 §1).
+   */
   override async alarm(): Promise<void> {
     const now = Date.now();
     const iso = new Date(now).toISOString();
@@ -876,8 +879,19 @@ export class Broker extends DurableObject<Env> {
     this.sql.exec("DELETE FROM audit WHERE ts <= ?", new Date(now - AUDIT_RETENTION_MS).toISOString());
     this.sql.exec("DELETE FROM updates WHERE at <= ?", new Date(now - UPDATE_RETENTION_MS).toISOString());
     await this.ctx.storage.setAlarm(now + SWEEP_INTERVAL_MS);
+    await this.flagStale();
     // After the sweep's alarm, so a drain that fails brings it forward.
     await this.drainSafely();
+  }
+
+  /** The board's stale rule (ADR 0011 §2): its notices are drained next; a row with no owner to tell is audited. */
+  private async flagStale(): Promise<void> {
+    try {
+      const { no_owner } = await this.env.BOARD.getByName(BOARD).flagStale();
+      for (const w of no_owner) this.auditAs("board", "wait:no_owner", w);
+    } catch (err) {
+      this.auditAs("board", "wait:flag_failed", { err: err instanceof Error ? err.message : String(err) });
+    }
   }
 }
 

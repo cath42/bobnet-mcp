@@ -5,6 +5,7 @@ import {
   type BoardCaller,
   type BoardCtx,
   type BoardAnswerEvent,
+  type BoardNoticeEvent,
   type BoardEvent,
   type BoardOp,
   type BoardReadName,
@@ -33,6 +34,7 @@ import {
   type StatusStuckRun,
   type WaitRecord,
   type TokenTotals,
+  BOARD_SENDER,
   parseRecipient,
 } from "@bobnet/protocol";
 import { BoardError } from "./errors.ts";
@@ -55,6 +57,10 @@ const OP_KEY_MS = 24 * 60 * 60 * 1000;
 const NOTICE_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 /** The broker drains this many notices at most per call. */
 export const NOTICE_BATCH = 50;
+/** A wait unchanged on its own record for longer than this is stale; its owner is told again after as long (ADR 0011 §2). */
+export const STALE_MS = 24 * 60 * 60 * 1000;
+/** How much of a commit's subject a fix's notice quotes. */
+const SUBJECT_CLIP = 80;
 /** The status read (ADR 0005 §2): its longest span, its lists' cap, when quiet turns stuck (Peach's default). */
 const SPAN_MAX_MS = 31 * 24 * 60 * 60 * 1000;
 const STATUS_MAX = 100;
@@ -118,7 +124,11 @@ export interface CiCaller {
   /** The supervisor whose gh adapter reported it, as `<name>@<laptop>`; absent from POST /v1/runs. */
   via?: string;
 }
-type Caller = BoardCaller | CiCaller;
+/** The board itself, writing what no caller asked for: a stale row's flag (ADR 0011 §2). */
+interface BoardSelf {
+  kind: "board";
+}
+type Caller = BoardCaller | CiCaller | BoardSelf;
 
 /** The source a supervisor's gh adapter reports as, whatever its message says (§10). */
 const GH_SOURCE = "github-actions";
@@ -270,7 +280,11 @@ const ORDERED = "ORDER BY i.ord IS NULL, i.ord, i.pk";
 export class BoardStore {
   private readonly rules: Rules;
 
-  constructor(private readonly sql: SqlStorage) {
+  /** `now`: the board's clock, which a write's time, Waits' ages and the stale rule read (ADR 0011 §2). */
+  constructor(
+    private readonly sql: SqlStorage,
+    private readonly now: () => number = () => Date.now(),
+  ) {
     this.rules = new Rules(sql);
   }
 
@@ -501,7 +515,8 @@ export class BoardStore {
   /**
    * One project's waits, oldest first: open questions and actions with the sessions closed on them,
    * items In Review with a Casper gate unticked, and backlog bugs that block use. The one definition
-   * of a wait and of `blocking`, which Waits and the overview both read.
+   * of a wait and of `blocking`, which Waits and the overview both read. A bug whose fix landed waits
+   * on its PO, not on Casper; a row a day unchanged is stale, and its owner is told (ADR 0011).
    */
   private waitsOf(p: ProjectRow): WaitRecord[] {
     const waits: WaitRecord[] = [];
@@ -529,6 +544,8 @@ export class BoardStore {
         since: q.created_at,
         blocking: q.holds.length > 0 || q.holds_sessions.length > 0 || waiting.length > 0,
         edits: this.questionEdits(pk),
+        fix: null,
+        ...this.aging(p, "questions", pk, q.ref, q.created_at, agentAddress(q.asked_by)),
       });
     }
     const gated = this.sql
@@ -548,15 +565,45 @@ export class BoardStore {
           row.pk,
         )
         .one().at;
-      waits.push({ ...this.itemWait(p, row, "review_gate"), holds: { items: [ref], sessions: [] }, asked_by: null, since: since ?? row.updated_at });
+      const wait = { ...this.itemWait(p, row, "review_gate"), holds: { items: [ref], sessions: [] }, asked_by: null, since: since ?? row.updated_at };
+      waits.push({ ...wait, ...this.aging(p, "items", row.pk, ref, wait.since, poOf(p)) });
     }
     const bugs = this.sql
       .exec<ItemRow>("SELECT * FROM items WHERE project = ? AND kind = 'backlog' AND type = 'bug' AND blocks_use = 1 AND archived_at IS NULL AND status != 'Done' ORDER BY pk", p.pk)
       .toArray();
     for (const row of bugs) {
-      waits.push({ ...this.itemWait(p, row, "bug"), feature: row.found_in === null ? null : this.refOf(row.found_in), asked_by: row.captured_by, since: row.created_at });
+      const wait = { ...this.itemWait(p, row, "bug"), feature: row.found_in === null ? null : this.refOf(row.found_in), asked_by: row.captured_by, since: row.created_at };
+      const fix = this.fixOf(row.pk);
+      waits.push({ ...wait, blocking: fix === null, fix, ...this.aging(p, "items", row.pk, wait.ref, wait.since, poOf(p)) });
     }
     return waits.sort(oldestFirst);
+  }
+
+  /**
+   * How long a wait's own record has gone unchanged (ADR 0011 §2): the newest event on it, else
+   * `since`. Stale past a day, with its owner and when they were told since that change; `kept`, when
+   * that newest event is its owner's keep.
+   */
+  private aging(p: ProjectRow, table: "questions" | "items", pk: number, ref: string, since: string, owner: string | null): Required<Pick<WaitRecord, "stale" | "kept">> {
+    const last = this.sql.exec<{ seq: number; at: string; op: string; actor: string }>("SELECT seq, at, op, actor FROM events WHERE tbl = ? AND pk = ? ORDER BY seq DESC LIMIT 1", table, pk).toArray()[0];
+    const changed = last?.at ?? since;
+    const kept = last?.op === "keep" ? { by: last.actor, at: last.at, reason: this.changesOf(last.seq).get("kept")?.new ?? "" } : null;
+    if (this.now() - Date.parse(changed) <= STALE_MS) return { stale: null, kept };
+    const flag = this.sql.exec<{ flagged_at: string }>("SELECT flagged_at FROM wait_flags WHERE project = ? AND ref = ?", p.pk, ref).toArray()[0];
+    return { stale: { changed_at: changed, owner, flagged_at: flag && flag.flagged_at >= changed ? flag.flagged_at : null }, kept };
+  }
+
+  /** A bug's latest landed fix (ADR 0011 §3), and whether its repo has ever reported a release tag. */
+  private fixOf(item: number): NonNullable<WaitRecord["fix"]> | null {
+    const f = this.sql
+      .exec<{ sha: string; subject: string; at: string; release: string | null; repo: string }>(
+        "SELECT f.sha, f.subject, f.at, f.release, u.repo FROM bug_fixes f JOIN pushes u ON u.pk = f.push WHERE f.item = ? ORDER BY f.pk DESC LIMIT 1",
+        item,
+      )
+      .toArray()[0];
+    if (!f) return null;
+    const tags = this.sql.exec("SELECT 1 FROM release_tags WHERE lower(repo) = lower(?) LIMIT 1", f.repo).toArray().length > 0;
+    return { sha: f.sha, subject: f.subject, landed_at: f.at, release: f.release, tags_known: tags };
   }
 
   private itemWait(p: ProjectRow, row: ItemRow, kind: "review_gate" | "bug"): WaitRecord {
@@ -575,6 +622,9 @@ export class BoardStore {
       since: row.created_at,
       blocking: true,
       edits: [],
+      fix: null,
+      stale: null,
+      kept: null,
     };
   }
 
@@ -1034,7 +1084,7 @@ export class BoardStore {
     op: Exclude<BoardOp, Op<BoardReadName>>,
   ): { result: Written; changed: { project: string; seq: number; refs: string[] } | null } {
     if (op.op === "ci_run") return this.ciRun(GH_SOURCE, ghRun(caller, op), whoOf(caller));
-    const tx = new Tx(this.sql, caller);
+    const tx = new Tx(this.sql, caller, this.now);
     const result = this.apply(tx, op);
     if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null };
     return { result, changed: { project: tx.projectKey ?? "*", seq: tx.seqs.at(-1)!, refs: [...tx.refs] } };
@@ -1042,7 +1092,7 @@ export class BoardStore {
 
   /** A CI system's report of one run (§10), from POST /v1/runs: the source is its token's. */
   ciRun(source: string, op: Op<"ci_run">, via?: string): { result: BoardResults["ci_run"]; changed: { project: string; seq: number; refs: string[] } | null } {
-    const tx = new Tx<Caller>(this.sql, via === undefined ? { kind: "ci", source } : { kind: "ci", source, via });
+    const tx = new Tx<Caller>(this.sql, via === undefined ? { kind: "ci", source } : { kind: "ci", source, via }, this.now);
     const result = this.reportCi(tx, source, op);
     if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null };
     return { result, changed: { project: tx.projectKey!, seq: tx.seqs.at(-1)!, refs: [...tx.refs] } };
@@ -1124,6 +1174,12 @@ export class BoardStore {
         return this.runEnd(tx, op);
       case "push":
         return this.push(tx, op);
+      case "release_tag":
+        return this.releaseTag(tx, op);
+      case "keep":
+        return this.keep(tx, op);
+      case "withdraw":
+        return this.withdraw(tx, op);
       case "slot_run":
         return this.slotRun(tx, op);
       case "ci_run":
@@ -1955,6 +2011,43 @@ export class BoardStore {
   }
 
   /** Casper's answer given in conversation, recorded by the lead or PO (§7): write-once, his words verbatim. */
+  /**
+   * A row on Waits is still current (ADR 0011 §2): an event on its record with the owner's why, so
+   * its day starts again and Waits shows it kept. A question's or action's asker or a `questions`
+   * holder, while it is open; for an item, whoever may set its status.
+   */
+  private keep(tx: Tx, op: Op<"keep">): BoardWritten {
+    const p = tx.project(this.project(op.project));
+    const kept: Change[] = [["kept", null, op.reason]];
+    if (/^[QA]-\d+$/.test(op.ref)) {
+      const q = this.question(p, op.ref);
+      this.askerOr(tx, p, q, "keep");
+      if (q.state !== "open") throw new BoardError("conflict", `${q.ref} is ${q.state}: only an open one waits, so only it is kept`);
+      return { ref: q.ref, seq: tx.event("keep", "questions", q.pk, q.ref, kept) };
+    }
+    const row = this.item(p, op.ref);
+    const ref = this.refOf(row.pk);
+    this.rules.require(tx.caller, p, "status", this.scope(row), ref);
+    return { ref, seq: tx.event("keep", "items", row.pk, ref, kept) };
+  }
+
+  /** A moot question or action is withdrawn (ADR 0011 §2): it leaves Waits and holds nothing. Its asker or a `questions` holder; nobody is told. */
+  private withdraw(tx: Tx, op: Op<"withdraw">): BoardWritten {
+    const p = tx.project(this.project(op.project));
+    const q = this.question(p, op.ref);
+    this.askerOr(tx, p, q, "withdraw");
+    // The open check is in the UPDATE: an answer that landed first wins.
+    const done = this.sql.exec("UPDATE questions SET state = 'withdrawn' WHERE pk = ? AND state = 'open' RETURNING pk", q.pk).toArray();
+    if (done.length === 0) throw new BoardError("conflict", `${q.ref} is ${this.questionRow(q.pk).state} already: only an open one is withdrawn`);
+    return { ref: q.ref, seq: tx.event("withdraw", "questions", q.pk, q.ref, [["state", "open", "withdrawn"]], op.reason) };
+  }
+
+  /** Refuses anyone but a question's asker or a `questions` holder. */
+  private askerOr(tx: Tx, p: ProjectRow, q: QuestionRow, what: string): void {
+    if (q.asked_by.toLowerCase() === tx.who.toLowerCase() || this.rules.hasFlag(tx.caller, p, "questions")) return;
+    throw new BoardError("forbidden", `${tx.caller.kind === "owner" ? tx.who : tx.caller.name} may not ${what} ${q.ref} in ${p.key}; its asker, ${q.asked_by}, or a holder of questions may`);
+  }
+
   private recordAnswer(tx: Tx, op: Op<"record_answer">): BoardWritten & BoardTold {
     const p = tx.project(this.project(op.project));
     this.rules.requireFlag(tx.caller, p, "questions");
@@ -2149,8 +2242,7 @@ export class BoardStore {
   private notify(tx: Tx, p: ProjectRow, q: QuestionRow, seq: number, said: Said, lines: string[], except?: BoardCaller): string[] {
     const to = new Map<string, string>();
     const skip = except?.kind === "agent" ? addressKey({ name: except.name, laptop: except.laptop }) : null;
-    // asked_by is an email when the owner asked: not an address, and he knows.
-    const address = (raw: string | null) => (raw?.includes("@") && parseRecipient(raw, "") ? raw : null);
+    const address = agentAddress;
     for (const raw of [p.lead, q.asked_by]) {
       const addr = address(raw) === null ? null : parseRecipient(raw!, "");
       if (addr && addressKey(addr) !== skip && !to.has(addressKey(addr))) to.set(addressKey(addr), raw!);
@@ -2201,7 +2293,7 @@ export class BoardStore {
       at: tx.at,
     };
     this.sql.exec(
-      `INSERT INTO notices (seq, project, question, state, to_json, "except", text, notice) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO notices (seq, project, kind, subject, state, to_json, "except", text, notice) VALUES (?, ?, 'answer', ?, ?, ?, ?, ?, ?)`,
       seq,
       p.key,
       q.ref,
@@ -2219,12 +2311,85 @@ export class BoardStore {
   /** The notices the broker hasn't taken yet, oldest first, a batch at most. */
   notices(): NoticeRow[] {
     return this.sql
-      .exec<{ seq: number; project: string; question: string; state: NoticeRow["state"]; to_json: string; except: string | null; text: string; notice: string }>(
-        `SELECT seq, project, question, state, to_json, "except", text, notice FROM notices WHERE taken_at IS NULL ORDER BY seq LIMIT ?`,
+      .exec<{ seq: number; project: string; kind: NoticeRow["kind"]; subject: string; state: NoticeRow["state"]; to_json: string; except: string | null; text: string; notice: string }>(
+        `SELECT seq, project, kind, subject, state, to_json, "except", text, notice FROM notices WHERE taken_at IS NULL ORDER BY seq LIMIT ?`,
         NOTICE_BATCH,
       )
       .toArray()
-      .map((n) => ({ seq: n.seq, project: n.project, question: n.question, state: n.state, to: JSON.parse(n.to_json) as string[], except: n.except, text: n.text, notice: JSON.parse(n.notice) as BoardAnswerEvent }));
+      .map((n) => ({
+        seq: n.seq,
+        project: n.project,
+        kind: n.kind,
+        subject: n.subject,
+        state: n.state,
+        to: JSON.parse(n.to_json) as string[],
+        except: n.except,
+        text: n.text,
+        notice: JSON.parse(n.notice) as NoticeRow["notice"],
+      }));
+  }
+
+  /**
+   * A notice that isn't an answer's (ADR 0011 §4): its text to the row's owner, if any, and its JSON
+   * to the project's supervisor, which forwards it to its orchestrator. `seq` is its event's.
+   */
+  private boardNotice(tx: Tx<Caller>, p: ProjectRow, seq: number, kind: "fix" | "stale", state: BoardNoticeEvent["kind"], ref: string, owner: string | null, text: string): void {
+    const to = owner === null ? [] : [owner];
+    const notice: BoardNoticeEvent = { v: 2, event: "board_notice", seq, project: p.key, ref, kind: state, to, lead: agentAddress(p.lead), asked_by: owner, text, at: tx.at };
+    this.sql.exec(
+      `INSERT INTO notices (seq, project, kind, subject, state, to_json, "except", text, notice) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      seq,
+      p.key,
+      kind,
+      ref,
+      state,
+      JSON.stringify(to),
+      text,
+      JSON.stringify(notice),
+    );
+  }
+
+  /**
+   * Tells each stale row's owner, once a day (ADR 0011 §2). A row is due with no flag yet, a change
+   * since its flag, or a day since it. Its notice goes under an event on the project's record (one on
+   * the row's own would restart its day). A row with no owner is flagged and returned, for the
+   * broker's audit, and nothing is sent. Flags whose row has left Waits go.
+   */
+  flagStale(): { flagged: Array<{ project: string; ref: string; owner: string; seq: number }>; no_owner: Array<{ project: string; ref: string }> } {
+    const now = this.now();
+    const out: ReturnType<BoardStore["flagStale"]> = { flagged: [], no_owner: [] };
+    for (const p of this.sql.exec<ProjectRow>("SELECT * FROM projects ORDER BY key").toArray()) {
+      const waits = this.waitsOf(p);
+      for (const w of waits) {
+        const stale = w.stale;
+        if (!stale) continue;
+        const flag = this.sql.exec<{ flagged_at: string }>("SELECT flagged_at FROM wait_flags WHERE project = ? AND ref = ?", p.pk, w.ref).toArray()[0];
+        if (flag && flag.flagged_at >= stale.changed_at && Date.parse(flag.flagged_at) + STALE_MS > now) continue;
+        const tx = new Tx<Caller>(this.sql, { kind: "board" }, this.now);
+        tx.project(p);
+        this.sql.exec(
+          `INSERT INTO wait_flags (project, ref, owner, changed_at, flagged_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (project, ref) DO UPDATE SET owner = excluded.owner, changed_at = excluded.changed_at, flagged_at = excluded.flagged_at`,
+          p.pk,
+          w.ref,
+          stale.owner,
+          stale.changed_at,
+          tx.at,
+        );
+        if (stale.owner === null) {
+          out.no_owner.push({ project: p.key, ref: w.ref });
+          continue;
+        }
+        const hours = Math.floor((now - Date.parse(stale.changed_at)) / 3_600_000);
+        const text = `${w.ref} (${p.key}) has waited on Casper for ${hours} h unchanged since ${minuteShown(stale.changed_at)}. If it is still current, keep it (board_write keep, with why); if not, edit it, withdraw it, or move it.`;
+        const seq = tx.event("flag_stale", "projects", p.pk, w.ref, [["stale", null, stale.owner]], `unchanged since ${stale.changed_at}`);
+        this.boardNotice(tx, p, seq, "stale", "stale", w.ref, stale.owner, text);
+        out.flagged.push({ project: p.key, ref: w.ref, owner: stale.owner, seq });
+      }
+      const refs = waits.map((w) => w.ref);
+      this.sql.exec(`DELETE FROM wait_flags WHERE project = ? AND ref NOT IN (${refs.map(() => "?").join(", ")})`, p.pk, ...refs);
+    }
+    return out;
   }
 
   /** Marks notices taken, once stored by the broker, and forgets those taken over 30 days ago. */
@@ -2341,12 +2506,15 @@ export class BoardStore {
     return { ref: op.id, seq: tx.event("run_end", "runs", run.pk, op.id, changes) };
   }
 
-  /** What a land pushed (§10), once per (repo, sha). */
-  private push(tx: Tx, op: Op<"push">): BoardWritten {
+  /**
+   * What a land pushed (§10), once per (repo, sha). Its `fixes` mark the project's open bugs (ADR 0011
+   * §1), each with an event on the bug and a notice to the PO; any other ref is listed as ignored.
+   */
+  private push(tx: Tx, op: Op<"push">): BoardWritten & { fixed: string[]; fixes_ignored: string[] } {
     const p = tx.project(this.project(op.project));
     const ctx = supervisorOp(tx.caller, op);
     const ref = `${op.repo}@${op.sha.slice(0, 12)}`;
-    if (this.sql.exec("SELECT 1 FROM pushes WHERE repo = ? AND sha = ?", op.repo, op.sha).toArray().length > 0) return { ref, seq: 0 };
+    if (this.sql.exec("SELECT 1 FROM pushes WHERE repo = ? AND sha = ?", op.repo, op.sha).toArray().length > 0) return { ref, seq: 0, fixed: [], fixes_ignored: [] };
     // The worker who landed it, and so its run, session and tasks (§10).
     const run = this.workerRun(p, ctx.worker);
     const pk = this.sql
@@ -2361,8 +2529,29 @@ export class BoardStore {
         tx.at,
       )
       .one().pk;
+    // A bug of this project's, by any id it has had, open and not archived; else ignored.
+    const fixes: Array<{ row: ItemRow; ref: string; sha: string; subject: string }> = [];
+    const ignored = new Set<string>();
+    for (const f of op.fixes ?? []) {
+      const row = this.sql.exec<ItemRow>("SELECT i.* FROM item_refs r JOIN items i ON i.pk = r.item WHERE r.project = ? AND r.ref = ?", p.pk, f.ref).toArray()[0];
+      if (!row || row.type !== "bug" || row.archived_at !== null || row.status === "Done") ignored.add(f.ref);
+      else fixes.push({ row, ref: this.refOf(row.pk), sha: f.sha, subject: f.subject });
+    }
     const changes: Change[] = [["repo", null, op.repo], ["branch", null, op.branch], ["sha", null, op.sha], ["worker", null, ctx.worker], ["run", null, run?.id]];
+    if (ignored.size > 0) changes.push(["fixes_ignored", null, [...ignored].join(", ")]);
     const seq = tx.event("push", "pushes", pk, ref, changes);
+    const fixed: string[] = [];
+    const by = run ? `${run.agent}@${run.laptop}` : ctx.worker;
+    const po = poOf(p);
+    for (const f of fixes) {
+      if (this.sql.exec("SELECT 1 FROM bug_fixes WHERE item = ? AND sha = ?", f.row.pk, f.sha).toArray().length > 0) continue;
+      this.sql.exec("INSERT INTO bug_fixes (project, item, sha, subject, push, at) VALUES (?, ?, ?, ?, ?, ?)", p.pk, f.row.pk, f.sha, f.subject, pk, tx.at);
+      const fixSeq = tx.event("push", "items", f.row.pk, f.ref, [["fix", null, f.sha]]);
+      const subject = f.subject.length > SUBJECT_CLIP ? `${f.subject.slice(0, SUBJECT_CLIP - 1)}…` : f.subject;
+      const text = `${f.ref}'s fix landed: ${f.sha.slice(0, 7)} "${subject}", by ${by}. Check it and close ${f.ref}: tick its criterion with the commit as evidence, then move it to Done.`;
+      this.boardNotice(tx, p, fixSeq, "fix", "fix_landed", f.ref, po, text);
+      fixed.push(f.ref);
+    }
     // A CI run on this commit that reported before the push ties now.
     const untied = this.sql
       .exec<{ pk: number; source: string; external_id: string }>(
@@ -2376,7 +2565,52 @@ export class BoardStore {
       const worker = this.tieCi(p, c.pk, op.repo, op.sha);
       tx.event("push", "ci_runs", c.pk, `${c.source} ${c.external_id}`, [["worker", null, worker]]);
     }
-    return { ref, seq };
+    return { ref, seq, fixed, fixes_ignored: [...ignored] };
+  }
+
+  /**
+   * A release tag the supervisor's upgrade verified (ADR 0011 §1), once per (repo, tag): the fixes
+   * landed in its repo and branch up to its push are in it, and the PO hears of those still open. A
+   * tag whose sha was never pushed is stored and marks nothing. A supervisor's, ctx-less like a CI run.
+   */
+  private releaseTag(tx: Tx, op: Op<"release_tag">): BoardWritten & { released: string[] } {
+    const caller = tx.caller;
+    if (caller.kind !== "agent" || !caller.supervisor) throw new BoardError("forbidden", "A release tag is reported by a supervisor's upgrade, over its own connection");
+    const p = tx.project(op.project !== undefined ? this.project(op.project) : this.projectOfRepo(op.repo));
+    if (!(caller.serves ?? []).includes(p.key)) {
+      throw new BoardError("forbidden", `${caller.laptop}'s supervisor didn't register ${p.key} as a project it serves on the board, so it reports none of its release tags`);
+    }
+    const ref = `${op.repo}@${op.tag}`;
+    const none = { ref, seq: 0, released: [] };
+    if (this.sql.exec("SELECT 1 FROM release_tags WHERE lower(repo) = lower(?) AND tag = ?", op.repo, op.tag).toArray().length > 0) return none;
+    const push = this.sql
+      .exec<{ pk: number; repo: string; branch: string }>("SELECT pk, repo, branch FROM pushes WHERE project = ? AND lower(repo) = lower(?) AND sha = ?", p.pk, op.repo, op.sha)
+      .toArray()[0];
+    this.sql.exec("INSERT INTO release_tags (project, repo, tag, sha, push, at) VALUES (?, ?, ?, ?, ?, ?)", p.pk, op.repo, op.tag, op.sha, push?.pk ?? null, tx.at);
+    if (!push) return none;
+    const seq = tx.event("release_tag", "pushes", push.pk, `${push.repo}@${op.sha.slice(0, 12)}`, [["tag", null, op.tag]]);
+    // Lands into one branch are serialised by the run slot, so push order is the branch's order.
+    const marked = this.sql
+      .exec<{ item: number; sha: string }>(
+        `UPDATE bug_fixes SET release = ? WHERE project = ? AND release IS NULL
+           AND push IN (SELECT pk FROM pushes WHERE project = ? AND lower(repo) = lower(?) AND branch = ? AND pk <= ?)
+         RETURNING item, sha`,
+        op.tag,
+        p.pk,
+        p.pk,
+        push.repo,
+        push.branch,
+        push.pk,
+      )
+      .toArray()
+      .sort((a, b) => a.item - b.item);
+    const released = [...new Set(marked.map((m) => this.refOf(m.item)))];
+    const open = marked.filter((m) => this.sql.exec("SELECT 1 FROM items WHERE pk = ? AND status != 'Done' AND archived_at IS NULL", m.item).toArray().length > 0);
+    if (open.length > 0) {
+      const text = open.map((m) => `${this.refOf(m.item)}'s fix ${m.sha.slice(0, 7)} is in ${op.tag}`).join("\n");
+      this.boardNotice(tx, p, seq, "fix", "fix_released", this.refOf(open[0]!.item), poOf(p), text);
+    }
+    return { ref, seq, released };
   }
 
   /**
@@ -2799,6 +3033,7 @@ export class BoardStore {
 
 /** A caller as the history names them: the owner's email, or an agent's address. */
 function whoOf(caller: Caller): string {
+  if (caller.kind === "board") return `${BOARD_SENDER.name}@${BOARD_SENDER.laptop}`;
   return caller.kind === "owner" ? caller.email : caller.kind === "ci" ? (caller.via ? `${caller.source} via ${caller.via}` : caller.source) : `${caller.name}@${caller.laptop}`;
 }
 
@@ -2811,16 +3046,35 @@ interface Said {
   via: "dashboard" | "conversation";
 }
 
-/** An answer's notice as the broker drains it (ADR 0009 §1): `to` the text's recipients, `notice` the supervisor's JSON. */
+/**
+ * A notice as the broker drains it (ADR 0009 §1, ADR 0011 §4): `subject` the question's or item's ref,
+ * `to` the text's recipients, `notice` the supervisor's JSON.
+ */
 export interface NoticeRow {
   seq: number;
   project: string;
-  question: string;
-  state: BoardAnswerEvent["state"];
+  kind: "answer" | "fix" | "stale";
+  subject: string;
+  state: BoardAnswerEvent["state"] | BoardNoticeEvent["kind"];
   to: string[];
   except: string | null;
   text: string;
-  notice: BoardAnswerEvent;
+  notice: BoardAnswerEvent | BoardNoticeEvent;
+}
+
+/** An agent's address, or null: asked_by is an email when the owner asked, which is no address, and he knows. */
+function agentAddress(raw: string | null): string | null {
+  return raw?.includes("@") && parseRecipient(raw, "") ? raw : null;
+}
+
+/** Who owns a review gate or a bug on Waits (ADR 0011 §2): the project's PO, else its lead. */
+function poOf(p: ProjectRow): string | null {
+  return agentAddress(p.po) ?? agentAddress(p.lead);
+}
+
+/** A time to the minute, as a notice says it: "2026-11-21 16:40Z". */
+function minuteShown(iso: string): string {
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`;
 }
 
 /** A session as a message names it: "LAND-56 design B". */
@@ -2830,7 +3084,7 @@ function sessionShown(s: SessionRef): string {
 
 /** One write's caller, time and events. */
 class Tx<C extends Caller = BoardCaller> {
-  readonly at = new Date().toISOString();
+  readonly at: string;
   readonly seqs: number[] = [];
   readonly refs = new Set<string>();
   projectKey: string | null = null;
@@ -2841,7 +3095,10 @@ class Tx<C extends Caller = BoardCaller> {
   constructor(
     private readonly sql: SqlStorage,
     readonly caller: C,
-  ) {}
+    now: () => number,
+  ) {
+    this.at = new Date(now()).toISOString();
+  }
 
   /** Who, as the history names them. */
   get who(): string {
