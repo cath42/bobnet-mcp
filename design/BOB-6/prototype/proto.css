@@ -1,0 +1,100 @@
+/* BOB-6: Start a session from the feature page (spec.md). Only style.css's tokens. Everything but the .proto-bar
+   rules moves into style.css as a block of its own ("Start a session: the Next card, the request, the brief editor"). */
+
+/* The prototype's bar: not the design. */
+.proto-bar { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 12.5px; color: var(--muted); padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
+.proto-bar > b { color: var(--text); }
+.proto-bar .seg.filters { flex-wrap: wrap; overflow: visible; }
+.proto-bar .pb-g { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: 100%; }
+.proto-bar .seg button, .proto-bar .pb-g > button { min-height: 28px; padding: 2px 8px; font-size: 12px; }
+.proto-bar .more-t { min-height: 28px; font-size: 12.5px; padding: 0 8px; }
+
+/* The supervisor a request goes to: its address, the laptop always shown. */
+.sup { white-space: nowrap; }
+.sup .dot { margin-right: 4px; }
+.off-t { color: var(--warn); }
+/* A decline is news, not a failure: the toast's edge is grey, not red. */
+.toast[data-ok="idle"] { border-left-color: var(--idle); }
+
+/* The Next banner carries the primary Start, so it is above the fold on a phone. */
+.start-banner { align-items: center; }
+.start-banner > a, .req-banner > a { color: inherit; text-decoration: none; min-width: 0; }
+.start-banner .start-btn { margin-left: auto; }
+.start-banner .cant-t { margin-left: auto; }
+.start-banner .cant-t a { color: var(--accent); }
+.start-banner.declined { border-left-color: var(--idle); }
+.start-banner.declined > b { color: var(--text); }
+
+/* Start in the Next card: the kinds that may start, where the request goes, and why the others can't. */
+.start { display: grid; gap: 8px; }
+.start-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.start-to { margin: 0; font-size: 13px; color: var(--muted); }
+.not-now { display: grid; gap: 2px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
+.not-now > span { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.not-now ul, .start.cant ul { margin: 0; padding-left: 18px; }
+.start.cant { font-size: 14px; }
+.start.cant ul { color: var(--text); }
+.start a, .se a { color: var(--accent); }
+.req-note { font-size: 13.5px; color: var(--muted); }
+.req-note.declined { color: var(--text); border-left: 3px solid var(--idle); padding-left: 8px; }
+.req-note q { font-style: italic; }
+
+/* The pending request: the Next card turns into it until a session starts or the supervisor declines. */
+.step.requested > .dot2 { background: var(--bg); border: 2px dashed var(--k, var(--accent)); }
+.step.requested .kind { color: var(--accent); }
+.req-wait { font-size: 14px; }
+.req-wait.off { color: var(--warn); }
+details.sent summary { margin: 0; font-size: 13px; }
+details.sent pre { margin-top: 6px; }
+.from-req { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+
+/* The brief editor: a page of its own (#feature/<project>/<ref>/start/<kind>). */
+.back { color: var(--accent); text-decoration: none; font-weight: 600; }
+.se { display: grid; gap: 14px; }
+.se-head h2 { margin: 0 0 2px; }
+.se-name { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 18px; }
+.se-name .muted { font-size: 13px; }
+.se-grid { display: grid; gap: 14px; }
+.se-side { display: grid; gap: 12px; align-content: start; }
+.se-main { display: grid; gap: 6px; min-width: 0; }
+.fld { display: grid; gap: 4px; font-size: 14px; }
+.fl { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; color: var(--muted); }
+.fh { font-size: 12.5px; color: var(--muted); }
+.fh.err { color: var(--bad); }
+.se input[type="text"] { font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); max-width: 16em; }
+.se input[aria-invalid="true"] { border-color: var(--bad); }
+.seg.kinds { justify-self: start; }
+.seg.kinds button { min-height: 36px; }
+#brief { font: inherit; font-size: 14.5px; line-height: 1.5; width: 100%; min-height: 50vh; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text); resize: vertical; overflow: hidden; }
+#brief:focus, .se input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.brief-st { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; font-size: 13px; }
+.brief-st .ed { color: var(--warn); font-weight: 600; }
+.brief-st .more-t { min-height: 28px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 13px; }
+.brief-st .cnt { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.brief-st .cnt.over { color: var(--bad); font-weight: 600; }
+.se-note { margin: 0; }
+.se-foot { display: flex; gap: 8px; justify-content: flex-end; }
+.se .banner .more-t { min-height: 30px; padding: 2px 10px; }
+
+@media (min-width: 900px) {
+  .se-grid { grid-template-columns: 280px minmax(0, 1fr); align-items: start; }
+  .se-side { position: sticky; top: 70px; }
+}
+
+/* A phone: Start is a full-width button, the editor's buttons stay at the bottom of the screen, 16px text so iOS
+   doesn't zoom, every target 44px. */
+@media (max-width: 600px) {
+  .start-banner .start-btn { margin-left: 0; width: 100%; min-height: 44px; }
+  .start-row button { flex: 1 1 100%; min-height: 44px; }
+  .start-row button.primary + button, .start-row button:not(.primary) { flex: 1 1 calc(50% - 4px); }
+  #brief { font-size: 16px; padding: 10px; min-height: 60vh; }
+  .se input[type="text"] { max-width: none; }
+  .seg.kinds { display: flex; }
+  .seg.kinds button { flex: 1; min-height: 44px; }
+  .se-foot { position: sticky; bottom: 0; margin: 0 -16px; padding: 10px 16px max(10px, env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }
+  .se-foot button { flex: 1; min-height: 44px; }
+  details.sent summary { padding: 12px 0; }
+  .brief-st .more-t { min-height: 44px; }
+}
+@media (pointer: coarse) { #brief { font-size: 16px; } }
