@@ -3,6 +3,7 @@
 - **Status:** accepted (Toad, 2026-11-22), for BOB-121 (session `BOB-121 design A`), ACs 5, 6, 11, 12
   and 13. Line numbers are at `89c5f58` (origin/v2). The build brief is `architecture/bob121/build-brief.md`.
   Daisy designs the screens (`design/BOB-121/`). §1 is what my answer to her consult c_2c826fdc gave her.
+  **Amended 2026-11-22** after Casper's Q-13 verdict (`lead/bob121/q13-verdict.md`): §3a.
 
 ## Context
 
@@ -181,6 +182,69 @@ interface ProjectPage {
 - **`get` with `session`** gains `weighted` and `unknown` on the session and on each run (optional
   fields), so the feature page shows the same figures (AC13).
 
+### 3a. After Q-13: a day's context per call, CI history, a feature's own criteria
+
+**A day's context per call: a third read, `usage_day`.** Casper keeps the context-per-call line graphs.
+Tapping a day opens them for that day, Total and By agent, against a baseline: the period's median
+(spec §2.9, "Baseline (Toad)"). The source is the board's `runs`: `calls` (main-thread model calls) and
+`ctx` (`schema.ts:253`: up to `RUN_CTX_MAX` = 2000 uint32s, evenly taken, first and last kept,
+`board.ts:142`). Nothing new is recorded. `ctx` has no time per call, so a run that crosses midnight
+splits its calls and its points over its days by wall time, as its tokens do (§3). The blobs are too
+heavy for `usage`, which serves every project for up to 90 days, so they come from their own read, on a
+tap:
+
+`{ op: "usage_day", project, day: "YYYY-MM-DD", days = 30 (1..90), tz = "UTC" }` → `UsageDay`:
+
+```ts
+/** Points evenly taken over calls 1..calls, first and last kept (the runs table's rule); pts.length === calls up to 2000. */
+interface CallLine { calls: number; pts: number[] }
+interface UsageDay {
+  project: string; day: string; days: string[];      // the page's period, as `usage` gives it; `day` is in it
+  /** Runs with calls in the day, by start; `first`: the run's own number of the day's first call (1 unless it began earlier). */
+  runs: Array<{ id: string; agent: string; role: string; session: SessionRef | null; model: string | null;
+    started_at: string; ended_at: string; resumed: boolean; first: number; ctx: CallLine }>;
+  /** Medians over the period's days, call by call, while ≥ 3 reach the call; empty when fewer. */
+  baseline: {
+    total: { days: number; calls: number; p50: CallLine };             // calls: the median day's
+    roles: Array<{ role: string; runs: number; calls: number;          // calls: the role's median day's
+      p25: CallLine; p50: CallLine; p75: CallLine }>;
+  };
+  lost: number;                                       // lost runs that day: no calls, no context
+}
+```
+
+- **Total** is the day's runs in start order, their points summed as they go (the session card's
+  "Whole session"). The baseline's `total` is that same curve for each day of the period, median at each
+  call.
+- **By agent** groups by `role`. The baseline per role is its runs that ended in the period, each
+  whole and from its own first call, as the laptop report's `baseline` (`supervisor/src/board.ts:118`)
+  and the session card's band do today.
+- **The period is the page's** (the last `days` days to today, in `tz`), not one ending on the tapped
+  day, and it includes that day. So does the bars' median day: one rule. A `day` outside it is `invalid`.
+- **Today's running workers** come from the laptop reports (`ctx`, ≤ 400 points, `frames.ts:120`),
+  added by the dashboard, as §3's "so far" adds their tokens.
+- **Calls per day per role** for the period are cheap and go on `usage` itself: each point gains
+  `calls` and `by_role: Array<{ role, calls, raw, weighted }>`.
+
+**A day's biggest sessions** (spec §6 Q4). Each `usage` point gains `top`: the sessions in the top 3 by
+raw or by weighted that day (≤ 6), each `{ session: SessionRef | null, feature_title, raw, weighted }`.
+`session: null` is the day's work outside any session, as one entry. The dashboard sorts by the switch
+and shows three.
+
+**CI history** (spec §6 Q2) is the board's, not the laptop report's. `ci_runs` (`schema.ts:285`)
+already keeps every run the supervisor's gh adapter posts (`ci-poll.ts:47`), passed ones included. A
+land's push ties a run on its sha to the worker (`pushes`, `store.ts:2683`). One helper, `ciOf(p)`,
+gives per workflow (`name`, source not `slot`) its latest run and the 5 before it: `{ name, branch,
+status, sha, url, started_at, ended_at, agent }`, where `agent` is `runs.agent` through `pushes.run`,
+else null. The `project` read gains `ci`, and `OverviewRow` gains it as an optional field. The laptop
+report's `ci` stays on the wire for older dashboards.
+
+**A feature's own criteria** (spec §6 Q3). `Progress` stays its own plus its tasks' AC (`store.ts:266`),
+as every list reads it. A feature's `ItemSummary` gains optional `own: { checked, total }`: its own AC
+and DoD together. It also gains `done_at`: when it was last moved to Done, by the rule the status read
+already uses (`store.ts:998`). A Done feature's unticked criteria are `get`'s `criteria` with `state:
+"open"`. That read exists already.
+
 ### 4. The current release (BOB-163)
 
 - **The rule.** A project's current release is the first release, in the board's order (`ord IS NULL,
@@ -199,7 +263,7 @@ interface ProjectPage {
 
 | Change | Protocol | Broker deploy | Supervisor rc and restart |
 |---|---|---|---|
-| §1 weights, §3 reads, §4 release rule | additive: two board read ops, optional fields on `SessionRecord`/`RunRecord`, `OverviewRow` unchanged in shape | yes | no |
+| §1 weights, §3 reads, §4 release rule | additive: three board read ops (`usage_day`, §3a), optional fields on `SessionRecord`/`RunRecord`, `ItemSummary` (`own`, `done_at`) and `OverviewRow` (`ci`) | yes | no |
 | §2 `run_end.models` | additive optional field, new broker table | yes, first | yes, riding with BOB-162 |
 
 ## Consequences

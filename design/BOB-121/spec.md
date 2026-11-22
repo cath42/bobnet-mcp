@@ -323,6 +323,23 @@ Today's page, with these changes:
   feature's page."
 - Tokens only, everywhere: no currency, no price.
 
+**Baseline (Toad):** the dashed line on a day's context-per-call graphs is the **median over the
+chosen period** (14 or 30 days). It is the same span and the same kind of figure as the bars' "median
+day", so the whole page compares against one thing. A median isn't pulled up by the spikes the page is
+there to show. A trailing average is, and it would shift with every day tapped. It is the median, call
+by call, of:
+- **Total:** the period's days, each day's calls in order with their context summed (as the session
+  card's "Whole session" draws it).
+- **By agent:** that role's runs in the period, each from its own first call. Their middle half stays
+  the grey band of today's chart.
+- **Calls:** the median day's calls (the day's, or the role's), in the key beside the day's own.
+
+Where fewer than 3 days (Total) or 3 runs (By agent) reach a call, the line stops: there is nothing to
+compare against. Under the graphs, the page says: "Dashed: the median over these 30 days. Total: a
+day's calls, call by call. By agent: Luigi's runs at the same call, the band their middle half. A line
+above it carried more context per call than usual." The key reads "Fri 13 Nov · 412 calls" and
+"median day · 286 calls".
+
 ### 2.10 Triage (`#triage/<key>`) (AC10)
 
 As it is: the project switch, the filters (All, Bugs, each open release, No release), Edit your
