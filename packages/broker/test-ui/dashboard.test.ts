@@ -712,6 +712,37 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     expect(view().textContent).toContain("Capture in one step");
     expect(view().textContent).not.toMatch(/\$\d/);
   });
+
+  it("lists the rules for every project and makes an agent global admin, poe@mbp-1 by default (BOB-118)", async () => {
+    const rule = (agent: string, over: Record<string, unknown> = {}) => ({ project: "*", agent, laptop: "mbp-1", role: "backup", read: true, items: "none", fields: [], sessions: false, questions: false, admin: false, ...over });
+    await go("#rules");
+    const [read] = pending("grants");
+    expect(read!.op).toEqual({ op: "grants", project: "bobnet" });
+    reply(read!, { grants: [rule("Mario"), { ...rule("Peach"), project: "bobnet", admin: true }] });
+    await settle();
+    // Only the '*' rules: a project's own stay that project's.
+    expect([...view().querySelectorAll("#global-rules tbody tr")].map((r) => r.querySelector("b")!.textContent)).toEqual(["Mario@mbp-1"]);
+    const who = view().querySelector("#rule-who") as HTMLInputElement;
+    expect(who.value).toBe("poe@mbp-1");
+    (view().querySelector("form.rule-form") as HTMLFormElement).requestSubmit();
+    const [grant] = pending("grant");
+    expect(grant!.key).toBeTruthy();
+    expect(grant!.op).toEqual({ op: "grant", project: "*", agent: "poe", laptop: "mbp-1", role: "admin", read: true, items: "none", fields: [], sessions: false, questions: false, admin: true });
+    reply(grant!, { ref: "poe@mbp-1 on *", seq: 90 });
+    await settle();
+    expect(toastEl().textContent).toContain("poe@mbp-1 is admin on every project");
+    reply(pending("grants")[0]!, { grants: [rule("Mario"), rule("poe", { role: "admin", admin: true })] });
+    await settle();
+    // An agent's rule it already has keeps the rest: Mario stays backup, admin now.
+    (view().querySelector("#global-rules tbody tr button") as HTMLButtonElement).click();
+    const [mario] = pending("grant");
+    expect(mario!.op).toMatchObject({ agent: "Mario", role: "backup", items: "none", admin: true });
+    refuse(mario!, "A rule for every project is Casper's gate; only the owner may");
+    await settle();
+    expect(toastEl().dataset["ok"]).toBe("false");
+    reply(pending("grants")[0]!, { grants: [rule("Mario")] });
+    await settle();
+  });
 });
 
 describe("triage and capture (BOB-8)", () => {
@@ -1649,7 +1680,10 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
       tasks_moved: [{ task: "BOB-42", status: "In Progress" }],
       runs: [run("w_l", "Luigi", "luigi", 50, null, [])],
       ci_runs: [
-        { source: "github-actions", external_id: "4812", name: "e2e (staging)", url: "https://github.com/cath42/bobnet-mcp/actions/runs/4812", repo: "cath42/bobnet-mcp", branch: "v2", sha: "abc", laptop: null, status: "running", started_at: iso(12), ended_at: null, worker: "w_l", usual_ms: 20 * 60_000 },
+        { source: "github-actions", external_id: "4812", name: "e2e (staging)", url: "https://github.com/cath42/bobnet-mcp/actions/runs/4812", repo: "cath42/bobnet-mcp", branch: "v2", sha: "abc", laptop: null, status: "running",
+          // Twelve and a half minutes before the frame is sent, not before the suite began: the suite runs past a minute.
+          get started_at() { return new Date(Date.now() - 12.5 * 60_000).toISOString(); },
+          ended_at: null, worker: "w_l", usual_ms: 20 * 60_000 },
         { source: "slot", external_id: "s_1", name: "land", url: null, repo: null, branch: null, sha: null, laptop: "mbp-2", status: "passed", started_at: iso(40), ended_at: iso(35), worker: "w_l", usual_ms: null },
       ],
     }),
