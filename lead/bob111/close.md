@@ -7,5 +7,5 @@
 - Supervisor rc: **v2.0.0-rc.50** at 419b3b3, tag pushed. Notes: rc50-notes.md. poe rolls it.
 - Live: AC1 and AC4 with the deploy; AC2 after rc.50 is rolled on mbp-1 and helix's mbp-1 entry has `board: service`.
   The dashboard check for AC1 and AC2 happens with Casper's next real answer, not as a manual test.
-- Peach: acceptance below.
+- Peach (w_423f053c): AC3 checked. AC1 and AC4 stay open for the dashboard check on Casper's next real answer, AC2 for the rc.50 roll plus `board: service` on mbp-1's helix entry, and DoD for the restart. The review-A major is noted on the item.
 - Not folded in: BOB-127 (ubu1 config, Casper's), BOB-125, BOB-126.
