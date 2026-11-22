@@ -1,6 +1,7 @@
 import { BoardOp, type BoardOpInput, BugWhere, findSecret, HANDOFF_MAX, LIMITS, ItemRef, ItemStatus, QuestionRef, ReleaseRef, SessionRef } from "@bobnet/protocol";
 import { z } from "zod";
 import type { CaptureInput, CaptureOutcome } from "./capture-queue.ts";
+import { BrokerError } from "./connection.ts";
 
 // The board's seven tools (ADR 0001 §8), defined once: the channel client serves
 // them to interactive agents and the supervisor to its workers. Each stamps who
@@ -134,16 +135,20 @@ export const BOARD_TOOLS: BoardTool[] = [
     name: "board_ask",
     description:
       "Ask Casper a question or an action only he can answer or do: {text, kind?: question|action, context?, options?: [{key, text, recommended?}], holds?: [item refs], " +
-      "holds_sessions?, needed_before?: {item}|{release}|{text}}. Or record his answer given in conversation, verbatim: answer {ref, key?, words}.",
+      "holds_sessions?, needed_before?: {item}|{release}|{text}}. Or record his answer given in conversation, verbatim: answer {ref, key?, words}. " +
+      "Or edit your own open one (or any, as an admin): edit {ref, set: {text?, context?, options?, holds?, holds_sessions?, needed_before?}, reason?}; " +
+      "only what set names changes, an option's key stays once set (change its text or add options), and an answered one isn't edited. Exactly one of ask, answer or edit.",
     shape: {
       project: projectArg,
       ask: fields.optional(),
       answer: z.object({ ref: QuestionRef, key: z.string().optional(), words: z.string().min(1) }).optional(),
+      edit: z.object({ ref: QuestionRef, set: fields, reason: z.string().optional() }).optional(),
     },
     run: async (deps, a) => {
-      if (Boolean(a["ask"]) === Boolean(a["answer"])) throw new Error("bad_arguments: pass ask or answer, one of them");
+      if ([a["ask"], a["answer"], a["edit"]].filter(Boolean).length !== 1) throw new Error("bad_arguments: pass exactly one of ask, answer or edit");
       const p = await project(deps, a);
       if (a["answer"]) return deps.op(checked({ ...(a["answer"] as Record<string, unknown>), op: "record_answer", project: p }));
+      if (a["edit"]) return editQuestion(deps, checked({ ...(a["edit"] as Record<string, unknown>), op: "edit_question", project: p }));
       return deps.op(checked({ ...(a["ask"] as Record<string, unknown>), op: "ask", project: p }));
     },
   },
@@ -188,6 +193,19 @@ export const BOARD_TOOLS: BoardTool[] = [
     },
   },
 ];
+
+/** An edit, on a broker from before BOB-119 too: one that doesn't know the op says so, and nothing is tried instead. */
+async function editQuestion(deps: BoardToolDeps, op: BoardOpInput): Promise<unknown> {
+  try {
+    return await deps.op(op);
+  } catch (err) {
+    const e = err as { code?: string; message?: string };
+    if (e.code === "invalid" && /^Invalid discriminator value/.test(e.message ?? "")) {
+      throw new BrokerError("unsupported", "this broker can't edit yet: it is older than edit_question (BOB-119); ask a new question that names the old one");
+    }
+    throw err;
+  }
+}
 
 /** The project a call means when it names none: the only one the caller may read. */
 export async function onlyProject(op: BoardToolDeps["op"]): Promise<string> {

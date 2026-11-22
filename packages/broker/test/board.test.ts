@@ -1378,3 +1378,158 @@ describe("the views' reads: waits, overview, the roadmap's counts (ADR 0001 §7,
     expect((await ok(owner, { op: "overview", project: "helix" })).projects[0]!.backlog).toMatchObject({ items: 2, bugs: 0 });
   });
 });
+
+describe("editing an open question or action (BOB-119)", () => {
+  const edit = (caller: BoardCaller, ref: string, set: Extract<BoardOpInput, { op: "edit_question" }>["set"], reason?: string) =>
+    call(caller, { op: "edit_question", project: "helix", ref, set, ...(reason ? { reason } : {}) });
+  const question = async (ref: string) => (await ok(owner, { op: "get", project: "helix", ref, history: true })) as Required<Pick<BoardResults["get"], "question" | "history">>;
+  const edits = async (ref: string) => (await question(ref)).history.filter((e) => e.op === "question_edited");
+
+  /** Helix's rules, and Data, who may ask but isn't admin; Data asks Q-1 with two options. */
+  async function asked() {
+    const ids = await helix();
+    await helixRules();
+    await ok(owner, { op: "grant", project: "helix", agent: "Data", role: "engineer", read: true, items: "none", fields: [], questions: true });
+    await ok(agent("Data"), { op: "ask", project: "helix", text: "Which chart?", options: [{ key: "a", text: "Bars", recommended: true }, { key: "b", text: "Lines" }] });
+    return ids;
+  }
+
+  it("lets its asker and an admin edit it, and refuses anyone else (AC 1)", async () => {
+    await asked();
+    expect(await ok(agent("Data"), { op: "edit_question", project: "helix", ref: "Q-1", set: { text: "Which chart, for the roadmap?" } })).toMatchObject({ ref: "Q-1" });
+    // Picard is the project's admin; the owner is admin everywhere.
+    await ok(agent("Picard"), { op: "edit_question", project: "helix", ref: "Q-1", set: { context: "The roadmap's chart." } });
+    await ok(owner, { op: "edit_question", project: "helix", ref: "Q-1", set: { needed_before: { text: "the demo" } } });
+    // Riker may write the open feature and close sessions, but didn't ask it and isn't admin; Bill only reads.
+    for (const who of ["Riker", "Bill"]) {
+      expect(await refused(agent(who), { op: "edit_question", project: "helix", ref: "Q-1", set: { text: "Mine now" } })).toEqual({
+        ok: false,
+        code: "forbidden",
+        message: `${who} may not edit Q-1 in helix; its asker, Data@mbp-1, or an admin may`,
+      });
+    }
+    expect((await question("Q-1")).question).toMatchObject({ text: "Which chart, for the roadmap?", context: "The roadmap's chart.", needed_before: { text: "the demo" } });
+    expect(await edits("Q-1")).toHaveLength(3);
+  });
+
+  it("refuses an answered, done or withdrawn one as not_open, and changes nothing (AC 2)", async () => {
+    await asked();
+    await ok(agent("Data"), { op: "ask", project: "helix", kind: "action", text: "Rotate the key" });
+    await ok(agent("Data"), { op: "ask", project: "helix", text: "Ship it?" });
+    await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a" });
+    await ok(owner, { op: "mark_done", project: "helix", ref: "A-1" });
+    await runInDurableObject(board(), (_, state) => {
+      state.storage.sql.exec("UPDATE questions SET state = 'withdrawn' WHERE ref = 'Q-2'");
+    });
+    for (const [ref, state] of [["Q-1", "answered"], ["A-1", "done"], ["Q-2", "withdrawn"]] as const) {
+      const before = await question(ref);
+      expect(await edit(agent("Data"), ref, { text: "Changed" })).toMatchObject({ ok: false, code: "conflict", message: expect.stringMatching(new RegExp(`^not_open: ${ref} is ${state}`)) });
+      expect(await edit(owner, ref, { holds: ["LAND-1"] })).toMatchObject({ ok: false, code: "conflict", message: expect.stringMatching(/^not_open/) });
+      expect(await question(ref)).toEqual(before);
+    }
+  });
+
+  it("loses to an answer that lands after its read: the open check is the UPDATE's, and nothing is written (AC 2)", async () => {
+    const { t1 } = await asked();
+    await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "b", words: "Lines" });
+    const before = await question("Q-1");
+    // The edit read Q-1 while it was still open; the answer landed between that read and its write.
+    const reply = await runInDurableObject(board(), async (instance) => {
+      const store = (instance as unknown as { store: { question: (...a: unknown[]) => Record<string, unknown> } }).store;
+      const read = store.question.bind(store);
+      store.question = (...a: unknown[]) => ({ ...read(...a), state: "open" });
+      try {
+        return (await instance.apply(agent("Data"), { op: "edit_question", project: "helix", ref: "Q-1", set: { text: "Too late", holds: [t1], options: [{ key: "a", text: "Bars" }, { key: "b", text: "Thin lines" }] } })) as unknown as BoardReply;
+      } finally {
+        store.question = read;
+      }
+    });
+    expect(reply).toMatchObject({ ok: false, code: "conflict", message: expect.stringMatching(/^not_open: Q-1 is answered/) });
+    expect(await question("Q-1")).toEqual(before);
+    expect(before.question).toMatchObject({ state: "answered", text: "Which chart?", holds: [], answer: { key: "b", words: "Lines" } });
+  });
+
+  it("keeps option keys: their text may change and options may be added; a lost or renamed key is refused, changing nothing (AC 3)", async () => {
+    await asked();
+    await ok(agent("Data"), { op: "edit_question", project: "helix", ref: "Q-1", set: { options: [{ key: "a", text: "Stacked bars", recommended: true }, { key: "b", text: "Lines" }, { key: "c", text: "A table" }] } });
+    const kept = await question("Q-1");
+    expect(kept.question.options).toEqual([
+      { key: "a", text: "Stacked bars", recommended: true },
+      { key: "b", text: "Lines", recommended: false },
+      { key: "c", text: "A table", recommended: false },
+    ]);
+    // b renamed to l, and c dropped: both lose a key.
+    for (const options of [[{ key: "a", text: "Bars" }, { key: "l", text: "Lines" }, { key: "c", text: "A table" }], [{ key: "a", text: "Bars" }, { key: "b", text: "Lines" }]]) {
+      expect(await edit(agent("Data"), "Q-1", { text: "Also changed", options })).toMatchObject({ ok: false, code: "invalid", message: expect.stringMatching(/^An option's key stays once set: Q-1 would lose (b|c)/) });
+    }
+    expect(await edit(agent("Data"), "Q-1", { options: [{ key: "a", text: "x" }, { key: "a", text: "y" }, { key: "b", text: "z" }, { key: "c", text: "w" }] })).toMatchObject({ ok: false, code: "invalid" });
+    expect(await question("Q-1")).toEqual(kept);
+    // An answer still takes the keys it had.
+    await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a" });
+  });
+
+  it("checks new holds and needed-before as an ask does, and Waits follows: the A-24 case turns blocking (AC 4)", async () => {
+    const { r1, f2, t1 } = await asked();
+    await join(f2);
+    // As helix A-24 was asked: needed before, holding nothing.
+    await ok(agent("Data"), { op: "ask", project: "helix", kind: "action", text: "Book the room", needed_before: { item: f2 } });
+    const wait = async (ref: string) => (await ok(owner, { op: "waits" })).waits.find((w) => w.ref === ref)!;
+    expect(await wait("A-1")).toMatchObject({ blocking: false, holds: { items: [], sessions: [] }, needed_before: { item: f2 }, edits: [] });
+    const before = await question("A-1");
+    for (const set of [{ holds: [t1, "LAND-99"] }, { holds_sessions: [{ feature: f2, kind: "review" as const, label: "1" }] }, { needed_before: { release: "R9" } }, { needed_before: { item: "LAND-99" } }]) {
+      expect(await edit(agent("Data"), "A-1", set)).toMatchObject({ ok: false, code: "invalid" });
+    }
+    expect(await question("A-1")).toEqual(before);
+
+    const session = { feature: f2, kind: "build" as const, label: "1" };
+    await ok(agent("Data"), { op: "edit_question", project: "helix", ref: "A-1", set: { holds: [t1, t1], holds_sessions: [session, session] }, reason: "holds were left out" });
+    expect(await wait("A-1")).toMatchObject({ blocking: true, holds: { items: [t1], sessions: [session] }, needed_before: { item: f2 } });
+    expect((await ok(owner, { op: "overview", project: "helix" })).projects[0]!.waits_on_you).toBeTruthy();
+    await ok(agent("Data"), { op: "edit_question", project: "helix", ref: "A-1", set: { holds: [], holds_sessions: [], needed_before: { release: r1 } } });
+    expect(await wait("A-1")).toMatchObject({ blocking: false, holds: { items: [], sessions: [] }, needed_before: { release: r1 } });
+    await ok(agent("Data"), { op: "edit_question", project: "helix", ref: "A-1", set: { needed_before: null } });
+    expect((await question("A-1")).question.needed_before).toBeNull();
+  });
+
+  it("keeps each edit in the history: the fields it changed, before and after, who, when and why; an edit that changes nothing writes nothing (AC 5)", async () => {
+    const { f1, t1 } = await asked();
+    const last = (await question("Q-1")).history.at(-1)!.seq;
+    await ok(agent("Data"), { op: "edit_question", project: "helix", ref: "Q-1", set: { text: "Which chart, for the roadmap?", holds: [t1], needed_before: { item: f1 } }, reason: "holds were left out" });
+    await ok(agent("Picard"), { op: "edit_question", project: "helix", ref: "Q-1", set: { options: [{ key: "a", text: "Bars", recommended: true }, { key: "b", text: "Thin lines" }, { key: "c", text: "A table" }] } });
+    const [first, second] = await edits("Q-1");
+    expect(first).toMatchObject({
+      seq: expect.any(Number),
+      at: expect.any(String),
+      actor: { kind: "agent", who: "Data@mbp-1" },
+      op: "question_edited",
+      record: { table: "questions", ref: "Q-1" },
+      reason: "holds were left out",
+      changes: [
+        { field: "text", old: "Which chart?", new: "Which chart, for the roadmap?" },
+        { field: "needed_before", old: null, new: f1 },
+        { field: "holds", old: null, new: t1 },
+      ],
+    });
+    expect(first!.seq).toBeGreaterThan(last);
+    expect(second).toMatchObject({
+      actor: { who: "Picard@mbp-1" },
+      reason: null,
+      changes: [
+        { field: "option b", old: "Lines", new: "Thin lines" },
+        { field: "option c", old: null, new: "A table" },
+      ],
+    });
+    // Waits carries the same edits, oldest first, for the dashboard.
+    expect((await ok(owner, { op: "waits" })).waits.find((w) => w.ref === "Q-1")!.edits).toEqual([
+      { seq: first!.seq, at: first!.at, by: "Data@mbp-1", reason: "holds were left out", changes: first!.changes },
+      { seq: second!.seq, at: second!.at, by: "Picard@mbp-1", reason: null, changes: second!.changes },
+    ]);
+
+    // The same values again, or nothing at all: no event, and the board's seq doesn't move.
+    const now = (await question("Q-1")).history.at(-1)!.seq;
+    const same = await call(agent("Data"), { op: "edit_question", project: "helix", ref: "Q-1", set: { text: "Which chart, for the roadmap?", holds: [t1], needed_before: { item: f1 } }, reason: "again" });
+    expect(same).toMatchObject({ ok: true, changed: null, result: { ref: "Q-1", seq: now } });
+    expect(await call(agent("Data"), { op: "edit_question", project: "helix", ref: "Q-1", set: {} })).toMatchObject({ ok: true, changed: null });
+    expect(await edits("Q-1")).toHaveLength(2);
+  });
+});

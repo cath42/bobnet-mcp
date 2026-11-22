@@ -110,11 +110,24 @@ describe("WaitRecord (BOB-31)", () => {
   it("carries a question's or action's context, null for a review gate or a bug; the ask op takes it up to 16 KB", () => {
     const wait = (kind: WaitRecord["kind"], context: string | null): WaitRecord => ({
       project: "helix", kind, ref: "Q-1", feature: null, text: "Ship it?", recommended: null, context, holds: { items: [], sessions: [] },
-      waiting_sessions: [], needed_before: null, asked_by: null, since: "2026-11-15T00:00:00.000Z", blocking: false,
+      waiting_sessions: [], needed_before: null, asked_by: null, since: "2026-11-15T00:00:00.000Z", blocking: false, edits: [],
     });
     expect(wait("question", "Line one\nLine two").context).toBe("Line one\nLine two");
     expect(wait("review_gate", null).context).toBeNull();
     expect(BoardOp.safeParse({ op: "ask", project: "helix", text: "Ship it?", context: "x".repeat(16 * 1024) }).success).toBe(true);
     expect(BoardOp.safeParse({ op: "ask", project: "helix", text: "Ship it?", context: "x".repeat(16 * 1024 + 1) }).success).toBe(false);
+  });
+});
+
+describe("edit_question (BOB-119)", () => {
+  it("sets only what it names, from the fields an ask has; kind, state and answers aren't among them", () => {
+    const edit = (set: Record<string, unknown>) => BoardOp.safeParse({ op: "edit_question", project: "helix", ref: "A-24", set, reason: "holds were left out" });
+    expect(edit({ holds: ["LAND-49"], holds_sessions: [{ feature: "LAND-49", kind: "build", label: "3" }] }).success).toBe(true);
+    expect(edit({ text: "Ship it?", context: null, needed_before: null, options: [{ key: "a", text: "Yes" }] }).success).toBe(true);
+    expect(edit({}).success).toBe(true);
+    expect(edit({ kind: "question" }).success).toBe(false);
+    expect(edit({ state: "open" }).success).toBe(false);
+    expect(edit({ text: " " }).success).toBe(false);
+    expect(BoardOp.safeParse({ op: "edit_question", project: "helix", ref: "LAND-1", set: {} }).success).toBe(false);
   });
 });

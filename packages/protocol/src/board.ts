@@ -144,6 +144,14 @@ export const RUN_REASON_MAX = 300;
 /** A handoff's text as a close stores it (§6). */
 export const HANDOFF_MAX = 64 * 1024;
 
+/** A question's options, what it holds up and what it is needed before (§7): as asked, and as edited. */
+const QuestionOptions = z
+  .array(z.object({ key: z.string().trim().min(1).max(20), text: z.string().trim().min(1).max(1000), recommended: z.boolean().default(false) }))
+  .max(10);
+const QuestionHolds = z.array(ItemRef).max(20);
+const QuestionHoldsSessions = z.array(SessionRef).max(10);
+const NeededBefore = z.union([z.object({ item: ItemRef }), z.object({ release: ReleaseRef }), z.object({ text: z.string().trim().min(1).max(100) })]);
+
 const project = { project: ProjectKey };
 const item = { project: ProjectKey, ref: ItemRef };
 
@@ -315,14 +323,33 @@ export const BoardOp = z.discriminatedUnion("op", [
     kind: z.enum(["question", "action"]).default("question"),
     text: z.string().trim().min(1).max(4000),
     context: text.nullable().optional(),
-    options: z
-      .array(z.object({ key: z.string().trim().min(1).max(20), text: z.string().trim().min(1).max(1000), recommended: z.boolean().default(false) }))
-      .max(10)
-      .default([]),
+    options: QuestionOptions.default([]),
     /** What it holds up: items, and sessions. */
-    holds: z.array(ItemRef).max(20).default([]),
-    holds_sessions: z.array(SessionRef).max(10).default([]),
-    needed_before: z.union([z.object({ item: ItemRef }), z.object({ release: ReleaseRef }), z.object({ text: z.string().trim().min(1).max(100) })]).optional(),
+    holds: QuestionHolds.default([]),
+    holds_sessions: QuestionHoldsSessions.default([]),
+    needed_before: NeededBefore.optional(),
+  }),
+  /**
+   * Its asker or an admin edits an open question or action (BOB-119): only the fields given change.
+   * An option's key stays once set: its text may change and options may be added. An answered or
+   * closed one isn't edited. Its history keeps each edit, before and after.
+   */
+  z.object({
+    op: z.literal("edit_question"),
+    ...project,
+    ref: QuestionRef,
+    set: z
+      .object({
+        text: z.string().trim().min(1).max(4000),
+        context: text.nullable(),
+        options: QuestionOptions,
+        holds: QuestionHolds,
+        holds_sessions: QuestionHoldsSessions,
+        needed_before: NeededBefore.nullable(),
+      })
+      .partial()
+      .strict(),
+    reason: reason.optional(),
   }),
   /** Casper's answer given in conversation, verbatim (§7): write-once. */
   z.object({
@@ -501,6 +528,18 @@ export interface WaitRecord {
   /** Since when it waits: asked, captured, or put In Review. */
   since: string;
   blocking: boolean;
+  /** A question's or action's edits since it was asked (BOB-119), oldest first; none for a review gate or a bug. An older broker sends no field. */
+  edits: QuestionEdit[];
+}
+
+/** One edit of an open question or action (BOB-119): the fields it changed, before and after, who, when and why. */
+export interface QuestionEdit {
+  seq: number;
+  at: string;
+  /** An agent's `name@laptop`, or the owner's email. */
+  by: string;
+  reason: string | null;
+  changes: Array<{ field: string; old: string | null; new: string | null }>;
 }
 
 /** An answer or done mark Casper sent from the dashboard (spec: "Answered from here today"). */
@@ -826,6 +865,7 @@ export interface BoardResults {
   capture: BoardWritten & { duplicate: boolean; dropped: string[] };
   close_session: BoardWritten & { tasks_moved: SessionRecord["tasks_moved"]; tokens: TokenTotals };
   ask: BoardWritten;
+  edit_question: BoardWritten;
   /** `told`: whom the board's message went to (§7); empty when nobody heard it. */
   record_answer: BoardWritten & { told: string[] };
   answer_question: BoardWritten & { told: string[] };

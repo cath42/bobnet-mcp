@@ -17,6 +17,7 @@ import {
   type ItemRecord,
   type ItemSummary,
   type ProjectRecord,
+  type QuestionEdit,
   type QuestionRecord,
   type ReleaseRecord,
   type RunOutcome,
@@ -188,7 +189,11 @@ interface QuestionRow {
   ref: string;
   kind: QuestionRecord["kind"];
   text: string;
+  context: string | null;
   asked_by: string;
+  needed_before_item: number | null;
+  needed_before_release: number | null;
+  needed_before_text: string | null;
   state: QuestionRecord["state"];
   answer_key: string | null;
   answer_words: string | null;
@@ -518,6 +523,7 @@ export class BoardStore {
         asked_by: q.asked_by,
         since: q.created_at,
         blocking: q.holds.length > 0 || q.holds_sessions.length > 0 || waiting.length > 0,
+        edits: this.questionEdits(pk),
       });
     }
     const gated = this.sql
@@ -563,6 +569,7 @@ export class BoardStore {
       asked_by: null,
       since: row.created_at,
       blocking: true,
+      edits: [],
     };
   }
 
@@ -948,6 +955,23 @@ export class BoardStore {
     return Math.round(ready * median);
   }
 
+  /** A question's or action's edits (BOB-119), oldest first, from its history. */
+  private questionEdits(pk: number): QuestionEdit[] {
+    return this.sql
+      .exec<{ seq: number; at: string; actor: string; reason: string | null }>(
+        "SELECT seq, at, actor, reason FROM events WHERE tbl = 'questions' AND pk = ? AND op = 'question_edited' ORDER BY seq",
+        pk,
+      )
+      .toArray()
+      .map((e) => ({
+        seq: e.seq,
+        at: e.at,
+        by: e.actor,
+        reason: e.reason,
+        changes: this.sql.exec<{ field: string; old: string | null; new: string | null }>("SELECT field, old, new FROM event_changes WHERE event = ? ORDER BY rowid", e.seq).toArray(),
+      }));
+  }
+
   /** A record's events, oldest first, with their changes. */
   private history(table: string, pk: number): BoardEvent[] {
     const events = this.sql
@@ -1075,6 +1099,8 @@ export class BoardStore {
         return this.closeSession(tx, op);
       case "ask":
         return this.ask(tx, op);
+      case "edit_question":
+        return this.editQuestion(tx, op);
       case "record_answer":
         return this.recordAnswer(tx, op);
       case "answer_question":
@@ -1822,6 +1848,104 @@ export class BoardStore {
       changes.push(["holds", null, this.sessionName(s)]);
     }
     return { ref, seq: tx.event("ask", "questions", pk, ref, changes) };
+  }
+
+  /**
+   * Its asker or an admin edits an open question or action (BOB-119). What it holds and is needed
+   * before is checked as at ask time, and Waits reads them from these rows, so it follows at once. The
+   * open check is in the UPDATE: an answer that landed first wins. Only what changed is written, under
+   * one event with before and after; an edit that changes nothing writes nothing.
+   */
+  private editQuestion(tx: Tx, op: Op<"edit_question">): BoardWritten {
+    const p = tx.project(this.project(op.project));
+    const q = this.question(p, op.ref);
+    if (q.asked_by.toLowerCase() !== tx.who.toLowerCase() && !this.rules.hasFlag(tx.caller, p, "admin")) {
+      throw new BoardError("forbidden", `${tx.caller.kind === "owner" ? tx.who : tx.caller.name} may not edit ${q.ref} in ${p.key}; its asker, ${q.asked_by}, or an admin may`);
+    }
+    if (q.state !== "open") throw notOpen(q.ref, q.state);
+    const set = op.set;
+    const changes: Change[] = [];
+    const cols: Record<string, SqlStorageValue> = {};
+    if (set.text !== undefined && set.text !== q.text) {
+      cols["text"] = set.text;
+      changes.push(["text", q.text, set.text]);
+    }
+    if (set.context !== undefined && set.context !== q.context) {
+      cols["context"] = set.context;
+      changes.push(["context", q.context, set.context]);
+    }
+    if (set.needed_before !== undefined) {
+      const nb = set.needed_before;
+      const now = {
+        needed_before_item: nb && "item" in nb ? this.item(p, nb.item).pk : null,
+        needed_before_release: nb && "release" in nb ? this.release(p, nb.release).pk : null,
+        needed_before_text: nb && "text" in nb ? nb.text : null,
+      };
+      if (now.needed_before_item !== q.needed_before_item || now.needed_before_release !== q.needed_before_release || now.needed_before_text !== q.needed_before_text) {
+        Object.assign(cols, now);
+        changes.push(["needed_before", this.neededShown(q), this.neededShown(now)]);
+      }
+    }
+    const heldItems = (pks: number[]) => pks.map((pk) => this.refOf(pk)).join(", ") || null;
+    const heldSessions = (pks: number[]) => pks.map((pk) => this.sessionName(this.sql.exec<SessionRow>("SELECT * FROM sessions WHERE pk = ?", pk).one())).join(", ") || null;
+    const holdsOf = (col: "item" | "session") =>
+      this.sql.exec<{ pk: number }>(`SELECT ${col} AS pk FROM question_holds WHERE question = ? AND ${col} IS NOT NULL ORDER BY rowid`, q.pk).toArray().map((r) => r.pk);
+    const holds = set.holds === undefined ? null : { was: holdsOf("item"), now: this.items(p, set.holds).map((i) => i.pk) };
+    if (holds && holds.was.join() !== holds.now.join()) changes.push(["holds", heldItems(holds.was), heldItems(holds.now)]);
+    // One row per session held: the table's UNIQUE can't see a repeat, its item being NULL.
+    const sessions = set.holds_sessions === undefined ? null : { was: holdsOf("session"), now: [...new Set(set.holds_sessions.map((s) => this.session(p, s).pk))] };
+    if (sessions && sessions.was.join() !== sessions.now.join()) changes.push(["holds_sessions", heldSessions(sessions.was), heldSessions(sessions.now)]);
+    let options = false;
+    if (set.options !== undefined) {
+      const keys = set.options.map((o) => o.key);
+      if (new Set(keys).size !== keys.length) throw new BoardError("invalid", "Each option has its own key");
+      const was = this.questionRecord(q.pk).options;
+      const gone = was.filter((o) => !keys.includes(o.key)).map((o) => o.key);
+      if (gone.length) {
+        throw new BoardError("invalid", `An option's key stays once set: ${q.ref} would lose ${gone.join(", ")}; change an option's text or add one, keeping every key`);
+      }
+      const shownOption = (o: { text: string; recommended: boolean } | undefined) => (o ? `${o.text}${o.recommended ? " (recommended)" : ""}` : null);
+      const before = changes.length;
+      for (const o of set.options) {
+        const old = shownOption(was.find((w) => w.key === o.key));
+        if (old !== shownOption(o)) changes.push([`option ${o.key}`, old, shownOption(o)]);
+      }
+      if (was.map((o) => o.key).join() !== keys.filter((k) => was.some((o) => o.key === k)).join()) changes.push(["options", was.map((o) => o.key).join(", "), keys.join(", ")]);
+      options = changes.length > before;
+    }
+    if (changes.length === 0) return { ref: q.ref, seq: this.lastSeq() };
+    // The open check is the UPDATE's own: an answer written since the read above wins, and this changes nothing.
+    const names = Object.keys(cols);
+    const updated = this.sql
+      .exec(
+        `UPDATE questions SET ${names.length ? names.map((c) => `${c} = ?`).join(", ") : "state = state"} WHERE pk = ? AND state = 'open' RETURNING pk`,
+        ...names.map((c) => cols[c]!),
+        q.pk,
+      )
+      .toArray();
+    if (updated.length === 0) throw notOpen(q.ref, this.questionRow(q.pk).state);
+    if (holds && holds.was.join() !== holds.now.join()) {
+      this.sql.exec("DELETE FROM question_holds WHERE question = ? AND item IS NOT NULL", q.pk);
+      for (const pk of holds.now) this.sql.exec("INSERT INTO question_holds (project, question, item) VALUES (?, ?, ?)", p.pk, q.pk, pk);
+    }
+    if (sessions && sessions.was.join() !== sessions.now.join()) {
+      this.sql.exec("DELETE FROM question_holds WHERE question = ? AND session IS NOT NULL", q.pk);
+      for (const pk of sessions.now) this.sql.exec("INSERT INTO question_holds (project, question, session) VALUES (?, ?, ?)", p.pk, q.pk, pk);
+    }
+    if (options) {
+      this.sql.exec("DELETE FROM question_options WHERE question = ?", q.pk);
+      set.options!.forEach((o, i) => {
+        this.sql.exec("INSERT INTO question_options (question, ord, key, text, recommended) VALUES (?, ?, ?, ?, ?)", q.pk, i + 1, o.key, o.text, o.recommended ? 1 : 0);
+      });
+    }
+    return { ref: q.ref, seq: tx.event("question_edited", "questions", q.pk, q.ref, changes, op.reason) };
+  }
+
+  /** A question's needed-before as its history shows it: the item's or release's ref, or the words. */
+  private neededShown(nb: Pick<QuestionRow, "needed_before_item" | "needed_before_release" | "needed_before_text">): string | null {
+    if (nb.needed_before_item !== null) return this.refOf(nb.needed_before_item);
+    if (nb.needed_before_release !== null) return this.releaseRef(nb.needed_before_release);
+    return nb.needed_before_text;
   }
 
   /** Casper's answer given in conversation, recorded by the lead or PO (§7): write-once, his words verbatim. */
@@ -2680,6 +2804,11 @@ class Tx<C extends Caller = BoardCaller> {
 function shown(v: Value): string | null {
   if (v === null || v === undefined) return null;
   return String(v);
+}
+
+/** An answered, done or withdrawn question or action stays as it is (BOB-119). */
+function notOpen(ref: string, state: string): BoardError {
+  return new BoardError("conflict", `not_open: ${ref} is ${state}; an answered or closed question isn't edited: ask a new one that names it`);
 }
 
 function ownerOnly(caller: BoardCaller, what: string): void {

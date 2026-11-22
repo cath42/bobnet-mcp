@@ -1,4 +1,4 @@
-// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5) and its follow-ups (the CI line under Working now), a cut question opened (BOB-31) at phone, tablet and desktop
+// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5) and its follow-ups (the CI line under Working now), a cut question opened (BOB-31), a question's edits (BOB-119) at phone, tablet and desktop
 // widths, against a fake broker in the page holding a copy of BobNet's board (2026-11-14; its backlog
 // 2026-11-15). The page is public/ as served.
 //   node test-ui/shots.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob7-*.png, bob8-*.png, bob10-*.png, bob3-*.png)
@@ -187,6 +187,20 @@ function fakeBroker() {
     options.set("Q-1", [{ key: "fixture", text: fixture, recommended: true }, { key: "hold", text: "Hold AC 8 until Helix's real board is in the service (BOB-9)", recommended: false }]);
     options.set("Q-7", [{ key: "yes", text: "Yes, BOB-29 first", recommended: true }, { key: "no", text: "No, BOB-30 first", recommended: false }]);
   }
+  // BOB-119's shots: helix A-24's case on BobNet's BOB-4, an action asked needed-before only, then edited to hold it, and
+  // edited again; a question edited once. Example records: no edit exists to sample yet.
+  if (window.BOB119) {
+    const edit = (seq, min, by, reason, changes) => ({ seq, at: iso(min), by, reason, changes });
+    const q = (ref, kind, text, over) => ({ project: "bobnet", kind, ref, feature: "BOB-4", text, recommended: null, context: null, holds: { items: ["BOB-4"], sessions: [] },
+      waiting_sessions: [], needed_before: null, asked_by: "Peach@mbp-1", since: iso(240), blocking: true, edits: [], ...over });
+    waits.splice(0, waits.length,
+      q("A-24", "action", "Book the demo room for Friday's rehearsal", { needed_before: { item: "BOB-4" }, edits: [
+        edit(301, 200, "Peach@mbp-1", "holds were left out, so it didn't show as blocking", [{ field: "holds", old: null, new: "BOB-4" }]),
+        edit(305, 30, "Mario@mbp-1", "Friday, not Thursday", [{ field: "text", old: "Book the demo room for Thursday's rehearsal", new: "Book the demo room for Friday's rehearsal" }])] }),
+      q("Q-7", "question", "Ship BOB-4 with the one major open, fixed in a follow-up?", { asked_by: "Toad@mbp-1", since: iso(90), recommended: { key: "fix", text: "Fix it first" }, edits: [
+        edit(310, 12, "Toad@mbp-1", null, [{ field: "text", old: "Ship BOB-4 with one major?", new: "Ship BOB-4 with the one major open, fixed in a follow-up?" }, { field: "option fix", old: "Fix first", new: "Fix it first (recommended)" }])] }));
+    options.set("Q-7", [{ key: "fix", text: "Fix it first", recommended: true }, { key: "ship", text: "Ship it, fix in a follow-up", recommended: false }]);
+  }
   const answered = [];
   const overviewRow = (p = project) => {
     const bd = boardOf(p.key);
@@ -371,6 +385,9 @@ const all = [
   ["bob44-feature-detail", "feature/bobnet/BOB-4", [(p) => p.locator("#on-now .a-line", { hasText: "Luigi" }).locator(".a-btn").click()], true],
   ["bob44-overview-detail", "overview", [(p) => p.locator("#working .a-line", { hasText: "Daisy" }).locator(".a-btn").click()], false, null, ".ov-now"],
   ["bob44-overview-stale", "overview", [], false, null, ".ov-now"],
+  // BOB-119: an edited action and question on Waits on you, A-24's edits open; the feature page's next step, its two edits open by default.
+  ["bob119-waits-edits", "waits", [(p) => p.locator('li[data-ref="A-24"] details.edits summary').click()], false, null, "#waits-holding"],
+  ["bob119-feature-edits", "feature/bobnet/BOB-4", [(p) => p.locator("#next").scrollIntoViewIfNeeded()], false, null, "#next"],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 
@@ -381,10 +398,13 @@ try {
     for (const [w, [width, height]] of Object.entries(widths)) {
       // BOB-44's criterion asks for phone and desktop; a tablet follows desktop (design/BOB-44/laptop-mark.md).
       if (name.startsWith("bob44") && w === "1024") continue;
+      // So does BOB-119's.
+      if (name.startsWith("bob119") && w === "1024") continue;
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2, colorScheme: scheme ?? "light" });
       if (name.startsWith("bob31")) await page.addInitScript(() => (window.BOB31 = true));
       if (name.startsWith("bob3") && !name.startsWith("bob31")) await page.addInitScript(() => (window.BOB3 = true));
-      if (name.startsWith("bob4")) await page.addInitScript(() => (window.BOB4 = true));
+      if (name.startsWith("bob4") || name.startsWith("bob119")) await page.addInitScript(() => (window.BOB4 = true));
+      if (name.startsWith("bob119")) await page.addInitScript(() => (window.BOB119 = true));
       if (name.startsWith("bob44")) await page.addInitScript(() => (window.BOB44 = true));
       if (name.includes("-stale")) await page.addInitScript(() => (window.STALE = true));
       if (name.startsWith("bob5")) {

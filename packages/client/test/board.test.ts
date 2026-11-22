@@ -305,6 +305,38 @@ describe("the board tools in the channel client", () => {
     expect((await call("close_session", { project: "helix", session: s, need: "none", summary: "Built", handoff })).text).toMatch(/secret_detected/);
   });
 
+  it("edits a question through board_ask edit, exactly one of ask, answer or edit; a refusal or an older broker comes back as an error saying why (BOB-119)", async () => {
+    const old = "Invalid discriminator value. Expected 'projects' | 'list' | 'ask' | 'record_answer'";
+    let reply: { ok: unknown } | { code: string; message: string } = { ok: { ref: "A-24", seq: 9 } };
+    const { broker, call } = await session(() => reply);
+    const edit = { ref: "A-24", set: { holds: ["LAND-49"], holds_sessions: [{ feature: "LAND-49", kind: "build", label: "3" }] }, reason: "holds were left out" };
+    expect(await call("board_ask", { project: "helix", edit })).toEqual({ isError: false, text: JSON.stringify({ ref: "A-24", seq: 9 }, null, 2) });
+    expect(broker.ops.at(-1)).toMatchObject({ t: "board_op", as: "Luigi", op: { op: "edit_question", project: "helix", ...edit } });
+    const sent = broker.ops.length;
+    // The mode: exactly one; none or two is the caller's mistake, and nothing is sent.
+    for (const args of [{}, { ask: { text: "x" }, edit }, { answer: { ref: "Q-1", words: "Yes" }, edit }]) {
+      expect(await call("board_ask", { project: "helix", ...args })).toEqual({ isError: true, text: "error: bad_arguments: pass exactly one of ask, answer or edit" });
+    }
+    expect((await call("board_ask", { project: "helix", edit: { ref: "A-24", set: { kind: "question" } } })).text).toMatch(/bad_arguments: set/);
+    expect(broker.ops).toHaveLength(sent);
+    reply = { code: "conflict", message: "not_open: A-24 is done; an answered or closed question isn't edited: ask a new one that names it" };
+    expect(await call("board_ask", { project: "helix", edit })).toEqual({ isError: true, text: `conflict: ${reply.message}` });
+    reply = { code: "forbidden", message: "Luigi may not edit A-24 in helix; its asker, Bob@mbp-1, or an admin may" };
+    expect(await call("board_ask", { project: "helix", edit })).toEqual({ isError: true, text: `forbidden: ${reply.message}` });
+    // A broker from before edit_question doesn't know the op: it says so, and nothing else is tried.
+    reply = { code: "invalid", message: old };
+    const before = broker.ops.length;
+    expect(await call("board_ask", { project: "helix", edit })).toEqual({
+      isError: true,
+      text: "unsupported: this broker can't edit yet: it is older than edit_question (BOB-119); ask a new question that names the old one",
+    });
+    expect(broker.ops).toHaveLength(before + 1);
+    // Its other refusals pass through as they are.
+    reply = { code: "invalid", message: "No question A-99 in helix" };
+    expect((await call("board_ask", { project: "helix", edit: { ...edit, ref: "A-99" } })).text).toBe("invalid: No question A-99 in helix");
+    expect(BOARD_TOOLS.find((t) => t.name === "board_ask")!.description).toMatch(/edit \{ref, set: \{text\?, context\?, options\?, holds\?, holds_sessions\?, needed_before\?\}, reason\?\}/);
+  });
+
   it("flushes captures made while the broker was away once it is back", async () => {
     const captureDir = dir();
     let up = false;

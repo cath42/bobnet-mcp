@@ -112,9 +112,13 @@ export class Rules {
     return this.rows(project.pk, caller.name, caller.laptop).some((r) => hasField(r, field) && covers(r.items));
   }
 
+  /** Whether the caller holds a flag on the project; the owner holds every one. */
+  hasFlag(caller: BoardCaller, project: { pk: number }, flag: Flag): boolean {
+    return caller.kind === "owner" || this.rows(project.pk, caller.name, caller.laptop).some((r) => r[flag] === 1);
+  }
+
   requireFlag(caller: BoardCaller, project: { pk: number; key: string }, flag: Flag): void {
-    if (caller.kind === "owner") return;
-    if (this.rows(project.pk, caller.name, caller.laptop).some((r) => r[flag] === 1)) return;
+    if (caller.kind === "owner" || this.hasFlag(caller, project, flag)) return;
     const who = this.sql
       .exec<{ agent: string }>(`SELECT agent FROM grants WHERE (project IS NULL OR project = ?) AND ${flag} = 1 ORDER BY agent`, project.pk)
       .toArray()

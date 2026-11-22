@@ -1434,6 +1434,115 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       (line().querySelector("form.answer button[type=button]") as HTMLButtonElement).click();
     });
 
+    /** The board changed: Waits reads again and gets `ws`. */
+    let changes = 300;
+    const reread = async (ws: unknown[]) => {
+      FakeSocket.last.frame({ t: "board_changed", project: "helix", seq: ++changes, refs: [] });
+      await answerWith(ws);
+    };
+
+    it("marks an edited question \"edited ×n\" on its meta row, its edits newest first, and moves the A-24 case to Holds work up once it holds (BOB-119 AC 4, AC 7)", async () => {
+      await go("#waits");
+      // As helix A-24 was asked: needed before the demo, holding nothing, so it waited as if nothing were held up.
+      const a24 = wait("A-24", "action", "Book the demo room", false, { project: "helix", feature: null, since: iso(60 * 6), needed_before: { text: "the demo" }, asked_by: "Peach@mbp-1", edits: [] });
+      await reread([a15, gate, q258, bug, q259, a24]);
+      expect(refs("waits-rest")).toContain("A-24");
+      expect(item("A-24").querySelector(".edits")).toBeNull();
+      // An older broker's waits carry no edits: nothing is marked.
+      expect(item("Q-258").querySelector(".edits")).toBeNull();
+      const edit = (seq: number, min: number, by: string, reason: string | null, changes: unknown[]) => ({ seq, at: iso(min), by, reason, changes });
+      const edited = {
+        ...a24,
+        text: "Book the demo room for Friday",
+        blocking: true,
+        holds: { items: ["LAND-49"], sessions: [fixes] },
+        edits: [
+          edit(301, 30, "Peach@mbp-1", "holds were left out", [{ field: "holds", old: null, new: "LAND-49" }, { field: "holds_sessions", old: null, new: "LAND-49 build Fixes" }]),
+          edit(302, 10, "owner@example.com", null, [{ field: "text", old: "Book the demo room", new: "Book the demo room for Friday" }, { field: "option b", old: "Lines", new: "Thin lines" }]),
+        ],
+      };
+      await reread([a15, gate, q258, bug, q259, edited]);
+      // Holding now, it is among what holds work up, with its current text.
+      expect(refs("waits-holding")).toContain("A-24");
+      expect(refs("waits-rest")).not.toContain("A-24");
+      const a = item("A-24");
+      expect(a.querySelector(".q")!.textContent).toBe("Book the demo room for Friday");
+      expect(a.querySelector(".holds")!.textContent).toMatch(/^Holds up LAND-49/);
+      // Muted text on the meta row, not a badge; closed on Waits on you.
+      const d = a.querySelector(".meta > details.edits") as HTMLDetailsElement;
+      expect(d.querySelector("summary")!.textContent).toBe("edited ×2");
+      expect(d.querySelector(".badge")).toBeNull();
+      expect(d.open).toBe(false);
+      const lines = [...d.querySelectorAll("li")];
+      expect(lines.map((l) => l.dataset["seq"])).toEqual(["302", "301"]);
+      expect(lines[0]!.querySelector(".ed-h")!.textContent).toMatch(/^\d+ \w{3} .+ · you · text, options$/);
+      expect(lines[0]!.querySelector(".ed-why")).toBeNull();
+      expect(lines[0]!.querySelector("del")!.textContent).toBe("Book the demo room");
+      expect(lines[0]!.textContent).toContain("option b: Lines → Thin lines");
+      expect(lines[1]!.querySelector(".ed-h")!.textContent).toMatch(/ · Peach · holds, sessions held$/);
+      expect(lines[1]!.querySelector(".ed-why")!.textContent).toBe("“holds were left out”");
+      expect(lines[1]!.textContent).toContain("holds: none → LAND-49");
+      // Opened, it stays open across a redraw.
+      d.open = true;
+      d.dispatchEvent(new Event("toggle"));
+      await reread([a15, gate, q258, bug, q259, edited]);
+      expect((item("A-24").querySelector("details.edits") as HTMLDetailsElement).open).toBe(true);
+      await reread([a15, gate, q258, bug, q259]);
+    });
+
+    it("keeps his draft when the question is edited under his open form, and says so with its edits open; an untouched form just redraws (BOB-119 AC 7)", async () => {
+      (item("Q-259").querySelector(".answer-btn") as HTMLButtonElement).click();
+      // Read before, its record may be here already.
+      const first = pending("get").find((f) => f.op["ref"] === "Q-259");
+      if (first) reply(first, { question: { ref: "Q-259", options: [] } });
+      await settle();
+      const form = () => item("Q-259").querySelector("form.answer")!;
+      const box = form().querySelector("textarea") as HTMLTextAreaElement;
+      box.value = "Tract 7, if it's dry";
+      box.dispatchEvent(new Event("input"));
+      const q259b = { ...q259, text: "Which tract for rehearsal 2, given the rain?", edits: [{ seq: 310, at: iso(1), by: "Bob@mbp-1", reason: "the rain", changes: [{ field: "text", old: q259.text, new: "Which tract for rehearsal 2, given the rain?" }, { field: "option a", old: "Tract 3", new: "Tract 3 (covered)" }] }] };
+      await reread([a15, gate, q258, bug, q259b]);
+      // He is in the form, so the page doesn't redraw under him; the note goes in at once, the draft untouched.
+      expect(form().contains(document.activeElement)).toBe(true);
+      expect(form().querySelector(".edited-note")!.textContent).toBe("Question edited since you opened this");
+      expect((form().querySelector("textarea") as HTMLTextAreaElement).value).toBe("Tract 7, if it's dry");
+      // Once he leaves it, it redraws: the draft stays, the note says why the question reads differently, and its edits are open.
+      (document.activeElement as HTMLElement).blur();
+      await settle();
+      expect((form().querySelector("textarea") as HTMLTextAreaElement).value).toBe("Tract 7, if it's dry");
+      expect(form().querySelectorAll(".edited-note")).toHaveLength(1);
+      expect((item("Q-259").querySelector("details.edits") as HTMLDetailsElement).open).toBe(true);
+      expect(item("Q-259").querySelector(".q")!.textContent).toBe("Which tract for rehearsal 2, given the rain?");
+      // Its options are read again; the keys stand, so the answer still goes.
+      const [again] = pending("get").filter((f) => f.op["ref"] === "Q-259");
+      reply(again!, { question: { ref: "Q-259", options: [{ key: "a", text: "Tract 3 (covered)", recommended: false }, { key: "b", text: "Tract 7", recommended: true }] } });
+      await settle();
+      expect([...form().querySelectorAll(".opt-row")].map((o) => o.textContent)).toEqual(["Tract 7recommended", "Tract 3 (covered)"]);
+      (form().querySelector('button[type="submit"]') as HTMLButtonElement).click();
+      const op = pending("answer_question").at(-1);
+      expect(op!.op).toEqual({ op: "answer_question", project: "helix", ref: "Q-259", words: "Tract 7, if it's dry" });
+      reply(op!, { ref: "Q-259", seq: 311, told: ["Bob@mbp-1"] });
+      await reread([a15, gate, q258, bug]);
+
+      // An untouched form: no note, the edits as he left them.
+      (item("Q-258").querySelector(".answer-btn") as HTMLButtonElement).click();
+      const get = pending("get").find((f) => f.op["ref"] === "Q-258");
+      if (get) reply(get, { question: { ref: "Q-258", options: [] } });
+      await settle();
+      const q258b = { ...q258, text: "Ship rehearsal 1, gap noted?", edits: [{ seq: 312, at: iso(0), by: "Bob@mbp-1", reason: null, changes: [{ field: "text", old: q258.text, new: "Ship rehearsal 1, gap noted?" }] }] };
+      await reread([a15, gate, q258b, bug]);
+      expect(item("Q-258").querySelector(".edited-note")).toBeNull();
+      (document.activeElement as HTMLElement).blur();
+      await settle();
+      expect(item("Q-258").querySelector("form.answer")).not.toBeNull();
+      expect(item("Q-258").querySelector(".edited-note")).toBeNull();
+      expect((item("Q-258").querySelector("details.edits") as HTMLDetailsElement).open).toBe(false);
+      expect(item("Q-258").querySelector(".q")!.textContent).toBe("Ship rehearsal 1, gap noted?");
+      (item("Q-258").querySelector(".answer-btn, form.answer button[type=button]") as HTMLButtonElement)?.click();
+      for (const f of pending("get")) reply(f, { question: { ref: String(f.op["ref"]), options: [] } });
+      await reread([a15, gate, q258, bug, q259]);
+    });
+
     it("drops an item once its source says it is answered, keeping nothing of its own (#3)", async () => {
       await go("#waits");
       FakeSocket.last.frame({ t: "board_changed", project: "helix", seq: 99, refs: ["Q-258"] });
@@ -1874,6 +1983,28 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
     // Amber means "you".
     expect(next.classList.contains("you")).toBe(true);
     expect(view().querySelector(".next-banner")!.classList.contains("you")).toBe(true);
+  });
+
+  it("marks an edited question on the next step with the same render, open when it has two edits or fewer (BOB-119 AC 7)", async () => {
+    const edit = (seq: number) => ({ seq, at: iso(100 - seq), by: "Toad@mbp-1", reason: seq === 2 ? "the major is fixed" : null, changes: [{ field: "text", old: `Ship it with ${seq} majors?`, new: "Ship it with one major?" }] });
+    const q7 = { project: "bobnet", kind: "question", ref: "Q-7", feature: "BOB-4", text: "Ship it with one major?", recommended: null, context: null,
+      holds: { items: ["BOB-4"], sessions: [] }, waiting_sessions: [], needed_before: null, asked_by: "Toad@mbp-1", since: iso(200), blocking: true };
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 92, refs: [] });
+    await answer([{ ...q7, edits: [edit(1), edit(2)] }]);
+    const d = () => $("next").querySelector(".meta > details.edits") as HTMLDetailsElement;
+    expect(d().querySelector("summary")!.textContent).toBe("edited ×2");
+    expect(d().open).toBe(true);
+    expect([...d().querySelectorAll("li")].map((l) => l.dataset["seq"])).toEqual(["2", "1"]);
+    expect(d().querySelector("li .ed-why")!.textContent).toBe("“the major is fixed”");
+    expect(d().querySelector("li del")!.textContent).toBe("Ship it with 2 majors?");
+    // Three and more fold to the count on the item page too.
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 93, refs: [] });
+    await answer([{ ...q7, ref: "Q-8", edits: [edit(1), edit(2), edit(3)] }]);
+    expect(d().querySelector("summary")!.textContent).toBe("edited ×3");
+    expect(d().open).toBe(false);
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 94, refs: [] });
+    await answer([q7]);
+    expect($("next").querySelector(".edits")).toBeNull();
   });
 
   it("folds its history to a count, and opens it newest first in words, with reasons, take-backs, the import and its tasks (BOB-14 #5)", async () => {

@@ -623,6 +623,7 @@ function nextItem(nx) {
       h("div", { class: "top" }, h("span", { class: "kind" }, "Next"), h("b", null, w ? "Waits on you" : nx.text)),
       w ? [h("div", null, h("span", { class: "id" }, w.ref), " ", h("b", null, w.text)),
           w.recommended ? h("div", { class: "sub" }, "Recommended: ", w.recommended.text) : null,
+          w.edits?.length ? h("div", { class: "meta" }, editsOf(w, "item")) : null,
           nx.more ? h("div", { class: "sub muted" }, `and ${nx.more} more waiting on you for this feature`) : null]
         : [nx.when ? h("div", { class: "sub muted" }, nx.when[0].toUpperCase() + nx.when.slice(1)) : null, nx.refs?.length ? h("div", { class: "sub" }, `Waits on ${nx.refs.join(", ")}`) : null]));
 }
@@ -1165,6 +1166,7 @@ async function loadOverview() {
     const [o, w] = await Promise.all([boardOp({ op: "overview" }), boardOp({ op: "waits", since: midnight() })]);
     Object.assign(ov, { rows: o.projects, waits: w.waits, answered: w.answered ?? [], error: null });
     pruneWhole();
+    noteEditedUnderForm();
   } catch (err) {
     Object.assign(ov, { rows: ov.rows ?? [], waits: ov.waits ?? [], error: err.message });
   } finally {
@@ -1403,17 +1405,25 @@ const leadOf = (key) => `${leadName(key)}, ${projectName(key)}'s lead,`;
 /** Who got a message, from the board's `told`: "sent to" (Daisy), never "heard by". */
 const sentTo = (told) => (told?.length ? `; sent to ${told.map(shortName).join(" and ")}` : "");
 
-/** A question's record, with its options, read when its form opens: "<project>/<ref>" → record, or { error }. */
+/**
+ * A question's record, with its options, read when its form opens: "<project>/<ref>" → record, or { error }.
+ * `edits`: how many edits Waits counts on it now; a record read before the last of them is read again, the old one shown meanwhile (BOB-119).
+ */
 const questions = new Map();
-async function loadQuestion(key, ref) {
+const questionReads = new Set();
+async function loadQuestion(key, ref, edits = 0) {
   const id = `${key}/${ref}`;
-  if (questions.has(id)) return;
-  questions.set(id, null);
+  const had = questions.get(id);
+  if (questionReads.has(id) || (had && (had.error || (had.edits_seen ?? 0) >= edits))) return;
+  questionReads.add(id);
+  if (!had) questions.set(id, null);
   try {
-    questions.set(id, (await boardOp({ op: "get", project: key, ref })).question ?? { error: `${ref} isn't on the board` });
+    const q = (await boardOp({ op: "get", project: key, ref })).question;
+    questions.set(id, q ? { ...q, edits_seen: edits } : { error: `${ref} isn't on the board` });
   } catch (err) {
     questions.set(id, { error: err.message });
   }
+  questionReads.delete(id);
   // The options come in under the box he may be typing in: draw them now, and give him the box back.
   if (!document.activeElement?.closest?.("form.answer")) return scheduleRender();
   render();
@@ -1436,7 +1446,7 @@ function answerToggle(id, verb) {
 function answerForm(w) {
   const a = state.answering, qid = waitId(w);
   const q = w.kind === "question" ? questions.get(qid) : null;
-  if (w.kind === "question" && !questions.has(qid)) loadQuestion(w.project, w.ref);
+  if (w.kind === "question") loadQuestion(w.project, w.ref, w.edits?.length ?? 0);
   const close = () => { state.answering = null; render(); };
   const form = h("form", { class: "answer", onsubmit: (e) => { e.preventDefault(); send(); } });
   const options = q?.options ? [...q.options].sort((x, y) => y.recommended - x.recommended) : [];
@@ -1468,11 +1478,14 @@ function answerForm(w) {
     }
     await loadOverview();
   }
+  // His draft stays; the note says the question moved under it (BOB-119). Its option keys are stable, so the answer still goes.
+  const note = a.edited ? h("p", { class: "edited-note" }, "Question edited since you opened this") : null;
   if (w.kind === "action") {
-    form.append(words("Note (optional)", "Anything they should know"), foot(h("button", { type: "submit", class: "primary" }, "Mark done")));
+    form.append(note ?? "", words("Note (optional)", "Anything they should know"), foot(h("button", { type: "submit", class: "primary" }, "Mark done")));
     return form;
   }
   form.append(
+    note ?? "",
     !q ? h("p", { class: "muted", style: "margin:0" }, "Reading its options…")
       : q.error ? h("p", { class: "muted", style: "margin:0" }, q.error)
       : options.length ? h("fieldset", null, h("legend", null, "Pick one"),
@@ -1539,9 +1552,59 @@ function waitLink(w) {
   return w.feature ? h("a", { href: featureHref(w.project, w.feature) }, `Open ${w.feature}`) : null;
 }
 
+/**
+ * Whether the question changed under his open answer form with a draft in it (BOB-119): then the form keeps the
+ * draft and says so, and its edits open. An untouched form just takes the question as it is now.
+ */
+function editedUnderForm(w) {
+  const a = state.answering, n = w.edits?.length ?? 0;
+  if (a?.id !== waitId(w)) return false;
+  a.seen ??= n;
+  if (n > a.seen) {
+    if (a.pick || a.words.trim()) a.edited = true;
+    else a.seen = n;
+  }
+  return !!a.edited;
+}
+
+/** While he is in his form the page doesn't redraw: the note goes into it now, and the rest follows on the next redraw. */
+function noteEditedUnderForm() {
+  const a = state.answering, w = a && (ov.waits ?? []).find((x) => waitId(x) === a.id);
+  if (!w || !editedUnderForm(w)) return;
+  state.folds.set(`edits:waits:${a.id}`, true);
+  const form = $("view").querySelector("form.answer");
+  if (form && !form.querySelector(".edited-note")) form.prepend(h("p", { class: "edited-note" }, "Question edited since you opened this"));
+}
+
+/** What an edit changed, by field, as its line names them. */
+const EDIT_FIELD = { text: "text", context: "context", needed_before: "needed before", holds: "holds", holds_sessions: "sessions held", options: "options" };
+const editField = (f) => EDIT_FIELD[f.startsWith("option") ? "options" : f] ?? f.replace(/_/g, " ");
+
+/**
+ * A question's or action's edits (BOB-119), one render for Waits on you and the item page: "edited ×n", muted on
+ * its meta row, opening its edits newest first: when, who and what, the reason on its own line, the old text struck
+ * through. None when it was never edited, or on an older broker's waits. `opened` opens it whatever he left it as.
+ */
+function editsOf(w, where, opened = false) {
+  const edits = w.edits ?? [];
+  if (!edits.length) return null;
+  const key = `edits:${where}:${waitId(w)}`;
+  if (opened) state.folds.set(key, true);
+  const change = (c) => c.field === "text" || c.field === "context"
+    ? (c.old ? h("del", { class: "muted" }, c.old) : null)
+    : h("div", { class: "muted" }, `${c.field.startsWith("option ") ? c.field : editField(c.field)}: ${c.old ?? "none"} → ${c.new ?? "none"}`);
+  return fold(key, where === "item" && edits.length <= 2, { class: "edits" },
+    h("summary", null, `edited ×${edits.length}`),
+    h("ol", null, [...edits].reverse().map((e) => h("li", { dataset: { seq: e.seq } },
+      h("div", { class: "ed-h" }, h("span", { title: new Date(e.at).toString() }, stamp(e.at)), ` · ${askedBy(e.by)} · ${[...new Set(e.changes.map((c) => editField(c.field)))].join(", ")}`),
+      e.reason ? h("div", { class: "ed-why" }, `“${e.reason}”`) : null,
+      e.changes.map(change)))));
+}
+
 function waitItem(w) {
   const [st, label] = WAIT_KIND[w.kind];
   const id = waitId(w), verb = ANSWER_VERB[w.kind], open = state.answering?.id === id;
+  const edited = editedUnderForm(w);
   const closed = w.waiting_sessions.map((ss) => `${ss.feature === w.feature ? stepName(ss) : `${ss.feature} ${stepName(ss)}`}`);
   return h("li", { id: `w-${id}`, dataset: { blocking: String(w.blocking), kind: w.kind, ref: w.ref } },
     h("div", { class: "top" }, badge(st, label), h("span", { class: "id" }, w.ref),
@@ -1554,6 +1617,7 @@ function waitItem(w) {
       w.blocking ? h("span", { class: "holds" }, w.kind === "bug" ? "Blocks use" : `Holds up ${heldNames(w)}`) : null,
       w.blocking ? null : neededBefore(w),
       w.asked_by ? h("span", null, `from ${askedBy(w.asked_by)}`) : null,
+      editsOf(w, "waits", edited),
       closed.length ? h("span", null, `${upTo2(closed)} closed on it (need: casper)`) : null,
       waitLink(w),
       verb && !open ? answerToggle(id, verb) : null),
