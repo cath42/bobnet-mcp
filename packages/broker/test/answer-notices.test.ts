@@ -198,6 +198,27 @@ describe("sent once per answer (ADR 0009 §1; BOB-111 AC3)", () => {
     expect(await poe.never(deliver)).toBe(true);
   });
 
+  it("audits a notice that can't be sent, leaves it untaken, and still sends the ones after it", async () => {
+    const o = await owner();
+    const picard = await helix(o);
+    // The first answer's recipients are spoiled as it is written, so sending it throws.
+    await runInDurableObject(boardDo(), (_, state) => {
+      state.storage.sql.exec("CREATE TRIGGER spoil AFTER INSERT ON notices BEGIN UPDATE notices SET to_json = '[5]' WHERE seq = NEW.seq; END");
+    });
+    const bad = await o.request({ t: "board_op", op: { op: "answer_question", project: "helix", ref: "Q-1", key: "a" } });
+    await runInDurableObject(boardDo(), (_, state) => {
+      state.storage.sql.exec("DROP TRIGGER spoil");
+    });
+    const good = await o.request({ t: "board_op", op: { op: "answer_question", project: "helix", ref: "Q-2", words: "Red" } });
+    expect(good.told).toContain("Picard@mbp-1");
+    expect(await picard.next(deliver)).toMatchObject({ msg: { id: `m_board_${good.seq}` } });
+    expect(await stored(`m_board_${bad.seq}`)).toBe(0);
+    expect(await untaken()).toEqual([bad.seq]);
+    expect(JSON.parse((await audits("notice:send_failed"))[0]!.detail)).toMatchObject({ seq: bad.seq });
+    const alarm = await runInDurableObject(network(), (_, state) => state.storage.getAlarm());
+    expect(alarm).not.toBeNull();
+  });
+
   it("keeps the answer when a drain throws, and the next drain sends it", async () => {
     const o = await owner();
     const picard = await helix(o);

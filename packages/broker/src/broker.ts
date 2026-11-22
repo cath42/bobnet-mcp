@@ -415,12 +415,24 @@ export class Broker extends DurableObject<Env> {
       // RPC's types can't carry the notice's loose JSON; the rows are the store's.
       const rows = (await board.notices()) as unknown as NoticeRow[];
       // From here to the mark nothing awaits: two drains that overlap can't both store a row.
+      // A row that throws is audited and left untaken for the alarm's retry; the rest still go.
+      const sentRows: number[] = [];
       for (const n of rows) {
-        const sent = this.sendNotice(n);
-        if (sent) told.set(n.seq, sent);
+        try {
+          const sent = this.sendNotice(n);
+          if (sent) told.set(n.seq, sent);
+          sentRows.push(n.seq);
+        } catch (err) {
+          this.auditAs("board", "notice:send_failed", { seq: n.seq, err: err instanceof Error ? err.message : String(err) });
+        }
       }
       if (rows.length === 0) return told;
-      await board.noticesTaken(rows.map((n) => n.seq));
+      if (sentRows.length > 0) await board.noticesTaken(sentRows);
+      if (sentRows.length < rows.length) {
+        // The untaken rows would come back at once: the alarm tries them again, and later batches wait for it.
+        await this.retryDrain();
+        return told;
+      }
       if (rows.length < NOTICE_BATCH) return told;
     }
   }
@@ -431,11 +443,16 @@ export class Broker extends DurableObject<Env> {
       return await this.drainNotices();
     } catch (err) {
       this.auditAs("board", "notice:drain_failed", { err: err instanceof Error ? err.message : String(err) });
-      const at = Date.now() + NOTICE_RETRY_MS;
-      const set = await this.ctx.storage.getAlarm();
-      if (set === null || set > at) await this.ctx.storage.setAlarm(at);
+      await this.retryDrain();
       return null;
     }
+  }
+
+  /** Has the alarm drain again within a minute. */
+  private async retryDrain(): Promise<void> {
+    const at = Date.now() + NOTICE_RETRY_MS;
+    const set = await this.ctx.storage.getAlarm();
+    if (set === null || set > at) await this.ctx.storage.setAlarm(at);
   }
 
   /** One notice, stored and delivered as any message is; null when an earlier drain stored it. */
@@ -458,7 +475,7 @@ export class Broker extends DurableObject<Env> {
     send(id, agents, n.text);
     if (supervisor) send(`${id}_s`, [supervisor], JSON.stringify(n.notice));
     const all = [...agents, ...(supervisor ? [supervisor] : [])];
-    return { told: all.map(formatAddress), waiting: all.filter((r) => !reached.includes(r)).map(formatAddress), supervisor: supervisor ? formatAddress(supervisor) : null };
+    return { told: all.map(formatAddress), waiting: all.filter((r) => !reached.includes(r)).map(formatAddress), supervisor: sup ? formatAddress(sup) : null };
   }
 
   /**

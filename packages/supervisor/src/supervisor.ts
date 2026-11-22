@@ -1378,10 +1378,10 @@ export class Supervisor {
   }
 
   /**
-   * An answer to a board question or action, from the board (ADR 0009 §4): its project's orchestrator
-   * is told what was answered, what it held and what still holds it, so it can start what waited. Once
-   * per message id, recorded first; dropped for a project not run here, and skipped when the
-   * orchestrator recorded it itself. No spawn and no board write: starting a session is its call.
+   * An answer to a board question or action, from the board (ADR 0009 §4): the laptop's orchestrator, and the
+   * project's own when it is another and not the asker, are told what was answered, what it held and what still holds it, so it can start what waited. Once
+   * per message id, recorded first; dropped for a project not run here, and skipped, per orchestrator,
+   * when it recorded it itself. No spawn and no board write: starting a session is its call.
    */
   private onBoardAnswer(msg: Envelope, json: Record<string, unknown>): void {
     const read = BoardAnswerEvent.safeParse(json);
@@ -1395,14 +1395,21 @@ export class Supervisor {
       return;
     }
     if (!this.store.beginBoardNotice(msg.id, a.project)) return;
-    const orchestrator = this.orchestratorOf(a.project);
+    // The laptop's orchestrator always (it is awake for this); the project's too when it is another and not the asker, who has the text.
+    const own = this.config.projects.get(a.project)?.orchestrator;
+    const targets = [this.config.orchestrator];
+    if (own && !this.sameAddress(own, this.config.orchestrator) && !(typeof a.asked_by === "string" && this.sameAddress(own, a.asked_by))) targets.push(own);
     const detail = { message: msg.id, project: a.project, ref: a.ref, state: a.state, by: a.by };
-    if (a.by !== "owner" && this.sameAddress(a.by, orchestrator)) {
-      this.store.audit(msg.from, "board:answer_own", null, detail);
-      return;
+    const told: string[] = [];
+    for (const to of targets) {
+      if (a.by !== "owner" && this.sameAddress(a.by, to)) {
+        this.store.audit(msg.from, "board:answer_own", null, { ...detail, to });
+        continue;
+      }
+      this.notifyTo(to, boardAnswerText(a));
+      told.push(to);
     }
-    this.notify(boardAnswerText(a), a.project);
-    this.store.audit(msg.from, "board:answer", null, { ...detail, to: orchestrator });
+    if (told.length > 0) this.store.audit(msg.from, "board:answer", null, { ...detail, to: told.join(",") });
   }
 
   /** Whether two addresses name the same peer, a bare name being this laptop's. */
@@ -3185,7 +3192,10 @@ export class Supervisor {
 
   /** Messages the project's orchestrator (the laptop's if none); what the broker can't take waits in the outbox. */
   private notify(body: string, project?: string): void {
-    const to = this.orchestratorOf(project);
+    this.notifyTo(this.orchestratorOf(project), body);
+  }
+
+  private notifyTo(to: string, body: string): void {
     this.broker
       .request({ t: "send", as: this.config.name, to: [to], body })
       .catch((err: Error) => {

@@ -70,11 +70,17 @@ describe("an answer notice from the board (ADR 0009 §4)", () => {
     expect(sessions.length).toBe(0);
   });
 
-  it("goes to a project's own orchestrator when it names one", async () => {
+  it("goes to the laptop's orchestrator and to a project's own, unless that is the asker, who has the text", async () => {
     const { push, told } = await setup();
+    // (b) Peach is neither Bob nor the asker (kong): both are told.
     push({ ...ANSWER, project: "arcade" }, "m_board_1_s");
     await until(() => told("Peach").length === 1);
-    expect(told("Bob")).toEqual([]);
+    expect(told("Bob").length).toBe(1);
+    // (a) Peach is the asker: one forward, to the laptop's orchestrator.
+    push({ ...ANSWER, project: "arcade", asked_by: "Peach@mbp-1" }, "m_board_2_s");
+    await until(() => told("Bob").length === 2);
+    await tick(30);
+    expect(told("Peach").length).toBe(1);
   });
 
   it("drops a project not run here, a body that doesn't parse, and an answer event from anyone but the board", async () => {
@@ -89,8 +95,8 @@ describe("an answer notice from the board (ADR 0009 §4)", () => {
     expect(store.auditLog(50).filter((a) => a.action.startsWith("board:"))).toEqual([]);
   });
 
-  it("skips an answer the orchestrator recorded itself: it knows", async () => {
-    const { push, broker } = await setup();
+  it("skips an answer the orchestrator recorded itself, per target: it knows", async () => {
+    const { push, broker, told } = await setup();
     push({ ...ANSWER, by: "Bob@mbp-1", via: "conversation" }, "m_board_7_s");
     await until(() => store.auditLog(20).some((a) => a.action === "board:answer_own"));
     expect(broker.sent).toEqual([]);
@@ -98,6 +104,15 @@ describe("an answer notice from the board (ADR 0009 §4)", () => {
     push({ ...ANSWER, by: "kong@mbp-1", via: "conversation" }, "m_board_8_s");
     await until(() => broker.sent.length === 1);
     expect(broker.sent[0]!.body).toMatch(/^Casper \(recorded by kong@mbp-1\) answered helix Q-282/);
+    // The laptop's orchestrator recorded it: the project's own is still told, Bob is not.
+    push({ ...ANSWER, project: "arcade", by: "Bob@mbp-1", via: "conversation" }, "m_board_9_s");
+    await until(() => told("Peach").length === 1);
+    expect(told("Bob").length).toBe(1);
+    // The project's own recorded it: Bob is told, Peach is not.
+    push({ ...ANSWER, project: "arcade", by: "Peach@mbp-1", via: "conversation" }, "m_board_10_s");
+    await until(() => told("Bob").length === 2);
+    await tick(30);
+    expect(told("Peach").length).toBe(1);
   });
 });
 
