@@ -535,8 +535,9 @@ projects:
       discard: () => {},
       check: async () => {},
       switch: () => {},
-      tagged: async (tag) => tags[tag] ?? null,
+      tagged: async (tag) => (asked.push(tag), tags[tag] ?? null),
     };
+    const asked: string[] = [];
     const { sup, broker, sessions } = await setup(config, { releases });
     const w = await sup.spawnJoined(spawn);
     await until(() => sessions.length === 1);
@@ -549,7 +550,8 @@ projects:
     expect(push.fixes).toEqual([{ ref: "BOB-27", sha, subject: "v2: BOB-27: the fix" }]);
     // A repo no service project here has: not sent, since the broker would refuse it.
     await sup.upgradeSupervisor(undefined, "v2.0.0-rc.35", "no");
-    await until(() => store.upgradesOpen().length === 0);
+    // Its row is open from before the build: none open once it was asked for is its end, so nothing runs past the test.
+    await until(() => asked.includes("v2.0.0-rc.35") && store.upgradesOpen().length === 0);
     await tick(50);
     expect(ops(broker, "release_tag")).toHaveLength(1);
   });
