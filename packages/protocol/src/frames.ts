@@ -203,6 +203,18 @@ export const LaptopSnapshot = z.object({
     .max(500),
   /** Its last cleanup (BOB-123); null before its first, and from a supervisor before cleanups. */
   cleanup: CleanupReport.nullable().default(null),
+  /**
+   * Its board reports not yet sent (ADR 0012 §3): how many, the oldest's `created_at`, and the error
+   * code the oldest last met (null before it fails). `{ 0, null, null }` when empty; absent from a
+   * supervisor before 0012.
+   */
+  board_outbox: z
+    .object({
+      count: z.number().int().nonnegative(),
+      oldest_at: z.string().max(40).nullable(),
+      code: z.string().max(40).nullable(),
+    })
+    .optional(),
 });
 export type LaptopSnapshot = z.infer<typeof LaptopSnapshot>;
 
@@ -316,6 +328,7 @@ export interface PeerStats {
 export interface Dashboard {
   peers: Array<PeerInfo & { connected_at: string | null; stats: PeerStats }>;
   laptops: Array<{ laptop: string; at: string; snapshot: LaptopSnapshot }>;
+  /** Always `[]` from ADR 0012 on: the boards follow the reply as `board` frames, to that socket only. */
   boards: Array<{ laptop: string; at: string; board: ProjectBoard }>;
   updates: UpdateItem[];
   traffic: TrafficItem[];
@@ -392,6 +405,14 @@ export const UpdateFrame = z.object({ t: z.literal("update"), rid, as: segment, 
 /** Owner only: everything the dashboard shows, in one reply. */
 export const DashboardFrame = z.object({ t: z.literal("dashboard"), rid });
 
+/** Owner only (ADR 0012 §4): the broker's audit, newest first; `before` (a `seq`) pages back. */
+export const AuditFrame = z.object({
+  t: z.literal("audit"),
+  rid,
+  limit: z.number().int().min(1).max(500).optional(),
+  before: z.number().int().optional(),
+});
+
 /** What the owner can do from the dashboard. */
 export const Action = z.discriminatedUnion("kind", [
   /** `message` is the note to the agent with the decision. */
@@ -448,6 +469,7 @@ export const ClientFrame = z.discriminatedUnion("t", [
   ActionResultFrame,
   AckFrame,
   BoardOpFrame,
+  AuditFrame,
 ]);
 export type ClientFrame = z.infer<typeof ClientFrame>;
 
@@ -473,6 +495,8 @@ export const ErrorCode = z.enum([
   "invalid",
   "conflict",
   "unavailable",
+  /** The broker failed on the frame (ADR 0012 §4); it is in its audit. Retryable, never final. */
+  "internal",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
@@ -515,4 +539,14 @@ export interface Results {
   action: { id: string };
   /** Per operation: `BoardResults[op]`. */
   board_op: BoardResults[keyof BoardResults];
+  audit: { entries: AuditEntry[]; more: boolean };
+}
+
+/** One row of the broker's audit, as the `audit` frame reads it. */
+export interface AuditEntry {
+  seq: number;
+  ts: string;
+  actor: string;
+  action: string;
+  detail: unknown;
 }

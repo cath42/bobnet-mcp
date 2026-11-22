@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressKey, CleanupReport, CLIENT_FRAME_TYPES, ClientFrame, findSecret, LaptopSnapshot, redactSecrets, parseRecipient, PROTOCOL_VERSION, WorkerSnapshot } from "../src/index.ts";
+import { addressKey, CleanupReport, CLIENT_FRAME_TYPES, ClientFrame, ErrorCode, findSecret, LaptopSnapshot, redactSecrets, parseRecipient, PROTOCOL_VERSION, WorkerSnapshot } from "../src/index.ts";
 import { redactSecrets as redactSecretsBb51add } from "./fixtures/secrets-bb51add.ts";
 
 describe("parseRecipient", () => {
@@ -561,5 +561,34 @@ describe("a laptop's last cleanup (BOB-123 AC 6)", () => {
   it("an older broker's schema drops it and still takes the snapshot", () => {
     const got = LaptopSnapshot.omit({ cleanup: true }).parse({ ...snap, cleanup: run });
     expect(got).not.toHaveProperty("cleanup");
+  });
+});
+
+describe("ADR 0012: the board outbox, internal and the audit frame (BOB-48)", () => {
+  const snap = { supervisor: { started_at: "x", concurrency: 1, active: 0, queued: 0 }, workers: [], pending: [], usage: [] };
+
+  it("reads a snapshot with its board outbox, and an older supervisor's without one", () => {
+    expect(LaptopSnapshot.parse(snap)).not.toHaveProperty("board_outbox");
+    const empty = { count: 0, oldest_at: null, code: null };
+    expect(LaptopSnapshot.parse({ ...snap, board_outbox: empty }).board_outbox).toEqual(empty);
+    const stuck = { count: 312, oldest_at: "2026-11-15T03:00:00.000Z", code: "unavailable" };
+    expect(LaptopSnapshot.parse({ ...snap, board_outbox: stuck }).board_outbox).toEqual(stuck);
+    expect(LaptopSnapshot.safeParse({ ...snap, board_outbox: { ...stuck, count: -1 } }).success).toBe(false);
+    expect(LaptopSnapshot.safeParse({ ...snap, board_outbox: { ...stuck, code: "x".repeat(41) } }).success).toBe(false);
+    // An older broker's schema drops it and still takes the snapshot.
+    expect(LaptopSnapshot.omit({ board_outbox: true }).parse({ ...snap, board_outbox: stuck })).not.toHaveProperty("board_outbox");
+  });
+
+  it("knows the audit frame, its limit 1 to 500 and its before", () => {
+    expect(CLIENT_FRAME_TYPES).toContain("audit");
+    expect(ClientFrame.parse({ t: "audit", rid: "a1" })).toEqual({ t: "audit", rid: "a1" });
+    expect(ClientFrame.parse({ t: "audit", rid: "a1", limit: 500, before: 42 })).toEqual({ t: "audit", rid: "a1", limit: 500, before: 42 });
+    expect(ClientFrame.safeParse({ t: "audit", rid: "a1", limit: 0 }).success).toBe(false);
+    expect(ClientFrame.safeParse({ t: "audit", rid: "a1", limit: 501 }).success).toBe(false);
+    expect(ClientFrame.safeParse({ t: "audit", rid: "a1", before: 1.5 }).success).toBe(false);
+  });
+
+  it("has an internal error code", () => {
+    expect(ErrorCode.parse("internal")).toBe("internal");
   });
 });
