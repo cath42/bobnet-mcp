@@ -405,6 +405,54 @@ describe("dashboard", () => {
     expect(old.laptops[0].snapshot).not.toHaveProperty("board_outbox");
   });
 
+  const ask = {
+    text: "echo probe",
+    cut: false,
+    questions: [{ question: "Which index?", header: "Index", multi: true, options: [{ label: "GiST", description: "for ranges" }] }],
+  };
+  const decided = {
+    id: "r_0", worker_id: "w_1", name: "Bill", project: "helix", kind: "approval" as const, tool: "Bash",
+    created_at: "2026-11-22T09:00:00.000Z", decided_at: "2026-11-22T09:01:00.000Z", decision: "allow" as const, preview: "git push", note: "Once only.",
+  };
+  const row = { id: "r_1", worker_id: "w_1", name: "Bill", kind: "approval" as const, tool: "Bash", tier: "human" as const, created_at: "2026-11-22T09:00:00.000Z", preview: "echo probe" };
+
+  it("keeps a report's whole asks and decided, and serves them whole in the dashboard reply and the report frame (ADR 0013)", async () => {
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const supervisor = await agent(1, "supervisor");
+    const whole = { ...snapshot, pending: [{ ...row, ask }, { ...row, id: "r_2", ask: null }, { ...row, id: "r_3" }], decided: [decided] };
+    await supervisor.request({ t: "report", as: "supervisor", snapshot: whole });
+    const live = await owner.next((f) => f.t === "report");
+    expect(live).toMatchObject({ snapshot: { pending: whole.pending, decided: [decided] } });
+    const d = await owner.request({ t: "dashboard" });
+    expect(d.laptops[0]!.snapshot).toEqual({ ...whole, cleanup: null });
+    // An older supervisor's: neither.
+    await supervisor.request({ t: "report", as: "supervisor", snapshot: { ...snapshot, pending: [row] } });
+    const old = (await owner.request({ t: "dashboard" })).laptops[0]!.snapshot;
+    expect(old).not.toHaveProperty("decided");
+    expect(old.pending[0]).not.toHaveProperty("ask");
+  });
+
+  it("takes a worst-case snapshot within the board frame limit (ADR 0013, Consequences)", async () => {
+    const supervisor = await agent(1, "supervisor");
+    // Every list at its maximum, with ordinary names: 100 workers with 400 ctx each, 500 usage rows, 100 pending
+    // whose asks fill the 128 KiB budget, 50 decided with 2000-character notes. The supervisor's fitReport
+    // brings a report with every string at its maximum too under the limit (its own test).
+    const workers = Array.from({ length: 100 }, (_, i) => ({ ...snapshot.workers[0]!, id: `w_${i}`, task: "x".repeat(200), checkpoint: "y".repeat(300), ctx: Array.from({ length: 400 }, () => 1_000_000) }));
+    const usage = Array.from({ length: 500 }, (_, i) => ({
+      day: "2026-11-22", project: "bobnet", role: `r${i}`, model: "claude-opus-5-5", workers: 100,
+      tokens: { input: 1e12, output: 1e12, cache_read: 1e12, cache_write: 1e12 },
+    }));
+    const big = { text: "t".repeat(Math.floor((128 * 1024) / 100) - 40), cut: true, questions: [] };
+    const pending = Array.from({ length: 100 }, (_, i) => ({ ...row, id: `r_${i}`, preview: "v".repeat(400), ask: big }));
+    expect(pending.reduce((n, p) => n + JSON.stringify(p.ask).length, 0)).toBeGreaterThan(127 * 1024);
+    const notes = Array.from({ length: 50 }, (_, i) => ({ ...decided, id: `r_d${i}`, preview: "v".repeat(400), note: "z".repeat(2000) }));
+    const worst = { ...snapshot, workers, pending, usage, decided: notes };
+    const size = Buffer.byteLength(JSON.stringify({ t: "report", rid: "r1", as: "supervisor", snapshot: worst }));
+    expect(size).toBeGreaterThan(LIMITS.frameBytes);
+    expect(size).toBeLessThan(LIMITS.boardFrameBytes);
+    await expect(supervisor.request({ t: "report", as: "supervisor", snapshot: worst })).resolves.toMatchObject({ laptop: "mbp-1" });
+  });
+
   it("takes a snapshot larger than other frames: a busy day's workers", async () => {
     const supervisor = await agent(1, "supervisor");
     const busy = { ...snapshot, workers: Array.from({ length: 100 }, (_, i) => ({ ...snapshot.workers[0]!, id: `w_${i}`, task: "x".repeat(200), checkpoint: "y".repeat(300) })) };
@@ -487,6 +535,20 @@ describe("dashboard actions", () => {
     expect(handed).toEqual({ t: "action", id, to: "supervisor@mbp-1", by: "owner@example.com", token, action: { kind: "stop", worker: "w_1" } });
     sup.raw(JSON.stringify({ t: "action_result", as: "supervisor", id, ok: true, message: "stopped" }));
     expect(await owner.next((f) => f.t === "action_result")).toMatchObject({ id, laptop: "mbp-1", ok: true, message: "stopped" });
+  });
+
+  it("relays note_delivered when the supervisor sends it, and leaves it out when an older one doesn't (ADR 0013 §3)", async () => {
+    const sup = await agent(1, "supervisor");
+    await sup.request({ t: "report", as: "supervisor", snapshot });
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const one = await owner.request({ t: "action", laptop: "mbp-1", action: { kind: "answer", request: "r_1", decision: "allow", message: "go" } });
+    await sup.next((f) => f.t === "action");
+    sup.raw(JSON.stringify({ t: "action_result", as: "supervisor", id: one.id, ok: true, message: "r_1 allowed", note_delivered: false }));
+    expect(await owner.next((f) => f.t === "action_result")).toEqual({ t: "action_result", id: one.id, laptop: "mbp-1", ok: true, message: "r_1 allowed", note_delivered: false });
+    const two = await owner.request({ t: "action", laptop: "mbp-1", action: { kind: "answer", request: "r_2", decision: "allow", message: "go" } });
+    await sup.next((f) => f.t === "action" && f.id === two.id);
+    sup.raw(JSON.stringify({ t: "action_result", as: "supervisor", id: two.id, ok: true, message: "r_2 allowed" }));
+    expect(await owner.next((f) => f.t === "action_result" && f.id === two.id)).toEqual({ t: "action_result", id: two.id, laptop: "mbp-1", ok: true, message: "r_2 allowed" });
   });
 
   it("pins the reporter to the name the supervisor registers as, and ignores a report from any other peer on its laptop", async () => {

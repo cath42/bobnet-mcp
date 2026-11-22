@@ -725,7 +725,9 @@ export class Broker extends DurableObject<Env> {
   private actionResult(conn: Conn, frame: Extract<ClientFrame, { t: "action_result" }>): void {
     const peer = this.hosted(conn, frame.as);
     this.audit(conn, "action_result", { id: frame.id, ok: frame.ok });
-    this.toOwners({ t: "action_result", id: frame.id, laptop: peer.laptop, ok: frame.ok, message: frame.message });
+    // Whether a note with allow reached the agent (ADR 0013 §3): absent from an older supervisor, and then from here too.
+    const noted = frame.note_delivered !== undefined ? { note_delivered: frame.note_delivered } : {};
+    this.toOwners({ t: "action_result", id: frame.id, laptop: peer.laptop, ok: frame.ok, message: frame.message, ...noted });
   }
 
   private toOwners(frame: ServerFrame): void {
