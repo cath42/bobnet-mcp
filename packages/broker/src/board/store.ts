@@ -1206,7 +1206,7 @@ export class BoardStore {
     if (op.status !== undefined && op.status !== "Draft") this.rules.require(tx.caller, p, "status", scope, where);
     if (op.release) {
       release = this.release(p, op.release);
-      if (op.kind === "feature") ownerOnly(tx.caller, "Putting a feature in a release");
+      if (op.kind === "feature") this.rules.require(tx.caller, p, "release", null, "features");
       else this.rules.require(tx.caller, p, "triage", null, "the backlog");
       openRelease(release);
     }
@@ -1360,7 +1360,7 @@ export class BoardStore {
       }
     }
     if (set.release !== undefined) {
-      if (row.kind === "feature") throw new BoardError("invalid", "A feature's release is Casper's gate: set_release");
+      if (row.kind === "feature") throw new BoardError("invalid", "A feature's release is set with set_release");
       if (row.kind === "task") throw new BoardError("invalid", "A task's release is its feature's");
       this.rules.require(tx.caller, p, "triage", null, what);
       const to = set.release === null ? null : this.release(p, set.release);
@@ -1527,14 +1527,15 @@ export class BoardStore {
   }
 
   private setRelease(tx: Tx, op: Op<"set_release">): BoardWritten {
-    ownerOnly(tx.caller, "Moving a feature into or out of a release");
     const p = tx.project(this.project(op.project));
     const row = this.feature(p, op.ref);
     const ref = this.refOf(row.pk);
+    // A grant, not Casper's gate (BOB-122): the owner holds it, and so does a rule with 'release'.
+    this.rules.require(tx.caller, p, "release", this.scope(row), ref);
     const to = op.release === null ? null : this.release(p, op.release);
     if (to) openRelease(to);
     if ((to?.pk ?? null) === row.release) return { ref, seq: 0 };
-    // Casper's move puts a feature last in its new release (notes 19).
+    // A move puts a feature last in its new release (notes 19).
     const ord = this.nextOrd(`SELECT max(ord) AS m FROM items WHERE project = ? AND kind = 'feature' AND release ${to ? "= ?" : "IS NULL"}`, p.pk, ...(to ? [to.pk] : []));
     this.setItem(row.pk, { release: to?.pk ?? null, ord }, tx.at);
     const changes: Change[] = [["release", row.release === null ? null : this.releaseRef(row.release), op.release], ["ord", row.ord, ord]];

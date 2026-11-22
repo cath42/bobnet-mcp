@@ -12,7 +12,8 @@
       "content",
       "criteria",
       "triage",
-      "create"
+      "create",
+      "release"
     ],
     "sessions": true,
     "questions": true,

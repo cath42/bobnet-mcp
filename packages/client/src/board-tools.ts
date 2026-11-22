@@ -30,7 +30,7 @@ const projectArg = z.string().optional().describe("Project key, e.g. helix; defa
 /** Operation-specific fields, checked against the board's own schema when called. */
 const fields = z.record(z.string(), z.unknown());
 
-const WRITES = ["create", "update", "criteria", "slot", "promote", "archive", "restore", "order"] as const;
+const WRITES = ["create", "update", "criteria", "slot", "promote", "archive", "restore", "order", "set_release"] as const;
 
 async function project(deps: BoardToolDeps, args: Record<string, unknown>): Promise<string> {
   return typeof args["project"] === "string" ? args["project"] : deps.project();
@@ -126,7 +126,7 @@ export const BOARD_TOOLS: BoardTool[] = [
       `Change the board, checked against your rights per field. op is one of ${WRITES.join(", ")}; fields are that operation's: ` +
       "create {kind feature|task|backlog, type, title, parent?, description?, criteria?: [{text, section?}], …}; update {ref, set: {status?, title?, description?, notes?, labels?, deps?, parent?, …}, reason?}; " +
       "criteria {ref, change: {action add|edit|check|uncheck, n?, text?, evidence?, reason?}}; slot {ref, feature}; promote {ref}; archive {ref, reason}; restore {ref}; " +
-      "order {scope features|backlog, release?, refs}. A bug is Done once its fix has landed and its criteria (\"It no longer happens\") are checked, the landed commit as evidence; " +
+      "order {scope features|backlog, release?, refs}; set_release {ref, release (null: out of any), reason?}, a feature's release, last in it. A bug is Done once its fix has landed and its criteria (\"It no longer happens\") are checked, the landed commit as evidence; " +
       "a bug closed without a fix is archived with a reason.",
     shape: { project: projectArg, op: z.enum(WRITES), fields },
     run: async (deps, a) => deps.op(checked({ ...(a["fields"] as Record<string, unknown>), op: a["op"], project: await project(deps, a) })),

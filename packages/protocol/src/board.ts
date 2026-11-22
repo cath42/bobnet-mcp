@@ -34,7 +34,7 @@ export const GrantItems = z.enum(["all", "open_feature", "not_open_feature", "no
 export type GrantItems = z.infer<typeof GrantItems>;
 
 /** Which fields a grant may write: `content` is title, description, notes, plan, type, labels, dependencies and parent. */
-export const GrantField = z.enum(["status", "order", "content", "criteria", "triage", "create"]);
+export const GrantField = z.enum(["status", "order", "content", "criteria", "triage", "create", "release"]);
 export type GrantField = z.infer<typeof GrantField>;
 
 // ---------- Values ----------

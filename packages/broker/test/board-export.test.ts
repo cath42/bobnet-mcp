@@ -320,3 +320,30 @@ describe("board migration 4: bobnet frees draft prefix DRAFT (ADR 0006)", () => 
     expect(n).toBe(0);
   });
 });
+
+describe("board migration 5: grant field 'release' (BOB-122)", () => {
+  it("keeps every rule's fields and lets a rule take 'release'", async () => {
+    await ok(owner, { op: "create_project", key: "helix", name: "Helix", prefix: "LAND" });
+    await ok(owner, { op: "grant", project: "helix", agent: "Picard", role: "PO", read: true, items: "all", fields: ["status", "triage"] });
+    // The table as it was before migration 5, then migration 5 over it.
+    await runInDurableObject(board(), (_, state) => {
+      const sql = state.storage.sql;
+      sql.exec(`DROP TABLE grant_fields;
+        CREATE TABLE grant_fields (
+          grant_pk INTEGER NOT NULL REFERENCES grants (pk) ON DELETE CASCADE,
+          field    TEXT NOT NULL CHECK (field IN ('status', 'order', 'content', 'criteria', 'triage', 'create')),
+          PRIMARY KEY (grant_pk, field)
+        );
+        INSERT INTO grant_fields (grant_pk, field) SELECT pk, 'status' FROM grants;
+        INSERT INTO grant_fields (grant_pk, field) SELECT pk, 'triage' FROM grants;`);
+      expect(() => sql.exec("INSERT INTO grant_fields (grant_pk, field) SELECT pk, 'release' FROM grants")).toThrow(/CHECK constraint failed/);
+      sql.exec(BOARD_MIGRATIONS[4]!);
+    });
+    const fields = async () => (await ok(owner, { op: "grants", project: "helix" })).grants.find((g) => g.agent === "Picard")!.fields;
+    expect(await fields()).toEqual(["status", "triage"]);
+    await ok(owner, { op: "grant", project: "helix", agent: "Picard", role: "PO", read: true, items: "all", fields: ["status", "triage", "release"] });
+    expect(await fields()).toEqual(["release", "status", "triage"]);
+    await ok(owner, { op: "revoke", project: "helix", agent: "Picard" });
+    expect(await runInDurableObject(board(), (_, state) => state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM grant_fields").one().n)).toBe(0);
+  });
+});

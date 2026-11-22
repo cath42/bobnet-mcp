@@ -404,4 +404,16 @@ export const BOARD_MIGRATIONS: readonly string[] = [
   UPDATE projects SET draft_prefix = NULL
   WHERE key = 'bobnet' AND draft_prefix = 'DRAFT' AND NOT EXISTS (SELECT 1 FROM item_refs WHERE project = projects.pk AND ref LIKE 'DRAFT-%');
   `,
+  // 5: grant field 'release' (BOB-122): moving a feature into or out of a release is a grant, not Casper's gate.
+  // SQLite can't change a CHECK in place, so the table is made again; nothing refers to it.
+  `
+  CREATE TABLE grant_fields_new (
+    grant_pk INTEGER NOT NULL REFERENCES grants (pk) ON DELETE CASCADE,
+    field    TEXT NOT NULL CHECK (field IN ('status', 'order', 'content', 'criteria', 'triage', 'create', 'release')),
+    PRIMARY KEY (grant_pk, field)
+  );
+  INSERT INTO grant_fields_new (grant_pk, field) SELECT grant_pk, field FROM grant_fields;
+  DROP TABLE grant_fields;
+  ALTER TABLE grant_fields_new RENAME TO grant_fields;
+  `,
 ];

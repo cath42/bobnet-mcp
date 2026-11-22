@@ -274,6 +274,11 @@ describe("the board tools in the channel client", () => {
     expect(broker.ops.at(-1)).not.toHaveProperty("ctx");
     await call("board_write", { project: "helix", op: "update", fields: { ref: "LAND-2", set: { status: "Done" } } });
     expect(broker.ops.at(-1)).toMatchObject({ op: { op: "update", project: "helix", ref: "LAND-2", set: { status: "Done" } } });
+    // A feature's release, by the PO's 'release' grant (BOB-122): null takes it out of any.
+    await call("board_write", { project: "helix", op: "set_release", fields: { ref: "LAND-1", release: "R2" } });
+    expect(broker.ops.at(-1)).toMatchObject({ op: { op: "set_release", project: "helix", ref: "LAND-1", release: "R2" } });
+    await call("board_write", { project: "helix", op: "set_release", fields: { ref: "LAND-1", release: null } });
+    expect(broker.ops.at(-1)).toMatchObject({ op: { op: "set_release", ref: "LAND-1", release: null } });
   });
 
   it("answers a refusal and a bad argument as errors naming why", async () => {

@@ -268,7 +268,7 @@ describe("who may write what (ADR 0001 §5)", () => {
     expect((await item(t2)).parent).toBe(f2);
   });
 
-  it("keeps Casper's gates his: a feature's release, the order of releases, a gated criterion", async () => {
+  it("keeps Casper's gates his: a feature's release without the 'release' grant, the order of releases, a gated criterion", async () => {
     const { r1, f2, t1 } = await helix();
     await helixRules();
     expect(await refused(agent("Picard"), { op: "set_release", project: "helix", ref: f2, release: r1 })).toMatchObject({ code: "forbidden" });
@@ -480,6 +480,86 @@ describe("Casper's gates: closing a release, and undo (ADR 0001 §5)", () => {
     await ok(agent("Picard"), { op: "promote", project: "helix", ref: drafted });
     expect((await item(drafted)).release).toBeNull();
     expect(await features(null)).toContain(drafted);
+  });
+});
+
+describe("a feature's release is a grant, 'release' (BOB-122)", () => {
+  /** Helix's R1 holding f1, R2 empty, f2 in none; Data has the PO's rule with 'release', Picard without it. */
+  async function slotting() {
+    const ids = await helix();
+    await helixRules();
+    const r2 = (await ok(owner, { op: "create_release", project: "helix", title: "Release 2" })).ref!;
+    const f3 = (await ok(owner, { op: "create", project: "helix", kind: "feature", type: "increment", title: "Waits", release: r2 })).ref!;
+    await ok(owner, { op: "grant", project: "helix", agent: "Data", role: "PO", read: true, items: "all", fields: ["status", "order", "content", "criteria", "triage", "create", "release"] });
+    return { ...ids, r2, f3 };
+  }
+  const features = async (release: string | null) => ((await ok(owner, { op: "list", project: "helix", of: "features", release })).items ?? []).map((i) => i.ref);
+
+  it("AC1: a rule with 'release' moves a feature into a release, between releases and out of any, last in its new one, as the PO's", async () => {
+    const { r1, r2, f1, f2, f3 } = await slotting();
+    const moved = async (ref: string, old: string | null, now: string | null) =>
+      expect((await item(ref)).history.at(-1)).toMatchObject({
+        op: "set_release",
+        actor: { kind: "agent", who: "Data@mbp-1" },
+        changes: expect.arrayContaining([{ field: "release", old, new: now }]),
+      });
+
+    await ok(agent("Data"), { op: "set_release", project: "helix", ref: f2, release: r2 });
+    expect(await features(r2)).toEqual([f3, f2]);
+    await moved(f2, null, r2);
+
+    await ok(agent("Data"), { op: "set_release", project: "helix", ref: f1, release: r2 });
+    expect(await features(r2)).toEqual([f3, f2, f1]);
+    expect(await features(r1)).toEqual([]);
+    await moved(f1, r1, r2);
+
+    await ok(agent("Data"), { op: "set_release", project: "helix", ref: f3, release: null });
+    expect(await features(r2)).toEqual([f2, f1]);
+    expect((await features(null)).at(-1)).toBe(f3);
+    await moved(f3, r2, null);
+
+    // A new feature made in a release goes last in it, by the same grant.
+    const made = (await ok(agent("Data"), { op: "create", project: "helix", kind: "feature", type: "increment", title: "New", release: r2 })).ref!;
+    expect(await features(r2)).toEqual([f2, f1, made]);
+  });
+
+  it("AC2: a rule without 'release' is refused, naming the field; the owner still moves a feature and undoes it", async () => {
+    const { r1, r2, f1, f2 } = await slotting();
+    const missing = { code: "forbidden", message: expect.stringContaining("the 'release' field") };
+    expect(await refused(agent("Picard"), { op: "set_release", project: "helix", ref: f2, release: r2 })).toMatchObject(missing);
+    expect(await refused(agent("Picard"), { op: "set_release", project: "helix", ref: f1, release: null })).toMatchObject(missing);
+    expect(await refused(agent("Picard"), { op: "create", project: "helix", kind: "feature", type: "increment", title: "x", release: r1 })).toMatchObject(missing);
+    expect((await refused(agent("Picard"), { op: "set_release", project: "helix", ref: f2, release: r2 })).message).toMatch(/Data may$/);
+    expect(await features(r2)).not.toContain(f2);
+
+    const before = await features(r1);
+    const { seq } = await ok(owner, { op: "set_release", project: "helix", ref: f1, release: r2 });
+    expect((await item(f1)).history.at(-1)).toMatchObject({ op: "set_release", actor: { kind: "owner" } });
+    await ok(owner, { op: "undo", project: "helix", seq });
+    expect(await features(r1)).toEqual(before);
+    expect((await item(f1)).history.at(-1)).toMatchObject({ op: "undo", undo_of: seq });
+  });
+
+  it("AC3: a rule with 'release' still may not order releases or close one", async () => {
+    const { r1, r2, f1 } = await slotting();
+    expect(await refused(agent("Data"), { op: "order_releases", project: "helix", refs: [r2, r1] })).toMatchObject({ code: "forbidden", message: expect.stringContaining("Casper's gate") });
+    expect(await refused(agent("Data"), { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: r2 }] })).toMatchObject({
+      code: "forbidden",
+      message: expect.stringContaining("Casper's gate"),
+    });
+    expect(((await ok(owner, { op: "list", project: "helix", of: "releases" })).releases ?? []).map((r) => [r.ref, r.status])).toEqual([
+      [r1, "planned"],
+      [r2, "planned"],
+    ]);
+  });
+
+  it("keeps 'release' through the rules: granted, read back, and in the store's check", async () => {
+    await slotting();
+    const { grants } = await ok(agent("Data"), { op: "grants", project: "helix" });
+    expect(grants.find((g) => g.agent === "Data")!.fields).toContain("release");
+    await runInDurableObject(board(), (_, state) => {
+      expect(() => state.storage.sql.exec("INSERT INTO grant_fields (grant_pk, field) SELECT pk, 'slot' FROM grants LIMIT 1")).toThrow(/CHECK constraint failed/);
+    });
   });
 });
 
