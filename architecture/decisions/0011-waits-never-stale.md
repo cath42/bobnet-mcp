@@ -212,6 +212,25 @@ Build A landed as f983ff4. Where it went past or against the text above, this is
    `BOB-27 (bobnet) has waited on its PO for 26 h since its fix landed, unchanged since 2026-11-21
    16:40Z. Check it and close it, or keep it (board_write keep, with why).`
 
+### 7. Rulings from review B (2026-11-22, `architecture/bob49/review-B.md`)
+
+Build B landed as d07137e. Where it went past the text above, this is what stands.
+
+1. **A forwarded `board_notice` ends with ` (Sent to <to>.)`** when `to` is not empty, so the
+   orchestrator knows who already has it. The board's own text doesn't change.
+2. **The supervisor sends `release_tag` only for a repo that one of its service projects has**, with
+   that project's key and its own spelling of the repo. Any other repo would be refused, and the
+   refusal is final. A tag that this process didn't verify (one already installed) isn't sent. A
+   tag that goes unreported is covered by the next one, which errs late.
+3. **The withdrawn toast** adds "…" only when the draft was cut, and it stays up while it carries a
+   draft. The wording is Daisy's to change.
+4. **Every view reads `blocking`, not `kind === "bug"`, for "blocks use".** A bug with a fix is
+   "when you have time" on Status too.
+5. **Dashboards re-read Waits hourly** (review A, m3), with no broker broadcast. A flag is written by
+   the hourly alarm, so the lag is at most one more hour.
+6. **`keep` and `withdraw` reach supervisor workers only with the rc.** A client checks ops against
+   its own `WRITES` and `BoardOp`. This corrects review A.
+
 ## Consequences
 
 - A landed `Fixes:` commit takes a bug off Needs you at once and tells its PO, with the release
