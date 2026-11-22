@@ -420,6 +420,8 @@ export class Supervisor {
   private readonly preapproved = new Map<string, Array<{ tool: string; input: string }>>();
   private stallTimer: NodeJS.Timeout | null = null;
   private reportTimer: NodeJS.Timeout | null = null;
+  private heartbeat: NodeJS.Timeout | null = null;
+  private captureTimer: NodeJS.Timeout | null = null;
   private lastReport = 0;
   private startedAt = new Date().toISOString();
   /** Usage a resumed session started from, per running worker. */
@@ -665,10 +667,10 @@ export class Supervisor {
       this.flushOutbox();
     }, STALL_CHECK_MS);
     this.flushCaptures();
-    const captureTimer = setInterval(() => this.flushCaptures(), CAPTURE_FLUSH_MS);
-    captureTimer.unref();
-    const heartbeat = setInterval(() => this.report(true), REPORT_HEARTBEAT_MS);
-    heartbeat.unref();
+    this.captureTimer = setInterval(() => this.flushCaptures(), CAPTURE_FLUSH_MS);
+    this.captureTimer.unref();
+    this.heartbeat = setInterval(() => this.report(true), REPORT_HEARTBEAT_MS);
+    this.heartbeat.unref();
     this.boards?.start();
     void this.pollCi();
     this.ciTimer = setInterval(() => void this.pollCi(), CI_POLL_MS);
@@ -688,6 +690,9 @@ export class Supervisor {
     if (this.stallTimer) clearInterval(this.stallTimer);
     if (this.holdTimer) clearInterval(this.holdTimer);
     if (this.reportTimer) clearTimeout(this.reportTimer);
+    // The heartbeat and the capture flush read the store, which the caller closes next.
+    if (this.heartbeat) clearInterval(this.heartbeat);
+    if (this.captureTimer) clearInterval(this.captureTimer);
     const runs = [...this.runs.values()];
     await Promise.all(runs.map((r) => r.stop("supervisor shutting down")));
     // Each exit is recorded before the caller closes the store; a stop kills a session after its grace period.
@@ -3442,6 +3447,8 @@ export class Supervisor {
 
   /** Sends the dashboard a snapshot, at most once per throttle interval. */
   private report(force = false): void {
+    // Shutting down: a run's exit still reports, but no timer may outlive the store.
+    if (this.closing && !force) return;
     const wait = this.lastReport + REPORT_THROTTLE_MS - Date.now();
     if (!force && wait > 0) {
       this.reportTimer ??= setTimeout(() => {

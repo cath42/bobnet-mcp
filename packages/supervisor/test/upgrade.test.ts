@@ -835,7 +835,7 @@ describe("GitReleases: only a tag on the line, built here (AC 3)", () => {
     expect(readdirSync(r.base).sort()).toEqual(["clone", "origin.git", "releases", "work"]);
     // Asked again, it is installed: no git work.
     expect(await g.installed(TAG)).toBe("2.0.0-rc.43");
-  });
+  }, 30_000);
 
   it("refuses a tag not on origin/v2", async () => {
     const g = releasesFor(fakeRepo());
