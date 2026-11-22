@@ -30,7 +30,7 @@ const projectArg = z.string().optional().describe("Project key, e.g. helix; defa
 /** Operation-specific fields, checked against the board's own schema when called. */
 const fields = z.record(z.string(), z.unknown());
 
-const WRITES = ["create", "update", "criteria", "slot", "promote", "archive", "restore", "order", "set_release"] as const;
+const WRITES = ["create", "update", "criteria", "slot", "promote", "archive", "restore", "order", "set_release", "keep", "withdraw"] as const;
 
 async function project(deps: BoardToolDeps, args: Record<string, unknown>): Promise<string> {
   return typeof args["project"] === "string" ? args["project"] : deps.project();
@@ -126,7 +126,8 @@ export const BOARD_TOOLS: BoardTool[] = [
       `Change the board, checked against your rights per field. op is one of ${WRITES.join(", ")}; fields are that operation's: ` +
       "create {kind feature|task|backlog, type, title, parent?, description?, criteria?: [{text, section?}], …}; update {ref, set: {status?, title?, description?, notes?, labels?, deps?, parent?, …}, reason?}; " +
       "criteria {ref, change: {action add|edit|check|uncheck, n?, text?, evidence?, reason?}}; slot {ref, feature}; promote {ref}; archive {ref, reason}; restore {ref}; " +
-      "order {scope features|backlog, release?, refs}; set_release {ref, release (null: out of any), reason?}, a feature's release, last in it. A bug is Done once its fix has landed and its criteria (\"It no longer happens\") are checked, the landed commit as evidence; " +
+      "order {scope features|backlog, release?, refs}; set_release {ref, release (null: out of any), reason?}, a feature's release, last in it; " +
+      "keep {ref, reason}, a row on Waits of yours is still current, when told it has waited a day unchanged; withdraw {ref, reason}, your open question or action is moot, and leaves Waits. A bug is Done once its fix has landed and its criteria (\"It no longer happens\") are checked, the landed commit as evidence; " +
       "a bug closed without a fix is archived with a reason.",
     shape: { project: projectArg, op: z.enum(WRITES), fields },
     run: async (deps, a) => deps.op(checked({ ...(a["fields"] as Record<string, unknown>), op: a["op"], project: await project(deps, a) })),
@@ -137,7 +138,8 @@ export const BOARD_TOOLS: BoardTool[] = [
       "Ask Casper a question or an action only he can answer or do: {text, kind?: question|action, context?, options?: [{key, text, recommended?}], holds?: [item refs], " +
       "holds_sessions?, needed_before?: {item}|{release}|{text}}. Or record his answer given in conversation, verbatim: answer {ref, key?, words}. " +
       "Or edit your own open one (or any, as an admin): edit {ref, set: {text?, context?, options?, holds?, holds_sessions?, needed_before?}, reason?}; " +
-      "only what set names changes, an option's key stays once set (change its text or add options), and an answered one isn't edited. Exactly one of ask, answer or edit.",
+      "only what set names changes, an option's key stays once set (change its text or add options), and an answered one isn't edited. Exactly one of ask, answer or edit. " +
+      "A lead waiting on Casper asks here, with holds_sessions, never only in plain text.",
     shape: {
       project: projectArg,
       ask: fields.optional(),

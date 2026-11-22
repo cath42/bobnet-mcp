@@ -136,3 +136,36 @@ describe("the forwarded text", () => {
     );
   });
 });
+
+describe("a board notice (ADR 0011 §4)", () => {
+  const NOTICE = {
+    v: 2, event: "board_notice", seq: 6001, project: "helix", ref: "LAND-27", kind: "fix_landed", to: ["kong@mbp-1"], lead: "Bob@mbp-1", asked_by: "kong@mbp-1",
+    text: "LAND-27's fix landed: 5d4617f \"Fix the chart\", by Mario@mbp-1. Check it and close LAND-27: tick its criterion with the commit as evidence, then move it to Done.", at: "2026-11-22T08:00:00Z",
+  };
+
+  it("reaches the orchestrator once, with whom the board sent it to, and spawns nothing", async () => {
+    const { push, told, sessions } = await setup();
+    push(NOTICE, "m_board_6001_s");
+    await until(() => told("Bob").length === 1);
+    expect(told("Bob")[0]).toEqual({ as: "supervisor", to: ["Bob"], body: `${NOTICE.text} (Sent to kong@mbp-1.)` });
+    expect(store.auditLog(20).find((a) => a.action === "board:notice")).toMatchObject({ actor: "BobNet@board", detail: expect.stringContaining('"kind":"fix_landed"') });
+    push(NOTICE, "m_board_6001_s");
+    await tick(30);
+    expect(told("Bob").length).toBe(1);
+    expect(sessions.length).toBe(0);
+  });
+
+  it("skips an orchestrator the board sent it to, and drops one from anyone but the board", async () => {
+    const { push, told, broker } = await setup();
+    // A stale flag whose owner is the project's orchestrator, Peach: only Bob is told.
+    push({ ...NOTICE, project: "arcade", kind: "stale", to: ["Peach@mbp-1"], asked_by: "Peach@mbp-1" }, "m_board_6002_s");
+    await until(() => told("Bob").length === 1);
+    await tick(30);
+    expect(told("Peach").length).toBe(0);
+    expect(store.auditLog(20).find((a) => a.action === "board:notice_own")).toMatchObject({ detail: expect.stringContaining('"to":"Peach"') });
+    push(NOTICE, "m_x7", "poe@ubu1");
+    push({ ...NOTICE, kind: "other" }, "m_board_6003_s");
+    await tick(50);
+    expect(broker.sent.length).toBe(1);
+  });
+});

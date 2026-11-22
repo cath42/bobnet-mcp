@@ -6,6 +6,7 @@ import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import {
   addressKey,
   BoardAnswerEvent,
+  BoardNoticeEvent,
   BoardOp,
   type BoardCtx,
   type BoardOpInput,
@@ -548,6 +549,7 @@ export class Supervisor {
       hold: (tag) => this.holdForRestart(tag),
       drain: (ms) => this.drainOutbox(ms),
       restart: () => this.restartForUpgrade(),
+      released: (repo, tag, sha) => this.reportReleaseTag(repo, tag, sha),
     });
     this.ciPoll = deps.ciPoll ?? new GhCiPoll(deps.log);
     this.sleep = deps.sleep ?? sleepFor;
@@ -1347,6 +1349,7 @@ export class Supervisor {
     if (!read) return;
     // The board's answer notice (ADR 0009 §4): the broker stamps the sender, and no laptop may take the board's.
     if (fromBoard(msg) && read.json["event"] === "answer") return this.onBoardAnswer(msg, read.json);
+    if (fromBoard(msg) && read.json["event"] === "board_notice") return this.onBoardNotice(msg, read.json);
     const withheld = read.json["event"] === "withheld";
     const answers = read.kind === "reply" || (withheld && typeof read.json["req"] === "string");
     // Read against the wire's schemas (§2), loose so a newer target's extra fields pass; what fails is dropped.
@@ -1410,6 +1413,39 @@ export class Supervisor {
       told.push(to);
     }
     if (told.length > 0) this.store.audit(msg.from, "board:answer", null, { ...detail, to: told.join(",") });
+  }
+
+  /**
+   * A board notice other than an answer (ADR 0011 §4): a bug's fix landed or was released, or a row went
+   * stale. Its text goes to the same orchestrator(s) as an answer's, so one can start the owner if it
+   * isn't running; an orchestrator the board already sent it to is skipped. Once per message id, recorded first.
+   */
+  private onBoardNotice(msg: Envelope, json: Record<string, unknown>): void {
+    const read = BoardNoticeEvent.safeParse(json);
+    if (!read.success) {
+      this.log.warn("a board notice that doesn't parse; dropped", { id: msg.id, err: read.error.issues[0]?.message, path: read.error.issues[0]?.path.join(".") });
+      return;
+    }
+    const n = read.data;
+    if (!this.config.projects.has(n.project)) {
+      this.log.info("a board notice for a project not run here; dropped", { id: msg.id, project: n.project });
+      return;
+    }
+    if (!this.store.beginBoardNotice(msg.id, n.project)) return;
+    const own = this.config.projects.get(n.project)?.orchestrator;
+    const targets = [this.config.orchestrator];
+    if (own && !this.sameAddress(own, this.config.orchestrator)) targets.push(own);
+    const detail = { message: msg.id, project: n.project, ref: n.ref, kind: n.kind };
+    const told: string[] = [];
+    for (const to of targets) {
+      if (n.to.some((t) => this.sameAddress(t, to))) {
+        this.store.audit(msg.from, "board:notice_own", null, { ...detail, to });
+        continue;
+      }
+      this.notifyTo(to, n.to.length > 0 ? `${n.text} (Sent to ${n.to.join(", ")}.)` : n.text);
+      told.push(to);
+    }
+    if (told.length > 0) this.store.audit(msg.from, "board:notice", null, { ...detail, to: told.join(",") });
   }
 
   /** Whether two addresses name the same peer, a bare name being this laptop's. */
@@ -2469,8 +2505,8 @@ export class Supervisor {
       logPath: this.logPath(w),
       queryFn: this.queryFn,
       canUseTool: consult
-        ? this.readOnly(this.router.forWorker(w.id, role))
-        : this.whileLanding(w.id, this.withPreapprovals(w.id, handoff, role.dir, this.router.forWorker(w.id, role))),
+        ? this.readOnly(this.router.forWorker(w.id, role, project.board))
+        : this.whileLanding(w.id, this.withPreapprovals(w.id, handoff, role.dir, this.router.forWorker(w.id, role, project.board))),
       // Every worker: a saved output's Read is refused in any mode, as no permission prompt may ask about it.
       preToolUse: role.permissionMode === "auto" ? this.preflight(w.id, role, handoff, consult !== undefined) : async (tool, input) => savedOutputCheck(tool, input),
       mcpServers: {
@@ -2793,7 +2829,7 @@ export class Supervisor {
       else this.refusedHeads.set(worktree, { head, oneMore });
       this.store.audit("supervisor", ok ? "land:ok" : held ? "land:held" : stale ? "land:stale" : flaky ? "land:flaky" : "land:failed", workerId, { code: r.code, head });
       this.slotOutcomes.set(workerId, ok ? "passed" : held || stale ? "cancelled" : "failed");
-      if (ok) await this.reportPush(w, worktree, target ?? project.rebase);
+      if (ok) await this.reportPush(w, worktree, target ?? project.rebase, tipBefore);
       const last = landSummary(r.output);
       const moved = `stale, ${onto} moved during the land`;
       const failed = `${flaky ? "flaky" : "could not land"} (${r.timedOut ? "timed out" : `exit ${r.code}`})`;
@@ -3382,6 +3418,28 @@ export class Supervisor {
     if (ops.length > 0) this.flushOutbox();
   }
 
+  /**
+   * A release tag the upgrade built (ADR 0011 §1), for the service project whose repo it is, through the
+   * outbox as the supervisor's own report, so the fixes landed before it read "in <tag>". None for a repo
+   * no service project here has: the broker would refuse it.
+   */
+  private async reportReleaseTag(repo: string, tag: string, sha: string): Promise<void> {
+    for (const p of this.serviceProjects()) {
+      const remote = p.land?.target?.remote ?? p.rebase?.remote ?? "origin";
+      let own: string | null;
+      try {
+        own = repoName(await git(p.path, ["remote", "get-url", remote]));
+      } catch {
+        continue;
+      }
+      if (own?.toLowerCase() !== repo.toLowerCase()) continue;
+      this.store.addOutbox(this.config.name, JSON.stringify({ ctx: null, op: { op: "release_tag", project: p.key, repo, tag, sha } }), "board_op");
+      this.flushOutbox();
+      return;
+    }
+    this.log.info("a release tag for a repo no service project here has; not reported", { repo, tag });
+  }
+
   /** What the supervisor says about a worker it speaks for (§4): from its row, as its spawn declared it. */
   private boardCtx(w: WorkerRow): BoardCtx {
     const d = w.declared_session ? (JSON.parse(w.declared_session) as DeclaredSession | null) : null;
@@ -3423,8 +3481,12 @@ export class Supervisor {
     };
   }
 
-  /** What a land pushed (§10): the board ties a CI run on that commit to this worker. */
-  private async reportPush(w: WorkerRow, worktree: string, target: { remote: string; branch: string } | undefined): Promise<void> {
+  /**
+   * What a land pushed (§10): the board ties a CI run on that commit to this worker. The commits it
+   * landed, `tipBefore..HEAD` (HEAD alone with no target), name the bugs they fix with a `Fixes:`
+   * trailer (ADR 0011 §1), and the board marks them.
+   */
+  private async reportPush(w: WorkerRow, worktree: string, target: { remote: string; branch: string } | undefined, tipBefore: string): Promise<void> {
     if (this.config.projects.get(w.project)?.board !== "service") return;
     try {
       const remote = target?.remote ?? "origin";
@@ -3432,7 +3494,8 @@ export class Supervisor {
       const url = await git(worktree, ["remote", "get-url", remote]);
       const repo = repoName(url);
       if (!repo) return;
-      this.boardReport(w, { op: "push", project: w.project, repo, branch: target?.branch ?? "main", sha });
+      const fixes = await landedFixes(worktree, tipBefore);
+      this.boardReport(w, { op: "push", project: w.project, repo, branch: target?.branch ?? "main", sha, ...(fixes.length > 0 ? { fixes } : {}) });
     } catch (err) {
       this.log.warn("couldn't read what the land pushed", { worker: w.id, err: (err as Error).message });
     }
@@ -3829,6 +3892,29 @@ function resumeTask(req: RequestRow, answer: Answer): string {
         ? `answered: ${JSON.stringify(answer.answers)}`
         : `denied${answer.message ? `: ${answer.message}` : ""}`;
   return `You were stopped while waiting on request ${req.id} (${req.tool}). It has been ${outcome}. Continue your task from where you left off.`;
+}
+
+/** At most this many fixes in one push, as the protocol takes them. */
+const MAX_FIXES = 20;
+
+/**
+ * The bugs the landed commits fix (ADR 0011 §1): each commit's `Fixes:` trailer, repeated or comma
+ * separated, that parses as a ref. Only that key counts, never a ref in the subject.
+ */
+export async function landedFixes(worktree: string, tipBefore: string): Promise<{ ref: string; sha: string; subject: string }[]> {
+  const range = tipBefore ? [`${tipBefore}..HEAD`] : ["-1", "HEAD"];
+  const out = await git(worktree, ["log", "--format=%H%x1f%s%x1f%(trailers:key=Fixes,valueonly,separator=%x2C)%x1e", ...range]);
+  const fixes: { ref: string; sha: string; subject: string }[] = [];
+  for (const record of out.split("\x1e")) {
+    const [sha, subject, refs] = record.trim().split("\x1f");
+    if (!sha || !refs) continue;
+    for (const raw of refs.split(",")) {
+      const ref = raw.trim().toUpperCase();
+      if (!ItemRef.safeParse(ref).success || fixes.some((f) => f.ref === ref && f.sha === sha)) continue;
+      fixes.push({ ref, sha, subject: (subject ?? "").slice(0, 200) });
+    }
+  }
+  return fixes.slice(0, MAX_FIXES);
 }
 
 function git(cwd: string, args: string[]): Promise<string> {

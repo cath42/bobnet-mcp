@@ -267,6 +267,19 @@ describe("the board tools in the channel client", () => {
     expect(said("close_session")).toMatch(/bug moved to Done needs its criteria checked first/);
   });
 
+  it("offers keep and withdraw in board_write, and tells a lead to ask Casper in board_ask (ADR 0011 §2, §5)", async () => {
+    const { client, broker, call } = await session(() => ({ ok: { ref: "Q-14", seq: 3 } }));
+    const tools = (await client.listTools()).tools;
+    const write = tools.find((t) => t.name === "board_write")!;
+    expect((write.inputSchema.properties as Record<string, { enum?: string[] }>)["op"]!.enum).toEqual(expect.arrayContaining(["keep", "withdraw"]));
+    expect(write.description).toMatch(/keep \{ref, reason\}.*withdraw \{ref, reason\}/);
+    expect(tools.find((t) => t.name === "board_ask")!.description).toContain("A lead waiting on Casper asks here, with holds_sessions, never only in plain text.");
+    await call("board_write", { project: "bobnet", op: "keep", fields: { ref: "Q-14", reason: "Still waits on the move" } });
+    expect(broker.ops.at(-1)).toMatchObject({ op: { op: "keep", project: "bobnet", ref: "Q-14", reason: "Still waits on the move" } });
+    await call("board_write", { project: "bobnet", op: "withdraw", fields: { ref: "Q-14", reason: "Moot: the laptop moved" } });
+    expect(broker.ops.at(-1)).toMatchObject({ op: { op: "withdraw", project: "bobnet", ref: "Q-14", reason: "Moot: the laptop moved" } });
+  });
+
   it("sends operations as the session's own name, with no ctx, and defaults the project to its only one", async () => {
     const { broker, call } = await session((op) => (op["op"] === "projects" ? { ok: { projects: [{ key: "helix" }] } } : { ok: { items: [], total: 0, cursor: null } }));
     await call("board_list", { of: "backlog" });

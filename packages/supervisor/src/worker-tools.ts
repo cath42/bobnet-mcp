@@ -59,7 +59,8 @@ export function workerTools(deps: WorkerToolDeps) {
               "land",
               "Land your committed work: the supervisor runs the project's land command in your worktree, through the hook, in a run slot (you may wait for it). " +
                 "Commit first; the tree must be clean. One attempt: on failure, read the output, fix, and call it again only once the cause is fixed. " +
-                "Once it lands, the supervisor rebases your branch onto main (if the project has rebase), so the landed commits drop out.",
+                "Once it lands, the supervisor rebases your branch onto main (if the project has rebase), so the landed commits drop out. " +
+                "A commit that fixes a bug carries the trailer Fixes: <REF>.",
               {},
               async () => {
                 try {

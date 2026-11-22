@@ -231,6 +231,24 @@ describe("a lead", () => {
     expect(broker.toOrchestrator().filter((b) => b.includes("asks a question"))).toEqual([]);
   });
 
+  it("on a project whose board is the service, asks Casper with board_ask, holds_sessions and all (ADR 0011 §5)", async () => {
+    const broker = new FakeBroker();
+    const { queryFn, sessions } = fakeQuery();
+    const sup = new Supervisor({ config: testConfig(dir, STUDIO.replace("    path: /work/studio\n", "    path: /work/studio\n    board: service\n")), policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null, ownerCheck: async () => false });
+    await sup.start();
+    running.push(sup);
+    sup.spawn({ project: "studio", role: "bob", task: "lead", as: "lead", tasks: [], session: null });
+    await until(() => sessions.length === 1);
+    const r = await sessions[0]!.ask("AskUserQuestion", { questions: [] });
+    expect(r).toEqual({
+      behavior: "deny",
+      message:
+        "Questions don't open a dialog here. Ask Casper with board_ask: the question, your options (mark the one you recommend), context, and holds_sessions for the session that waits on his answer (or holds for the items). " +
+        "Then end your turn; you may say the question in your reply too. If he answers by typing in this Remote Control session, record it at once with board_ask answer { ref, key, words }, his words verbatim. " +
+        "A question asked only in plain text doesn't show on his dashboard.",
+    });
+  });
+
   it("has the orchestrator's BobNet tools and keeps its own status", async () => {
     const { sup, broker, leadSession: s, sessions } = await withLead();
     sup.spawn({ project: "studio", role: "ann", task: "x" });

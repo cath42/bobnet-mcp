@@ -9,6 +9,7 @@ import { parseSupervisorConfig } from "../src/config.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
 import { downsample, repoName, Supervisor } from "../src/supervisor.ts";
+import type { Releases } from "../src/upgrade.ts";
 import { FakeBroker, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 
 // A project on BobNet's board service (ADR 0001 §6, §8, §9, §10, §12): spawns
@@ -44,11 +45,11 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function setup(config = testConfig(dir, BOBNET), opts: { remoteControl?: boolean } = {}) {
+async function setup(config = testConfig(dir, BOBNET), opts: { remoteControl?: boolean; releases?: Releases } = {}) {
   const broker = new FakeBroker();
   const { queryFn, sessions } = fakeQuery(opts);
   const captureDir = join(dir, "captures");
-  const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null, captureDir });
+  const sup = new Supervisor({ config, policy: POLICY, store, broker, queryFn, log: quiet, sandboxCheck: async () => null, captureDir, ...(opts.releases ? { releases: opts.releases } : {}) });
   await sup.start();
   running.push(sup);
   return { sup, broker, sessions, captureDir };
@@ -363,6 +364,115 @@ projects:
     await until(() => ops(broker, "push").length === 1 && ops(broker, "slot_run").length === 2);
     expect(ops(broker, "push")[0]).toMatchObject({ as: "Luigi", ctx: { worker: w.id }, op: { project: "bobnet", repo: "cath42/bobnet-mcp", branch: "main", sha: g("rev-parse", "HEAD") } });
     expect(ops(broker, "slot_run").map((o) => (o.op as { status: string }).status)).toEqual(["running", "passed"]);
+  });
+
+  /** A worktree of bobnet with one commit, its origin `remote` (GitHub's URL by default), and a land script that runs `script`. */
+  function landable(script = "echo landed", remote = "https://github.com/cath42/bobnet-mcp.git", extra = "") {
+    const worktree = join(dir, "bobnet-luigi");
+    mkdirSync(join(worktree, "packages"), { recursive: true });
+    const g = (...args: string[]) => execFileSync("git", ["-C", worktree, "-c", "user.name=Luigi", "-c", "user.email=l@x", ...args]).toString().trim();
+    execFileSync("git", ["init", "-q", "-b", "main", worktree]);
+    writeFileSync(join(worktree, "README"), "x");
+    g("add", ".");
+    g("commit", "-qm", "init");
+    g("remote", "add", "origin", remote);
+    const land = join(dir, "land.sh");
+    writeFileSync(land, `#!/bin/sh\n${script}\n`);
+    chmodSync(land, 0o755);
+    const config = parseSupervisorConfig(
+      `
+orchestrator: Mario
+state_dir: ${dir}
+projects:
+  bobnet:
+    path: ${worktree}
+    board: service
+    land: { command: [${land}]${extra} }
+    roles:
+      luigi: { dir: ${join(worktree, "packages")}, name: Luigi }
+`,
+      (d) => d,
+    );
+    const commit = (message: string) => {
+      writeFileSync(join(worktree, "README"), message);
+      g("commit", "-qam", message);
+      return g("rev-parse", "HEAD");
+    };
+    return { worktree, g, config, commit };
+  }
+
+  it("reports the bug a landed commit's Fixes: trailer names, beside its Co-Authored-By:, and two from one trailer (ADR 0011 §1)", async () => {
+    const { config, commit } = landable();
+    const { sup, broker, sessions } = await setup(config);
+    const w = await sup.spawnJoined(spawn);
+    await until(() => sessions.length === 1);
+    const subject = "v2: BOB-27: board reports no longer stall behind a row the protocol won't take";
+    const first = commit(`${subject}\n\nThe report skips the row.\n\nFixes: BOB-27\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`);
+    expect(await sup.land(w.id)).toMatchObject({ ok: true });
+    await until(() => ops(broker, "push").length === 1);
+    expect(ops(broker, "push")[0]!.op).toMatchObject({ sha: first, fixes: [{ ref: "BOB-27", sha: first, subject }] });
+    const second = commit("v2: BOB-30: the waits link\n\nFixes: BOB-27, BOB-30\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>");
+    expect(await sup.land(w.id)).toMatchObject({ ok: true });
+    await until(() => ops(broker, "push").length === 2);
+    expect(ops(broker, "push")[1]!.op).toMatchObject({ sha: second, fixes: [{ ref: "BOB-27", sha: second }, { ref: "BOB-30", sha: second }] });
+    // A ref in the subject alone fixes nothing: the push has no fixes.
+    commit("v2: BOB-122: plan");
+    expect(await sup.land(w.id)).toMatchObject({ ok: true });
+    await until(() => ops(broker, "push").length === 3);
+    expect(ops(broker, "push")[2]!.op).not.toHaveProperty("fixes");
+  });
+
+  it("tells a worker, in land's description, to carry Fixes: <REF>, and in its board tools to keep, withdraw and ask on the board", async () => {
+    const { config } = landable();
+    const { sup, sessions } = await setup(config);
+    await sup.spawnJoined(spawn);
+    await until(() => sessions.length === 1);
+    const tools = (sessions[0]!.options.mcpServers!["bobnet"] as unknown as { instance: { _registeredTools: Record<string, { description: string }> } }).instance._registeredTools;
+    expect(tools["land"]!.description).toMatch(/A commit that fixes a bug carries the trailer Fixes: <REF>\.$/);
+    expect(tools["board_ask"]!.description).toContain("A lead waiting on Casper asks here, with holds_sessions, never only in plain text.");
+    expect(tools["board_write"]!.description).toMatch(/keep \{ref, reason\}.*withdraw \{ref, reason\}/);
+  });
+
+  it("reads every commit the land brought onto its target, not only HEAD", async () => {
+    const origin = join(dir, "origin.git");
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+    const { config, g, commit } = landable("git push -q origin HEAD:main", origin, ", target: origin/main");
+    g("push", "-q", "origin", "HEAD:main");
+    const { sup, broker, sessions } = await setup(config);
+    const w = await sup.spawnJoined(spawn);
+    await until(() => sessions.length === 1);
+    const a = commit("v2: BOB-27: the fix\n\nFixes: BOB-27");
+    commit("v2: BOB-31: a test\n\nFixes: not-a-ref");
+    const c = commit("v2: BOB-30: the other\n\nFixes: bob-30");
+    expect(await sup.land(w.id)).toMatchObject({ ok: true });
+    await until(() => ops(broker, "push").length === 1);
+    expect(ops(broker, "push")[0]!.op).toMatchObject({ sha: c, fixes: [{ ref: "BOB-30", sha: c }, { ref: "BOB-27", sha: a }] });
+  });
+
+  it("reports the tag an upgrade built to the board, for the service project whose repo it is (ADR 0011 §1)", async () => {
+    const { config } = landable();
+    const sha = "5d4617f4bed3884d73deb1a9cc71e1ed366215f4";
+    const tags: Record<string, { repo: string; sha: string }> = { "v2.0.0-rc.34": { repo: "cath42/bobnet-mcp", sha }, "v2.0.0-rc.35": { repo: "cath42/helix", sha } };
+    const releases: Releases = {
+      root: join(dir, "releases"),
+      missing: () => null,
+      installed: async () => null,
+      verify: async (tag) => tag.slice(1),
+      build: async () => {},
+      discard: () => {},
+      check: async () => {},
+      switch: () => {},
+      tagged: async (tag) => tags[tag] ?? null,
+    };
+    const { sup, broker } = await setup(config, { releases });
+    await sup.upgradeSupervisor(undefined, "v2.0.0-rc.34", "no");
+    await until(() => ops(broker, "release_tag").length === 1);
+    expect(ops(broker, "release_tag")[0]).toEqual({ as: "supervisor", ctx: undefined, op: { op: "release_tag", project: "bobnet", repo: "cath42/bobnet-mcp", tag: "v2.0.0-rc.34", sha } });
+    // A repo no service project here has: not sent, since the broker would refuse it.
+    await sup.upgradeSupervisor(undefined, "v2.0.0-rc.35", "no");
+    await until(() => store.upgradesOpen().length === 0);
+    await tick(50);
+    expect(ops(broker, "release_tag")).toHaveLength(1);
   });
 
   it("refuses a project on both the board service and a backlog", () => {

@@ -83,6 +83,9 @@ class FakeReleases implements Releases {
     this.calls.push(`switch ${tag}`);
     this.current = tag;
   }
+  async tagged() {
+    return null;
+  }
 }
 
 const dirs: string[] = [];
@@ -254,7 +257,7 @@ describe("refused without the configuration (§3)", () => {
   it("a tag that isn't a release tag is refused by the tool, and by the op in-process", async () => {
     const s = await setup();
     await expect(s.upgrade({ tag: "main" })).rejects.toThrow("must be a release tag");
-    const u = new Upgrades({ version: RUNNING, releases: new FakeReleases(), store: s.ubu.store, log: quiet, waitingOn: () => null, emit: () => {}, hold: () => {}, drain: async () => {}, restart: () => {} });
+    const u = new Upgrades({ version: RUNNING, releases: new FakeReleases(), store: s.ubu.store, log: quiet, waitingOn: () => null, emit: () => {}, hold: () => {}, drain: async () => {}, restart: () => {}, released: async () => {} });
     await expect(u.ask("r1", "orchestrator", "v2.0.0;touch x")).rejects.toThrow("isn't a release tag");
   });
 

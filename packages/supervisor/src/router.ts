@@ -1,7 +1,7 @@
 import type { CanUseTool, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { LEAD_SERVER } from "./lead-tools.ts";
 import { WORKER_SERVER } from "./worker-tools.ts";
-import type { RoleConfig } from "./config.ts";
+import type { ProjectConfig, RoleConfig } from "./config.ts";
 import type { Policy, Tier } from "./policy.ts";
 import type { RequestRow, Store, WorkerState } from "./store.ts";
 
@@ -51,8 +51,8 @@ export class Router {
     this.deps = deps;
   }
 
-  /** The canUseTool callback for one worker. */
-  forWorker(workerId: string, role: RoleConfig): CanUseTool {
+  /** The canUseTool callback for one worker; `board`, its project's (a lead on the service asks on it). */
+  forWorker(workerId: string, role: RoleConfig, board?: ProjectConfig["board"]): CanUseTool {
     return async (toolName, input, { signal, mcpServer, toolUseID }) => {
       const { store, policy } = this.deps;
 
@@ -61,14 +61,20 @@ export class Router {
         return { behavior: "allow", updatedInput: input };
       }
 
-      // A lead asks Casper the way it would in a terminal: in its own session, which he follows in Remote Control.
+      // A lead asks Casper on the board when its project's board is the service (ADR 0011 §5), so the
+      // question shows on his dashboard; elsewhere, as in a terminal: in its own session, which he follows in Remote Control.
       if (toolName === "AskUserQuestion" && role.lead) {
         store.audit("router", "lead-question", workerId, {});
         return {
           behavior: "deny",
           message:
-            "Questions don't open a dialog here. Ask Casper in your reply, plainly, with the options you'd have offered, and end your turn: " +
-            "he answers by typing in your Remote Control session, and his answer is your next message.",
+            board === "service"
+              ? "Questions don't open a dialog here. Ask Casper with board_ask: the question, your options (mark the one you recommend), context, " +
+                "and holds_sessions for the session that waits on his answer (or holds for the items). Then end your turn; you may say the question " +
+                "in your reply too. If he answers by typing in this Remote Control session, record it at once with board_ask answer { ref, key, words }, " +
+                "his words verbatim. A question asked only in plain text doesn't show on his dashboard."
+              : "Questions don't open a dialog here. Ask Casper in your reply, plainly, with the options you'd have offered, and end your turn: " +
+                "he answers by typing in your Remote Control session, and his answer is your next message.",
         };
       }
       if (toolName === "AskUserQuestion") {

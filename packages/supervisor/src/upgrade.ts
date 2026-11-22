@@ -5,6 +5,7 @@ import { delimiter, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Logger } from "@bobnet/client/log";
 import { UPGRADE_TAG, type UpgradeRestart, type UpgradeStage } from "@bobnet/protocol";
+import { repoName } from "./ci-poll.ts";
 import type { UpgradeConfig } from "./config.ts";
 import type { Store } from "./store.ts";
 
@@ -59,6 +60,8 @@ export interface Releases {
   build(tag: string): Promise<void>;
   /** Removes what a build of the tag cut short left behind: <root>/.<tag>.partial and its tar. */
   discard(tag: string): void;
+  /** The tag as verify resolved it, for the board's release_tag (ADR 0011 §1): origin's repo and the commit; null if this process didn't verify it. */
+  tagged(tag: string): Promise<{ repo: string; sha: string } | null>;
   /** The release's own preflight, `bin.ts check`, with this supervisor's config dir. */
   check(tag: string): Promise<void>;
   /** `previous` to the running release and `current` to the tag, each switched atomically. */
@@ -269,6 +272,14 @@ export class GitReleases implements Releases {
     return version;
   }
 
+  async tagged(tag: string): Promise<{ repo: string; sha: string } | null> {
+    const sha = this.verified.get(tag);
+    if (!sha) return null;
+    const url = await this.git(["remote", "get-url", "origin"]);
+    const repo = url.code === 0 ? repoName(url.stdout) : null;
+    return repo ? { repo, sha } : null;
+  }
+
   discard(tag: string): void {
     const partial = join(this.root, `.${tag}.partial`);
     rmSync(partial, { recursive: true, force: true });
@@ -348,6 +359,8 @@ export interface UpgradeHost {
   drain(ms: number): Promise<void>;
   /** Exits EXIT_UPGRADE, as a shutdown otherwise does. */
   restart(): void;
+  /** A tag built and checked, as verify resolved it: reported to the board as a release_tag (ADR 0011 §1). */
+  released(repo: string, tag: string, sha: string): Promise<void>;
 }
 
 interface Pending {
@@ -471,6 +484,13 @@ export class Upgrades {
       await releases.check(u.tag);
     } catch (err) {
       return this.fail(u, err instanceof UpgradeStepError ? err.step : "install", (err as Error).message);
+    }
+    // The fixes it carries are now in a release (ADR 0011 §1); a tag installed before wasn't verified here, and was reported then.
+    try {
+      const t = await releases.tagged(u.tag);
+      if (t) await this.host.released(t.repo, u.tag, t.sha);
+    } catch (err) {
+      this.host.log.warn("upgrade: couldn't report the release tag to the board", { tag: u.tag, error: (err as Error).message });
     }
     if (u.restart === "no") {
       this.current = null;
