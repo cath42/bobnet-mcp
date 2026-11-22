@@ -1349,6 +1349,26 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect($("waits-answered")).toBeNull();
     });
 
+    it("says who was told, who it waits for to come online, and when no supervisor runs the project (ADR 0009 §5; BOB-111 AC4)", async () => {
+      // Its options were read by the answer before: no read again.
+      (item("Q-258").querySelector(".answer-btn") as HTMLButtonElement).click();
+      expect(pending("get")).toEqual([]);
+      const box = item("Q-258").querySelector("form.answer textarea") as HTMLTextAreaElement;
+      box.value = "The north tract";
+      box.dispatchEvent(new Event("input"));
+      (item("Q-258").querySelector('form.answer button[type="submit"]') as HTMLButtonElement).click();
+      const [op] = pending("answer_question");
+      reply(op!, { ref: "Q-258", seq: 90, told: ["Bob@mbp-1", "kong@mbp-1", "poe@mbp-1"], waiting: ["kong@mbp-1"], supervisor: "poe@mbp-1" });
+      await settle();
+      expect($("toast").textContent).toBe("Answered Q-258. Recorded as your words; sent to Bob, kong and poe; waiting for kong to come online.Undo");
+      ($("toast").querySelector("button") as HTMLButtonElement).click();
+      const [undo] = pending("undo");
+      reply(undo!, { ref: "Q-258", seq: 91, told: ["Bob@mbp-1"], waiting: [], supervisor: null });
+      await settle();
+      expect($("toast").textContent).toBe("Undone: Q-258 waits on you again; sent to Bob; no supervisor runs Helix.");
+      await answerWith([a15, gate, q258, bug, q259]);
+    });
+
     it("says why when the board refuses an answer, and keeps the form", async () => {
       (item("Q-259").querySelector(".answer-btn") as HTMLButtonElement).click();
       reply(pending("get")[0]!, { question: { ref: "Q-259", options: [] } });

@@ -1420,8 +1420,15 @@ const waitAge = (iso) => (Date.now() - Date.parse(iso) < DAY ? since(iso) : age(
 const askedBy = (a) => (/@[^@]*\./.test(a) ? "you" : shortName(a));
 /** "Mario, BobNet's lead," before "gets a message" (BOB-5 as built). */
 const leadOf = (key) => `${leadName(key)}, ${projectName(key)}'s lead,`;
-/** Who got a message, from the board's `told`: "sent to" (Daisy), never "heard by". */
-const sentTo = (told) => (told?.length ? `; sent to ${told.map(shortName).join(" and ")}` : "");
+/** Names as a sentence lists them: "Bob", "Bob and Peach", "Bob, Peach and poe". */
+const andList = (addrs) => { const n = addrs.map(shortName); return n.length < 2 ? n.join("") : `${n.slice(0, -1).join(", ")} and ${n.at(-1)}`; };
+/**
+ * Who got an answer's message, from the board's reply: "sent to" (Daisy), never "heard by"; whom it waits for,
+ * and a project no supervisor runs (ADR 0009 §5). A reply without `supervisor` (an older broker) says neither.
+ */
+const sentTo = (res, project) => (res?.told?.length ? `; sent to ${andList(res.told)}` : "")
+  + (res?.waiting?.length ? `; waiting for ${andList(res.waiting)} to come online` : "")
+  + (res?.supervisor === null ? `; no supervisor runs ${projectName(project)}` : "");
 
 /**
  * A question's record, with its options, read when its form opens: "<project>/<ref>" → record, or { error }.
@@ -1487,7 +1494,7 @@ function answerForm(w) {
       // It leaves its group at once, and the counts drop; the board's next read says the same.
       ov.waits = (ov.waits ?? []).filter((x) => waitId(x) !== qid);
       render();
-      toast(`${w.kind === "question" ? `Answered ${w.ref}` : `Marked ${w.ref} done`}. Recorded as your words${sentTo(res.told)}.`, true,
+      toast(`${w.kind === "question" ? `Answered ${w.ref}` : `Marked ${w.ref} done`}. Recorded as your words${sentTo(res, w.project)}.`, true,
         res.seq ? () => undoAnswer(w, res.seq) : null);
     } catch (err) {
       for (const b of form.querySelectorAll("button")) b.disabled = false;
@@ -1520,7 +1527,7 @@ function answerForm(w) {
 async function undoAnswer(w, seq) {
   try {
     const res = await boardOp({ op: "undo", project: w.project, seq }, true);
-    toast(`Undone: ${w.ref} waits on you again${sentTo(res.told)}.`);
+    toast(`Undone: ${w.ref} waits on you again${sentTo(res, w.project)}.`);
   } catch (err) {
     toast(err.message, false);
   }

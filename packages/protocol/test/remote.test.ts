@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyRemote, compareVersions, parseRemoteRequest, readRemoteRequest, RemoteEvent, RemoteExit, RemoteReply, RemoteRequestV1, RemoteRequestV2, RemoteUpgrade, RemoteWithheld, UPGRADE_TAG } from "../src/index.ts";
+import { BoardAnswerEvent, classifyRemote, compareVersions, parseRemoteRequest, readRemoteRequest, RemoteEvent, RemoteExit, RemoteReply, RemoteRequestV1, RemoteRequestV2, RemoteUpgrade, RemoteWithheld, UPGRADE_TAG } from "../src/index.ts";
 import * as rc41 from "./fixtures/remote-rc41.ts";
 
 // The wire between supervisors (ADR 0007 §2, §9).
@@ -253,5 +253,28 @@ describe("compareVersions: x.y.z[-rc.n]", () => {
       expect(compareVersions(bad, "2.0.0")).toBeNull();
       expect(compareVersions("2.0.0", bad)).toBeNull();
     }
+  });
+});
+
+describe("an answer's event (ADR 0009 §3; BOB-111 AC2)", () => {
+  const ANSWER = {
+    v: 2, event: "answer", seq: 5123, project: "helix", ref: "Q-282", kind: "question", state: "answered", key: "accept", option: "Accept the prototype", words: "Ship it",
+    by: "owner", via: "dashboard", asked_by: "kong@mbp-1",
+    holds: { items: ["LAND-56"], sessions: [{ feature: "LAND-56", kind: "design", label: "B" }] },
+    still_held: [{ session: { feature: "LAND-56", kind: "design", label: "B" }, by: ["Q-283"] }],
+    at: "2026-11-21T16:40:00Z",
+  };
+  it("parses §3's object, loosely, in each state", () => {
+    expect(BoardAnswerEvent.parse({ ...ANSWER, lead: "kong@mbp-1" })).toEqual({ ...ANSWER, lead: "kong@mbp-1" });
+    for (const state of ["answered", "done", "withdrawn"]) expect(BoardAnswerEvent.safeParse({ ...ANSWER, state }).success).toBe(true);
+    expect(BoardAnswerEvent.safeParse({ ...ANSWER, kind: "action", state: "done", key: null, option: null, asked_by: null, holds: { items: [], sessions: [] }, still_held: [] }).success).toBe(true);
+    for (const bad of [{ state: "open" }, { event: "exit" }, { v: 1 }, { project: undefined }, { seq: "1" }, { holds: { items: [] } }])
+      expect(BoardAnswerEvent.safeParse({ ...ANSWER, ...bad }).success).toBe(false);
+  });
+  it("is an event, never a request, and no RemoteEvent: an older supervisor drops it", () => {
+    expect(classifyRemote(JSON.stringify(ANSWER))?.kind).toBe("event");
+    expect(readRemoteRequest(JSON.stringify(ANSWER))).toBeNull();
+    expect(RemoteEvent.safeParse(ANSWER).success).toBe(false);
+    expect(rc41.RemoteEvent.safeParse(ANSWER).success).toBe(false);
   });
 });

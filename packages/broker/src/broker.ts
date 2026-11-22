@@ -4,8 +4,8 @@ import {
   BOARD_READS,
   BOARD_SENDER,
   type BoardCaller,
-  type BoardMessage,
   type BoardReply,
+  type BoardTold,
   CLIENT_FRAME_TYPES,
   ClientFrame,
   type ClientInfo,
@@ -30,6 +30,7 @@ import {
   type ServerFrame,
 } from "@bobnet/protocol";
 import { DurableObject } from "cloudflare:workers";
+import { NOTICE_BATCH, type NoticeRow } from "./board/store.ts";
 import { migrate } from "./schema.ts";
 
 const SWEEP_INTERVAL_MS = 3600_000;
@@ -43,6 +44,10 @@ const DASHBOARD_ITEMS = 50;
 const DASHBOARD_UPDATES = 200;
 /** Every project's board is one `Board` object (ADR 0001 §1). */
 const BOARD = "board";
+/** A drain of the answers' notices that failed is tried again this soon, by the alarm (ADR 0009 §1). */
+const NOTICE_RETRY_MS = 60_000;
+/** The writes that leave a notice (ADR 0009 §1): what the board says of whom it told is the broker's to fill in. */
+const NOTICE_OPS = new Set(["answer_question", "mark_done", "record_answer", "undo"]);
 
 interface Conn {
   connId: string;
@@ -275,6 +280,8 @@ export class Broker extends DurableObject<Env> {
     // The ok goes first so the client knows the address before deliveries arrive.
     this.ok(ws, frame.rid, { address: formatAddress(peer), queued: pending.length } satisfies Results["register"]);
     for (const msg of pending) this.send(ws, { t: "deliver", to: formatAddress(peer), wake: wakes(msg), msg });
+    // A notice the last drain couldn't send goes now, to its supervisor among others (ADR 0009 §1).
+    if (frame.supervisor) this.ctx.waitUntil(this.drainSafely());
   }
 
   private deregister(conn: Conn, as: string): Results["deregister"] {
@@ -375,9 +382,15 @@ export class Broker extends DurableObject<Env> {
     } catch (err) {
       reply = { ok: false, code: "unavailable", message: `The board can't be reached (${err instanceof Error ? err.message : String(err)}); retry` };
     }
-    // Committed, whatever became of the caller's socket meanwhile: the owners refetch, and the board's messages go out.
-    if (reply.ok && reply.changed) this.toOwners({ t: "board_changed", ...reply.changed });
-    if (reply.ok) for (const m of reply.messages) this.boardMessage(conn, m);
+    // Committed, whatever became of the caller's socket meanwhile: the owners refetch, and the board's notices go out.
+    if (reply.ok && reply.changed) {
+      this.toOwners({ t: "board_changed", ...reply.changed });
+      const drained = await this.drainSafely();
+      // An answer's reply says whom its notice went to (ADR 0009 §5): this drain's, or an earlier one's for a replay.
+      const seq = (reply.result as { seq?: unknown } | null)?.seq;
+      const told = NOTICE_OPS.has(frame.op.op) && typeof seq === "number" ? (drained?.get(seq) ?? this.toldBefore(seq)) : null;
+      if (told) reply = { ...reply, result: { ...(reply.result as object), ...told } };
+    }
     const ws = this.socket(conn.connId);
     if (!ws) return;
     if (reply.ok) this.ok(ws, frame.rid, reply.result);
@@ -390,27 +403,117 @@ export class Broker extends DurableObject<Env> {
   }
 
   /**
-   * A message the board's write sends (ADR 0001 §7), from its reserved sender, stored and delivered as
-   * any message is. A recipient that has never registered gets it when it does.
+   * Sends the answers' notices (ADR 0009 §1): each one's text to its agents as message `m_board_<seq>`,
+   * and its JSON to the project's supervisor as `m_board_<seq>_s`, from the board's reserved sender, then
+   * marks them taken. One already stored (a drain that ended before its mark, or another drain's) is
+   * only marked. Whom each was sent to, by seq. A recipient that has never registered gets it when it does.
    */
-  private boardMessage(conn: Conn, m: BoardMessage): void {
+  private async drainNotices(): Promise<Map<number, Required<BoardTold>>> {
+    const board = this.env.BOARD.getByName(BOARD);
+    const told = new Map<number, Required<BoardTold>>();
+    for (;;) {
+      // RPC's types can't carry the notice's loose JSON; the rows are the store's.
+      const rows = (await board.notices()) as unknown as NoticeRow[];
+      // From here to the mark nothing awaits: two drains that overlap can't both store a row.
+      for (const n of rows) {
+        const sent = this.sendNotice(n);
+        if (sent) told.set(n.seq, sent);
+      }
+      if (rows.length === 0) return told;
+      await board.noticesTaken(rows.map((n) => n.seq));
+      if (rows.length < NOTICE_BATCH) return told;
+    }
+  }
+
+  /** Drains the notices; a drain that fails is tried again by the alarm, within a minute. Null when it failed. */
+  private async drainSafely(): Promise<Map<number, Required<BoardTold>> | null> {
+    try {
+      return await this.drainNotices();
+    } catch (err) {
+      this.auditAs("board", "notice:drain_failed", { err: err instanceof Error ? err.message : String(err) });
+      const at = Date.now() + NOTICE_RETRY_MS;
+      const set = await this.ctx.storage.getAlarm();
+      if (set === null || set > at) await this.ctx.storage.setAlarm(at);
+      return null;
+    }
+  }
+
+  /** One notice, stored and delivered as any message is; null when an earlier drain stored it. */
+  private sendNotice(n: NoticeRow): Required<BoardTold> | null {
+    const id = `m_board_${n.seq}`;
+    if (this.messageExists(id) || this.messageExists(`${id}_s`)) return null;
+    const except = n.except === null ? null : parseRecipient(n.except, BOARD_SENDER.laptop);
+    const skip = except ? addressKey(except) : null;
+    const agents = this.boardRecipients(n.to).filter((r) => r.key !== skip);
+    const sup = this.noticeSupervisor(n);
+    const supervisor = sup && sup.key !== skip ? sup : null;
+    const reached: Recipient[] = [];
+    const send = (msgId: string, to: Recipient[], body: string) => {
+      if (to.length === 0) return;
+      const msg = this.store({ ...BOARD_SENDER, team: null }, "message", to, { id: msgId, body, urgent: false, in_reply_to: null, ttlSeconds: LIMITS.defaultMessageTtlSeconds });
+      reached.push(...this.fanOut(msg, to));
+      this.toOwners({ t: "traffic", item: traffic(msg) });
+      this.auditAs("board", "board_message", { id: msg.id, seq: n.seq, to: to.map((p) => p.key) });
+    };
+    send(id, agents, n.text);
+    if (supervisor) send(`${id}_s`, [supervisor], JSON.stringify(n.notice));
+    const all = [...agents, ...(supervisor ? [supervisor] : [])];
+    return { told: all.map(formatAddress), waiting: all.filter((r) => !reached.includes(r)).map(formatAddress), supervisor: supervisor ? formatAddress(supervisor) : null };
+  }
+
+  /**
+   * Whom an earlier drain sent notice `seq` to, from its stored messages; `waiting` those it is still
+   * queued for that aren't online now. Null when nothing was stored for it.
+   */
+  private toldBefore(seq: number): Required<BoardTold> | null {
+    const read = (id: string) => this.sql.exec<{ envelope: string }>("SELECT envelope FROM messages WHERE id = ?", id).toArray()[0];
+    const text = read(`m_board_${seq}`);
+    const json = read(`m_board_${seq}_s`);
+    if (!text && !json) return null;
+    const to = (row: { envelope: string } | undefined) => (row ? (JSON.parse(row.envelope) as Envelope).to : []);
+    const told = [...to(text), ...to(json)];
+    const queued = (addr: string) => {
+      const key = addressKey(parseRecipient(addr, BOARD_SENDER.laptop)!);
+      const peer = this.peer(key);
+      const pending = this.sql.exec("SELECT 1 FROM deliveries WHERE to_key = ? AND message_id IN (?, ?)", key, `m_board_${seq}`, `m_board_${seq}_s`).toArray().length > 0;
+      return pending && !(peer?.conn_id && this.isLive(peer.conn_id));
+    };
+    return { told, waiting: told.filter(queued), supervisor: to(json)[0] ?? null };
+  }
+
+  /** The board's recipients as peers, or as addresses that have not registered yet; never the board's own laptop. */
+  private boardRecipients(to: string[]): Recipient[] {
     const recipients: Recipient[] = [];
-    for (const raw of new Set(m.to)) {
+    for (const raw of new Set(to)) {
       const addr = parseRecipient(raw, BOARD_SENDER.laptop);
       if (!addr || addr.laptop.toLowerCase() === BOARD_SENDER.laptop) continue;
       const key = addressKey(addr);
+      if (recipients.some((r) => r.key === key)) continue;
       recipients.push(this.peer(key) ?? { key, name: addr.name, laptop: addr.laptop, conn_id: null });
     }
-    if (recipients.length === 0) return;
-    const msg = this.store({ ...BOARD_SENDER, team: null }, "message", recipients, {
-      body: m.body,
-      urgent: false,
-      in_reply_to: null,
-      ttlSeconds: LIMITS.defaultMessageTtlSeconds,
-    });
-    this.fanOut(msg, recipients);
-    this.toOwners({ t: "traffic", item: traffic(msg) });
-    this.audit(conn, "board_message", { id: msg.id, to: recipients.map((p) => p.key) });
+    return recipients;
+  }
+
+  /**
+   * The supervisor that runs a notice's project (ADR 0009 §2), from what supervisors registered: the one
+   * that serves it; of several, the one on the lead's laptop, else on the asker's; else nobody, audited.
+   */
+  private noticeSupervisor(n: NoticeRow): Recipient | null {
+    const serving = this.sql
+      .exec<{ laptop: string; name: string; projects: string | null }>("SELECT laptop, name, projects FROM laptop_supervisors ORDER BY laptop")
+      .toArray()
+      .filter((r) => r.projects !== null && (JSON.parse(r.projects) as string[]).includes(n.project));
+    const on = (raw: unknown) => {
+      const addr = typeof raw === "string" ? parseRecipient(raw, BOARD_SENDER.laptop) : null;
+      return addr ? serving.find((r) => r.laptop.toLowerCase() === addr.laptop.toLowerCase()) : undefined;
+    };
+    const pick = serving.length === 1 ? serving[0] : serving.length > 1 ? (on(n.notice["lead"]) ?? on(n.notice.asked_by)) : undefined;
+    if (!pick) {
+      if (serving.length > 1) this.auditAs("board", "notice:no_supervisor", { seq: n.seq, project: n.project, serving: serving.map((r) => `${r.name}@${r.laptop}`) });
+      return null;
+    }
+    const key = addressKey({ name: pick.name, laptop: pick.laptop });
+    return this.peer(key) ?? { key, name: pick.name, laptop: pick.laptop, conn_id: null };
   }
 
   /** Who makes a board operation (ADR 0001 §4): the owner, or a peer this connection hosts, with what its supervisor says. */
@@ -583,11 +686,11 @@ export class Broker extends DurableObject<Env> {
     sender: Pick<PeerRow, "name" | "laptop" | "team">,
     type: Envelope["type"],
     recipients: Recipient[],
-    opts: { body: string; urgent: boolean; in_reply_to: string | null; ttlSeconds: number },
+    opts: { id?: string; body: string; urgent: boolean; in_reply_to: string | null; ttlSeconds: number },
   ): Envelope {
     const now = Date.now();
     const msg: Envelope = {
-      id: `m_${crypto.randomUUID()}`,
+      id: opts.id ?? `m_${crypto.randomUUID()}`,
       type,
       from: formatAddress(sender),
       to: recipients.map(formatAddress),
@@ -730,7 +833,11 @@ export class Broker extends DurableObject<Env> {
 
   private audit(conn: Conn, action: string, detail: Record<string, unknown>): void {
     const id = conn.identity;
-    const actor = id.kind === "laptop" ? `laptop:${id.laptop}` : id.kind === "owner" ? `owner:${id.email}` : `ci:${id.source}`;
+    this.auditAs(id.kind === "laptop" ? `laptop:${id.laptop}` : id.kind === "owner" ? `owner:${id.email}` : `ci:${id.source}`, action, detail);
+  }
+
+  /** An audit row by `actor`: a connection's, or "board" for what the broker does for the board. */
+  private auditAs(actor: string, action: string, detail: Record<string, unknown>): void {
     this.sql.exec(
       "INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)",
       new Date().toISOString(),
@@ -740,7 +847,7 @@ export class Broker extends DurableObject<Env> {
     );
   }
 
-  /** Drops expired messages, long-gone peers and old audit rows. */
+  /** Drops expired messages, long-gone peers and old audit rows, and sends any notice a drain left (ADR 0009 §1). */
   override async alarm(): Promise<void> {
     const now = Date.now();
     const iso = new Date(now).toISOString();
@@ -752,6 +859,8 @@ export class Broker extends DurableObject<Env> {
     this.sql.exec("DELETE FROM audit WHERE ts <= ?", new Date(now - AUDIT_RETENTION_MS).toISOString());
     this.sql.exec("DELETE FROM updates WHERE at <= ?", new Date(now - UPDATE_RETENTION_MS).toISOString());
     await this.ctx.storage.setAlarm(now + SWEEP_INTERVAL_MS);
+    // After the sweep's alarm, so a drain that fails brings it forward.
+    await this.drainSafely();
   }
 }
 

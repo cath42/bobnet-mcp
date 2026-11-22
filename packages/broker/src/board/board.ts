@@ -4,13 +4,14 @@ import { migrate } from "../schema.ts";
 import { BoardError } from "./errors.ts";
 import { exportBoard, importBoard, type Reader } from "./export.ts";
 import { BOARD_MIGRATIONS } from "./schema.ts";
-import { BoardStore } from "./store.ts";
+import { BoardStore, type NoticeRow } from "./store.ts";
 
 /**
  * Every project's board (ADR 0001 §1): its own Durable Object, so it restores
  * on its own and its reads don't queue messages. Only the broker calls it, with
- * the caller it verified; it answers the result, what changed and the messages
- * the write sends (§7), and the broker does the sending.
+ * the caller it verified; it answers the result and what changed. An answer's
+ * messages are notice rows in its transaction, which the broker drains and sends
+ * (ADR 0009 §1).
  */
 export class Board extends DurableObject<Env> {
   private readonly store: BoardStore;
@@ -32,11 +33,11 @@ export class Board extends DurableObject<Env> {
     if (!parsed.success) return { ok: false, code: "invalid", message: parsed.error.issues[0]?.message ?? "Invalid operation" };
     const op = parsed.data;
     return this.answer(op.op, () => {
-      if (isRead(op)) return { ok: true, result: this.store.read(caller, op), changed: null, messages: [] };
-      const { result, changed, messages } = this.ctx.storage.transactionSync(() =>
+      if (isRead(op)) return { ok: true, result: this.store.read(caller, op), changed: null };
+      const { result, changed } = this.ctx.storage.transactionSync(() =>
         key === undefined ? this.store.write(caller, op) : this.store.writeOnce(caller, op, key),
       );
-      return { ok: true, result, changed, messages };
+      return { ok: true, result, changed };
     });
   }
 
@@ -47,9 +48,19 @@ export class Board extends DurableObject<Env> {
     const op = parsed.data;
     if (op.op !== "ci_run") return { ok: false, code: "invalid", message: "Invalid run" };
     return this.answer(op.op, () => {
-      const { result, changed, messages } = this.ctx.storage.transactionSync(() => this.store.ciRun(source, op));
-      return { ok: true, result, changed, messages };
+      const { result, changed } = this.ctx.storage.transactionSync(() => this.store.ciRun(source, op));
+      return { ok: true, result, changed };
     });
+  }
+
+  /** The answers' notices the broker hasn't taken yet, oldest first, 50 at most (ADR 0009 §1). */
+  async notices(): Promise<NoticeRow[]> {
+    return this.store.notices();
+  }
+
+  /** Marks notices taken once the broker has stored their messages; taken ones go after 30 days. */
+  async noticesTaken(seqs: number[]): Promise<void> {
+    this.ctx.storage.transactionSync(() => this.store.noticesTaken(seqs));
   }
 
   /** Runs one operation, answering a refusal or a bug as a reply. */

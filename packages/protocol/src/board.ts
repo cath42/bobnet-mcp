@@ -837,6 +837,18 @@ export interface BoardWritten {
   seq: number;
 }
 
+/**
+ * Whom an answer's message went to (§7, ADR 0009 §5). `told`: every address it was sent to, the
+ * project's supervisor included; empty when nobody was. `waiting`: those of them that weren't online
+ * when it was sent. `supervisor`: the supervisor told, or null when none runs the project. The broker
+ * sets all three; `waiting` and `supervisor` are absent when the board answers without it.
+ */
+export interface BoardTold {
+  told: string[];
+  waiting?: string[];
+  supervisor?: string | null;
+}
+
 export interface BoardResults {
   projects: { projects: ProjectRecord[] };
   list: { releases?: ReleaseRecord[]; items?: ItemSummary[]; total: number; cursor: string | null };
@@ -866,11 +878,10 @@ export interface BoardResults {
   close_session: BoardWritten & { tasks_moved: SessionRecord["tasks_moved"]; tokens: TokenTotals };
   ask: BoardWritten;
   edit_question: BoardWritten;
-  /** `told`: whom the board's message went to (§7); empty when nobody heard it. */
-  record_answer: BoardWritten & { told: string[] };
-  answer_question: BoardWritten & { told: string[] };
-  mark_done: BoardWritten & { told: string[] };
-  undo: BoardWritten & { told: string[] };
+  record_answer: BoardWritten & BoardTold;
+  answer_question: BoardWritten & BoardTold;
+  mark_done: BoardWritten & BoardTold;
+  undo: BoardWritten & BoardTold;
   session_join: BoardWritten & { created: boolean };
   run_start: BoardWritten & { unknown_tasks: string[] };
   run_remote: BoardWritten;
@@ -892,14 +903,7 @@ export function fromBoard(msg: { laptop: string }): boolean {
   return msg.laptop.toLowerCase() === BOARD_SENDER.laptop;
 }
 
-/** A message the board's write sends, from `BOARD_SENDER`, for the broker to store and deliver (§7). */
-export interface BoardMessage {
-  /** BobNet addresses, `name@laptop`. */
-  to: string[];
-  body: string;
-}
-
-/** What `Board` answers the broker: the result, what changed for the broker to push, and the messages to send (§7, §8). */
+/** What `Board` answers the broker: the result, and what changed for the broker to push (§8). An answer's messages are notice rows the broker drains (ADR 0009 §1). */
 export type BoardReply =
-  | { ok: true; result: unknown; changed: { project: string; seq: number; refs: string[] } | null; messages: BoardMessage[] }
+  | { ok: true; result: unknown; changed: { project: string; seq: number; refs: string[] } | null }
   | { ok: false; code: BoardErrorCode; message: string };

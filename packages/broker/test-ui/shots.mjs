@@ -1,4 +1,4 @@
-// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5) and its follow-ups (the CI line under Working now), a cut question opened (BOB-31), a question's edits (BOB-119), a laptop's last cleanup (BOB-123) at phone, tablet and desktop
+// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5) and its follow-ups (the CI line under Working now), a cut question opened (BOB-31), a question's edits (BOB-119), a laptop's last cleanup (BOB-123), an answer's toast (BOB-111) at phone, tablet and desktop
 // widths, against a fake broker in the page holding a copy of BobNet's board (2026-11-14; its backlog
 // 2026-11-15). The page is public/ as served.
 //   node test-ui/shots.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob7-*.png, bob8-*.png, bob10-*.png, bob3-*.png)
@@ -247,7 +247,10 @@ function fakeBroker() {
         const i = waits.findIndex((w) => w.project === op.project && w.ref === op.ref);
         const [w] = waits.splice(i, 1);
         answered.unshift({ project: w.project, ref: w.ref, kind: w.kind, text: w.text, key: op.key ?? null, words: op.words ?? op.note ?? null, at: new Date().toISOString() });
-        return { ref: op.ref, seq: ++seq, told: [projects.find((p) => p.key === op.project).lead] };
+        const lead = projects.find((p) => p.key === op.project).lead;
+        // BOB-111: the asker is offline, and the project's supervisor is told too; or no supervisor runs it.
+        if (window.BOB111) return { ref: op.ref, seq: ++seq, told: [lead, "kong@mbp-1", ...(window.NOSUP ? [] : ["poe@mbp-1"])], waiting: ["kong@mbp-1"], supervisor: window.NOSUP ? null : "poe@mbp-1" };
+        return { ref: op.ref, seq: ++seq, told: [lead] };
       }
       default: return { ref: null, seq: ++seq, told: [] };
     }
@@ -337,6 +340,9 @@ function fakeBroker() {
 
 const widths = { 390: [390, 844], 1024: [1024, 768], 1440: [1440, 900] };
 const words = "The roadmap jumps to the top on my phone when I move a feature. Happens every time, on the train too.";
+const answerQ258 = [(p) => p.locator('li[data-ref="Q-258"]').getByRole("button", { name: "Answer" }).click(),
+  (p) => p.locator('li[data-ref="Q-258"] .opt-row').first().click(), (p) => p.fill('li[data-ref="Q-258"] textarea', "Adding the second company now; rerun C11 in ten minutes."),
+  (p) => p.getByRole("button", { name: "Send answer" }).click()];
 const capture = [(p) => p.click("#capture-open"), (p) => p.fill("#cap-text", words), (p) => p.getByRole("button", { name: "Bug", exact: true }).click(),
   (p) => p.getByRole("button", { name: "production" }).click(), (p) => p.check("#cap-blocks")];
 const q1 = (p) => p.locator('#needs li[data-id="bobnet/Q-1"]');
@@ -402,6 +408,9 @@ const all = [
   // BOB-119: an edited action and question on Waits on you, A-24's edits open; the feature page's next step, its two edits open by default.
   ["bob119-waits-edits", "waits", [(p) => p.locator('li[data-ref="A-24"] details.edits summary').click()], false, null, "#waits-holding"],
   ["bob119-feature-edits", "feature/bobnet/BOB-4", [(p) => p.locator("#next").scrollIntoViewIfNeeded()], false, null, "#next"],
+  // BOB-111 (AC4): the toast after answering says who was told, the supervisor too, and whom it waits for; or that no supervisor runs the project.
+  ["bob111-answer-toast", "waits", answerQ258, false, "#toast"],
+  ["bob111-answer-toast-nosup", "waits", answerQ258, false, "#toast"],
   // BOB-123: each laptop's last cleanup on its row (Sessions), one with none yet.
   ["bob123-laptops", "sessions", [(p) => p.locator("#laptops").scrollIntoViewIfNeeded()], false, null, "#laptops"],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
@@ -416,8 +425,8 @@ try {
       if (name.startsWith("bob44") && w === "1024") continue;
       // So does BOB-119's.
       if (name.startsWith("bob119") && w === "1024") continue;
-      // And BOB-123's.
-      if (name.startsWith("bob123") && w === "1024") continue;
+      // And BOB-123's, and BOB-111's.
+      if ((name.startsWith("bob123") || name.startsWith("bob111")) && w === "1024") continue;
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2, colorScheme: scheme ?? "light" });
       if (name.startsWith("bob31")) await page.addInitScript(() => (window.BOB31 = true));
       if (name.startsWith("bob3") && !name.startsWith("bob31")) await page.addInitScript(() => (window.BOB3 = true));
@@ -426,12 +435,14 @@ try {
       if (name.startsWith("bob44")) await page.addInitScript(() => (window.BOB44 = true));
       if (name.startsWith("bob123")) await page.addInitScript(() => (window.BOB123 = true));
       if (name.includes("-stale")) await page.addInitScript(() => (window.STALE = true));
-      if (name.startsWith("bob5")) {
+      if (name.startsWith("bob111")) await page.addInitScript(() => (window.BOB111 = true));
+      if (name.endsWith("-nosup")) await page.addInitScript(() => (window.NOSUP = true));
+      if (name.startsWith("bob5") || name.startsWith("bob111")) {
         await page.addInitScript(() => (window.BOB5 = true));
         if (name === "bob5-ci-line") await page.addInitScript(() => (window.CI = true));
         await page.addInitScript({ path: join(here, "../../../design/BOB-1/sample/records.js") });
       }
-      if (name.startsWith("bob3acc") || name.startsWith("bob5") || name.startsWith("bob31") || name.startsWith("bob44")) {
+      if (name.startsWith("bob3acc") || name.startsWith("bob5") || name.startsWith("bob111") || name.startsWith("bob31") || name.startsWith("bob44")) {
         await page.addInitScript(() => (window.TWO = true));
         await page.addInitScript({ path: join(here, "../../../design/BOB-1/sample/helix.js") });
       }

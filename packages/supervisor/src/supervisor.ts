@@ -5,6 +5,7 @@ import { join, relative, resolve, isAbsolute } from "node:path";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import {
   addressKey,
+  BoardAnswerEvent,
   BoardOp,
   type BoardCtx,
   type BoardOpInput,
@@ -1344,6 +1345,8 @@ export class Supervisor {
   private onRemoteAnswer(msg: Envelope): void {
     const read = classifyRemote(msg.body, msg.in_reply_to);
     if (!read) return;
+    // The board's answer notice (ADR 0009 §4): the broker stamps the sender, and no laptop may take the board's.
+    if (fromBoard(msg) && read.json["event"] === "answer") return this.onBoardAnswer(msg, read.json);
     const withheld = read.json["event"] === "withheld";
     const answers = read.kind === "reply" || (withheld && typeof read.json["req"] === "string");
     // Read against the wire's schemas (§2), loose so a newer target's extra fields pass; what fails is dropped.
@@ -1372,6 +1375,34 @@ export class Supervisor {
     this.copyFromReply(sent, read.json);
     this.store.settleRemoteSent(sent.id, { state: "replied", reply: msg.body });
     this.remoteWaits.get(sent.id)?.(read.json);
+  }
+
+  /**
+   * An answer to a board question or action, from the board (ADR 0009 §4): its project's orchestrator
+   * is told what was answered, what it held and what still holds it, so it can start what waited. Once
+   * per message id, recorded first; dropped for a project not run here, and skipped when the
+   * orchestrator recorded it itself. No spawn and no board write: starting a session is its call.
+   */
+  private onBoardAnswer(msg: Envelope, json: Record<string, unknown>): void {
+    const read = BoardAnswerEvent.safeParse(json);
+    if (!read.success) {
+      this.log.warn("an answer notice from the board that doesn't parse; dropped", { id: msg.id, err: read.error.issues[0]?.message, path: read.error.issues[0]?.path.join(".") });
+      return;
+    }
+    const a = read.data;
+    if (!this.config.projects.has(a.project)) {
+      this.log.info("an answer notice for a project not run here; dropped", { id: msg.id, project: a.project });
+      return;
+    }
+    if (!this.store.beginBoardNotice(msg.id, a.project)) return;
+    const orchestrator = this.orchestratorOf(a.project);
+    const detail = { message: msg.id, project: a.project, ref: a.ref, state: a.state, by: a.by };
+    if (a.by !== "owner" && this.sameAddress(a.by, orchestrator)) {
+      this.store.audit(msg.from, "board:answer_own", null, detail);
+      return;
+    }
+    this.notify(boardAnswerText(a), a.project);
+    this.store.audit(msg.from, "board:answer", null, { ...detail, to: orchestrator });
   }
 
   /** Whether two addresses name the same peer, a bare name being this laptop's. */
@@ -3647,6 +3678,31 @@ function preview(r: RequestRow): string {
   }
   if (findSecret(text)) return "[hidden: looks like it contains a credential]";
   return text.length > 400 ? `${text.slice(0, 399)}…` : text;
+}
+
+/**
+ * An answer notice as its orchestrator reads it (ADR 0009 §4): what was answered, what it held, what
+ * still holds that, and "can start" only for what nothing else holds.
+ */
+export function boardAnswerText(a: BoardAnswerEvent): string {
+  const session = (s: { feature: string; kind: string; label: string }) => `session ${s.feature} ${s.kind} ${s.label}`;
+  const held = [...a.holds.items, ...a.holds.sessions.map(session)];
+  const still = a.still_held.map((x) => ({ what: x.item ?? (x.session ? session(x.session) : ""), by: x.by }));
+  const free = held.filter((h) => !still.some((x) => x.what === h));
+  const who = a.by === "owner" ? "Casper" : `Casper (recorded by ${a.by})`;
+  const said = [a.key !== null ? `${a.key}${a.option !== null ? `: ${a.option}` : ""}` : null, a.words !== null ? `"${a.words}"` : null].filter((x) => x !== null).join(", ");
+  const what = `${a.project} ${a.ref}`;
+  const list = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
+  if (a.state === "withdrawn") {
+    const head = `${who} withdrew ${a.kind === "action" ? "his done mark on" : "his answer to"} ${what}${said ? ` (${said})` : ""}; it is open again.`;
+    return held.length ? `${head} It holds ${list(held)} again.` : head;
+  }
+  const head = a.state === "done" ? `${who} marked ${what} done${said ? `: ${said}` : ""}.` : `${who} answered ${what}${said ? ` (${said})` : ""}.`;
+  if (!held.length) return `${head} It held nothing on the board.`;
+  const parts = [`${head} It held ${list(held)}.`];
+  if (still.length) parts.push(`Still held: ${still.map((x) => `${x.what} by ${x.by.join(", ")}`).join("; ")}.`);
+  if (free.length) parts.push(`Nothing else holds ${list(free)} now: ${free.length === 1 ? "it can" : "they can"} start.`);
+  return parts.join(" ");
 }
 
 function formatInbound(msg: Envelope): string {

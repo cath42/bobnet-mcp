@@ -108,6 +108,38 @@ export type UpgradeStage = (typeof UPGRADE_STAGES)[number];
 export const RemoteUpgrade = z.looseObject({ v, event: z.literal("upgrade"), req: id, stage: z.enum(UPGRADE_STAGES), from: z.string().nullable(), to: z.string() });
 export type RemoteUpgrade = z.infer<typeof RemoteUpgrade>;
 
+/** What an answer to a board question or action is now (ADR 0009 §3): answered, done (an action), or withdrawn by an undo. */
+export const BOARD_ANSWER_STATES = ["answered", "done", "withdrawn"] as const;
+
+const HeldSession = z.looseObject({ feature: z.string(), kind: z.string(), label: z.string() });
+
+/**
+ * An answer's event (ADR 0009 §3): from the board (`BobNet@board`), to the supervisor that runs its
+ * project, which tells its orchestrator (§4). `by` is "owner" for Casper's answer on the dashboard,
+ * else the recorder's address; `key` and `words` are what was withdrawn when `state` is withdrawn.
+ * `still_held`: the other open questions that hold what this one holds. An older supervisor's
+ * RemoteEvent refuses it (an unknown event), and it is dropped.
+ */
+export const BoardAnswerEvent = z.looseObject({
+  v,
+  event: z.literal("answer"),
+  seq: z.number().int(),
+  project: z.string().min(1),
+  ref: z.string().min(1),
+  kind: z.enum(["question", "action"]),
+  state: z.enum(BOARD_ANSWER_STATES),
+  key: z.string().nullable(),
+  option: z.string().nullable(),
+  words: z.string().nullable(),
+  by: z.string().min(1),
+  via: z.string().nullable(),
+  asked_by: z.string().nullable(),
+  holds: z.looseObject({ items: z.array(z.string()), sessions: z.array(HeldSession) }),
+  still_held: z.array(z.looseObject({ item: z.string().optional(), session: HeldSession.optional(), by: z.array(z.string()) })),
+  at: z.string(),
+});
+export type BoardAnswerEvent = z.infer<typeof BoardAnswerEvent>;
+
 /** The states that end a worker, as an `exit` says them. */
 export const EXIT_STATES = ["done", "failed", "stopped"] as const;
 

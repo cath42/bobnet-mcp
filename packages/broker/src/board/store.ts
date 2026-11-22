@@ -4,11 +4,12 @@ import {
   type BacklogCounts,
   type BoardCaller,
   type BoardCtx,
+  type BoardAnswerEvent,
   type BoardEvent,
-  type BoardMessage,
   type BoardOp,
   type BoardReadName,
   type BoardResults,
+  type BoardTold,
   type BoardWritten,
   type CriterionRecord,
   type GrantField,
@@ -50,6 +51,10 @@ const UNDO_MS = 2 * 60 * 1000;
 const ANSWERED_MAX = 50;
 /** How long a write's operation key is kept (§12). */
 const OP_KEY_MS = 24 * 60 * 60 * 1000;
+/** A taken notice is kept this long (ADR 0009 §1), then pruned. */
+const NOTICE_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
+/** The broker drains this many notices at most per call. */
+export const NOTICE_BATCH = 50;
 /** The status read (ADR 0005 §2): its longest span, its lists' cap, when quiet turns stuck (Peach's default). */
 const SPAN_MAX_MS = 31 * 24 * 60 * 60 * 1000;
 const STATUS_MAX = 100;
@@ -1027,25 +1032,25 @@ export class BoardStore {
   write(
     caller: BoardCaller,
     op: Exclude<BoardOp, Op<BoardReadName>>,
-  ): { result: Written; changed: { project: string; seq: number; refs: string[] } | null; messages: BoardMessage[] } {
+  ): { result: Written; changed: { project: string; seq: number; refs: string[] } | null } {
     if (op.op === "ci_run") return this.ciRun(GH_SOURCE, ghRun(caller, op), whoOf(caller));
     const tx = new Tx(this.sql, caller);
     const result = this.apply(tx, op);
-    if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null, messages: [] };
-    return { result, changed: { project: tx.projectKey ?? "*", seq: tx.seqs.at(-1)!, refs: [...tx.refs] }, messages: tx.messages };
+    if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null };
+    return { result, changed: { project: tx.projectKey ?? "*", seq: tx.seqs.at(-1)!, refs: [...tx.refs] } };
   }
 
   /** A CI system's report of one run (§10), from POST /v1/runs: the source is its token's. */
-  ciRun(source: string, op: Op<"ci_run">, via?: string): { result: BoardResults["ci_run"]; changed: { project: string; seq: number; refs: string[] } | null; messages: BoardMessage[] } {
+  ciRun(source: string, op: Op<"ci_run">, via?: string): { result: BoardResults["ci_run"]; changed: { project: string; seq: number; refs: string[] } | null } {
     const tx = new Tx<Caller>(this.sql, via === undefined ? { kind: "ci", source } : { kind: "ci", source, via });
     const result = this.reportCi(tx, source, op);
-    if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null, messages: [] };
-    return { result, changed: { project: tx.projectKey!, seq: tx.seqs.at(-1)!, refs: [...tx.refs] }, messages: [] };
+    if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null };
+    return { result, changed: { project: tx.projectKey!, seq: tx.seqs.at(-1)!, refs: [...tx.refs] } };
   }
 
   /**
    * A write with an operation key (§12): once per key. A repeat by the same actor and op answers the
-   * first reply, messages included, and writes nothing; keys last a day. A refused write rolls back,
+   * first reply and writes nothing, so no second notice either (ADR 0009 §1); keys last a day. A refused write rolls back,
    * key and all, so its retry is refused again.
    */
   writeOnce(caller: BoardCaller, op: Exclude<BoardOp, Op<BoardReadName>>, key: string): ReturnType<BoardStore["write"]> {
@@ -1950,7 +1955,7 @@ export class BoardStore {
   }
 
   /** Casper's answer given in conversation, recorded by the lead or PO (§7): write-once, his words verbatim. */
-  private recordAnswer(tx: Tx, op: Op<"record_answer">): BoardWritten & { told: string[] } {
+  private recordAnswer(tx: Tx, op: Op<"record_answer">): BoardWritten & BoardTold {
     const p = tx.project(this.project(op.project));
     this.rules.requireFlag(tx.caller, p, "questions");
     const q = this.question(p, op.ref);
@@ -1972,16 +1977,15 @@ export class BoardStore {
     const seq = tx.event("record_answer", "questions", q.pk, q.ref, changes);
     // Whoever waits on it hears, so nobody has to remember to forward it; the recorder knows.
     const lines = [`Casper answered ${q.ref} (${p.key}), in conversation, recorded by ${tx.who}: ${q.text}`];
-    if (op.key !== undefined) {
-      const option = this.option(q, op.key);
-      lines.push(`Option ${option.key}: ${option.text}`);
-    }
+    const option = op.key === undefined ? null : this.option(q, op.key);
+    if (option) lines.push(`Option ${option.key}: ${option.text}`);
     lines.push(`His words: ${op.words}`);
-    return { ref: q.ref, seq, told: this.notify(tx, p, q, lines.join("\n"), tx.caller) };
+    const said = { state, key: op.key ?? null, option: option?.text ?? null, words: op.words, via: "conversation" } as const;
+    return { ref: q.ref, seq, told: this.notify(tx, p, q, seq, said, lines, tx.caller) };
   }
 
   /** Casper's answer from the dashboard (§7): write-once, the owner's alone, and the lead hears it. */
-  private answerQuestion(tx: Tx, op: Op<"answer_question">): BoardWritten & { told: string[] } {
+  private answerQuestion(tx: Tx, op: Op<"answer_question">): BoardWritten & BoardTold {
     ownerOnly(tx.caller, "Answering a question");
     const p = tx.project(this.project(op.project));
     const q = this.question(p, op.ref);
@@ -1993,11 +1997,12 @@ export class BoardStore {
     const lines = [`Casper answered ${q.ref} (${p.key}): ${q.text}`];
     if (option) lines.push(`Option ${option.key}: ${option.text}`);
     if (op.words !== undefined) lines.push(`His words: ${op.words}`);
-    return { ref: q.ref, seq, told: this.notify(tx, p, q, lines.join("\n")) };
+    const said = { state: "answered", key: op.key ?? null, option: option?.text ?? null, words: op.words ?? null, via: "dashboard" } as const;
+    return { ref: q.ref, seq, told: this.notify(tx, p, q, seq, said, lines) };
   }
 
   /** Casper marks an action done from the dashboard (§7), with an optional note: write-once, the owner's alone. */
-  private markDone(tx: Tx, op: Op<"mark_done">): BoardWritten & { told: string[] } {
+  private markDone(tx: Tx, op: Op<"mark_done">): BoardWritten & BoardTold {
     ownerOnly(tx.caller, "Marking an action done");
     const p = tx.project(this.project(op.project));
     const q = this.question(p, op.ref);
@@ -2006,7 +2011,8 @@ export class BoardStore {
     const seq = this.answer(tx, q, "done", null, op.note ?? null, "mark_done");
     const lines = [`Casper marked ${q.ref} done (${p.key}): ${q.text}`];
     if (op.note !== undefined) lines.push(`His note: ${op.note}`);
-    return { ref: q.ref, seq, told: this.notify(tx, p, q, lines.join("\n")) };
+    const said = { state: "done", key: null, option: null, words: op.note ?? null, via: "dashboard" } as const;
+    return { ref: q.ref, seq, told: this.notify(tx, p, q, seq, said, lines) };
   }
 
   /** Writes an answer from the dashboard and its event. */
@@ -2029,7 +2035,7 @@ export class BoardStore {
    * minutes: his dashboard answer or done mark (§7), a feature's release, or a release's close. An
    * order of releases isn't undone here: the dashboard sends the inverse order.
    */
-  private undo(tx: Tx, op: Op<"undo">): BoardWritten & { told: string[] } {
+  private undo(tx: Tx, op: Op<"undo">): BoardWritten & BoardTold {
     ownerOnly(tx.caller, "Undo");
     const p = tx.project(this.project(op.project));
     const e = this.sql
@@ -2068,7 +2074,9 @@ export class BoardStore {
     const lines = [`Casper withdrew ${what} ${q.ref} (${p.key}); it is open again: ${q.text}`];
     if (q.answer_key !== null) lines.push(`Withdrawn option: ${q.answer_key}`);
     if (q.answer_words !== null) lines.push(`Withdrawn words: ${q.answer_words}`);
-    return { ref: q.ref, seq, told: this.notify(tx, p, q, lines.join("\n")) };
+    const option = q.answer_key === null ? null : this.sql.exec<{ text: string }>("SELECT text FROM question_options WHERE question = ? AND key = ?", q.pk, q.answer_key).toArray()[0];
+    const said = { state: "withdrawn", key: q.answer_key, option: option?.text ?? null, words: q.answer_words, via: "dashboard" } as const;
+    return { ref: q.ref, seq, told: this.notify(tx, p, q, seq, said, lines) };
   }
 
   /** Puts a feature back in the release Casper moved it out of, unless it has moved since. */
@@ -2133,19 +2141,97 @@ export class BoardStore {
   }
 
   /**
-   * The board's message about a question (§7): to the project's lead, and to whoever asked if that is
-   * someone else, never to `except`, who made the write. Whom it went to.
+   * The board's message about a question (§7), as a notice row in the write's transaction (ADR 0009 §1):
+   * the text to the project's lead, and to whoever asked if that is someone else, never to `except`, who
+   * made the write; the JSON (§3) for the broker to send the project's supervisor. The text says what
+   * the question holds, and what else still holds it. Whom the text goes to.
    */
-  private notify(tx: Tx, p: ProjectRow, q: QuestionRow, body: string, except?: BoardCaller): string[] {
+  private notify(tx: Tx, p: ProjectRow, q: QuestionRow, seq: number, said: Said, lines: string[], except?: BoardCaller): string[] {
     const to = new Map<string, string>();
     const skip = except?.kind === "agent" ? addressKey({ name: except.name, laptop: except.laptop }) : null;
+    // asked_by is an email when the owner asked: not an address, and he knows.
+    const address = (raw: string | null) => (raw?.includes("@") && parseRecipient(raw, "") ? raw : null);
     for (const raw of [p.lead, q.asked_by]) {
-      // asked_by is an email when the owner asked: not an address, and he knows.
-      const addr = raw?.includes("@") ? parseRecipient(raw, "") : null;
+      const addr = address(raw) === null ? null : parseRecipient(raw!, "");
       if (addr && addressKey(addr) !== skip && !to.has(addressKey(addr))) to.set(addressKey(addr), raw!);
     }
-    if (to.size > 0) tx.messages.push({ to: [...to.values()], body });
+    const holds = this.sql.exec<{ item: number | null; session: number | null }>("SELECT item, session FROM question_holds WHERE question = ? ORDER BY rowid", q.pk).toArray();
+    const items = holds.flatMap((h) => (h.item !== null ? [this.refOf(h.item)] : []));
+    const sessions = holds.flatMap((h) => (h.session !== null ? [this.sessionRef(h.session)!] : []));
+    // The other open questions that hold anything this one holds, as they stand now.
+    const others = this.sql
+      .exec<{ item: number | null; session: number | null; ref: string }>(
+        `SELECT h.item, h.session, o.ref FROM question_holds h
+         JOIN question_holds oh ON oh.question != h.question AND (oh.item = h.item OR oh.session = h.session)
+         JOIN questions o ON o.pk = oh.question
+         WHERE h.question = ? AND o.state = 'open' ORDER BY h.rowid, o.pk`,
+        q.pk,
+      )
+      .toArray();
+    const stillHeld = new Map<string, BoardAnswerEvent["still_held"][number]>();
+    const byQuestion = new Map<string, string[]>();
+    for (const o of others) {
+      const what = o.item !== null ? { item: this.refOf(o.item) } : { session: this.sessionRef(o.session!)! };
+      const name = what.item ?? `session ${sessionShown(what.session!)}`;
+      if (stillHeld.has(name)) stillHeld.get(name)!.by.push(o.ref);
+      else stillHeld.set(name, { ...what, by: [o.ref] });
+      byQuestion.set(o.ref, [...(byQuestion.get(o.ref) ?? []), name]);
+    }
+    const held = [...items, ...sessions.map((x) => `session ${sessionShown(x)}`)];
+    if (held.length) lines.push(`Holds: ${held.join("; ")}`);
+    if (byQuestion.size) lines.push(`Still held by: ${[...byQuestion].map(([ref, what]) => `${ref} (${what.join("; ")})`).join(", ")}`);
+    const notice: BoardAnswerEvent = {
+      v: 2,
+      event: "answer",
+      seq,
+      project: p.key,
+      ref: q.ref,
+      kind: q.kind,
+      state: said.state,
+      key: said.key,
+      option: said.option,
+      words: said.words,
+      // Never the owner's email: he is "owner" in a message.
+      by: tx.caller.kind === "owner" ? "owner" : tx.who,
+      via: said.via,
+      asked_by: address(q.asked_by),
+      lead: address(p.lead),
+      holds: { items, sessions },
+      still_held: [...stillHeld.values()],
+      at: tx.at,
+    };
+    this.sql.exec(
+      `INSERT INTO notices (seq, project, question, state, to_json, "except", text, notice) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      seq,
+      p.key,
+      q.ref,
+      said.state,
+      JSON.stringify([...to.values()]),
+      except?.kind === "agent" ? `${except.name}@${except.laptop}` : null,
+      lines.join("\n"),
+      JSON.stringify(notice),
+    );
     return [...to.values()];
+  }
+
+  // ---------- Notices (ADR 0009 §1) ----------
+
+  /** The notices the broker hasn't taken yet, oldest first, a batch at most. */
+  notices(): NoticeRow[] {
+    return this.sql
+      .exec<{ seq: number; project: string; question: string; state: NoticeRow["state"]; to_json: string; except: string | null; text: string; notice: string }>(
+        `SELECT seq, project, question, state, to_json, "except", text, notice FROM notices WHERE taken_at IS NULL ORDER BY seq LIMIT ?`,
+        NOTICE_BATCH,
+      )
+      .toArray()
+      .map((n) => ({ seq: n.seq, project: n.project, question: n.question, state: n.state, to: JSON.parse(n.to_json) as string[], except: n.except, text: n.text, notice: JSON.parse(n.notice) as BoardAnswerEvent }));
+  }
+
+  /** Marks notices taken, once stored by the broker, and forgets those taken over 30 days ago. */
+  noticesTaken(seqs: number[]): void {
+    const now = new Date();
+    for (const seq of seqs) this.sql.exec("UPDATE notices SET taken_at = ? WHERE seq = ? AND taken_at IS NULL", now.toISOString(), seq);
+    this.sql.exec("DELETE FROM notices WHERE taken_at < ?", new Date(now.getTime() - NOTICE_KEEP_MS).toISOString());
   }
 
   private option(q: QuestionRow, key: string): { key: string; text: string } {
@@ -2711,18 +2797,42 @@ export class BoardStore {
   }
 }
 
-/** One write's caller, time and events. */
 /** A caller as the history names them: the owner's email, or an agent's address. */
 function whoOf(caller: Caller): string {
   return caller.kind === "owner" ? caller.email : caller.kind === "ci" ? (caller.via ? `${caller.source} via ${caller.via}` : caller.source) : `${caller.name}@${caller.laptop}`;
 }
 
+/** What an answer's notice says was said (ADR 0009 §3): `key` and `words` are what was withdrawn when withdrawn. */
+interface Said {
+  state: BoardAnswerEvent["state"];
+  key: string | null;
+  option: string | null;
+  words: string | null;
+  via: "dashboard" | "conversation";
+}
+
+/** An answer's notice as the broker drains it (ADR 0009 §1): `to` the text's recipients, `notice` the supervisor's JSON. */
+export interface NoticeRow {
+  seq: number;
+  project: string;
+  question: string;
+  state: BoardAnswerEvent["state"];
+  to: string[];
+  except: string | null;
+  text: string;
+  notice: BoardAnswerEvent;
+}
+
+/** A session as a message names it: "LAND-56 design B". */
+function sessionShown(s: SessionRef): string {
+  return `${s.feature} ${s.kind} ${s.label}`;
+}
+
+/** One write's caller, time and events. */
 class Tx<C extends Caller = BoardCaller> {
   readonly at = new Date().toISOString();
   readonly seqs: number[] = [];
   readonly refs = new Set<string>();
-  /** What the write sends, from the board (§7), in the same transaction. */
-  readonly messages: BoardMessage[] = [];
   projectKey: string | null = null;
   private projectPk: number | null = null;
   /** The session a close tags its writes with, whatever the caller's ctx says. */

@@ -2,6 +2,7 @@ import type { BoardCaller, BoardCtx, BoardOpInput, BoardReply, BoardResults, Gra
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
+import type { NoticeRow } from "../src/board/store.ts";
 
 // The board service's core (ADR 0001 §2, §3, §5), called as the broker calls it.
 
@@ -11,6 +12,15 @@ const inSession = (name: string, feature: string, role = "po"): BoardCaller =>
   agent(name, { worker: `w_${name.toLowerCase()}`, role, project: "helix", session: { feature, kind: "build", label: "1" }, tasks: [] });
 
 const board = () => env.BOARD.getByName("board");
+
+/** The untaken notice an answer left (ADR 0009 §1), by its seq. */
+async function noticeOf(seq: number): Promise<NoticeRow | undefined> {
+  return ((await board().notices()) as unknown as NoticeRow[]).find((n) => n.seq === seq);
+}
+/** A notice's text as the message to agents it is; none when it goes to nobody. */
+const textOf = (n: NoticeRow | undefined) => (n && n.to.length ? [{ to: n.to, body: n.text }] : []);
+/** Every notice row, taken or not. */
+const noticeCount = () => runInDurableObject(board(), (_, state) => state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM notices").one().n);
 
 async function call(caller: BoardCaller, op: BoardOpInput): Promise<BoardReply> {
   return (await board().apply(caller, op)) as unknown as BoardReply;
@@ -981,11 +991,11 @@ describe("questions (ADR 0001 §7)", () => {
     await ok(agent("Picard"), { op: "ask", project: "helix", kind: "action", text: "Rotate the key" });
   }
 
-  /** The messages an operation that must succeed sends. */
-  async function sent(caller: BoardCaller, op: BoardOpInput): Promise<Extract<BoardReply, { ok: true }>["messages"]> {
+  /** The message to agents an operation that must succeed leaves in its notice (ADR 0009 §1): none when its text goes to nobody. */
+  async function sent(caller: BoardCaller, op: BoardOpInput): Promise<Array<{ to: string[]; body: string }>> {
     const reply = await call(caller, op);
     if (!reply.ok) throw new Error(`${op.op} refused: ${reply.code}: ${reply.message}`);
-    return reply.messages;
+    return textOf(await noticeOf((reply.result as { seq: number }).seq));
   }
 
   it("takes the owner's answer once, verbatim, and refuses every other role", async () => {
@@ -1049,7 +1059,7 @@ describe("questions (ADR 0001 §7)", () => {
     const reply = await call(agent("Picard"), { op: "record_answer", project: "helix", ref: "Q-2", key: "y", words: "Ship it Friday" });
     if (!reply.ok) throw new Error(reply.message);
     expect(reply.result).toMatchObject({ told: ["Riker@mbp-1"] });
-    const [note, ...more] = reply.messages;
+    const [note, ...more] = textOf(await noticeOf((reply.result as { seq: number }).seq));
     expect(more).toEqual([]);
     expect(note!.to).toEqual(["Riker@mbp-1"]);
     expect(note!.body).toContain("Casper answered Q-2 (helix), in conversation, recorded by Picard@mbp-1: Ship it?");
@@ -1134,6 +1144,103 @@ describe("questions (ADR 0001 §7)", () => {
   });
 });
 
+describe("answer notices (ADR 0009 §1, §3; BOB-111 AC1, AC3)", () => {
+  /** Picard, the lead, asks Q-1 holding a feature and its session, and Q-2 holding the same session; and A-1. */
+  async function asking() {
+    const { f1, t1 } = await helix();
+    await helixRules();
+    await join(f1);
+    const session = { feature: f1, kind: "build" as const, label: "1" };
+    await ok(agent("Picard"), { op: "ask", project: "helix", text: "Which chart?", options: [{ key: "a", text: "Bars" }], holds: [t1], holds_sessions: [session] });
+    await ok(agent("Picard"), { op: "ask", project: "helix", text: "Which colour?", holds_sessions: [session] });
+    await ok(agent("Picard"), { op: "ask", project: "helix", kind: "action", text: "Rotate the key" });
+    return { f1, t1, session };
+  }
+
+  it("leaves exactly one notice for each of the four ops, and none for an edit or a refused write", async () => {
+    await asking();
+    await ok(owner, { op: "grant", project: "helix", agent: "Riker", role: "session PO", read: true, items: "open_feature", fields: [], questions: true });
+    const before = await noticeCount();
+    const answered = await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a" });
+    expect(await noticeCount()).toBe(before + 1);
+    await ok(owner, { op: "undo", project: "helix", seq: answered.seq });
+    expect(await noticeCount()).toBe(before + 2);
+    await ok(owner, { op: "mark_done", project: "helix", ref: "A-1", note: "Rotated" });
+    expect(await noticeCount()).toBe(before + 3);
+    await ok(agent("Riker"), { op: "record_answer", project: "helix", ref: "Q-2", words: "Blue" });
+    expect(await noticeCount()).toBe(before + 4);
+
+    await ok(agent("Picard"), { op: "edit_question", project: "helix", ref: "Q-1", set: { text: "Which chart, really?" } });
+    expect(await noticeCount()).toBe(before + 4);
+    expect(await refused(owner, { op: "answer_question", project: "helix", ref: "Q-2", words: "again" })).toMatchObject({ code: "conflict" });
+    expect(await refused(owner, { op: "answer_question", project: "helix", ref: "Q-9", words: "nobody's" })).toMatchObject({ code: "invalid" });
+    expect(await noticeCount()).toBe(before + 4);
+  });
+
+  it("says what was answered, what it holds and what still holds it, in the text and the supervisor's JSON", async () => {
+    const { t1, session } = await asking();
+    const { seq } = await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a", words: "Bars, thin" });
+    const n = (await noticeOf(seq))!;
+    expect(n).toMatchObject({ project: "helix", question: "Q-1", state: "answered", to: ["Picard@mbp-1"], except: null });
+    expect(n.text).toContain(`Holds: ${t1}; session ${session.feature} build 1`);
+    expect(n.text).toContain(`Still held by: Q-2 (session ${session.feature} build 1)`);
+    expect(n.notice).toEqual({
+      v: 2, event: "answer", seq, project: "helix", ref: "Q-1", kind: "question", state: "answered", key: "a", option: "Bars", words: "Bars, thin",
+      by: "owner", via: "dashboard", asked_by: "Picard@mbp-1", lead: "Picard@mbp-1",
+      holds: { items: [t1], sessions: [session] }, still_held: [{ session, by: ["Q-2"] }], at: expect.any(String),
+    });
+    // The owner's email is never in a message.
+    expect(JSON.stringify(n)).not.toContain("owner@example.com");
+    // Q-2 answered after: nothing else holds the session, so no "Still held by".
+    const second = await ok(owner, { op: "answer_question", project: "helix", ref: "Q-2", words: "Blue" });
+    const n2 = (await noticeOf(second.seq))!;
+    expect(n2.text).not.toContain("Still held by");
+    expect(n2.notice).toMatchObject({ key: null, option: null, words: "Blue", still_held: [], holds: { items: [], sessions: [session] } });
+  });
+
+  it("leaves the recorder out of an answer recorded from conversation, and names it as by", async () => {
+    await asking();
+    await ok(owner, { op: "grant", project: "helix", agent: "Riker", role: "session PO", read: true, items: "open_feature", fields: [], questions: true });
+    const { seq } = await ok(agent("Riker"), { op: "record_answer", project: "helix", ref: "Q-1", key: "a", words: "Bars" });
+    expect(await noticeOf(seq)).toMatchObject({ to: ["Picard@mbp-1"], except: "Riker@mbp-1", notice: { by: "Riker@mbp-1", via: "conversation", state: "answered" } });
+    // The lead records his own question: its text goes to nobody, the notice is still left for the supervisor.
+    const own = await ok(agent("Picard"), { op: "record_answer", project: "helix", ref: "Q-2", words: "Blue" });
+    expect(await noticeOf(own.seq)).toMatchObject({ to: [], except: "Picard@mbp-1", notice: { by: "Picard@mbp-1" } });
+  });
+
+  it("leaves a withdrawn notice for an undo, with what was withdrawn, and a done one for an action", async () => {
+    await asking();
+    const answered = await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a", words: "Bars" });
+    const undone = await ok(owner, { op: "undo", project: "helix", seq: answered.seq });
+    expect(await noticeOf(undone.seq)).toMatchObject({ state: "withdrawn", notice: { state: "withdrawn", key: "a", option: "Bars", words: "Bars", by: "owner" } });
+    const done = await ok(owner, { op: "mark_done", project: "helix", ref: "A-1", note: "Rotated" });
+    expect(await noticeOf(done.seq)).toMatchObject({ state: "done", notice: { kind: "action", state: "done", words: "Rotated", key: null } });
+    // The owner asked: asked_by is his email, so the JSON has none.
+    await ok(owner, { op: "ask", project: "helix", text: "Mine?" });
+    const mine = await ok(owner, { op: "answer_question", project: "helix", ref: "Q-3", words: "Yes" });
+    expect((await noticeOf(mine.seq))!.notice.asked_by).toBeNull();
+  });
+
+  it("hands out untaken notices oldest first, and prunes taken ones after 30 days", async () => {
+    await asking();
+    const a = await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a" });
+    const b = await ok(owner, { op: "answer_question", project: "helix", ref: "Q-2", words: "Blue" });
+    expect(((await board().notices()) as unknown as NoticeRow[]).map((n) => n.seq)).toEqual([a.seq, b.seq]);
+    await board().noticesTaken([a.seq]);
+    expect(((await board().notices()) as unknown as NoticeRow[]).map((n) => n.seq)).toEqual([b.seq]);
+    expect(await noticeCount()).toBe(2);
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 31 * 24 * 60 * 60 * 1000 });
+    try {
+      await board().noticesTaken([b.seq]);
+    } finally {
+      vi.useRealTimers();
+    }
+    // a went, taken 31 days before; b, just taken, stays.
+    expect(await noticeCount()).toBe(1);
+    expect(await board().notices()).toEqual([]);
+  });
+});
+
 describe("operation keys (ADR 0001 §12)", () => {
   const keyed = async (caller: BoardCaller, op: BoardOpInput, key: string) => (await board().apply(caller, op, key)) as unknown as BoardReply;
   const backlog = async () => (await ok(owner, { op: "list", project: "helix", of: "backlog" })).total;
@@ -1150,14 +1257,16 @@ describe("operation keys (ADR 0001 §12)", () => {
     expect(await backlog()).toBe(2);
   });
 
-  it("replays an answer's messages, so a reply lost after the commit still tells the lead", async () => {
+  it("replays an answer's reply, and leaves its notice once (ADR 0009 §1)", async () => {
     await helix();
     await helixRules();
     await ok(agent("Picard"), { op: "ask", project: "helix", text: "Which chart?", options: [{ key: "a", text: "Bars" }] });
     const answer = { op: "answer_question", project: "helix", ref: "Q-1", key: "a" } as const;
     const first = await keyed(owner, answer, "k-2");
-    expect(first).toMatchObject({ ok: true, messages: [{ to: ["Picard@mbp-1"] }] });
+    expect(first).toMatchObject({ ok: true, result: { told: ["Picard@mbp-1"] } });
+    expect(await noticeCount()).toBe(1);
     expect(await keyed(owner, answer, "k-2")).toEqual(first);
+    expect(await noticeCount()).toBe(1);
     // A new key is a new answer, which is written once.
     expect(await keyed(owner, answer, "k-3")).toMatchObject({ ok: false, code: "conflict" });
   });

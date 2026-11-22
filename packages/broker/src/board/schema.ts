@@ -416,4 +416,20 @@ export const BOARD_MIGRATIONS: readonly string[] = [
   DROP TABLE grant_fields;
   ALTER TABLE grant_fields_new RENAME TO grant_fields;
   `,
+  // 6: an answer's notice (ADR 0009 §1), written in the answer's transaction, for the broker to send and
+  // mark taken. Not board data: never exported, never read by an operation. `seq` is the answer's event.
+  `
+  CREATE TABLE notices (
+    seq      INTEGER PRIMARY KEY,
+    project  TEXT NOT NULL,
+    question TEXT NOT NULL,
+    state    TEXT NOT NULL CHECK (state IN ('answered', 'done', 'withdrawn')),
+    to_json  TEXT NOT NULL,                       -- the agents' recipients: the lead and asked_by, minus the writer
+    "except" TEXT,                                -- the writer's address; null for the owner
+    text     TEXT NOT NULL,                       -- the agents' message
+    notice   TEXT NOT NULL,                       -- the supervisor's JSON
+    taken_at TEXT
+  );
+  CREATE INDEX notices_untaken ON notices (seq) WHERE taken_at IS NULL;
+  `,
 ];

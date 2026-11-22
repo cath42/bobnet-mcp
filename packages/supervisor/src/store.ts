@@ -106,6 +106,9 @@ CREATE TABLE IF NOT EXISTS audit (
 CREATE TABLE IF NOT EXISTS remote_requests (
   message_id TEXT PRIMARY KEY, sender TEXT NOT NULL, op TEXT NOT NULL, reply TEXT, at TEXT NOT NULL, v INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS board_notices (
+  message_id TEXT PRIMARY KEY, project TEXT NOT NULL, at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS remote_sent (
   id TEXT PRIMARY KEY, message_id TEXT UNIQUE, to_name TEXT NOT NULL, op TEXT NOT NULL, target TEXT, body TEXT NOT NULL,
   state TEXT NOT NULL, reply TEXT, sent_at TEXT NOT NULL, deadline TEXT, replied_at TEXT
@@ -510,6 +513,15 @@ export class Store {
   /** Requests still in progress: at start, those the supervisor died handling. */
   remoteInProgress(): Array<{ message_id: string; sender: string; op: string; v: 1 | 2 }> {
     return this.all("SELECT message_id, sender, op, v FROM remote_requests WHERE reply IS NULL ORDER BY at");
+  }
+
+  // ---------- The board's answer notices (ADR 0009 §4) ----------
+
+  /** Recorded before it is forwarded; false if it was already, so a redelivery isn't forwarded twice. */
+  beginBoardNotice(messageId: string, project: string): boolean {
+    if (this.one("SELECT 1 AS x FROM board_notices WHERE message_id = ?", messageId)) return false;
+    this.run("INSERT INTO board_notices (message_id, project, at) VALUES (?, ?, ?)", messageId, project, now());
+    return true;
   }
 
   // ---------- Remote sent (the requester's record, ADR 0007 §2) ----------
