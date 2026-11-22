@@ -35,3 +35,15 @@ projects then". mbp-1's data volume was at 96-98%.
 ## Order
 Peach writes the criteria. Luigi builds it. Mario reviews and deploys the broker first (it only keeps the field),
 then cuts the supervisor rc. poe rolls the rc and stages the config.
+
+## Measured, 2026-11-21 22:40 (Mario; poe's question "if node_modules isn't it, why is ~/Code 59 GB?")
+- node_modules are APFS clones of the pnpm store (`~/Library/pnpm/store/v11`, same volume, `nodeLinker: isolated`,
+  import method auto). Test: a fresh `pnpm install --frozen-lockfile --offline` of this repo into /tmp: `du` shows
+  776 MB of node_modules, `df` dropped 6 MB. So deleting a worktree's node_modules frees about 1% of what du shows. No
+  switch to hardlinks or the global virtual store is needed; it would free nothing more.
+  (Deleting an idle helix worktree's node_modules to measure was refused by the auto-mode classifier. The scratch
+  install measures the same import from the same store; the helix worktrees record the same storeDir.)
+- ~/Code without node_modules: 26.7 GB, of which helix-navigator-maps' services/read/maps/pipeline/cache is 13.1 GB and
+  pipeline/out is 1.8 GB. Both are gitignored, so BOB-123's `ignored`/`paths` step can clean them once helix's config
+  lists them. Next: landmanagement-features 2.3 GB, land-v5 0.7 GB, and everything else under 0.6 GB. The helix
+  worktrees share one .git (517 MB in helix-navigator).
