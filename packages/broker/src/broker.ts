@@ -1,6 +1,7 @@
 import {
   type Action,
   addressKey,
+  type AuditEntry,
   BOARD_READS,
   BOARD_SENDER,
   type BoardCaller,
@@ -39,6 +40,10 @@ const SILENT_AFTER_MS = 90_000;
 const PEER_RETENTION_MS = 30 * 24 * 3600_000;
 const AUDIT_RETENTION_MS = 90 * 24 * 3600_000;
 const UPDATE_RETENTION_MS = 30 * 24 * 3600_000;
+/** A laptop's report, and then its boards, go 30 days after it last reported (ADR 0012 §2). */
+const REPORT_RETENTION_MS = 30 * 24 * 3600_000;
+/** The audit frame's page when it names no `limit` (ADR 0012 §4). */
+const AUDIT_PAGE = 100;
 const DASHBOARD_ITEMS = 50;
 /** Session updates are the owner's progress view: more of them than of traffic. */
 const DASHBOARD_UPDATES = 200;
@@ -124,6 +129,7 @@ export class Broker extends DurableObject<Env> {
   override async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
     const conn = ws.deserializeAttachment() as Conn;
     let rid: string | null = null;
+    let t: unknown;
     try {
       if (typeof data !== "string") throw new FrameError("bad_frame", "Frames must be JSON text");
       // Parsed before the size check so even an oversized request gets its
@@ -138,7 +144,7 @@ export class Broker extends DurableObject<Env> {
         rid = (raw as { rid: string }).rid;
       }
       // A supervisor's snapshot and boards may be larger than other frames.
-      const t = (raw as { t?: unknown } | null)?.t;
+      t = (raw as { t?: unknown } | null)?.t;
       const limit = t === "board" || t === "report" ? LIMITS.boardFrameBytes : LIMITS.frameBytes;
       if (encoder.encode(data).byteLength > limit) {
         throw new FrameError("frame_too_large", `Frames are limited to ${limit} bytes`);
@@ -151,8 +157,15 @@ export class Broker extends DurableObject<Env> {
       if (parsed.data.t === "board_op") await this.boardOp(conn, parsed.data);
       else this.dispatch(ws, conn, parsed.data);
     } catch (err) {
-      if (!(err instanceof FrameError)) throw err;
-      this.send(ws, { t: "error", rid, code: err.code, message: err.message });
+      if (err instanceof FrameError) {
+        this.send(ws, { t: "error", rid, code: err.code, message: err.message });
+        return;
+      }
+      // ADR 0012 §4: answered, never rethrown; the stack goes to the log only.
+      console.error("frame failed", { rid, t, err });
+      const message = err instanceof Error ? err.message : String(err);
+      this.audit(conn, "internal", { t: typeof t === "string" ? t : null, rid, err: message.slice(0, 500) });
+      this.send(ws, { t: "error", rid, code: "internal", message: "The broker failed on this frame; it is in its audit" });
     }
   }
 
@@ -200,7 +213,13 @@ export class Broker extends DurableObject<Env> {
         return this.ok(ws, frame.rid, this.postUpdate(conn, frame.as, frame.text));
       case "dashboard":
         if (conn.identity.kind !== "owner") throw new FrameError("forbidden", "Only the owner reads the dashboard");
-        return this.ok(ws, frame.rid, this.dashboard());
+        this.ok(ws, frame.rid, this.dashboard());
+        // ADR 0012 §4: the boards follow the reply, one frame each and to this socket only.
+        for (const b of this.boards()) this.send(ws, { t: "board", ...b });
+        return;
+      case "audit":
+        if (conn.identity.kind !== "owner") throw new FrameError("forbidden", "Only the owner reads the audit");
+        return this.ok(ws, frame.rid, this.readAudit(frame.limit ?? AUDIT_PAGE, frame.before));
       case "action":
         return this.ok(ws, frame.rid, this.forwardAction(conn, frame.laptop, frame.action));
       case "action_result":
@@ -651,10 +670,7 @@ export class Broker extends DurableObject<Env> {
         .exec<{ laptop: string; snapshot: string; at: string }>("SELECT * FROM laptop_reports ORDER BY laptop")
         .toArray()
         .map((r) => ({ laptop: r.laptop, at: r.at, snapshot: JSON.parse(r.snapshot) as LaptopSnapshot })),
-      boards: this.sql
-        .exec<{ laptop: string; board: string; at: string }>("SELECT laptop, board, at FROM project_boards ORDER BY laptop, project")
-        .toArray()
-        .map((r) => ({ laptop: r.laptop, at: r.at, board: JSON.parse(r.board) as ProjectBoard })),
+      boards: [],
       updates: this.sql
         .exec<{ seq: number; from_addr: string; laptop: string; text: string; at: string }>(
           "SELECT * FROM updates ORDER BY seq DESC LIMIT ?",
@@ -665,6 +681,27 @@ export class Broker extends DurableObject<Env> {
       traffic: recent.slice(0, DASHBOARD_ITEMS).map(traffic),
       now: new Date().toISOString(),
     };
+  }
+
+  /** Every laptop's boards, by laptop and project: what follows a `dashboard` reply. */
+  private boards(): Array<{ laptop: string; at: string; board: ProjectBoard }> {
+    return this.sql
+      .exec<{ laptop: string; board: string; at: string }>("SELECT laptop, board, at FROM project_boards ORDER BY laptop, project")
+      .toArray()
+      .map((r) => ({ laptop: r.laptop, at: r.at, board: JSON.parse(r.board) as ProjectBoard }));
+  }
+
+  /** The audit, newest first, `limit` rows below `before` (ADR 0012 §4); one more is read to tell `more`. */
+  private readAudit(limit: number, before: number | undefined): Results["audit"] {
+    const rows = this.sql
+      .exec<{ seq: number; ts: string; actor: string; action: string; detail: string }>(
+        "SELECT seq, ts, actor, action, detail FROM audit WHERE seq < ? ORDER BY seq DESC LIMIT ?",
+        before ?? Number.MAX_SAFE_INTEGER,
+        limit + 1,
+      )
+      .toArray();
+    const entries = rows.slice(0, limit).map((r): AuditEntry => ({ ...r, detail: JSON.parse(r.detail) as unknown }));
+    return { entries, more: rows.length > limit };
   }
 
   /** Hands an owner's action to the laptop's supervisor, with the owner's own token. */
@@ -865,7 +902,8 @@ export class Broker extends DurableObject<Env> {
   }
 
   /**
-   * Drops expired messages, long-gone peers and old audit rows, has the board flag rows a day unchanged
+   * Drops expired messages, long-gone peers, old audit rows and the reports and boards of laptops gone 30
+   * days (ADR 0012 §2), has the board flag rows a day unchanged
    * on Waits (ADR 0011 §2), and sends their notices and any a drain left (ADR 0009 §1).
    */
   override async alarm(): Promise<void> {
@@ -878,6 +916,10 @@ export class Broker extends DurableObject<Env> {
     this.sql.exec("DELETE FROM peers WHERE conn_id IS NULL AND last_seen <= ?", stale);
     this.sql.exec("DELETE FROM audit WHERE ts <= ?", new Date(now - AUDIT_RETENTION_MS).toISOString());
     this.sql.exec("DELETE FROM updates WHERE at <= ?", new Date(now - UPDATE_RETENTION_MS).toISOString());
+    // A board goes with its laptop, not by its own age: a live laptop's board is sent only when it changes.
+    const gone = new Date(now - REPORT_RETENTION_MS).toISOString();
+    this.sql.exec("DELETE FROM laptop_reports WHERE at <= ?", gone);
+    this.sql.exec("DELETE FROM project_boards WHERE at <= ? AND laptop NOT IN (SELECT laptop FROM laptop_reports)", gone);
     await this.ctx.storage.setAlarm(now + SWEEP_INTERVAL_MS);
     await this.flagStale();
     // After the sweep's alarm, so a drain that fails brings it forward.

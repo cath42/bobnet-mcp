@@ -257,6 +257,57 @@ describe("frames", () => {
   });
 });
 
+describe("internal errors", () => {
+  it("answers a frame the broker fails on with internal and its rid, audits it, and keeps the socket (BOB-23 AC 1)", async () => {
+    const c = await agent(1, "Bob");
+    const stub = env.BROKER.getByName("network");
+    await runInDurableObject(stub, (obj) => {
+      (obj as unknown as { listPeers: () => never }).listPeers = () => {
+        throw new Error("disk on fire");
+      };
+    });
+    c.raw(JSON.stringify({ t: "peers", rid: "p1" }));
+    expect(await c.next((f) => f.t === "error" && f.rid === "p1")).toEqual({
+      t: "error",
+      rid: "p1",
+      code: "internal",
+      message: "The broker failed on this frame; it is in its audit",
+    });
+    await runInDurableObject(stub, (obj, state) => {
+      const row = state.storage.sql.exec<{ actor: string; detail: string }>("SELECT actor, detail FROM audit WHERE action = 'internal'").one();
+      expect(row.actor).toBe("laptop:mbp-1");
+      expect(JSON.parse(row.detail)).toEqual({ t: "peers", rid: "p1", err: "disk on fire" });
+      delete (obj as unknown as { listPeers?: unknown }).listPeers;
+    });
+    await expect(c.request({ t: "register", name: "Bill" })).resolves.toMatchObject({ address: "Bill@mbp-1" });
+  });
+});
+
+describe("audit", () => {
+  it("lets the owner read the audit newest first, paged by limit and before (BOB-23 AC 2)", async () => {
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const bob = await agent(1, "Bob");
+    await bob.request({ t: "status", as: "Bob", status: "one" });
+    const first = await owner.request({ t: "audit", limit: 2 });
+    expect(first.entries).toHaveLength(2);
+    expect(first.more).toBe(true);
+    expect(first.entries[0].seq).toBeGreaterThan(first.entries[1].seq);
+    expect(first.entries[0]).toEqual({ seq: expect.any(Number), ts: expect.any(String), actor: "laptop:mbp-1", action: "register", detail: { peer: "bob@mbp-1", team: null } });
+    const rest = await owner.request({ t: "audit", before: first.entries[1].seq });
+    expect(rest.more).toBe(false);
+    expect(rest.entries.every((e: { seq: number }) => e.seq < first.entries[1].seq)).toBe(true);
+    expect(rest.entries.at(-1).action).toBe("connect");
+    // The default page is 100, and 500 at most.
+    expect(await errorCode(owner.request({ t: "audit", limit: 0 }))).toBe("bad_frame");
+    expect(await errorCode(owner.request({ t: "audit", limit: 501 }))).toBe("bad_frame");
+  });
+
+  it("refuses the audit to a laptop", async () => {
+    const bob = await agent(1, "Bob");
+    expect(await errorCode(bob.request({ t: "audit" }))).toBe("forbidden");
+  });
+});
+
 describe("dashboard", () => {
   const snapshot = {
     supervisor: { started_at: "2026-10-30T00:00:00.000Z", concurrency: 3, active: 1, queued: 0 },
@@ -316,7 +367,42 @@ describe("dashboard", () => {
     expect(live).toMatchObject({ laptop: "mbp-1", board: { project: "helix" } });
     await supervisor.request({ t: "board", as: "supervisor", board });
     const d = await owner.request({ t: "dashboard" });
-    expect(d.boards).toEqual([{ laptop: "mbp-1", at: expect.any(String), board }]);
+    expect(d.boards).toEqual([]);
+    expect(await owner.next((f) => f.t === "board")).toEqual({ t: "board", laptop: "mbp-1", at: expect.any(String), board });
+  });
+
+  it("answers the dashboard with no boards, then sends each board after it, to that socket only (BOB-17 AC 1)", async () => {
+    const one = await agent(1, "supervisor");
+    const two = await agent(2, "supervisor");
+    await two.request({ t: "board", as: "supervisor", board: { ...board, project: "bobnet" } });
+    await one.request({ t: "board", as: "supervisor", board: { ...board, project: "land" } });
+    await one.request({ t: "board", as: "supervisor", board });
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const other = await Client.open(await ownerToken(), { origin: ORIGIN });
+    owner.raw(JSON.stringify({ t: "dashboard", rid: "d1" }));
+    // In the order they arrive: the reply first, then one frame per board, by laptop and project.
+    const order: ServerFrame[] = [];
+    for (let i = 0; i < 4; i++) order.push(await owner.next((f) => f.t === "ok" || f.t === "board"));
+    expect(order[0]).toMatchObject({ t: "ok", rid: "d1", result: { boards: [] } });
+    expect(order.slice(1).map((f) => f.t === "board" && [f.laptop, f.board.project])).toEqual([
+      ["mbp-1", "helix"],
+      ["mbp-1", "land"],
+      ["mbp-2", "bobnet"],
+    ]);
+    expect(await other.never((f) => f.t === "board")).toBe(true);
+  });
+
+  it("carries a supervisor's board outbox in its snapshot, and an older one's without it (BOB-28 AC 1)", async () => {
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const supervisor = await agent(1, "supervisor");
+    const board_outbox = { count: 14, oldest_at: "2026-11-22T03:00:00.000Z", code: "unavailable" };
+    await supervisor.request({ t: "report", as: "supervisor", snapshot: { ...snapshot, board_outbox } });
+    expect(await owner.next((f) => f.t === "report")).toMatchObject({ snapshot: { board_outbox } });
+    const d = await owner.request({ t: "dashboard" });
+    expect(d.laptops[0].snapshot.board_outbox).toEqual(board_outbox);
+    await supervisor.request({ t: "report", as: "supervisor", snapshot });
+    const old = await owner.request({ t: "dashboard" });
+    expect(old.laptops[0].snapshot).not.toHaveProperty("board_outbox");
   });
 
   it("takes a snapshot larger than other frames: a busy day's workers", async () => {
@@ -472,6 +558,41 @@ describe("retention", () => {
     });
     const back = await Client.open(await laptopToken(1));
     expect(await back.request({ t: "register", name: "Bill" })).toMatchObject({ queued: 0 });
+  });
+
+  it("sweeps a laptop's report 30 days after it last reported, and its boards with it, never a live laptop's (BOB-17 AC 2)", async () => {
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const one = await Client.open(await laptopToken(1));
+    await one.request({ t: "register", name: "supervisor", supervisor: true });
+    const two = await agent(2, "supervisor");
+    const snapshot = { supervisor: { started_at: "2026-10-30T00:00:00.000Z", concurrency: 3, active: 0, queued: 0 }, workers: [], pending: [], usage: [] };
+    const board = { project: "helix", ref: null, backlog: null, sessions: [], runs: [], baseline: { runs: 0, p25: [], p50: [], p75: [] }, commits: [], ci: null };
+    for (const c of [one, two]) {
+      await c.request({ t: "report", as: "supervisor", snapshot });
+      await c.request({ t: "board", as: "supervisor", board });
+    }
+    await two.request({ t: "board", as: "supervisor", board: { ...board, project: "land" } });
+    const stub = env.BROKER.getByName("network");
+    const day = 24 * 3600_000;
+    await runInDurableObject(stub, (_obj, state) => {
+      const ago = (days: number) => new Date(Date.now() - days * day).toISOString();
+      // mbp-1 went quiet 31 days ago; mbp-2 reports, and its land board hasn't changed in 40 days.
+      state.storage.sql.exec("UPDATE laptop_reports SET at = ? WHERE laptop = 'mbp-1'", ago(31));
+      state.storage.sql.exec("UPDATE project_boards SET at = ? WHERE laptop = 'mbp-1'", ago(31));
+      state.storage.sql.exec("UPDATE project_boards SET at = ? WHERE laptop = 'mbp-2' AND project = 'land'", ago(40));
+    });
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    await runInDurableObject(stub, (_obj, state) => {
+      expect(state.storage.sql.exec("SELECT laptop FROM laptop_reports").toArray()).toEqual([{ laptop: "mbp-2" }]);
+      expect(state.storage.sql.exec("SELECT laptop, project FROM project_boards ORDER BY project").toArray()).toEqual([
+        { laptop: "mbp-2", project: "helix" },
+        { laptop: "mbp-2", project: "land" },
+      ]);
+      // Its pin stays, for when it comes back (ADR 0012 §2).
+      expect(state.storage.sql.exec("SELECT count(*) AS n FROM laptop_supervisors WHERE laptop = 'mbp-1'").one().n).toBe(1);
+    });
+    const d = await owner.request({ t: "dashboard" });
+    expect(d.laptops.map((l: { laptop: string }) => l.laptop)).toEqual(["mbp-2"]);
   });
 
   it("never writes message bodies to the audit log", async () => {
