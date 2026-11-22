@@ -1,0 +1,38 @@
+/* BOB-51: these rules move into style.css; they use only its tokens. */
+
+/* The ask block: an approval's whole command, or a question's headers, questions and options (spec 1). */
+.ask { display: grid; gap: 10px; min-width: 0; max-width: 72ch; }
+.ask .preview { margin: 0; }
+.ask .aq { display: grid; gap: 6px; min-width: 0; }
+.ask .aq + .aq { border-top: 1px solid var(--line); padding-top: 10px; }
+.ask .hd { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.ask .qt { font-size: 14px; font-weight: 600; color: var(--text); white-space: pre-line; overflow-wrap: anywhere; }
+.ask .pick { font-size: 12px; color: var(--muted); }
+.ask .opts { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ask .opts li { border: 0; border-left: 3px solid var(--line); border-radius: 0; background: none; padding: 2px 10px; display: grid; gap: 2px; }
+.ask .opts .lb { font-size: 14px; color: var(--text); }
+.ask .opts .ds { font-size: 13px; color: var(--muted); white-space: pre-line; overflow-wrap: anywhere; }
+.ask .cutnote { font-size: 12.5px; color: var(--muted); font-style: italic; }
+/* Folded: the first question, or the command, clamped (3 lines; 2 on a phone; 12 on Waits). */
+.ask.folded .qt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--clamp, 3); overflow: hidden; }
+/* A command is clipped at whole lines: the bottom padding is a border, which the clipped text can't show through. */
+.ask.folded .preview { display: block; line-height: 1.45; padding-bottom: 0; border-bottom: 6px solid transparent; max-height: calc(var(--clamp, 3) * 1.45em); overflow: hidden; box-sizing: content-box; }
+.waits .ask { --clamp: 12; }
+.a-detail .preview { background: var(--surface); }
+.a-detail .ask-h { font-size: 13px; }
+.a-detail .ask-h b { font-weight: 600; }
+.a-detail .more-t, .waits li .more-t.ask-more { justify-self: start; padding-left: 0; }
+
+/* Needs you: an approval's command inline in its line, whole when open (spec 1b). */
+.ov-needs .l-t code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; font-weight: 400; }
+.ov-needs li.open .l-t code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border-radius: 6px; padding: 6px 8px; margin-top: 4px; }
+
+/* Answered from here today: a denied permission (spec 2). */
+.waits li.answered[data-decision="deny"] { border-left-color: var(--bad); }
+.waits li.answered .top .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+
+@media (max-width: 520px) {
+  .ask { --clamp: 2; }
+  .waits .ask { --clamp: 12; }
+  .a-detail .more-t, .waits li .more-t.ask-more { min-height: 44px; }
+}
