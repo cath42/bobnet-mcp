@@ -2651,7 +2651,7 @@ function viewSessions() {
   const ended = workers().filter((w) => w.ended_at).sort((a, c) => c.ended_at.localeCompare(a.ended_at));
   const peers = [...state.peers].sort((a, c) => Number(c.online) - Number(a.online) || a.address.localeCompare(c.address));
   return [
-    h("p", { class: "note", style: "margin:0" }, "For debugging: what each session said and did."),
+    h("p", { class: "note", style: "margin:0" }, "For debugging: what each session said and did. ", h("a", { href: "#rules" }, "Rules for every project")),
     h("section", null, h("h2", null, "Session updates ", h("span", { class: "count", id: "updates-filter" }, state.taskFilter ? [`${state.taskFilter} only · `, taskChip(state.taskFilter)] : [])),
       h("ul", { class: "feed", id: "updates" }, shown.length
         ? shown.map((u) => h("li", null, h("time", { datetime: u.at, title: u.at }, clock(u.at)), h("span", null, u.task ? taskChip(u.task) : null, h("b", null, shortName(u.from)), " ", withoutTask(u.text, u.task))))
@@ -2679,10 +2679,79 @@ function viewSessions() {
   ];
 }
 
+// ---------- Rules for every project: Casper makes an agent global admin (BOB-118) ----------
+
+/** The '*' rules, read through the first project's grants (every project's answer includes them). */
+const rules = { rows: null, error: null, loading: false, busy: false, who: "poe@mbp-1" };
+
+async function loadRules() {
+  if (rules.loading) return;
+  const key = svc.projects?.[0]?.key;
+  if (!key) return;
+  rules.loading = true;
+  try {
+    rules.rows = (await boardOp({ op: "grants", project: key })).grants.filter((g) => g.project === "*");
+    rules.error = null;
+  } catch (err) {
+    rules.error = err.message;
+  } finally {
+    rules.loading = false;
+    scheduleRender();
+  }
+}
+
+/** Admin on or off for one agent@laptop on every project. A rule it already has keeps the rest; a new one reads and writes no items. */
+async function setGlobalAdmin(who, admin) {
+  const m = /^([^@\s]+)@([^@\s]+)$/.exec(who.trim());
+  if (!m) return toast(`${who} is not name@laptop`, false);
+  const [, agent, laptop] = m;
+  const old = rules.rows?.find((g) => g.agent.toLowerCase() === agent.toLowerCase() && g.laptop.toLowerCase() === laptop.toLowerCase());
+  const rule = old ? { role: old.role, read: old.read || admin, items: old.items, fields: old.fields, sessions: old.sessions, questions: old.questions } : { role: "admin", read: true, items: "none", fields: [], sessions: false, questions: false };
+  rules.busy = true;
+  render();
+  try {
+    await boardOp({ op: "grant", project: "*", agent, laptop, ...rule, admin }, true);
+    toast(admin ? `${agent}@${laptop} is admin on every project: it can set any project's rules.` : `${agent}@${laptop} is no longer admin on every project.`);
+  } catch (err) {
+    toast(err.message, false);
+  }
+  rules.busy = false;
+  await loadRules();
+}
+
+function viewRules() {
+  if (!svc.projects?.length) return [h("div", { class: "empty-card" }, svc.projects ? "No project's board is in the service yet." : "Reading the board…")];
+  if (rules.rows === null && !rules.error) loadRules();
+  const rows = rules.rows ?? [];
+  const yes = (b) => (b ? "yes" : "no");
+  return [
+    h("section", null, h("h2", null, "Rules for every project ", h("span", { class: "count" }, rules.rows ? String(rows.length) : "")),
+      rules.error ? h("p", { class: "note bad" }, rules.error) : null,
+      rows.length
+        ? h("div", { class: "table-wrap" }, h("table", { class: "stack", id: "global-rules" },
+          h("thead", null, h("tr", null, h("th", null, "Agent"), h("th", null, "Role"), h("th", null, "Reads"), h("th", null, "Items"), h("th", null, "Admin"), h("th", null, ""))),
+          h("tbody", null, rows.map((g) => h("tr", null,
+            h("td", { class: "wide" }, h("b", null, `${g.agent}@${g.laptop}`)),
+            h("td", { "data-label": "Role" }, g.role),
+            h("td", { "data-label": "Reads" }, yes(g.read)),
+            h("td", { "data-label": "Items" }, g.items, g.fields.length ? h("div", { class: "muted" }, g.fields.join(", ")) : null),
+            h("td", { "data-label": "Admin" }, g.admin ? h("b", null, "yes") : "no"),
+            h("td", { class: "full" }, rules.busy ? null : button(g.admin ? "Take admin away" : "Make admin", g.admin ? "" : "primary", () => setGlobalAdmin(`${g.agent}@${g.laptop}`, !g.admin))))))))
+        : h("div", { class: "empty-card" }, rules.rows ? "No rule for every project yet." : "Reading the rules…"),
+      h("p", { class: "note" }, "A rule here holds on every project. Admin lets that agent set any project's rules, so you need not.")),
+    h("section", null, h("h2", null, "Make an agent global admin"),
+      h("form", { class: "rule-form", onsubmit: (e) => { e.preventDefault(); setGlobalAdmin(e.target.elements.who.value, true); } },
+        h("label", { for: "rule-who" }, "Agent"),
+        h("input", { id: "rule-who", name: "who", value: rules.who, oninput: (e) => (rules.who = e.target.value), autocomplete: "off", autocapitalize: "off", spellcheck: "false", required: true, pattern: "[^@\\s]+@[^@\\s]+", placeholder: "name@laptop" }),
+        h("button", { type: "submit", class: "primary", disabled: rules.busy || !rules.rows || null }, "Make global admin")),
+      h("p", { class: "note" }, "Admin, reads every board, writes no items. A rule the agent already has keeps the rest. Only you can do this.")),
+  ];
+}
+
 // ---------- Views ----------
 
 // Now left the tabs (BOB-5 as built 3): "#now" opens the Overview, as any unknown view does.
-const VIEWS = { overview: viewOverview, waits: viewWaits, status: viewStatus, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions };
+const VIEWS = { overview: viewOverview, waits: viewWaits, status: viewStatus, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions, rules: viewRules };
 const viewName = () => (VIEWS[location.hash.slice(1).split("/")[0]] ? location.hash.slice(1).split("/")[0] : "overview");
 
 function render() {
@@ -2718,7 +2787,7 @@ function scheduleRender() {
   clearTimeout(renderTimer);
   renderTimer = setTimeout(() => {
     // Not while he writes an answer: a live frame would take the box from under his typing.
-    if (holdRender || document.activeElement?.tagName === "SELECT" || document.activeElement?.closest?.("form.answer")) return scheduleRender();
+    if (holdRender || document.activeElement?.tagName === "SELECT" || document.activeElement?.closest?.("form.answer, form.rule-form")) return scheduleRender();
     render();
   }, 250);
 }
@@ -2860,6 +2929,7 @@ function connect() {
           for (const id of feats.keys()) if (id.startsWith(`${f.project}/`)) loadFeature(f.project, id.slice(f.project.length + 1));
         }
         if (ov.rows) loadOverview();
+        if (rules.rows) loadRules();
         statusChanged();
         break;
       case "update":

@@ -315,6 +315,19 @@ describe("who may write what (ADR 0001 §5)", () => {
     expect(grants.find((g) => g.agent === "Bill")).toMatchObject({ items: "all", fields: ["status"] });
     await ok(agent("Bill"), { op: "update", project: "helix", ref: "LAND-4", set: { status: "Ready" } });
   });
+
+  it("lets a global admin, made by the owner from the dashboard, set a project's rules (BOB-118)", async () => {
+    await helix();
+    await helixRules();
+    const poe = { op: "grant", project: "*", agent: "poe", laptop: "mbp-1", role: "admin", read: true, items: "none", fields: [], admin: true } as const;
+    expect(await refused(agent("Picard"), poe)).toMatchObject({ code: "forbidden" });
+    await ok(owner, poe);
+    await ok(agent("poe"), { op: "grant", project: "helix", agent: "Bill", role: "builder", read: true, items: "none", fields: [] });
+    const { grants } = await ok(agent("poe"), { op: "grants", project: "helix" });
+    expect(grants.find((g) => g.project === "*" && g.agent === "poe")).toMatchObject({ admin: true, items: "none" });
+    // No item writes: admin sets rules, not the board.
+    expect(await refused(agent("poe"), { op: "update", project: "helix", ref: "LAND-4", set: { status: "Ready" } })).toMatchObject({ code: "forbidden" });
+  });
 });
 
 describe("Casper's gates: closing a release, and undo (ADR 0001 §5)", () => {

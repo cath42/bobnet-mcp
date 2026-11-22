@@ -8,6 +8,7 @@ import {
   type BacklogFiles,
   backlogToExport,
   EVERY_PROJECT_WARNING,
+  NO_ADMIN_REFUSAL,
   type ImportGrant,
   importBacklogCommand,
   readBacklogAt,
@@ -402,11 +403,11 @@ describe("the Backlog.md import", () => {
       const file = join(mkdtempSync(join(tmpdir(), "grants-")), "grants.json");
       const peach = { project: "bobnet", agent: "Peach", laptop: "mbp-1", role: "PO", read: true, items: "all", fields: ["status"], sessions: false, questions: true, admin: false };
       writeFileSync(file, JSON.stringify([peach]));
-      const own = await run({ status: 200, reply: { ok: true, projects: [] } }, ["--grants", file]);
+      const own = await run({ status: 200, reply: { ok: true, projects: [] } }, ["--grants", file, "--no-admin"]);
       expect(own).toMatchObject({ code: 0, errors: [] });
       expect(own.posted[0]!.projects[0]!.grants).toMatchObject([{ agent: "Peach", laptop: "mbp-1" }]);
 
-      writeFileSync(file, JSON.stringify([peach, { ...peach, project: "*", agent: "Mario", role: "backup", items: "none", fields: [], questions: false }]));
+      writeFileSync(file, JSON.stringify([peach, { ...peach, project: "*", agent: "Mario", role: "backup", items: "none", fields: [], questions: false, admin: true }]));
       const every = await run({ status: 403, reply: { ok: false, code: "forbidden", message: "not an empty board" } }, ["--grants", file]);
       expect(every.code).toBe(1);
       expect(every.errors).toEqual([EVERY_PROJECT_WARNING, "Not imported: the broker answered 403, forbidden: not an empty board"]);
@@ -417,6 +418,18 @@ describe("the Backlog.md import", () => {
       expect(broken.code).toBe(2);
       expect(broken.errors[0]).toMatch(/^--grants .*grants\.json: 0\.agent: /);
       expect(broken.posted).toEqual([]);
+    });
+
+    it("refuses a --grants file with no admin unless --no-admin (BOB-118)", async () => {
+      const file = join(mkdtempSync(join(tmpdir(), "grants-")), "grants.json");
+      const peach = { project: "bobnet", agent: "Peach", laptop: "mbp-1", role: "PO", read: true, items: "all", fields: ["status"], sessions: false, questions: true, admin: false };
+      writeFileSync(file, JSON.stringify([peach]));
+      const taken = { status: 200, reply: { ok: true as const, projects: [] } };
+      const refused = await run(taken, ["--grants", file]);
+      expect(refused).toMatchObject({ code: 2, errors: [`--grants ${file}: ${NO_ADMIN_REFUSAL}`], posted: [] });
+      expect((await run(taken, ["--grants", file, "--no-admin"])).code).toBe(0);
+      writeFileSync(file, JSON.stringify([peach, { ...peach, agent: "Mario", role: "lead", admin: true }]));
+      expect((await run(taken, ["--grants", file])).code).toBe(0);
     });
   });
 });

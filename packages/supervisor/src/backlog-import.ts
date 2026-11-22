@@ -637,9 +637,10 @@ export function formatReport(r: ImportReport): string {
 
 const USAGE = `bobnet-supervisor import-backlog --repo <path> --ref <commit> --project <key> --name <name> --prefix <PREFIX>
   [--dir product/backlog] [--draft-prefix DRAFT] [--questions lead/questions.md] [--lead name@laptop] [--po name@laptop]
-  [--grants grants.json] [--out board.json] [--report report.md] [--post]
+  [--grants grants.json [--no-admin]] [--out board.json] [--report report.md] [--post]
 Reads the backlog at the commit and writes the board export and the report. Nothing is posted without --post.
---grants is a JSON array of the rules to seed: each an export grant row with "project", the project's key or "*".`;
+--grants is a JSON array of the rules to seed: each an export grant row with "project", the project's key or "*".
+It needs a rule with admin, or --no-admin to seed the rules all the same.`;
 
 /** The rules in a --grants file, or why they can't be read. */
 export function readGrants(text: string): ImportGrant[] {
@@ -653,6 +654,11 @@ export function readGrants(text: string): ImportGrant[] {
   if (!parsed.success) throw new Error(parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".") || "the file"}: ${i.message}`).join("; "));
   return parsed.data;
 }
+
+/** Why a --grants file with no admin is refused (BOB-118): no one but the owner could change the project's rules after. */
+export const NO_ADMIN_REFUSAL =
+  "No rule in --grants has admin: after the import only the owner (Casper) could change this project's rules, and no agent could add one " +
+  "(BOB-115's dead end). Give the lead admin, or pass --no-admin to seed them as they are.";
 
 /** Said before a post that brings a rule for every project: the broker takes one from a laptop only into an empty board. */
 export const EVERY_PROJECT_WARNING =
@@ -678,6 +684,7 @@ export async function importBacklogCommand(argv: string[], post?: () => (doc: Bo
       out: { type: "string" },
       report: { type: "string" },
       post: { type: "boolean", default: false },
+      "no-admin": { type: "boolean", default: false },
     },
   });
   if (!v.repo || !v.ref || !v.project || !v.name || !v.prefix) {
@@ -697,6 +704,10 @@ export async function importBacklogCommand(argv: string[], post?: () => (doc: Bo
       grants = readGrants(readFileSync(v.grants, "utf8"));
     } catch (e) {
       console.error(`--grants ${v.grants}: ${(e as Error).message}`);
+      return 2;
+    }
+    if (!grants.some((g) => g.admin) && !v["no-admin"]) {
+      console.error(`--grants ${v.grants}: ${NO_ADMIN_REFUSAL}`);
       return 2;
     }
   }

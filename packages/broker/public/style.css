@@ -784,3 +784,9 @@ main.wide .st { max-width: 1320px; }
 .lap-age { font-weight: 400; font-size: 0.92em; }
 .a-detail .spawned { font-size: 13px; }
 @media (max-width: 600px) { .lap { max-width: 10ch; } .lap-age { display: none; } }
+
+/* Rules for every project (BOB-118): one field and its button, wrapping on a phone. */
+form.rule-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+form.rule-form label { font-size: 13px; color: var(--muted); }
+form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+.note.bad { color: var(--bad); }
