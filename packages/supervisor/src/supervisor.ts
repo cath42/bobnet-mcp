@@ -21,6 +21,7 @@ import {
   ItemRef,
   type CleanupReport,
   type LaptopSnapshot,
+  type PendingAsk,
   LIMITS,
   parseRecipient,
   type PeerInfo,
@@ -399,14 +400,23 @@ const SLOT_NAME_MAX = 100;
 
 /** A slot run's name clipped to what the protocol takes, so its report can be made. */
 function fitRunName(op: BoardOpInput): BoardOpInput {
-  if (op.op !== "slot_run" || op.name.length <= SLOT_NAME_MAX) return op;
-  // Whole code points up to the limit's units, so a surrogate pair is never split (BOB-28) and the clip still fits.
-  let name = "";
-  for (const ch of op.name) {
-    if (name.length + ch.length > SLOT_NAME_MAX - 1) break;
-    name += ch;
+  if (op.op !== "slot_run") return op;
+  const name = clip(op.name, SLOT_NAME_MAX);
+  return name === op.name ? op : { ...op, name };
+}
+
+/**
+ * `s` within `max` UTF-16 units, ending in "…" when clipped. Whole code points up to the limit's units, so
+ * a surrogate pair is never split (BOB-28) and the clip still fits.
+ */
+export function clip(s: string, max: number): string {
+  if (s.length <= max) return s;
+  let out = "";
+  for (const ch of s) {
+    if (out.length + ch.length > max - 1) break;
+    out += ch;
   }
-  return { ...op, name: `${name}…` };
+  return `${out}…`;
 }
 
 interface Consult {
@@ -3626,6 +3636,18 @@ export class Supervisor {
       days.set(key, row);
     }
 
+    // The whole asks within one budget (ADR 0013 §1): human tier first, then list order; a row past it gets null.
+    const pending = this.store.requests(["open", "orphaned"]).slice(0, 100);
+    const asks = new Map<string, PendingAsk | null>();
+    let spent = 0;
+    for (const r of [...pending.filter((r) => r.tier === "human"), ...pending.filter((r) => r.tier !== "human")]) {
+      const ask = askOf(r, this.detect);
+      const size = ask ? Buffer.byteLength(JSON.stringify(ask)) : 0;
+      if (spent + size > ASK_BUDGET) continue;
+      spent += size;
+      asks.set(r.id, ask);
+    }
+
     return {
       supervisor: {
         started_at: this.startedAt,
@@ -3634,7 +3656,7 @@ export class Supervisor {
         queued: this.store.queued().length,
       },
       workers,
-      pending: this.store.requests(["open", "orphaned"]).slice(0, 100).map((r) => {
+      pending: pending.map((r) => {
         const w = this.store.worker(r.worker_id);
         return {
           id: r.id,
@@ -3645,6 +3667,7 @@ export class Supervisor {
           tier: r.tier,
           created_at: r.created_at,
           preview: preview(r),
+          ask: asks.get(r.id) ?? null,
         };
       }),
       usage: [...days.values()].sort((a, b) => a.day.localeCompare(b.day)).slice(-500),
@@ -3750,13 +3773,13 @@ function remoteOf(w: WorkerRow): { remoteBy?: string; spawnReq?: string } {
   return w.remote_by && w.spawn_req ? { remoteBy: w.remote_by, spawnReq: w.spawn_req } : {};
 }
 
-/** What a request asks, short enough for the dashboard; never a credential. */
 /** A request on one line, at most 160 characters: what the orchestrator sees before it asks for detail. */
 function oneLine(r: RequestRow): string {
   const text = preview(r).replace(/\s+/g, " ");
   return text.length > 160 ? `${text.slice(0, 159)}…` : text;
 }
 
+/** What a request asks, short enough for the dashboard; never a credential. */
 function preview(r: RequestRow): string {
   let text: string;
   try {
@@ -3769,6 +3792,49 @@ function preview(r: RequestRow): string {
   }
   if (findSecret(text)) return "[hidden: looks like it contains a credential]";
   return text.length > 400 ? `${text.slice(0, 399)}…` : text;
+}
+
+/** All the asks on one report together, in UTF-8 bytes of JSON (ADR 0013 §1). */
+export const ASK_BUDGET = 128 * 1024;
+
+/**
+ * What a request asks, whole (ADR 0013 §1): an AskUserQuestion's questions, headers and options (not an
+ * option's own preview), else the command, file path, URL or path as `preview` picks it, else the raw
+ * input. Each field clipped to the protocol's maximum, and `cut` set when one was; null when any field's
+ * serialised form looks like a credential.
+ */
+export function askOf(r: RequestRow, detect: Detect = findSecret): PendingAsk | null {
+  let input: Record<string, unknown> | null = null;
+  try {
+    const v: unknown = JSON.parse(r.input);
+    if (v && typeof v === "object" && !Array.isArray(v)) input = v as Record<string, unknown>;
+  } catch {
+    // The raw input is the text.
+  }
+  let cut = false;
+  const fit = (v: unknown, max: number): string => {
+    const s = typeof v === "string" ? v : "";
+    const out = clip(s, max);
+    if (out !== s) cut = true;
+    return out;
+  };
+  const list = <T>(v: unknown, max: number): T[] => {
+    const xs = Array.isArray(v) ? (v as T[]) : [];
+    if (xs.length > max) cut = true;
+    return xs.slice(0, max);
+  };
+  const raw = r.tool === "AskUserQuestion" ? list<Record<string, unknown>>(input?.["questions"], 4) : [];
+  const questions = raw.map((q) => ({
+    question: fit(q?.["question"], 4000),
+    header: fit(q?.["header"], 40),
+    multi: q?.["multiSelect"] === true,
+    options: list<Record<string, unknown>>(q?.["options"], 4).map((o) => ({ label: fit(o?.["label"], 200), description: fit(o?.["description"], 1000) })),
+  }));
+  const picked = questions[0]?.question ?? input?.["command"] ?? input?.["file_path"] ?? input?.["url"] ?? input?.["path"];
+  const text = fit(typeof picked === "string" ? picked : r.input, 8000);
+  const fields = [text, ...questions.flatMap((q) => [q.question, q.header, ...q.options.flatMap((o) => [o.label, o.description])])];
+  if (fields.some((f) => detect(JSON.stringify(f)))) return null;
+  return { text, cut, questions };
 }
 
 /**

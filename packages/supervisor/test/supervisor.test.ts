@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseSupervisorConfig, strandedState } from "../src/config.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
-import { landSummary, powerNote, savedOutputCheck, Supervisor, taskRef } from "../src/supervisor.ts";
+import { ASK_BUDGET, landSummary, powerNote, savedOutputCheck, Supervisor, taskRef } from "../src/supervisor.ts";
 import { gitWriteDirs, WORKER_TOOLS } from "../src/worker.ts";
 import { FakeBroker, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 
@@ -983,5 +983,78 @@ describe("gitWriteDirs", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("ADR 0013 §1: a request's whole ask on the report (BOB-51)", () => {
+  const KEY = `AKIA${"ABCDEFGHIJKLMNOP"}`;
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  const put = (tool: string, input: unknown, tier: "human" | "orchestrator" = "human") =>
+    store.createRequest({ worker_id: "w_x", kind: tool === "AskUserQuestion" ? "question" : "approval", tool, input: JSON.stringify(input), tier, rule: "r", reason: "x" });
+  const row = (sup: Supervisor, id: string) => sup.snapshot().pending.find((p) => p.id === id)!;
+
+  it("sends a 4-question AskUserQuestion whole: questions, headers, options and multi, never an option's preview", async () => {
+    const { sup } = await setup();
+    const questions = [1, 2, 3, 4].map((n) => ({
+      question: `Question ${n}: ${"why ".repeat(200)}?`,
+      header: `H${n}`,
+      multiSelect: n % 2 === 0,
+      options: [1, 2, 3, 4].map((o) => ({ label: `Option ${n}.${o}`, description: `What ${o} does`, preview: "<b>mock</b>" })),
+    }));
+    const r = put("AskUserQuestion", { questions }, "orchestrator");
+    const p = row(sup, r.id);
+    expect(p.ask).toEqual({
+      text: questions[0]!.question,
+      cut: false,
+      questions: questions.map((q) => ({ question: q.question, header: q.header, multi: q.multiSelect, options: q.options.map(({ label, description }) => ({ label, description })) })),
+    });
+    // The preview is as it was: the first question, cut at 400.
+    expect(p.preview).toHaveLength(400);
+  });
+
+  it("clips a 9000-character command to 8000 by whole code points, with cut set", async () => {
+    const { sup } = await setup();
+    const plain = put("Bash", { command: "x".repeat(9000) });
+    expect(row(sup, plain.id).ask).toEqual({ text: `${"x".repeat(7999)}…`, cut: true, questions: [] });
+    // An emoji across the limit is dropped whole, never split.
+    const astral = put("Bash", { command: `${"x".repeat(7998)}😀${"y".repeat(1000)}` });
+    const text = row(sup, astral.id).ask!.text;
+    expect(text).toBe(`${"x".repeat(7998)}…`);
+    expect(lone.test(text)).toBe(false);
+    const fits = put("Bash", { command: `${"x".repeat(7997)}😀${"y".repeat(1000)}` });
+    expect(row(sup, fits.id).ask!.text).toBe(`${"x".repeat(7997)}😀…`);
+    // A field of the question clipped too: a 50-character header.
+    const q = put("AskUserQuestion", { questions: [{ question: "Q?", header: "h".repeat(50), multiSelect: false, options: [] }] });
+    expect(row(sup, q.id).ask).toMatchObject({ cut: true, questions: [{ header: `${"h".repeat(39)}…` }] });
+  });
+
+  it("takes the file path, URL or raw input as preview does, and the short command whole", async () => {
+    const { sup } = await setup();
+    expect(row(sup, put("Write", { file_path: "/a/b.ts", content: "x" }).id).ask).toEqual({ text: "/a/b.ts", cut: false, questions: [] });
+    expect(row(sup, put("WebFetch", { url: "https://x.example", prompt: "p" }).id).ask!.text).toBe("https://x.example");
+    expect(row(sup, put("Other", { a: 1 }).id).ask!.text).toBe('{"a":1}');
+  });
+
+  it("withholds the whole ask when a field looks like a credential, and leaves preview as it was", async () => {
+    const { sup } = await setup();
+    const r = put("AskUserQuestion", { questions: [{ question: "Which key?", header: "Key", multiSelect: false, options: [{ label: "This", description: `use ${KEY}` }] }] });
+    const p = row(sup, r.id);
+    expect(p.ask).toBeNull();
+    expect(p.preview).toBe("Which key?");
+  });
+
+  it("keeps all the asks within the budget, filling human tier first, so the newest orchestrator rows go null first", async () => {
+    const { sup } = await setup();
+    const orch = Array.from({ length: 10 }, () => put("Bash", { command: "o".repeat(8000) }, "orchestrator"));
+    const human = Array.from({ length: 10 }, () => put("Bash", { command: "h".repeat(8000) }, "human"));
+    const snap = sup.snapshot();
+    const ask = (id: string) => snap.pending.find((p) => p.id === id)!.ask;
+    expect(human.every((r) => ask(r.id) !== null)).toBe(true);
+    const kept = orch.map((r) => ask(r.id) !== null);
+    expect(kept.indexOf(false)).toBeGreaterThan(0);
+    // Oldest first: once one is null, every newer one is too.
+    expect(kept.slice(kept.indexOf(false)).every((k) => !k)).toBe(true);
+    const bytes = snap.pending.reduce((n, p) => n + (p.ask ? Buffer.byteLength(JSON.stringify(p.ask)) : 0), 0);
+    expect(bytes).toBeLessThanOrEqual(ASK_BUDGET);
   });
 });
