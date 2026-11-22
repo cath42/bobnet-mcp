@@ -477,6 +477,15 @@ export class Store {
     return kind ? this.all("SELECT * FROM outbox WHERE kind = ? ORDER BY seq", kind) : this.all("SELECT * FROM outbox ORDER BY seq");
   }
 
+  /** How many rows of a kind wait, the head's seq and the oldest's time; no bodies, as it runs on every report. */
+  outboxSummary(kind: OutboxKind): { count: number; head: number | null; oldest_at: string | null } {
+    const r = this.one<{ count: number; head: number | null; oldest_at: string | null }>(
+      "SELECT count(*) AS count, min(seq) AS head, min(created_at) AS oldest_at FROM outbox WHERE kind = ?",
+      kind,
+    );
+    return { count: Number(r?.count ?? 0), head: r?.head ?? null, oldest_at: r?.oldest_at ?? null };
+  }
+
   /** A row sent again differently: without its in_reply_to, or with another body in its place. */
   updateOutbox(seq: number, set: { body?: string; in_reply_to?: null }): void {
     if (set.body !== undefined) this.run("UPDATE outbox SET body = ? WHERE seq = ?", set.body, seq);

@@ -6,9 +6,9 @@ import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import {
   addressKey,
   BoardAnswerEvent,
+  BoardCtx,
   BoardNoticeEvent,
   BoardOp,
-  type BoardCtx,
   type BoardOpInput,
   type BoardResults,
   type CiStatus,
@@ -400,7 +400,13 @@ const SLOT_NAME_MAX = 100;
 /** A slot run's name clipped to what the protocol takes, so its report can be made. */
 function fitRunName(op: BoardOpInput): BoardOpInput {
   if (op.op !== "slot_run" || op.name.length <= SLOT_NAME_MAX) return op;
-  return { ...op, name: `${op.name.slice(0, SLOT_NAME_MAX - 1)}…` };
+  // Whole code points up to the limit's units, so a surrogate pair is never split (BOB-28) and the clip still fits.
+  let name = "";
+  for (const ch of op.name) {
+    if (name.length + ch.length > SLOT_NAME_MAX - 1) break;
+    name += ch;
+  }
+  return { ...op, name: `${name}…` };
 }
 
 interface Consult {
@@ -3276,8 +3282,8 @@ export class Supervisor {
 
   private flushing = false;
   private flushAgain = false;
-  /** The outbox row a board report wait was last logged for. */
-  private boardWaitLogged: number | null = null;
+  /** The outbox row a board report last waited on, and the code it met: logged once, and reported as `board_outbox.code` while it is the head. */
+  private boardWait: { seq: number; code: string | null } | null = null;
 
   private flushOutbox(): void {
     if (this.flushing) {
@@ -3383,14 +3389,17 @@ export class Supervisor {
         // A row the protocol won't take is checked here: sent, the broker's bad_frame would hold up all behind it.
         const checked = BoardOp.safeParse(op);
         if (!checked.success) throw Object.assign(new Error(checked.error.issues[0]?.message ?? "not a board operation"), { code: "bad_row" });
+        // Its ctx too (ADR 0012 §3): then a broker bad_frame means only version skew.
+        const ctx = report.ctx ? BoardCtx.safeParse(report.ctx) : null;
+        if (ctx && !ctx.success) throw Object.assign(new Error(`ctx: ${ctx.error.issues[0]?.message ?? "not a board ctx"}`), { code: "bad_row" });
         await this.broker.boardOp(item.to_name, op, report.ctx ?? undefined, 0);
       } catch (err) {
         const code = (err as { code?: string }).code ?? (report ? undefined : "bad_row");
         const final = code !== undefined && (FINAL_BOARD_ERRORS.has(code) || code === "bad_row" || (code === "not_hosted" && !names.has(item.to_name.toLowerCase())));
         if (!final) {
           // Said once per row, so a wait that doesn't end is seen in the log (BOB-27).
-          if (this.boardWaitLogged !== item.seq) this.log.warn("board reports wait", { seq: item.seq, op: report?.op.op, code, err: (err as Error).message });
-          this.boardWaitLogged = item.seq;
+          if (this.boardWait?.seq !== item.seq) this.log.warn("board reports wait", { seq: item.seq, op: report?.op.op, code, err: (err as Error).message });
+          this.boardWait = { seq: item.seq, code: code?.slice(0, 40) ?? null };
           return;
         }
         this.log.error("a board report can't be made; dropped", { op: report?.op.op, worker: report?.ctx?.worker, code, err: (err as Error).message });
@@ -3640,7 +3649,15 @@ export class Supervisor {
       }),
       usage: [...days.values()].sort((a, b) => a.day.localeCompare(b.day)).slice(-500),
       cleanup: this.lastCleanup,
+      board_outbox: this.boardOutbox(),
     };
+  }
+
+  /** The board reports not yet sent (ADR 0012 §3); the code only while the row it was met on is still the head. */
+  private boardOutbox(): NonNullable<LaptopSnapshot["board_outbox"]> {
+    const { count, head, oldest_at } = this.store.outboxSummary("board_op");
+    const code = head !== null && this.boardWait?.seq === head ? this.boardWait.code : null;
+    return { count, oldest_at, code };
   }
 
   /** Sends the dashboard a snapshot, at most once per throttle interval. */

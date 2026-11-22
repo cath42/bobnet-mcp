@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Envelope } from "@bobnet/protocol";
+import type { Envelope, LaptopSnapshot } from "@bobnet/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseSupervisorConfig, strandedState } from "../src/config.ts";
 import { Policy } from "../src/policy.ts";
@@ -814,6 +814,17 @@ describe("expiring orphans (BOB-26)", () => {
     expect(JSON.parse(expired(id)!.detail).why).toBe("no session to resume");
     expect(second.sup.pending()).toEqual([]);
     expect(second.broker.toOrchestrator().join("\n")).toContain("Requests still answerable (answering resumes the worker): none");
+  });
+
+  it("expires an orphan over a day old at the restart, before the first report, with no call of its own (BOB-48 AC 1)", async () => {
+    const { id } = await orphan();
+    const db = (store as unknown as { db: { prepare(sql: string): { run(...args: unknown[]): unknown } } }).db;
+    db.prepare("UPDATE requests SET created_at = ? WHERE id = ?").run(new Date(Date.now() - 25 * 3_600_000).toISOString(), id);
+    const second = await setup();
+    await until(() => second.broker.reports.length > 0);
+    expect((second.broker.reports[0] as LaptopSnapshot).pending).toEqual([]);
+    expect(store.request(id)!.state).toBe("expired");
+    expect(JSON.parse(expired(id)!.detail).why).toBe("older than 24 h");
   });
 
   it("expires an orphan whose session a later worker resumed", async () => {

@@ -266,6 +266,63 @@ describe("a run's reports", () => {
   });
 });
 
+describe("the board outbox in the report (BOB-28, ADR 0012 §3)", () => {
+  const ctx = { worker: "w_1", role: "luigi", project: "bobnet", session: null, tasks: [] };
+  const runEnd = (id: string) => ({ op: "run_end", project: "bobnet", id, ended_at: "2026-11-15T00:00:00.000Z", tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, calls: 0 });
+
+  it("reads empty, then the count, the oldest and the code the head waits on, then empty again", async () => {
+    const { sup, broker } = await setup();
+    expect(sup.snapshot().board_outbox).toEqual({ count: 0, oldest_at: null, code: null });
+    broker.board = () => {
+      throw new BrokerError("unavailable", "the board is unavailable since then; wait and retry");
+    };
+    store.addOutbox("Luigi", JSON.stringify({ ctx, op: runEnd("w_1") }), "board_op");
+    const oldest = store.outbox("board_op")[0]!.created_at;
+    // Queued, not yet tried: no code.
+    expect(sup.snapshot().board_outbox).toEqual({ count: 1, oldest_at: oldest, code: null });
+    store.addOutbox("Luigi", JSON.stringify({ ctx, op: runEnd("w_2") }), "board_op");
+    sup.onConnected();
+    await until(() => sup.snapshot().board_outbox?.code === "unavailable");
+    expect(sup.snapshot().board_outbox).toEqual({ count: 2, oldest_at: oldest, code: "unavailable" });
+    // The head went another way (here, by hand): its code isn't the new head's.
+    store.removeOutbox(store.outbox("board_op")[0]!.seq);
+    expect(sup.snapshot().board_outbox).toMatchObject({ count: 1, code: null });
+    broker.board = () => ({ ref: null, seq: 1 });
+    sup.onConnected();
+    await until(() => store.outbox().length === 0);
+    expect(sup.snapshot().board_outbox).toEqual({ count: 0, oldest_at: null, code: null });
+  });
+
+  it("drops a row whose ctx the protocol won't take, audited board:refused, so it holds up none behind it (BOB-28 AC 2)", async () => {
+    const { sup, broker } = await setup();
+    store.addOutbox("Luigi", JSON.stringify({ ctx: { ...ctx, tasks: "BOB-2" }, op: runEnd("w_1") }), "board_op");
+    store.addOutbox("Luigi", JSON.stringify({ ctx, op: runEnd("w_2") }), "board_op");
+    broker.board = () => ({ ref: null, seq: 1 });
+    sup.onConnected();
+    await until(() => store.outbox().length === 0);
+    expect(ops(broker, "run_end").map((o) => (o.op as { id: string }).id)).toEqual(["w_2"]);
+    const refused = store.auditLog().filter((a) => a.action === "board:refused").map((a) => JSON.parse(a.detail));
+    expect(refused).toEqual([{ op: "run_end", code: "bad_row", message: expect.stringMatching(/^ctx: /) }]);
+  });
+
+  it("clips a slot run's name by whole code points, never splitting a surrogate pair, and still within the limit (BOB-28 AC 2)", async () => {
+    const { sup, broker } = await setup();
+    // A pair at units 98-99: a clip at 99 units would split it.
+    const pair = `${"x".repeat(98)}🚀 and the rest of a long command`;
+    const wide = "🚀".repeat(60);
+    for (const [i, name] of [pair, wide].entries()) {
+      store.addOutbox("Luigi", JSON.stringify({ ctx, op: { op: "slot_run", project: "bobnet", external_id: `mbp-1:s${i}`, name, status: "running" } }), "board_op");
+    }
+    broker.board = () => ({ ref: null, seq: 1 });
+    sup.onConnected();
+    await until(() => store.outbox().length === 0);
+    const names = ops(broker, "slot_run").map((o) => (o.op as Extract<BoardOpInput, { op: "slot_run" }>).name);
+    expect(names).toEqual([`${"x".repeat(98)}…`, `${"🚀".repeat(49)}…`]);
+    expect(names.every((n) => n.length <= 100 && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(n))).toBe(true);
+    expect(store.auditLog().filter((a) => a.action === "board:refused")).toEqual([]);
+  });
+});
+
 describe("the board tools a worker gets", () => {
   type Tool = { handler: (args: Record<string, unknown>, extra: unknown) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> };
   const toolsOf = (srv: unknown) => (srv as { instance: { _registeredTools: Record<string, Tool> } }).instance._registeredTools;
