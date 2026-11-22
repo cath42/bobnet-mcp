@@ -303,3 +303,38 @@ describe("the stale rule, on an injected clock (ADR 0011 §2; BOB-49 AC2)", () =
     expect(await notices()).toEqual([]);
   });
 });
+
+describe("review A's fixes (architecture/bob49/review-A.md B1, M1)", () => {
+  const T0 = Date.parse("2026-11-21T16:40:00.000Z");
+
+  it("flags a project with 120 rows on Waits, and still deletes the flag of one answered (B1)", async () => {
+    const clock = await moveableClock(T0);
+    await ok(owner, { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", lead: "Picard@mbp-1" });
+    await ok(owner, { op: "grant", project: "helix", agent: "Data", role: "dev", read: true, items: "none", fields: [], questions: true });
+    const refs: string[] = [];
+    for (let n = 0; n < 120; n++) refs.push((await ok(agent("Data"), { op: "ask", project: "helix", text: `Question ${n}?` })).ref!);
+    clock.t = T0 + 25 * H;
+    expect((await board().flagStale()).flagged).toHaveLength(120);
+    await ok(owner, { op: "answer_question", project: "helix", ref: refs[0]!, words: "Yes" });
+    clock.t = T0 + 26 * H;
+    expect(await board().flagStale()).toEqual({ flagged: [], no_owner: [] });
+    const flags = await runInDurableObject(board(), (_, state) => state.storage.sql.exec<{ ref: string }>("SELECT ref FROM wait_flags").toArray().map((r) => r.ref));
+    expect(flags).toHaveLength(119);
+    expect(flags).not.toContain(refs[0]);
+  });
+
+  it("refuses a fix whose bug is another project's, in the table itself (M1)", async () => {
+    await ok(owner, { op: "create_project", key: "helix", name: "Helix", prefix: "LAND" });
+    await ok(owner, { op: "create_project", key: "bobnet", name: "BobNet", prefix: "BOB" });
+    await ok(agent("Casper"), { op: "capture", project: "bobnet", capture_id: uuid(1), title: "Stalls", type: "bug" });
+    await runInDurableObject(board(), (_, state) => {
+      const sql = state.storage.sql;
+      const pk = (key: string) => sql.exec<{ pk: number }>("SELECT pk FROM projects WHERE key = ?", key).one().pk;
+      const bug = sql.exec<{ pk: number }>("SELECT pk FROM items WHERE project = ?", pk("bobnet")).one().pk;
+      const push = (project: number) => sql.exec<{ pk: number }>("INSERT INTO pushes (project, repo, branch, sha, worker, at) VALUES (?, ?, 'main', ?, 'w_1', 'x') RETURNING pk", project, `r/${project}`, "a".repeat(40)).one().pk;
+      const fix = (project: number) => sql.exec("INSERT INTO bug_fixes (project, item, sha, subject, push, at) VALUES (?, ?, ?, 's', ?, 'x')", project, bug, "b".repeat(40), push(project));
+      expect(() => fix(pk("helix"))).toThrow(/FOREIGN KEY constraint failed/);
+      fix(pk("bobnet"));
+    });
+  });
+});

@@ -451,13 +451,14 @@ export const BOARD_MIGRATIONS: readonly string[] = [
   CREATE TABLE bug_fixes (
     pk      INTEGER PRIMARY KEY,
     project INTEGER NOT NULL REFERENCES projects (pk),
-    item    INTEGER NOT NULL REFERENCES items (pk),
+    item    INTEGER NOT NULL,
     sha     TEXT NOT NULL,
     subject TEXT NOT NULL,
     push    INTEGER NOT NULL REFERENCES pushes (pk),
     release TEXT,                                  -- the first release tag at or after its push
     at      TEXT NOT NULL,
-    UNIQUE (item, sha)
+    UNIQUE (item, sha),
+    FOREIGN KEY (project, item) REFERENCES items (project, pk)
   );
   CREATE INDEX bug_fixes_unreleased ON bug_fixes (project, push) WHERE release IS NULL;
 

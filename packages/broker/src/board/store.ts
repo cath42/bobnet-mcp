@@ -2387,7 +2387,8 @@ export class BoardStore {
         out.flagged.push({ project: p.key, ref: w.ref, owner: stale.owner, seq });
       }
       const refs = waits.map((w) => w.ref);
-      this.sql.exec(`DELETE FROM wait_flags WHERE project = ? AND ref NOT IN (${refs.map(() => "?").join(", ")})`, p.pk, ...refs);
+      // One bound value whatever the list's length: a statement binds at most 100.
+      this.sql.exec("DELETE FROM wait_flags WHERE project = ? AND ref NOT IN (SELECT value FROM json_each(?))", p.pk, JSON.stringify(refs));
     }
     return out;
   }
