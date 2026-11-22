@@ -17,6 +17,10 @@ rather than by convention.
 4. Casper's gates on the dashboard (C2) are: moving a feature into or out of a
    release (a backlog item's release is a triage field, set by the PO and Casper; Peach, 2026-11-14), reordering releases, and closing a release. Editing a release's goal or any other text
    is a request to the PO. *Evidence: test.* (Peach, 2026-11-13, on Daisy's question)
+   **Changed by Casper, 2026-11-21:** moving a feature into or out of a release is the project's
+   PO's ("You are the primary PO … moving a feature into a release is your responsibility"). It is
+   no longer Casper's gate; Casper may still do it on the dashboard. Reordering releases and closing
+   a release stay his. The broker change is BOB-122.
 5. Closing a release that still has features not Done is allowed only after a confirmation that
    names each open feature and where it goes (another release, or out of any release). Nothing is
    closed with work silently left in it. *Evidence: test.*

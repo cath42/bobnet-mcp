@@ -41,7 +41,7 @@ has the largest board (~700 task files, 3 releases, ~29 features). Picard's writ
 | 2 | The roadmap: releases and features across projects | [roadmap-view.md](roadmap-view.md) | Agreed |
 | 3 | The steps view: a feature's sessions and tasks | [steps-view.md](steps-view.md) | Agreed |
 | 4 | What waits on Casper | [waiting-on-casper.md](waiting-on-casper.md) | Agreed |
-| 5 | Start a session from the UI | [start-session.md](start-session.md) | Draft |
+| 5 | Start a session from the UI | [start-session.md](start-session.md) | Agreed, BOB-6 Ready (R2) |
 | 6 | Who writes the board, and editing from the UI | [board-writes.md](board-writes.md) | Agreed |
 | 7 | Capture backlog items without structuring them | [capture.md](capture.md) | Agreed |
 | 8 | Bugs | [bugs.md](bugs.md) | Agreed |

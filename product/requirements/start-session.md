@@ -35,3 +35,14 @@ retro). BobNet fills in the brief and Casper confirms. The request goes to poe, 
   allow which session) so BobNet doesn't hard-code Helix's rules? With the board in the service, the
   service can keep and enforce them. (Toad's first advice, to flag and not enforce, assumed the board
   was the project's files.)
+
+## R2 refinement (Peach, 2026-11-21)
+
+Casper agreed R2 "Run the team from your phone" ("R2 looks good"), with this feature last in it. The
+board (BOB-6) carries the criteria above, updated:
+- The request goes to **the supervisor that runs the project** (poe today), over the same delivery
+  as BOB-111's answers, so it works when that supervisor is on another laptop (BOB-44).
+- **Gates and session kinds are the project's data in the service**, next to its rules, not files
+  in its repo: the board moved into the service (C5). Toad designs the shape in BOB-6's design
+  session (his advice c_0201d124 answered under the old frame).
+- The feature's page shows the request until a session starts or the supervisor declines it.
