@@ -21,28 +21,28 @@ not code).
 1. **Migration 7** (`broker/src/board/schema.ts`, after `:422`). §1 and §4, exactly:
    - the tables `session_kinds`, `session_kind_statuses` and `start_requests` (with the partial unique
      index);
-   - the columns `projects.open_features_max`, `projects.next_start` and `grants.gates`;
+   - the columns `projects.open_features_max`, `projects.next_start` and `grants.start_rules`;
    - `notices` remade with `kind` (`answer` | `start`), `question` renamed to `subject`, and `state` gaining
      `requested`. Copy the rows in as `kind = 'answer'`.
 
    Update `NoticeRow` (`store.ts:2815`) and `notices()` (`:2220`). Migration test: a db at 6 with notices
    migrates with its rows intact.
 2. **Protocol** (`protocol/src/board.ts`, `remote.ts`):
-   - the ops `set_gates`, `gates` (read), `start_options` (read), `start_request`, `withdraw_start` and
-     `decline_start`, shaped as in §1, §2, §4 and §5. Add `gates` and `start_options` to `BOARD_READS`.
-   - types `StartRequest`, `StartOption` and `Gates`; `get`'s feature result gains `requests`;
-   - `grant` gains `gates: z.boolean().optional()`;
+   - the ops `set_start_rules`, `start_rules` (read), `start_options` (read), `start_request`, `withdraw_start` and
+     `decline_start`, shaped as in §1, §2, §4 and §5. Add `start_rules` and `start_options` to `BOARD_READS`.
+   - types `StartRequest`, `StartOption` and `StartRules`; `get`'s feature result gains `requests`;
+   - `grant` gains `start_rules: z.boolean().optional()`;
    - `BoardStartEvent` (loose, `event: "start"`, `state: requested | withdrawn`) next to `BoardAnswerEvent`;
    - results: `start_request` and `withdraw_start` return `{ ref, seq }` plus `BoardTold`.
 3. **The declaration** (`store.ts`, `rules.ts`):
-   - the `gates` flag in `FLAGS` (`rules.ts:39`), `"set the project's session kinds and limits"`;
-   - `set_gates` replaces the rows whole, with events, and needs the flag;
-   - `gates` reads them (`read` needed);
-   - `grant` keeps the row's `gates` when the op omits it;
-   - the `grants` read shows `gates` and the declaration.
+   - the `start_rules` flag in `FLAGS` (`rules.ts:39`), `"set the project's session kinds and limits"`;
+   - `set_start_rules` replaces the rows whole, with events, and needs the flag;
+   - `start_rules` reads them (`read` needed);
+   - `grant` keeps the row's `start_rules` when the op omits it;
+   - the `grants` read shows `start_rules` and the declaration.
 
    Tests: set and read, replace drops a kind, refused without the flag (the reason names the holders), an old
-   `grant` keeps `gates`.
+   `grant` keeps `start_rules`.
 4. **`startCheck` and the offer** (`store.ts`): §2's checks in the table's order, with its codes and service-written
    reasons, plus the label proposal (the first free letter of A-Z). `start_options` returns the declared kinds
    only, with `ok`/`code`/`reason`/`label`/`brief`, plus `pending` and `requests` (the last 5). `supervisor` is
@@ -70,7 +70,7 @@ not code).
      `carrySession` spawn isn't matched.
    - Who: an agent's `start_request` is `forbidden`; `decline_start` off a supervisor connection, or for a
      project it doesn't serve, is `forbidden`.
-   - Export and import (`export.ts`, `protocol/src/board-export.ts`) carry the declaration, grants' `gates` and
+   - Export and import (`export.ts`, `protocol/src/board-export.ts`) carry the declaration, grants' `start_rules` and
      `start_requests` as optional fields; the round trip is equal.
 
 ## B: delivery
@@ -107,7 +107,7 @@ not code).
     `{ project, request, reason }` and is offered to orchestrators. It is refused (`no`, with the reason) for a
     project this laptop doesn't run on the service. Otherwise the supervisor sends `board_op decline_start` `as`
     its own `config.name`, and returns the board's reply or refusal verbatim.
-11. **The client and its MCP tools** (`packages/client`): `board_write` gains `set_gates`, and `board_grants` shows
+11. **The client and its MCP tools** (`packages/client`): `board_write` gains `set_start_rules`, and `board_grants` shows
     the declaration with the rules. `board_get` of a feature shows `requests`. Whether to offer `start_request` to
     agents: **no**, it is owner-only.
 12. **Both ends real (AC3):** a test that runs a broker with its Board and a supervisor, posts `start_request` as
@@ -134,7 +134,7 @@ not code).
 
 ## After the build (not code)
 
-18. **The declarations:** an admin grants `gates` to each project's PO. Then Peach writes bobnet's declaration and
+18. **The declarations:** an admin grants `start_rules` to each project's PO. Then Peach writes bobnet's declaration and
     Helix's PO writes helix's, as each sees fit; §1 has my proposal. Only after the restart (§7).
 
 ## Not here

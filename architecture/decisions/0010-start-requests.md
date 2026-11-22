@@ -49,28 +49,29 @@ CREATE TABLE session_kind_statuses (        -- the feature statuses a kind start
 );
 ALTER TABLE projects ADD COLUMN open_features_max INTEGER CHECK (open_features_max > 0); -- null: no limit
 ALTER TABLE projects ADD COLUMN next_start INTEGER NOT NULL DEFAULT 1 CHECK (next_start > 0);
-ALTER TABLE grants ADD COLUMN gates INTEGER NOT NULL DEFAULT 0 CHECK (gates IN (0, 1));
+ALTER TABLE grants ADD COLUMN start_rules INTEGER NOT NULL DEFAULT 0 CHECK (start_rules IN (0, 1));
 ```
 
 Rows, not JSON, as ADR 0001 §2 requires. The four kinds stay fixed. A project chooses which of them it
 offers, with what gate and which skill. It can't invent a fifth kind, because `sessions.kind` couldn't hold it.
 
-**The declaration is written whole** with a new op, `set_gates`, and read with `gates`:
+**The declaration is written whole** with a new op, `set_start_rules`, and read with `start_rules`:
 
 ```
-set_gates { project, kinds: [{ kind, statuses: Status[] (≥ 1), after: Kind | null, skill: string | null }],
+set_start_rules { project, kinds: [{ kind, statuses: Status[] (≥ 1), after: Kind | null, skill: string | null }],
             open_features_max: int | null, reason? }
 ```
 
-- `set_gates` replaces the project's rows. Any kind it doesn't list is not offered. Each change is an
+- `set_start_rules` replaces the project's rows. Any kind it doesn't list is not offered. Each change is an
   event on `projects` / `session_kinds`, as for any write (ADR 0001 §3).
-- **Who may write it: a new grant flag, `gates`**, next to `sessions`, `questions` and `admin`
+- **Who may write it: a new grant flag, `start_rules`**, next to `sessions`, `questions` and `admin`
   (`rules.ts:39`). The owner holds it, as he holds every flag (`rules.ts:118`). Peach decides who holds it
   (ADR 0001 §5), and that is the project's PO under C1 and C2: Peach on bobnet, Helix's PO on helix. An
-  admin applies the grant. A refusal names the holders (`requireFlag`, `rules.ts:121`).
-- The `grant` op gains `gates?: boolean`. **If it is absent, the row keeps its current value.** An old
+  admin applies the grant. A refusal names the holders (`requireFlag`, `rules.ts:121`). It is not called
+  `gates`: on the dashboard that word means Casper's own gates ("Edit your gates").
+- The `grant` op gains `start_rules?: boolean`. **If it is absent, the row keeps its current value.** An old
   client re-granting a PO therefore doesn't take the flag away.
-- `board_grants` shows the declaration with the rules ("next to its rules"). `board_write` gets `set_gates`.
+- `board_grants` shows the declaration with the rules ("next to its rules"). `board_write` gets `set_start_rules`.
 - **Until a PO writes a declaration, Start is offered nowhere.** No rows are seeded and nothing is
   hard-coded for Helix. The rollout depends on this (§7).
 
@@ -315,13 +316,13 @@ harmless, and §7 keeps it from happening.
 - **Broker deploy:** migration 7, the ops, the drain, `start_options`'s `supervisor`, and the dashboard
   (`public/` ships with the Worker).
 - **A release and a restart** of every supervisor that serves a project with a declaration (mbp-1, and ubu1
-  to match): `onBoardStart`, `decline_start`, and the client's `set_gates` and `board_grants`.
+  to match): `onBoardStart`, `decline_start`, and the client's `set_start_rules` and `board_grants`.
 - **Order:** deploy, then release, then restart, *then* the POs write their declarations. Until a declaration
   exists, Start is offered nowhere (§1), so an old supervisor never gets a start event it would drop.
   Additive both ways:
-  - a new broker with an old client: no `set_gates`, and `grant` keeps `gates`;
-  - an old broker with a new client: `set_gates` is refused as an unknown op.
-- **Export** carries `session_kinds` and their statuses, `open_features_max`, grants' `gates` and
+  - a new broker with an old client: no `set_start_rules`, and `grant` keeps `start_rules`;
+  - an old broker with a new client: `set_start_rules` is refused as an unknown op.
+- **Export** carries `session_kinds` and their statuses, `open_features_max`, grants' `start_rules` and
   `start_requests`. These are optional fields, so an older broker can't import an export that holds them
   (as ADR 0003's addendum says of `release`).
 
