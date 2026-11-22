@@ -133,6 +133,9 @@ describe("a landed fix marks its bug and tells the PO; a release tag fills its r
     const [released] = await notices();
     expect(released).toMatchObject({ kind: "fix", subject: "BOB-27", state: "fix_released", to: ["Peach@mbp-1"], text: "BOB-27's fix 5d4617f is in v2.0.0-rc.34" });
     expect(released!.notice).toMatchObject({ event: "board_notice", kind: "fix_released", ref: "BOB-27" });
+    // The release is a change to the bug too, so its day starts again (ADR 0011 §6.3).
+    const after = (await ok(owner, { op: "get", project: "bobnet", ref: "BOB-27", history: true })).history!;
+    expect(after.at(-1)).toMatchObject({ op: "release_tag", changes: [{ field: "release", old: null, new: "v2.0.0-rc.34" }] });
     // A tag reported again changes nothing.
     expect(await ok(supervisor(), { op: "release_tag", project: "bobnet", repo: "cath42/bobnet", tag: "v2.0.0-rc.34", sha: LATER })).toMatchObject({ released: [] });
   });
@@ -321,6 +324,20 @@ describe("review A's fixes (architecture/bob49/review-A.md B1, M1)", () => {
     const flags = await runInDurableObject(board(), (_, state) => state.storage.sql.exec<{ ref: string }>("SELECT ref FROM wait_flags").toArray().map((r) => r.ref));
     expect(flags).toHaveLength(119);
     expect(flags).not.toContain(refs[0]);
+  });
+
+  it("tells the PO a fixed bug waits on them, not on Casper, when it goes stale (m2, ADR 0011 §6.9)", async () => {
+    const clock = await moveableClock(T0);
+    const ctx: BoardCtx = { worker: "w_mario", role: "lead", project: "bobnet", session: null, tasks: [] };
+    await ok(owner, { op: "create_project", key: "bobnet", name: "BobNet", prefix: "BOB", lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: ["cath42/bobnet"] });
+    const bug = (await ok(agent("Casper"), { op: "capture", project: "bobnet", capture_id: uuid(3), title: "Stalls", type: "bug", blocks_use: true })).ref!;
+    await ok(agent("Mario", ctx), { op: "run_start", project: "bobnet", id: "w_mario", started_at: new Date(T0).toISOString(), session: null });
+    const sha = "5d4617f4bed3884d73deb1a9cc71e1ed366215f4";
+    await ok(agent("Mario", ctx), { op: "push", project: "bobnet", repo: "cath42/bobnet", branch: "v2", sha, fixes: [{ ref: bug, sha, subject: "the fix" }] });
+    await board().noticesTaken((await notices()).map((n) => n.seq));
+    clock.t = T0 + 26 * H;
+    expect((await board().flagStale()).flagged).toEqual([{ project: "bobnet", ref: bug, owner: "Peach@mbp-1", seq: expect.any(Number) }]);
+    expect((await notices())[0]!.text).toBe(`${bug} (bobnet) has waited on its PO for 26 h since its fix landed, unchanged since 2026-11-21 16:40Z. Check it and close it, or keep it (board_write keep, with why).`);
   });
 
   it("refuses a fix whose bug is another project's, in the table itself (M1)", async () => {

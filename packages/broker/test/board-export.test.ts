@@ -182,6 +182,30 @@ describe("import (ADR 0001 §11)", () => {
     expect(got.session).toMatchObject({ runs: [{ id: "w_bill", calls: 2, ctx: [1000, 0x10000000] }] });
   });
 
+  it("keeps a bug's fix, its release and the release tag through a round trip (ADR 0011 §6.6; review A M2)", async () => {
+    const { f1 } = await helix();
+    const bug = (await ok(agent("Picard"), { op: "capture", project: "helix", capture_id: "00000000-0000-4000-8000-000000000001", title: "Tracts don't load", type: "bug", blocks_use: true })).ref!;
+    const session = { feature: f1, kind: "build" as const, label: "1" };
+    const fix = "5d4617f4bed3884d73deb1a9cc71e1ed366215f4", tip = "6e151ac8a1b2c3d4e5f60718293a4b5c6d7e8f90";
+    await ok(sup("Bill", session), { op: "push", project: "helix", repo: "helix", branch: "v2", sha: fix, fixes: [{ ref: bug, sha: fix, subject: "Tracts load" }] });
+    await ok(sup("Bill", session), { op: "push", project: "helix", repo: "helix", branch: "v2", sha: tip });
+    const serving: BoardCaller = { kind: "agent", name: "supervisor", laptop: "mbp-1", supervisor: true, ctx: null, serves: ["helix"] };
+    await ok(serving, { op: "release_tag", repo: "helix", tag: "v1.0.0", sha: tip });
+    await ok(serving, { op: "release_tag", repo: "helix", tag: "v1.0.1-never-pushed", sha: "f".repeat(40) });
+    const doc = await exported();
+    expect(doc.projects[0]!.fixes).toEqual([{ item: bug, sha: fix, subject: "Tracts load", push: `helix@${fix}`, release: "v1.0.0", at: expect.any(String) }]);
+    expect(doc.projects[0]!.release_tags).toEqual([
+      { repo: "helix", tag: "v1.0.0", sha: tip, push: `helix@${tip}`, at: expect.any(String) },
+      { repo: "helix", tag: "v1.0.1-never-pushed", sha: "f".repeat(40), push: null, at: expect.any(String) },
+    ]);
+    await reset();
+    await imported(doc);
+    expect(comparable(await exported())).toEqual(comparable(doc));
+    // The fixed bug still doesn't block, and says its release.
+    const waits = (await ok(owner, { op: "waits", project: "helix" })).waits;
+    expect(waits.find((w) => w.ref === bug)).toMatchObject({ blocking: false, fix: { sha: fix, release: "v1.0.0", tags_known: true } });
+  });
+
   it("refuses a project the board has, by key or prefix, and writes nothing", async () => {
     await helix();
     const doc = await exported();

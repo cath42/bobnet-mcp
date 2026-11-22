@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrokerError } from "@bobnet/client/connection";
-import type { BoardOpInput } from "@bobnet/protocol";
+import { BoardOp, type BoardOpInput } from "@bobnet/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseSupervisorConfig } from "../src/config.ts";
 import { Policy } from "../src/policy.ts";
@@ -433,6 +433,21 @@ projects:
     expect(tools["board_write"]!.description).toMatch(/keep \{ref, reason\}.*withdraw \{ref, reason\}/);
   });
 
+  it("clips what it sends to what the board takes: a subject of 200 at most, 20 fixes at most (review A)", async () => {
+    const { config, commit } = landable();
+    const { sup, broker, sessions } = await setup(config);
+    const w = await sup.spawnJoined(spawn);
+    await until(() => sessions.length === 1);
+    const refs = Array.from({ length: 25 }, (_, i) => `BOB-${i + 1}`);
+    const sha = commit(`v2: ${"x".repeat(296)}\n\nFixes: ${refs.join(", ")}`);
+    expect(await sup.land(w.id)).toMatchObject({ ok: true });
+    await until(() => ops(broker, "push").length === 1);
+    const op = ops(broker, "push")[0]!.op as Extract<BoardOpInput, { op: "push" }>;
+    expect(op.fixes!.map((f) => f.ref)).toEqual(refs.slice(0, 20));
+    expect(op.fixes!.every((f) => f.sha === sha && f.subject.length === 200)).toBe(true);
+    expect(BoardOp.safeParse(op).success).toBe(true);
+  });
+
   it("reads every commit the land brought onto its target, not only HEAD", async () => {
     const origin = join(dir, "origin.git");
     execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
@@ -449,10 +464,11 @@ projects:
     expect(ops(broker, "push")[0]!.op).toMatchObject({ sha: c, fixes: [{ ref: "BOB-30", sha: c }, { ref: "BOB-27", sha: a }] });
   });
 
-  it("reports the tag an upgrade built to the board, for the service project whose repo it is (ADR 0011 §1)", async () => {
-    const { config } = landable();
-    const sha = "5d4617f4bed3884d73deb1a9cc71e1ed366215f4";
-    const tags: Record<string, { repo: string; sha: string }> = { "v2.0.0-rc.34": { repo: "cath42/bobnet-mcp", sha }, "v2.0.0-rc.35": { repo: "cath42/helix", sha } };
+  it("reports the tag an upgrade built on a landed tip, its repo written as the push's, for the service project whose repo it is (ADR 0011 §1)", async () => {
+    const { config, commit } = landable();
+    const sha = commit("v2: BOB-27: the fix\n\nFixes: BOB-27");
+    // The upgrade's clone names the repo in another case: what is sent is the push's spelling.
+    const tags: Record<string, { repo: string; sha: string }> = { "v2.0.0-rc.34": { repo: "Cath42/BobNet-MCP", sha }, "v2.0.0-rc.35": { repo: "cath42/helix", sha } };
     const releases: Releases = {
       root: join(dir, "releases"),
       missing: () => null,
@@ -464,10 +480,16 @@ projects:
       switch: () => {},
       tagged: async (tag) => tags[tag] ?? null,
     };
-    const { sup, broker } = await setup(config, { releases });
+    const { sup, broker, sessions } = await setup(config, { releases });
+    const w = await sup.spawnJoined(spawn);
+    await until(() => sessions.length === 1);
+    expect(await sup.land(w.id)).toMatchObject({ ok: true });
+    await until(() => ops(broker, "push").length === 1);
     await sup.upgradeSupervisor(undefined, "v2.0.0-rc.34", "no");
     await until(() => ops(broker, "release_tag").length === 1);
-    expect(ops(broker, "release_tag")[0]).toEqual({ as: "supervisor", ctx: undefined, op: { op: "release_tag", project: "bobnet", repo: "cath42/bobnet-mcp", tag: "v2.0.0-rc.34", sha } });
+    const push = ops(broker, "push")[0]!.op as Extract<BoardOpInput, { op: "push" }>;
+    expect(ops(broker, "release_tag")[0]).toEqual({ as: "supervisor", ctx: undefined, op: { op: "release_tag", project: "bobnet", repo: push.repo, tag: "v2.0.0-rc.34", sha: push.sha } });
+    expect(push.fixes).toEqual([{ ref: "BOB-27", sha, subject: "v2: BOB-27: the fix" }]);
     // A repo no service project here has: not sent, since the broker would refuse it.
     await sup.upgradeSupervisor(undefined, "v2.0.0-rc.35", "no");
     await until(() => store.upgradesOpen().length === 0);

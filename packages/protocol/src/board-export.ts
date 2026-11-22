@@ -152,6 +152,12 @@ const Run = z.object({
 
 const Push = z.object({ repo: z.string(), branch: z.string(), sha: z.string(), worker: z.string(), run: text.nullable(), at });
 
+/** A bug's landed fix (ADR 0011 §6.6): its item by ref, its push as `repo@sha`. */
+const Fix = z.object({ item: ItemRef, sha: z.string(), subject: z.string(), push: z.string(), release: text.nullable(), at });
+
+/** A release tag an upgrade reported (ADR 0011 §6.6): its push as `repo@sha`, null when its sha was never pushed. */
+const ReleaseTag = z.object({ repo: z.string(), tag: z.string(), sha: z.string(), push: text.nullable(), at });
+
 const CiRun = z.object({
   source: z.string().min(1),
   external_id: z.string().min(1),
@@ -225,6 +231,9 @@ const Project = z.object({
   runs: z.array(Run),
   pushes: z.array(Push),
   ci_runs: z.array(CiRun),
+  /** Bugs' landed fixes and the repos' release tags (ADR 0011 §6.6); an older document has neither, read as none. */
+  fixes: z.array(Fix).optional(),
+  release_tags: z.array(ReleaseTag).optional(),
   /** The project's own rules; rules for every project are the document's. */
   grants: z.array(Grant),
   events: z.array(Event),

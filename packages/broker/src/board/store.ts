@@ -2381,7 +2381,10 @@ export class BoardStore {
           continue;
         }
         const hours = Math.floor((now - Date.parse(stale.changed_at)) / 3_600_000);
-        const text = `${w.ref} (${p.key}) has waited on Casper for ${hours} h unchanged since ${minuteShown(stale.changed_at)}. If it is still current, keep it (board_write keep, with why); if not, edit it, withdraw it, or move it.`;
+        // A bug whose fix landed waits on its PO, not on Casper (ADR 0011 §6.9).
+        const text = w.fix
+          ? `${w.ref} (${p.key}) has waited on its PO for ${hours} h since its fix landed, unchanged since ${minuteShown(stale.changed_at)}. Check it and close it, or keep it (board_write keep, with why).`
+          : `${w.ref} (${p.key}) has waited on Casper for ${hours} h unchanged since ${minuteShown(stale.changed_at)}. If it is still current, keep it (board_write keep, with why); if not, edit it, withdraw it, or move it.`;
         const seq = tx.event("flag_stale", "projects", p.pk, w.ref, [["stale", null, stale.owner]], `unchanged since ${stale.changed_at}`);
         this.boardNotice(tx, p, seq, "stale", "stale", w.ref, stale.owner, text);
         out.flagged.push({ project: p.key, ref: w.ref, owner: stale.owner, seq });
@@ -2608,6 +2611,8 @@ export class BoardStore {
     const released = [...new Set(marked.map((m) => this.refOf(m.item)))];
     const open = marked.filter((m) => this.sql.exec("SELECT 1 FROM items WHERE pk = ? AND status != 'Done' AND archived_at IS NULL", m.item).toArray().length > 0);
     if (open.length > 0) {
+      // The PO is told to check it live now, so each open bug's day starts again here (ADR 0011 §6.3).
+      for (const item of new Set(open.map((m) => m.item))) tx.event("release_tag", "items", item, this.refOf(item), [["release", null, op.tag]]);
       const text = open.map((m) => `${this.refOf(m.item)}'s fix ${m.sha.slice(0, 7)} is in ${op.tag}`).join("\n");
       this.boardNotice(tx, p, seq, "fix", "fix_released", this.refOf(open[0]!.item), poOf(p), text);
     }

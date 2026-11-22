@@ -285,6 +285,21 @@ export function exportBoard(sql: SqlStorage, by: Reader, source: string | null =
         session: session(c["session"]),
         tasks: tasksOf("SELECT item FROM ci_run_tasks WHERE ci_run = ?", c["pk"]),
       })),
+      fixes: all<Row>("SELECT f.*, x.repo AS push_repo, x.sha AS push_sha FROM bug_fixes f JOIN pushes x ON x.pk = f.push WHERE f.project = ? ORDER BY f.pk", pk).map((f) => ({
+        item: ref(f["item"])!,
+        sha: f["sha"] as string,
+        subject: f["subject"] as string,
+        push: recordKey.push({ repo: f["push_repo"] as string, sha: f["push_sha"] as string }),
+        release: str(f["release"]),
+        at: f["at"] as string,
+      })),
+      release_tags: all<Row>("SELECT t.*, x.repo AS push_repo, x.sha AS push_sha FROM release_tags t LEFT JOIN pushes x ON x.pk = t.push WHERE t.project = ? ORDER BY t.pk", pk).map((t) => ({
+        repo: t["repo"] as string,
+        tag: t["tag"] as string,
+        sha: t["sha"] as string,
+        push: t["push_repo"] === null ? null : recordKey.push({ repo: t["push_repo"] as string, sha: t["push_sha"] as string }),
+        at: t["at"] as string,
+      })),
       grants: grants("project = ?", pk),
       events: events("project = ?", pk),
     };
@@ -656,6 +671,23 @@ function importProject(sql: SqlStorage, p: ExportProject, doc: BoardExport, at: 
       .one().pk;
     ciPk.set(recordKey.ciRun(c), pk);
     for (const t of new Set(c.tasks)) sql.exec("INSERT INTO ci_run_tasks (project, ci_run, item) VALUES (?, ?, ?)", project, pk, pkOf(item(t, `CI run ${recordKey.ciRun(c)}'s task`).ref));
+  }
+
+  const pushOf = (key: string, what: string) => pushPk.get(key) ?? bad(`${what}'s push ${key} is not in the export`);
+  for (const f of p.fixes ?? []) {
+    sql.exec(
+      "INSERT INTO bug_fixes (project, item, sha, subject, push, release, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      project,
+      pkOf(item(f.item, `fix ${f.sha}'s bug`).ref),
+      f.sha,
+      f.subject,
+      pushOf(f.push, `${f.item}'s fix ${f.sha}`),
+      f.release,
+      f.at,
+    );
+  }
+  for (const t of p.release_tags ?? []) {
+    sql.exec("INSERT INTO release_tags (project, repo, tag, sha, push, at) VALUES (?, ?, ?, ?, ?, ?)", project, t.repo, t.tag, t.sha, t.push === null ? null : pushOf(t.push, `release tag ${t.tag}`), t.at);
   }
 
   const records = new Map<ExportTable, Map<string, number>>([

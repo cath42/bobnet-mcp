@@ -3432,8 +3432,9 @@ export class Supervisor {
       } catch {
         continue;
       }
-      if (own?.toLowerCase() !== repo.toLowerCase()) continue;
-      this.store.addOutbox(this.config.name, JSON.stringify({ ctx: null, op: { op: "release_tag", project: p.key, repo, tag, sha } }), "board_op");
+      if (!own || own.toLowerCase() !== repo.toLowerCase()) continue;
+      // The repo as the project's push names it, so the board matches the two.
+      this.store.addOutbox(this.config.name, JSON.stringify({ ctx: null, op: { op: "release_tag", project: p.key, repo: own, tag, sha } }), "board_op");
       this.flushOutbox();
       return;
     }
@@ -3907,7 +3908,8 @@ export async function landedFixes(worktree: string, tipBefore: string): Promise<
   const fixes: { ref: string; sha: string; subject: string }[] = [];
   for (const record of out.split("\x1e")) {
     const [sha, subject, refs] = record.trim().split("\x1f");
-    if (!sha || !refs) continue;
+    // As the protocol takes them, or the board refuses the whole push: a full sha, a subject of 200 at most, 20 at most.
+    if (!sha || !/^[0-9a-f]{40}$/.test(sha) || !refs) continue;
     for (const raw of refs.split(",")) {
       const ref = raw.trim().toUpperCase();
       if (!ItemRef.safeParse(ref).success || fixes.some((f) => f.ref === ref && f.sha === sha)) continue;
