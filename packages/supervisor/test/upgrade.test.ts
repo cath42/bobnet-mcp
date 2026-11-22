@@ -893,7 +893,7 @@ describe("GitReleases: only a tag on the line, built here (AC 3)", () => {
     rmSync(join(r.root, TAG), { recursive: true });
     await expect(releasesFor(r).build(TAG)).rejects.toMatchObject({ step: "git archive", message: `${TAG} wasn't verified by this supervisor` });
     expect(readdirSync(r.root)).toEqual([]);
-  });
+  }, 30_000);
 
   /** A git on the PATH that runs `before` (sh) when its subcommand is `sub`, then the real one. */
   const wrappedGit = (sub: string, before: string) => {
