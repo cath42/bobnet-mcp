@@ -13,8 +13,9 @@ prototype (`proto.js` draws each piece the way `app.js` should; `proto.css` rule
 
 ## Data (Toad, consult c_360a0445, 2026-11-22)
 
-Toad records these in `architecture/bob51/build-brief.md`; if names differ there, Toad's file wins and
-the screens below stay the same.
+Ruled in `architecture/decisions/0013-requests-whole-notes-delivered.md` (§1-§3) and
+`architecture/bob51/build-brief.md` task 7; if names differ there, Toad's files win and the screens
+below stay the same.
 
 - `pending[i].preview` stays (≤400, cut with "…"). New optional **`ask`**:
   `{ text, cut, questions: [{ question, header, multi, options: [{ label, description }] }] }`.
@@ -120,6 +121,11 @@ Empty: as today, no section when nothing was answered today.
 ## 3. A note sent with Allow (AC3)
 
 Permission form (an approval):
+
+- **Only on a laptop whose report has `decided`** (even empty): its supervisor delivers the note.
+  A laptop whose report has no `decided` runs an older supervisor that drops a note with Allow: there
+  the form stays exactly as today (label `Note to Howard, sent with Deny (optional)`, today's foot
+  text, Allow sends no message). Toad, ADR 0013.
 
 - Label: **`Note to Howard (optional)`**. Placeholder: `e.g. fine, but use the pool's stop script next time`.
 - Foot text: **`Howard gets your decision, and your note as its next message. It can't be taken back.`**
