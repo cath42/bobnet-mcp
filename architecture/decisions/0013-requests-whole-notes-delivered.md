@@ -131,6 +131,20 @@ its orchestrator the note wasn't delivered.
 
 - The report grows by up to 128 KiB of asks and about 130 KiB of `decided` in the worst case. It must
   still fit `LIMITS.boardFrameBytes` (900 KiB) with every list at its maximum. A test pins that.
+- **A report always fits (ruling, consult c_23703570, build A).** With every list at its maximum *and*
+  every string at its schema maximum, the report is about 943 KB. That is over the limit, and the broker
+  would refuse it whole, so the laptop would drop off the dashboard. The supervisor therefore runs
+  `fitReport` (`supervisor.ts`, `REPORT_FIT_BYTES` = the limit less 1 KiB for the frame) on every
+  snapshot. Past the limit it frees space in this order:
+  1. It nulls asks in the reverse of the order they were filled: orchestrator tier newest first, then
+     human tier.
+  2. It nulls `decided` notes, oldest first.
+  3. It drops `decided` rows, oldest first.
+
+  It never drops a worker, a usage row or a pending row. A worst case with ordinary field lengths passes
+  untouched (broker test). The all-maximum case is tested against `fitReport`.
+- **`<who>` for a remote spawn (§3) is `remote_by@laptop`**, e.g. `Bob@mbp-1`, as the worker's system
+  prompt names its orchestrator.
 - A note now reaches an agent that was allowed to go on. An agent's next turn may start with Casper's
   words rather than the tool's result. That is what he asked for.
 - `via` is the first record of where a decision came from. `decided_by` stays who decided it.
