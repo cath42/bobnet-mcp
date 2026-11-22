@@ -206,3 +206,19 @@ The MCP tool `board_ask answer` returns the same `told` and `waiting`, so a reco
   (`supervisor.ts:2450`, `config.ts:158`). ubu1's helix entry evidently lacks it. That is Casper's
   config, not a code change. The supervisor's own `git fetch` runs outside the worker's network
   sandbox (`supervisor.ts:2810`), so adding `rebase: { onto: origin/main }` there should be enough.
+
+## Addendum (2026-11-22, build A, c87bd1a; review `reviews/bob111-review.md`)
+
+- **`lead` is in the notice JSON**, next to `asked_by`: an address or null. §2's pick needs the project's
+  lead at drain time, and that lead is the one as it stood at the answer, the same moment that fixes the text's
+  recipients. The field is additive, and `BoardAnswerEvent` is loose.
+- **The candidates in §2** are the `laptop_supervisors` rows whose registered `projects` include the
+  project. A supervisor registers `serviceProjects()`, its projects with `board: service`
+  (`supervisor.ts:670`, `:3328`), not every project it runs. Only a service board has questions, so the set
+  is right. But a laptop is a candidate only if its config puts the project on the service.
+- **`BoardMessage`, `BoardReply.messages` and `Tx.messages` are removed.** Every board message goes
+  through a notice row. A board message that isn't about an answer would add a notice `state`. It
+  wouldn't bring back `tx.messages`.
+- **The four results carry `supervisor: string | null`** beside `told` and `waiting` (`BoardTold`,
+  `protocol/src/board.ts`). The broker sets it, and the toast's "no supervisor runs <project>" reads it. A reply
+  without it (the board alone, or a failed drain) says neither clause.
