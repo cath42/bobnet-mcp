@@ -22,3 +22,27 @@ Verbatim:
 ## What it means for BOB-51
 The prototype is not built. Build A (protocol, supervisor, broker) stands and ships in rc.53: it carries the data.
 The dashboard half (task 7) waits for a use-case-driven redesign that starts from the Overview.
+
+## Second message (verbatim)
+
+> The status was a great idea, i have to admit i haven't used it much yet, but lets keep it, it should work, the roadmap
+> is weird its a good overview but often even for features marked done it shows 58 of 62 criterias i have no idea what
+> that means and why that would be important, it seems to indicate the feature is not done but with no explanation.
+> Feature in current version always show 'this project has no backlog configured' could we please include that also in
+> the prototype? Triage is fine, usage is a very important feature but I'm kind of thinking we should do a graph per
+> project rather than a filter and then show all of them on there instead so i can always keep an eye on any spikes -
+> also the graphs should allow me to toggle factoring the model/effort (sonnet low vs opus high has a very different
+> token spend) or is that already factored in? the sessions i never look at, this view isn't much useful, challenge me
+> if you think otherwise
+
+## As Mario reads it
+- Status: keep; it must work.
+- Roadmap: a good overview, but "58 of 62 criteria" on a Done feature reads as "not done" with no explanation. Either
+  say what's missing or don't show a count for a Done feature.
+- Features: always says "This project has no backlog configured" (app.js:353, the Backlog.md-era empty state). The
+  prototype must cover the Features view.
+- Triage: fine as is.
+- Usage: very important. One graph per project, all shown at once (no filter), to spot spikes. A toggle to weigh tokens
+  by model/effort. Today it is raw tokens; model and effort are only a label (app.js:145), not factored in.
+- Sessions: Casper never looks at it. Mario's take: drop it as a tab; what's useful in it (who ran, tokens per session,
+  review evidence) moves to the project page and the feature page.
