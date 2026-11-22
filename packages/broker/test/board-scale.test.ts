@@ -168,6 +168,7 @@ it("answers the status read across a Helix-sized board with a month of work, and
   // Each failure passed again later: settled, not stuck.
   expect(h.stuck.settled.some((x) => x.kind === "ci")).toBe(true);
   expect(JSON.stringify(result).length).toBeLessThan(1024 * 1024);
-  expect(ms).toBeLessThan(250);
+  // Well under 250 ms on a quiet laptop (the log line above); the land runs it beside every other suite, so room (BOB-117's rule).
+  expect(ms).toBeLessThan(1000);
   // Importing 40,000 events is the slow part, not the read.
 }, 60_000);
