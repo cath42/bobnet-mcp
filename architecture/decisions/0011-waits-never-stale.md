@@ -114,8 +114,8 @@ Casper: "we don't have stale items in that list, that's important" (BOB-34). Two
   - The Broker DO's alarm (`broker.ts:868`, hourly) calls `flagStale()` before it drains. A row is
     therefore flagged between 24 h and 25 h after its last change.
 - **The clock is injected.** The board store takes `now: () => number` in its constructor, defaulting
-  to `Date.now`. `waitsOf` and `flagStale` read it. `Tx.at` doesn't change. A test builds the store
-  with a clock it moves forward.
+  to `Date.now`. `waitsOf`, `flagStale` and `Tx.at` read it (review A, ruling 1). A test builds the
+  store with a clock it moves forward.
 
 ### 3. What a wait row carries (additive, on `WaitRecord`, `protocol/src/board.ts:512`)
 
@@ -179,6 +179,38 @@ Daisy decides how these read (`design/BOB-49/`). The overview's `waits_on_you` u
   Athletic's and Vitals'. poe, admin on `*`, reads them with `board_grants` and asks each PO.
 - **No "turn ended waiting" signal.** The supervisor can't tell a question in prose from a status
   line. A heuristic would put false rows on the very list this ADR keeps clean.
+
+### 6. Rulings from review A (2026-11-22, `architecture/bob49/review-A.md`)
+
+Build A landed as f983ff4. Where it went past or against the text above, this is what stands.
+
+1. **`Tx.at` reads the store's clock.** A `keep` at a moved time has to be stamped at that time, or
+   AC2 can't be tested. In production both are `Date.now`.
+2. **A stale flag's event is on the project's record** (`tbl projects`, op `flag_stale`, actor kind
+   `board`, `ref` the row's ref, change `stale → owner`). Its seq is the notice's `seq`. An event on
+   the row's own record would restart the row's day, so it can't go there. The flag shows in the
+   project's history and in the export, which is right: it was said to someone.
+3. **`release_tag` writes its event on the tag's push** (op `release_tag`, change `tag`).
+   `release_tags` is not an export table. A tag never pushed is stored with no event. **Added:** each
+   bug still open whose fix the tag released also gets an `items` event (op `release_tag`, change
+   `["release", null, tag]`). The PO was just told to check it live, so the row's day starts again
+   there; a stale flag an hour after the release notice would be noise.
+4. **Results:** `push` answers `fixed` and `fixes_ignored`; `release_tag` answers `released`. One
+   `fix_released` notice per tag, a line per open bug, `ref` the first.
+5. **A fix with no PO and no lead** still writes its notice, `to` empty. The project's supervisor
+   gets the JSON: `noticeSupervisor` picks the one supervisor that serves the project without `lead`
+   or `asked_by` (`broker.ts:518`).
+6. **`bug_fixes` and `release_tags` are board data, so they go in the export and the import.** Each
+   is an optional array on the exported project, read as empty from an older document, with refs in
+   place of pks (the item's ref, a push as `repo@sha`). `wait_flags` and `notices` stay out.
+7. **`flagStale`'s cleanup binds one value, whatever the number of rows.** A Durable Object binds 100
+   values per statement at most, so `NOT IN (?, ?, …)` over a project's waits must not grow with them
+   (`ref NOT IN (SELECT value FROM json_each(?))`).
+8. **`bug_fixes.item` is a composite key**, `(project, item) → items (project, pk)`, as every link
+   in one project is (`schema.ts:4-6`). `push` stays a plain key: `pushes` has no `(project, pk)`.
+9. **A stale bug whose fix has landed waits on its PO, not on Casper**, and its text says so:
+   `BOB-27 (bobnet) has waited on its PO for 26 h since its fix landed, unchanged since 2026-11-21
+   16:40Z. Check it and close it, or keep it (board_write keep, with why).`
 
 ## Consequences
 
