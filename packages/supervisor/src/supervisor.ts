@@ -3686,7 +3686,7 @@ export class Supervisor {
       asks.set(r.id, ask);
     }
 
-    return {
+    return fitReport({
       supervisor: {
         started_at: this.startedAt,
         concurrency: this.config.concurrency,
@@ -3712,7 +3712,7 @@ export class Supervisor {
       usage: [...days.values()].sort((a, b) => a.day.localeCompare(b.day)).slice(-500),
       cleanup: this.lastCleanup,
       board_outbox: this.boardOutbox(),
-    };
+    });
   }
 
   /** What Casper decided from the dashboard since `since`, newest first, at most 50 (ADR 0013 §2); his note withheld as `preview` is. */
@@ -3859,6 +3859,38 @@ function preview(r: RequestRow): string {
 
 /** All the asks on one report together, in UTF-8 bytes of JSON (ADR 0013 §1). */
 export const ASK_BUDGET = 128 * 1024;
+
+/** What a report may be, in UTF-8 bytes of its snapshot: the broker's limit, less room for the frame around it. */
+export const REPORT_FIT_BYTES = LIMITS.boardFrameBytes - 1024;
+
+/**
+ * A report the broker takes (ADR 0013, Consequences): one over its limit is refused whole, and the laptop
+ * drops off the dashboard. Past `max` it nulls the asks, the last one filled first (orchestrator tier from
+ * the newest, then human); then the decided notes, oldest first; then the decided rows, oldest first.
+ * Workers, usage and pending rows are never dropped.
+ */
+export function fitReport(snap: LaptopSnapshot, max = REPORT_FIT_BYTES): LaptopSnapshot {
+  const bytes = (v: unknown) => Buffer.byteLength(JSON.stringify(v));
+  let size = bytes(snap);
+  if (size <= max) return snap;
+  const pending = snap.pending.map((p) => ({ ...p }));
+  const order = [...pending.filter((p) => p.tier !== "human").reverse(), ...pending.filter((p) => p.tier === "human").reverse()];
+  for (const p of order) {
+    if (size <= max) break;
+    if (!p.ask) continue;
+    size -= bytes(p.ask) - bytes(null);
+    p.ask = null;
+  }
+  const decided = (snap.decided ?? []).map((d) => ({ ...d }));
+  for (let i = decided.length - 1; i >= 0 && size > max; i--) {
+    const d = decided[i]!;
+    if (d.note === null) continue;
+    size -= bytes(d.note) - bytes(null);
+    d.note = null;
+  }
+  while (decided.length && size > max) size -= bytes(decided.pop()) + 1;
+  return { ...snap, pending, ...(snap.decided ? { decided } : {}) };
+}
 
 /**
  * What a request asks, whole (ADR 0013 §1): an AskUserQuestion's questions, headers and options (not an

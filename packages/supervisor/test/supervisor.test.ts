@@ -3,12 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Envelope, LaptopSnapshot } from "@bobnet/protocol";
+import { type Envelope, LaptopSnapshot, LIMITS } from "@bobnet/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseSupervisorConfig, strandedState } from "../src/config.ts";
 import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
-import { ASK_BUDGET, landSummary, powerNote, savedOutputCheck, Supervisor, taskRef } from "../src/supervisor.ts";
+import { ASK_BUDGET, fitReport, landSummary, powerNote, savedOutputCheck, Supervisor, taskRef } from "../src/supervisor.ts";
 import { gitWriteDirs, WORKER_TOOLS } from "../src/worker.ts";
 import { FakeBroker, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 
@@ -1270,5 +1270,73 @@ describe("ADR 0013 §3: a note with allow or answer is the agent's next message 
     expect(broker.results[0]).toMatchObject({ ok: true, note_delivered: false });
     await pending;
     expect(store.auditLog().find((a) => a.action === "note:undelivered")).toMatchObject({ actor: "human", worker_id: w.id, detail: JSON.stringify({ request: id }) });
+  });
+});
+
+describe("ADR 0013, Consequences: a report always fits the broker's limit (BOB-51)", () => {
+  /** The worst case: every list at its maximum, and with `pad` every string at its maximum too. */
+  function worst(pad: boolean): LaptopSnapshot {
+    const s = (n: number, short: string) => (pad ? "s".repeat(n) : short);
+    const workers = Array.from({ length: 100 }, (_, i) => ({
+      id: `w_${i}`.padEnd(pad ? 40 : 10, "0"), name: s(40, "Luigi"), project: s(40, "bobnet"), role: s(40, "luigi"), state: "running" as const,
+      task: "x".repeat(200), model: s(60, "claude-opus-5-5"), effort: "high", checkpoint: "y".repeat(300), started_at: "2026-11-22T09:00:00.000Z", ended_at: null,
+      last_event_at: "2026-11-22T09:00:00.000Z", tokens: { input: 1e9, output: 1e9, cache_read: 1e9, cache_write: 1e9 }, session: s(60, "BOB-51 build A"),
+      task_ref: "BOB-51", task_refs: ["BOB-51"], calls: 400, context: 1_000_000, ctx: Array.from({ length: 400 }, () => 1_000_000),
+      remote_url: null, remote_from: null, remote_by: null,
+    }));
+    const usage = Array.from({ length: 500 }, (_, i) => ({
+      day: "2026-11-22", project: s(40, "bobnet"), role: `r${i}`.padEnd(pad ? 40 : 5, "r"), model: s(60, "claude-opus-5-5"), workers: 100,
+      tokens: { input: 1e12, output: 1e12, cache_read: 1e12, cache_write: 1e12 },
+    }));
+    const ask = { text: "t".repeat(Math.floor(ASK_BUDGET / 100) - 40), cut: true, questions: [] };
+    const pending = Array.from({ length: 100 }, (_, i) => ({
+      id: `r_${i}`, worker_id: `w_${i}`, name: s(40, "Luigi"), kind: "approval" as const, tool: s(80, "Bash"), tier: i % 2 ? ("human" as const) : ("orchestrator" as const),
+      created_at: "2026-11-22T09:00:00.000Z", preview: "v".repeat(400), ask,
+    }));
+    const decided = Array.from({ length: 50 }, (_, i) => ({
+      id: `r_d${i}`, worker_id: `w_${i}`, name: s(40, "Luigi"), project: s(40, "bobnet"), kind: "approval" as const, tool: s(80, "Bash"),
+      created_at: "2026-11-22T09:00:00.000Z", decided_at: "2026-11-22T09:01:00.000Z", decision: "allow" as const, preview: "v".repeat(400), note: "z".repeat(2000),
+    }));
+    return { supervisor: { started_at: "2026-11-22T00:00:00.000Z", concurrency: 3, active: 3, queued: 0 }, workers, pending, usage, cleanup: null, decided, board_outbox: { count: 0, oldest_at: null, code: null } };
+  }
+  const frame = (snap: LaptopSnapshot) => Buffer.byteLength(JSON.stringify({ t: "report", rid: "r_0123456789abcdef", as: "supervisor", snapshot: snap }));
+
+  it("leaves the worst case with ordinary field lengths whole", () => {
+    const snap = worst(false);
+    expect(frame(snap)).toBeGreaterThan(LIMITS.frameBytes);
+    expect(frame(snap)).toBeLessThan(LIMITS.boardFrameBytes);
+    expect(fitReport(snap)).toBe(snap);
+  });
+
+  it("brings the all-maximum case under the limit by nulling asks, the newest orchestrator rows first, and keeps every row", () => {
+    const snap = worst(true);
+    expect(frame(snap)).toBeGreaterThan(LIMITS.boardFrameBytes);
+    const fit = fitReport(snap);
+    expect(frame(fit)).toBeLessThan(LIMITS.boardFrameBytes);
+    expect(LaptopSnapshot.safeParse(fit).success).toBe(true);
+    expect([fit.workers.length, fit.usage.length, fit.pending.length, fit.decided!.length]).toEqual([100, 500, 100, 50]);
+    const nulled = fit.pending.filter((p) => p.ask === null);
+    expect(nulled.length).toBeGreaterThan(0);
+    expect(nulled.every((p) => p.tier === "orchestrator")).toBe(true);
+    expect(nulled[0]!.id).not.toBe("r_0");
+    expect(fit.pending.at(-2)!.ask).toBeNull();
+    expect(fit.decided!.every((d) => d.note !== null)).toBe(true);
+    // The snapshot it was given is unchanged.
+    expect(snap.pending.every((p) => p.ask !== null)).toBe(true);
+  });
+
+  it("then the decided notes, oldest first, then the decided rows, when the asks aren't enough", () => {
+    const snap = worst(true);
+    const all = frame(snap);
+    const noAsks = all - snap.pending.reduce((n, p) => n + Buffer.byteLength(JSON.stringify(p.ask)) - 4, 0);
+    const notes = fitReport(snap, noAsks - 10_000);
+    expect(notes.pending.every((p) => p.ask === null)).toBe(true);
+    expect(notes.decided!.at(-1)!.note).toBeNull();
+    expect(notes.decided![0]!.note).not.toBeNull();
+    expect(notes.decided).toHaveLength(50);
+    const rows = fitReport(snap, noAsks - 120_000);
+    expect(rows.decided!.length).toBeLessThan(50);
+    expect(rows.decided![0]!.id).toBe("r_d0");
+    expect(Buffer.byteLength(JSON.stringify(rows))).toBeLessThanOrEqual(noAsks - 120_000);
   });
 });
