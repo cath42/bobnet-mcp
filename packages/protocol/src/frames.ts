@@ -162,6 +162,47 @@ export const CleanupReport = z.object({
 });
 export type CleanupReport = z.infer<typeof CleanupReport>;
 
+/**
+ * A pending request's whole ask (ADR 0013 §1): what `preview` cuts, each field clipped by its supervisor
+ * to its maximum by whole code points (a clipped field ends in "…", and `cut` is set). `questions` is an
+ * AskUserQuestion's, else []; an option's own `preview` isn't sent. Null when withheld (a field looks like
+ * a credential) or past the report's budget.
+ */
+export const PendingAsk = z.object({
+  text: z.string().max(8000),
+  cut: z.boolean(),
+  questions: z
+    .array(
+      z.object({
+        question: z.string().max(4000),
+        header: z.string().max(40),
+        multi: z.boolean(),
+        options: z.array(z.object({ label: z.string().max(200), description: z.string().max(1000) })).max(4),
+      }),
+    )
+    .max(4),
+});
+export type PendingAsk = z.infer<typeof PendingAsk>;
+
+/**
+ * A request Casper settled from the dashboard in the laptop's last 24 h (ADR 0013 §2). `note` is his
+ * words as he sent them, withheld as `preview` is.
+ */
+export const DecidedRequest = z.object({
+  id: z.string().max(40),
+  worker_id: z.string().max(40),
+  name: z.string().max(40),
+  project: z.string().max(40),
+  kind: z.enum(["approval", "question"]),
+  tool: z.string().max(80),
+  created_at: z.string().max(40),
+  decided_at: z.string().max(40),
+  decision: z.enum(["allow", "deny"]),
+  preview: z.string().max(400),
+  note: z.string().max(2000).nullable(),
+});
+export type DecidedRequest = z.infer<typeof DecidedRequest>;
+
 export const LaptopSnapshot = z.object({
   supervisor: z.object({
     started_at: z.string(),
@@ -183,9 +224,16 @@ export const LaptopSnapshot = z.object({
         created_at: z.string(),
         /** What is being asked, shortened; redacted if it looks like it holds a credential. */
         preview: z.string().max(400),
+        /** The whole ask (ADR 0013 §1); absent from a supervisor before 0013, null when withheld or over budget. */
+        ask: PendingAsk.nullable().optional(),
       }),
     )
     .max(100),
+  /**
+   * Requests Casper decided from the dashboard, last 24 h, newest first (ADR 0013 §2). `[]` when none;
+   * absent from a supervisor before 0013, which also means it drops a note sent with Allow.
+   */
+  decided: z.array(DecidedRequest).max(50).optional(),
   /** Daily totals per project role, last 14 days. */
   usage: z
     .array(
@@ -432,6 +480,8 @@ export const ActionResultFrame = z.object({
   id: z.string().max(64),
   ok: z.boolean(),
   message: z.string().max(500),
+  /** Whether a note sent with allow reached the agent (ADR 0013 §3); absent from an older supervisor. */
+  note_delivered: z.boolean().optional(),
 });
 
 export const AckFrame = z.object({
@@ -517,7 +567,7 @@ export type ServerFrame =
   | { t: "board"; laptop: string; at: string; board: ProjectBoard }
   | { t: "update"; item: UpdateItem }
   | { t: "traffic"; item: TrafficItem }
-  | { t: "action_result"; id: string; laptop: string; ok: boolean; message: string }
+  | { t: "action_result"; id: string; laptop: string; ok: boolean; message: string; note_delivered?: boolean }
   /** A board write committed: refetch what shows these records. */
   | { t: "board_changed"; project: string; seq: number; refs: string[] }
   // To a laptop's supervisor. `token` is the owner's Access JWT, for the

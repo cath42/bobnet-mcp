@@ -50,6 +50,8 @@ export const RemoteRequestV2 = z.discriminatedUnion("op", [
   z.object({ v, op: z.literal("tail"), id, n: z.number().int().positive().max(500) }).strict(),
   z.object({ v, op: z.literal("summary"), id }).strict(),
   z.object({ v, op: z.literal("request"), id }).strict(),
+  // Its reply may carry `note_delivered` (ADR 0013 §3): whether a `message` with allow or answer reached
+  // the agent. An older target replies without it, and drops the note.
   z
     .object({
       v,

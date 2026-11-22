@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { addressKey, CleanupReport, CLIENT_FRAME_TYPES, ClientFrame, ErrorCode, findSecret, LaptopSnapshot, redactSecrets, parseRecipient, PROTOCOL_VERSION, WorkerSnapshot } from "../src/index.ts";
+import { z } from "zod";
+import { ActionResultFrame, addressKey, CleanupReport, CLIENT_FRAME_TYPES, ClientFrame, ErrorCode, findSecret, LaptopSnapshot, redactSecrets, parseRecipient, PROTOCOL_VERSION, WorkerSnapshot } from "../src/index.ts";
 import { redactSecrets as redactSecretsBb51add } from "./fixtures/secrets-bb51add.ts";
 
 describe("parseRecipient", () => {
@@ -590,5 +591,62 @@ describe("ADR 0012: the board outbox, internal and the audit frame (BOB-48)", ()
 
   it("has an internal error code", () => {
     expect(ErrorCode.parse("internal")).toBe("internal");
+  });
+});
+
+describe("ADR 0013: the whole ask, decided and note_delivered (BOB-51)", () => {
+  const snap = { supervisor: { started_at: "x", concurrency: 1, active: 0, queued: 0 }, workers: [], usage: [] };
+  const row = { id: "r1", worker_id: "w1", name: "luigi", kind: "approval", tool: "Bash", tier: "human", created_at: "t", preview: "ls" };
+  const ask = {
+    text: "Which?",
+    cut: false,
+    questions: [{ question: "Which?", header: "Pick", multi: true, options: [{ label: "A", description: "the first" }] }],
+  };
+  const decided = {
+    id: "r0", worker_id: "w1", name: "luigi", project: "bobnet", kind: "approval", tool: "Bash",
+    created_at: "t0", decided_at: "t1", decision: "allow", preview: "ls", note: "go on",
+  };
+
+  it("reads a snapshot with and without ask and decided", () => {
+    const old = LaptopSnapshot.parse({ ...snap, pending: [row] });
+    expect(old.pending[0]).not.toHaveProperty("ask");
+    expect(old).not.toHaveProperty("decided");
+    const got = LaptopSnapshot.parse({ ...snap, pending: [{ ...row, ask }, { ...row, id: "r2", ask: null }], decided: [decided] });
+    expect(got.pending[0]!.ask).toEqual(ask);
+    expect(got.pending[1]!.ask).toBeNull();
+    expect(got.decided).toEqual([decided]);
+    expect(LaptopSnapshot.parse({ ...snap, pending: [], decided: [] }).decided).toEqual([]);
+  });
+
+  it("refuses an ask or a decided row over its maxima", () => {
+    const q = ask.questions[0]!;
+    const bad = [
+      { ...ask, text: "x".repeat(8001) },
+      { ...ask, questions: [{ ...q, question: "x".repeat(4001) }] },
+      { ...ask, questions: [{ ...q, header: "x".repeat(41) }] },
+      { ...ask, questions: [{ ...q, options: [{ label: "x".repeat(201), description: "" }] }] },
+      { ...ask, questions: [{ ...q, options: [{ label: "A", description: "x".repeat(1001) }] }] },
+      { ...ask, questions: [{ ...q, options: Array(5).fill(q.options[0]) }] },
+      { ...ask, questions: Array(5).fill(q) },
+    ];
+    for (const a of bad) expect(LaptopSnapshot.safeParse({ ...snap, pending: [{ ...row, ask: a }] }).success).toBe(false);
+    expect(LaptopSnapshot.safeParse({ ...snap, pending: [{ ...row, ask: { ...ask, text: "x".repeat(8000) } }] }).success).toBe(true);
+    expect(LaptopSnapshot.safeParse({ ...snap, pending: [], decided: [{ ...decided, note: "x".repeat(2001) }] }).success).toBe(false);
+    expect(LaptopSnapshot.safeParse({ ...snap, pending: [], decided: [{ ...decided, decision: "answer" }] }).success).toBe(false);
+    expect(LaptopSnapshot.safeParse({ ...snap, pending: [], decided: Array(51).fill(decided) }).success).toBe(false);
+  });
+
+  it("an older broker's schema drops them and still takes the snapshot", () => {
+    const older = LaptopSnapshot.omit({ decided: true }).extend({ pending: z.array(LaptopSnapshot.shape.pending.element.omit({ ask: true })) });
+    const got = older.parse({ ...snap, pending: [{ ...row, ask }], decided: [decided] });
+    expect(got).not.toHaveProperty("decided");
+    expect(got.pending[0]).not.toHaveProperty("ask");
+  });
+
+  it("reads action_result with and without note_delivered", () => {
+    const r = { t: "action_result", as: "supervisor", id: "a1", ok: true, message: "allowed" };
+    expect(ActionResultFrame.parse(r)).not.toHaveProperty("note_delivered");
+    expect(ActionResultFrame.parse({ ...r, note_delivered: false }).note_delivered).toBe(false);
+    expect(ClientFrame.parse({ ...r, note_delivered: true })).toMatchObject({ note_delivered: true });
   });
 });
