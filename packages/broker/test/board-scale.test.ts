@@ -102,8 +102,8 @@ it("reads a Helix-sized board fast: lists carry counts, a feature loads its task
     { items: 0, bugs: 0, oldest: null },
   ]);
   expect(await listAll({ op: "list", project: "helix", of: "backlog" })).toEqual({ items: 103, pages: 2 });
-  // Generous for a CI machine; on mbp-1 each read takes a few ms (the handoff says what was measured).
-  for (const [name, t] of Object.entries(ms)) expect(t, name).toBeLessThan(250);
+  // On mbp-1 each read takes a few ms (the handoff says what was measured); the land runs it beside every other suite, so room (BOB-117's rule; 278 ms seen).
+  for (const [name, t] of Object.entries(ms)) expect(t, name).toBeLessThan(1000);
 });
 
 /** A month of work on the Helix-sized board (ADR 0005 §2): 300 sessions, 1,500 runs, 3,000 CI runs, 20,000 events. */
