@@ -177,6 +177,12 @@ const Project = z.object({
   board: z.literal("service").optional(),
   /** Roles any worker in the project may consult mid-task. */
   consult: z.array(z.string()).default([]),
+  /**
+   * The steps of this project's disk cleanup (BOB-123), from a fixed set: a name, or a one-key map
+   * for a step's own settings (`ignored: [globs]`, `paths: [dirs]`, `worktrees: { line }`). Nothing
+   * runs that isn't listed. Read by parseCleanupSteps, which names an unknown step.
+   */
+  cleanup: z.array(z.unknown()).default([]),
   roles: z.record(z.string(), Role),
 }).refine((p) => !(p.board && p.backlog), { message: "a project's board is the service or a backlog, not both", path: ["board"] });
 
@@ -227,10 +233,33 @@ const SupervisorFile = z.object({
     .record(
       z.string().refine((a) => a.split("@").length === 2 && a.split("@").every(isValidSegment), "must be name@laptop"),
       z
-        .object({ spawn: z.record(z.string(), z.array(z.string()).min(1)).optional(), upgrade: z.boolean().default(false) })
-        .refine((e) => e.spawn !== undefined || e.upgrade, "must grant spawn, upgrade: true, or both"),
+        .object({ spawn: z.record(z.string(), z.array(z.string()).min(1)).optional(), upgrade: z.boolean().default(false), cleanup: z.boolean().default(false) })
+        .refine((e) => e.spawn !== undefined || e.upgrade || e.cleanup, "must grant spawn, upgrade: true, cleanup: true, or more than one"),
     )
     .default({}),
+  /**
+   * When this laptop's disk cleanup runs (BOB-123): daily at `schedule` (HH:MM, this laptop's time),
+   * and when free space falls below `floor_gib`, at most once per `floor_min_interval` (30m, 6h, 1d).
+   * What runs is each project's `cleanup` list. Without this section, it runs only when asked.
+   */
+  cleanup: z
+    .object({
+      schedule: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "must be HH:MM").optional(),
+      floor_gib: z.number().positive().optional(),
+      floor_min_interval: z.string().regex(/^\d+[mhd]$/, "must be a number and m, h or d, e.g. 6h").default("6h"),
+      /** A step running longer is killed, its whole process group with it. */
+      step_timeout_minutes: z.number().positive().default(30),
+      /** How long a run waits for the run slot before it is "skipped: busy". */
+      slot_wait_minutes: z.number().positive().default(10),
+      /**
+       * The supervisor's own worker logs (state_dir/logs), cleared in every run unless false: a log older
+       * than keep_days goes, then the oldest until they take keep_mb at most. A live worker's never.
+       */
+      logs: z
+        .union([z.literal(false), z.object({ keep_days: z.number().positive().default(14), keep_mb: z.number().positive().default(1024) })])
+        .default({ keep_days: 14, keep_mb: 1024 }),
+    })
+    .optional(),
   /**
    * Where this supervisor's releases come from when it upgrades itself (ADR 0008 §3): tags on
    * `origin/<line>` of the local clone `repo`, installed under `root`. Without it, no upgrade.
@@ -312,8 +341,32 @@ export interface ProjectConfig {
   backlog: { dir: string; ref: string } | undefined;
   board: "service" | undefined;
   consult: string[];
+  /** Its disk cleanup's steps (BOB-123), in the order listed; empty, none runs. */
+  cleanup: CleanupStepConfig[];
   roles: Map<string, RoleConfig>;
 }
+
+/** One step of a project's cleanup (BOB-123). Globs and paths are relative to each of its worktrees. */
+export type CleanupStepConfig =
+  | { step: "worktrees"; line: string }
+  | { step: "ignored"; globs: string[] }
+  | { step: "paths"; paths: string[] }
+  | { step: "docker"; volumes: boolean }
+  | { step: "runner"; dirs: string[] }
+  | { step: "playwright" | "pnpm-store" | "old-pnpm-stores" };
+
+export interface CleanupConfig {
+  schedule: string | undefined;
+  floorBytes: number | undefined;
+  floorMinIntervalMs: number;
+  stepTimeoutMs: number;
+  slotWaitMs: number;
+  /** The supervisor's own logs: kept this long and this big at most; null leaves them alone. */
+  logs: { keepMs: number; keepBytes: number } | null;
+}
+
+/** What the logs keep when there is no `cleanup` section to say. */
+export const DEFAULT_LOG_KEEP = { keepMs: 14 * 86_400_000, keepBytes: 1024 * 2 ** 20 };
 
 export interface SupervisorConfig {
   orchestrator: string;
@@ -334,6 +387,10 @@ export interface SupervisorConfig {
   remote: Map<string, Map<string, Set<string>>>;
   /** The remote requesters, by lowercase address, that may upgrade this supervisor (ADR 0008 §2). */
   remoteUpgrade: Set<string>;
+  /** The remote requesters, by lowercase address, that may run a cleanup here (BOB-123). */
+  remoteCleanup: Set<string>;
+  /** When the cleanup runs by itself; undefined, only when asked. */
+  cleanup: CleanupConfig | undefined;
   /** Where upgrades come from and go (§3); undefined without an `upgrade` section, and then none runs. */
   upgrade: UpgradeConfig | undefined;
   /** The releases' folder (§1): `upgrade.root`, else ~/.local/share/bobnet. Workers never touch it. */
@@ -475,15 +532,18 @@ export function parseSupervisorConfig(
       backlog: p.backlog ? { dir: p.backlog.dir, ref: p.backlog.ref ?? (p.rebase?.onto ?? "origin/main") } : undefined,
       board: p.board,
       consult: p.consult,
+      cleanup: parseCleanupSteps(pKey, p.cleanup, p.land?.target ?? p.rebase?.onto ?? "origin/main"),
       roles,
     });
   }
 
   const remote = new Map<string, Map<string, Set<string>>>();
   const remoteUpgrade = new Set<string>();
+  const remoteCleanup = new Set<string>();
   for (const [address, r] of Object.entries(file.remote)) {
     const may = new Map<string, Set<string>>();
     if (r.upgrade) remoteUpgrade.add(address.toLowerCase());
+    if (r.cleanup) remoteCleanup.add(address.toLowerCase());
     for (const [pKey, roles] of Object.entries(r.spawn ?? {})) {
       const p = projects.get(pKey);
       if (!p) throw new Error(`remote.${address}: no project ${pKey}`);
@@ -510,11 +570,125 @@ export function parseSupervisorConfig(
     sandboxWrite: file.sandbox_write,
     remote,
     remoteUpgrade,
+    remoteCleanup,
+    cleanup: file.cleanup
+      ? {
+          schedule: file.cleanup.schedule,
+          floorBytes: file.cleanup.floor_gib === undefined ? undefined : Math.round(file.cleanup.floor_gib * 2 ** 30),
+          floorMinIntervalMs: durationMs(file.cleanup.floor_min_interval),
+          stepTimeoutMs: file.cleanup.step_timeout_minutes * 60_000,
+          slotWaitMs: file.cleanup.slot_wait_minutes * 60_000,
+          logs: file.cleanup.logs === false ? null : { keepMs: file.cleanup.logs.keep_days * 86_400_000, keepBytes: Math.round(file.cleanup.logs.keep_mb * 2 ** 20) },
+        }
+      : undefined,
     upgrade: file.upgrade ? { repo: file.upgrade.repo, root: file.upgrade.root ?? DEFAULT_RELEASE_ROOT, line: file.upgrade.line } : undefined,
     releaseRoot: file.upgrade?.root ?? DEFAULT_RELEASE_ROOT,
     boardBackup: file.board_backup,
     projects,
   };
+}
+
+/** "30m", "6h", "1d" in milliseconds. */
+const durationMs = (d: string) => Number(d.slice(0, -1)) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[d.slice(-1) as "m" | "h" | "d"];
+
+/** The cleanup steps there are (BOB-123): nothing else may be listed. */
+export const CLEANUP_STEP_NAMES = ["worktrees", "ignored", "paths", "docker", "playwright", "pnpm-store", "old-pnpm-stores", "runner"] as const;
+
+/** What `ignored` clears unless it lists its own globs. */
+export const DEFAULT_IGNORED = [".turbo", "dist", "test-results", ".wrangler"];
+
+/** A path inside the repository: relative, without "..". */
+const repoPath = (p: unknown) => typeof p === "string" && p.length > 0 && !isAbsolute(p) && !p.split("/").includes("..") && p !== ".";
+
+/**
+ * A project's `cleanup` list as its steps (BOB-123), refusing what isn't one of the fixed set, a step
+ * listed twice, or a path outside the repository, each named. `line` is the worktrees step's default.
+ */
+export function parseCleanupSteps(project: string, raw: unknown[], line: string): CleanupStepConfig[] {
+  const where = `${project}.cleanup`;
+  const steps: CleanupStepConfig[] = [];
+  const known = (name: string) => (CLEANUP_STEP_NAMES as readonly string[]).includes(name);
+  for (const entry of raw) {
+    let name: string;
+    let value: unknown;
+    if (typeof entry === "string") [name, value] = [entry, undefined];
+    else if (entry && typeof entry === "object" && !Array.isArray(entry) && Object.keys(entry).length === 1) [name, value] = Object.entries(entry)[0]!;
+    else throw new Error(`${where}: each step is a name or a one-key map, not ${JSON.stringify(entry)}`);
+    if (!known(name)) throw new Error(`${where}: unknown step "${name}"; the steps are ${CLEANUP_STEP_NAMES.join(", ")}`);
+    if (steps.some((s) => s.step === name)) throw new Error(`${where}: step "${name}" is listed twice`);
+    const list = (what: string): string[] => {
+      if (!Array.isArray(value) || value.length === 0) throw new Error(`${where}.${name}: must list ${what}`);
+      for (const p of value) if (!repoPath(p)) throw new Error(`${where}.${name}: ${JSON.stringify(p)} must be a path inside the repository`);
+      return value as string[];
+    };
+    switch (name) {
+      case "worktrees": {
+        const l = value === undefined ? line : (value as { line?: unknown } | null)?.line;
+        if (typeof l !== "string" || !/^[\w.-]+\/[\w./-]+$/.test(l) || (value !== undefined && Object.keys(value as object).some((k) => k !== "line"))) {
+          throw new Error(`${where}.worktrees: takes only line, a remote/branch such as origin/main`);
+        }
+        steps.push({ step: "worktrees", line: l });
+        break;
+      }
+      case "ignored":
+        steps.push({ step: "ignored", globs: value === undefined ? DEFAULT_IGNORED : list("globs") });
+        break;
+      case "paths":
+        steps.push({ step: "paths", paths: list("paths") });
+        break;
+      case "docker": {
+        const v = value === undefined ? {} : value;
+        if (!v || typeof v !== "object" || Array.isArray(v) || Object.entries(v).some(([k, x]) => k !== "volumes" || typeof x !== "boolean")) throw new Error(`${where}.docker: takes only volumes: true or false`);
+        steps.push({ step: "docker", volumes: (v as { volumes?: boolean }).volumes ?? false });
+        break;
+      }
+      case "runner": {
+        if (!Array.isArray(value) || value.length === 0) throw new Error(`${where}.runner: must list the actions-runner folders`);
+        const dirs = value.map((d) => (typeof d === "string" ? expand(d) : ""));
+        for (const d of dirs) if (!isAbsolute(d)) throw new Error(`${where}.runner: ${JSON.stringify(value[dirs.indexOf(d)])} must be an absolute path (or start with ~/)`);
+        steps.push({ step: "runner", dirs });
+        break;
+      }
+      default:
+        if (value !== undefined) throw new Error(`${where}.${name}: takes no settings`);
+        steps.push({ step: name as "playwright" | "pnpm-store" | "old-pnpm-stores" });
+    }
+  }
+  return steps;
+}
+
+/**
+ * Refuses a project's cleanup `paths` git doesn't ignore in its repository (BOB-123): a tracked or
+ * unignored folder is never cleared, and there is no exception list; it goes in .gitignore.
+ * `ignored` answers whether git ignores a path in a repository.
+ */
+export function checkCleanupPaths(config: Pick<SupervisorConfig, "projects">, ignored: (repo: string, path: string) => boolean): void {
+  for (const p of config.projects.values()) {
+    for (const s of p.cleanup) {
+      if (s.step !== "paths") continue;
+      for (const path of s.paths) {
+        if (!ignored(p.path, path)) throw new Error(`${p.key}.cleanup.paths: ${path} isn't ignored by git in ${p.path}; add it to .gitignore to clear it`);
+      }
+    }
+  }
+}
+
+/** Whether git ignores `path` in `repo`, as a file or a folder; one that is, or holds, a tracked file never is. */
+export function gitIgnores(repo: string, path: string): boolean {
+  try {
+    if (execFileSync("git", ["-C", repo, "ls-files", "--", path], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()) return false;
+  } catch {
+    return false;
+  }
+  for (const p of [path, `${path.replace(/\/+$/, "")}/`]) {
+    try {
+      execFileSync("git", ["-C", repo, "check-ignore", "-q", "--", p], { stdio: "ignore" });
+      return true;
+    } catch {
+      // 1: not ignored; anything else (not a repository) is no better
+    }
+  }
+  return false;
 }
 
 function pickMcp(where: string, names: string[], read: () => Record<string, unknown>): Record<string, unknown> {

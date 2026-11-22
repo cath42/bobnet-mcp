@@ -280,7 +280,8 @@ describe("dashboard", () => {
     const live = await owner.next((f) => f.t === "report");
     expect(live).toMatchObject({ laptop: "mbp-1", snapshot: { workers: [{ id: "w_1" }] } });
     const d = await owner.request({ t: "dashboard" });
-    expect(d.laptops).toEqual([{ laptop: "mbp-1", at: expect.any(String), snapshot }]);
+    // An older supervisor's snapshot, without a cleanup, reads as none yet (BOB-123 AC 6).
+    expect(d.laptops).toEqual([{ laptop: "mbp-1", at: expect.any(String), snapshot: { ...snapshot, cleanup: null } }]);
     // The broker's clock, which the dashboard judges a report's age by (Toad, BOB-26 minor 6).
     expect(Math.abs(Date.parse(d.now!) - Date.now())).toBeLessThan(60_000);
   });
@@ -328,6 +329,25 @@ describe("dashboard", () => {
   it("rejects a malformed snapshot", async () => {
     const supervisor = await agent(1, "supervisor");
     expect(await errorCode(supervisor.request({ t: "report", as: "supervisor", snapshot: { ...snapshot, supervisor: null } as never }))).toBe("bad_frame");
+  });
+
+  it("keeps a laptop's last cleanup next to its snapshot, through reports without one (BOB-123 AC 6)", async () => {
+    const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
+    const supervisor = await agent(1, "supervisor");
+    const cleanup = {
+      at: "2026-11-21T22:00:00.000Z", trigger: "schedule", skipped: null, freed_bytes: 2_000_000_000,
+      projects: [{ project: "helix", freed_bytes: null, steps: [{ step: "docker", ok: false, error: "timed out after 30 min", skipped: null, acted: 0, freed_bytes: null }] }],
+      steps: [{ step: "logs", ok: true, error: null, skipped: null, acted: 4, freed_bytes: 300_000_000 }],
+    };
+    await supervisor.request({ t: "report", as: "supervisor", snapshot: { ...snapshot, cleanup } });
+    expect((await owner.request({ t: "dashboard" })).laptops[0]!.snapshot.cleanup).toEqual(cleanup);
+    // A report without one (an older supervisor's, or a new db) keeps it; the live frame carries it too.
+    await supervisor.request({ t: "report", as: "supervisor", snapshot });
+    expect(await owner.next((f) => f.t === "report" && f.snapshot.cleanup !== null)).toMatchObject({ snapshot: { cleanup } });
+    expect((await owner.request({ t: "dashboard" })).laptops[0]!.snapshot.cleanup).toEqual(cleanup);
+    const later = { ...cleanup, at: "2026-11-22T22:00:00.000Z", skipped: "busy", freed_bytes: null, projects: [], steps: [] };
+    await supervisor.request({ t: "report", as: "supervisor", snapshot: { ...snapshot, cleanup: later } });
+    expect((await owner.request({ t: "dashboard" })).laptops[0]!.snapshot.cleanup).toEqual(later);
   });
 
   it("feeds session updates, checked for credentials, to the owner", async () => {
@@ -396,7 +416,8 @@ describe("dashboard actions", () => {
 
     const owner = await Client.open(await ownerToken(), { origin: ORIGIN });
     const d = await owner.request({ t: "dashboard" });
-    expect(d.laptops).toEqual([{ laptop: "mbp-1", at: expect.any(String), snapshot }]);
+    // The laptop's last cleanup, kept from an earlier test's report, aside (BOB-123).
+    expect(d.laptops).toEqual([{ laptop: "mbp-1", at: expect.any(String), snapshot: expect.objectContaining(snapshot) }]);
     const { id } = await owner.request({ t: "action", laptop: "mbp-1", action: { kind: "stop", worker: "w_1" } });
     expect(await sup.next((f) => f.t === "action")).toMatchObject({ id, to: "supervisor@mbp-1" });
 

@@ -699,6 +699,12 @@ export class Store {
     );
   }
 
+  /** The detail of the newest audit row of `action`, or null for none. */
+  lastAudit<T>(action: string): T | null {
+    const row = this.one<{ detail: string }>("SELECT detail FROM audit WHERE action = ? ORDER BY seq DESC LIMIT 1", action);
+    return row ? (JSON.parse(row.detail) as T) : null;
+  }
+
   auditLog(limit = 100): Array<{ ts: string; actor: string; action: string; worker_id: string | null; detail: string }> {
     return this.all("SELECT ts, actor, action, worker_id, detail FROM audit ORDER BY seq DESC LIMIT ?", limit);
   }

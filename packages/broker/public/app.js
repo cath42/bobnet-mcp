@@ -147,6 +147,24 @@ const fmtModel = (w) => `${w.model ?? "default"} · ${w.effort ?? "default"}`;
 const headlineOf = (task) => (task.match(/^Bob(?:'s brief)?:\s*([^.(]+)/)?.[1] ?? "").trim() || null;
 const chip = (id, onClick) => (onClick ? h("button", { type: "button", class: "chip", onclick: (e) => (e.stopPropagation(), onClick()) }, id) : h("span", { class: "chip", style: "display:inline-block;border:1px solid var(--accent)" }, id));
 const ago = (iso) => h("span", { "data-ago": iso }, since(iso));
+/** Bytes on disk, as df reads them: decimal units. */
+const fmtBytes = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${Math.round(n / 1e6)} MB` : n >= 1e3 ? `${Math.round(n / 1e3)} KB` : `${Math.max(0, n)} B`);
+/** What a cleanup freed: the change in free space, or unknown when it couldn't be read (never 0 for that). */
+const freedText = (n) => (n === null || n === undefined ? "unknown" : fmtBytes(n));
+const CLEANUP_TRIGGER = { schedule: "scheduled", floor: "disk low", demand: "asked for" };
+
+/** A laptop's last cleanup on its row (BOB-123): when, what started it, what it freed per project (unknown said so), each failed or skipped step. */
+function cleanupLine(c) {
+  if (!c) return h("div", { class: "cleanup" }, "No cleanup yet");
+  const why = CLEANUP_TRIGGER[c.trigger] ?? c.trigger;
+  if (c.skipped) return h("div", { class: "cleanup", dataset: { skipped: "" } }, h("span", null, h("b", null, "Cleanup skipped"), ` · ${c.skipped === "busy" ? "the run slot was busy" : c.skipped} · ${why} · `, ago(c.at), " ago · it tries again at the next check"));
+  const parts = [...c.projects.map((p) => ({ name: p.project, freed: p.freed_bytes, steps: p.steps })), ...(c.steps?.length ? [{ name: "supervisor logs", freed: c.steps.reduce((a, s) => (a === null || s.freed_bytes === null ? null : a + s.freed_bytes), 0), steps: c.steps }] : [])];
+  return h("div", { class: "cleanup" },
+    h("span", null, h("b", null, "Last cleanup"), " ", ago(c.at), ` ago · ${why} · freed `, h("span", { class: "num" }, freedText(c.freed_bytes))),
+    parts.length ? h("ul", null, parts.map((p) => h("li", null,
+      h("span", null, p.name, " ", h("span", { class: "num" }, freedText(p.freed))),
+      p.steps.filter((s) => !s.ok || s.skipped).map((s) => h("span", { class: s.ok ? "skip" : "fail" }, s.ok ? `${s.step} skipped: ${s.skipped}` : `${s.step} failed: ${s.error ?? "no reason given"}`))))) : null);
+}
 
 /**
  * The task number an update is about: of the backlog ids in it (LAND-41, LAND-41.2),
@@ -2729,7 +2747,8 @@ function viewSessions() {
       return h("div", { class: "card" },
         h("div", { class: "top" }, h("span", { class: "name" }, l.laptop), h("span", { class: "badge", dataset: { state: stale ? "stopped" : "running" } }, stale ? "no recent report" : "supervisor up")),
         h("div", { class: "meta" }, h("span", null, `${sup.active} of ${sup.concurrency} slots busy`), h("span", null, `${sup.queued} queued`), h("span", null, "up ", ago(sup.started_at)), h("span", null, "reported ", ago(l.at), " ago"),
-          stale && l.snapshot.pending.length ? h("span", null, `${l.snapshot.pending.length} ${l.snapshot.pending.length === 1 ? "request" : "requests"} from its last report not offered`) : null));
+          stale && l.snapshot.pending.length ? h("span", null, `${l.snapshot.pending.length} ${l.snapshot.pending.length === 1 ? "request" : "requests"} from its last report not offered`) : null),
+        cleanupLine(l.snapshot.cleanup ?? null));
     }))),
     h("section", null, h("h2", null, "Agents ", h("span", { class: "count", id: "agents-count" }, `${peers.filter((p) => p.online).length} online of ${peers.length}`)),
       h("div", { class: "table-wrap" }, h("table", { id: "agents" },

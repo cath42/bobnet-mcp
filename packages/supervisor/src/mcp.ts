@@ -51,6 +51,7 @@ const AnswerArgs = z.object({
 });
 const RequestId = z.object({ id: z.string(), laptop: Laptop });
 const UpgradeArgs = z.object({ laptop: z.string().min(1), tag: z.string().regex(UPGRADE_TAG, "must be a release tag, v<x.y.z> or v<x.y.z>-rc.<n>"), restart: z.enum(UPGRADE_RESTARTS).optional() });
+const CleanupArgs = z.object({ laptop: Laptop, dry_run: z.boolean().optional(), project: z.string().min(1).max(40).optional() });
 const AuditArgs = z.object({ limit: z.number().int().positive().max(500).default(50) });
 
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
@@ -210,10 +211,20 @@ export const TOOLS = [
       ["laptop", "tag"],
     ),
   },
+  {
+    name: "cleanup",
+    description:
+      "Run a laptop's disk cleanup now (BOB-123): each project's steps from supervisor.yaml (merged, clean, unused worktrees; ignored build output; docker, Playwright and pnpm store prunes). It never removes a tracked file, a live worker's or a standing role's worktree. A dry run lists what it would remove, with sizes, and changes nothing. On this laptop it runs for real unless dry_run, holding the run slot, and answers its outcome; on another it is a dry run unless dry_run: false (under that laptop's cleanup grant), and a real one answers that it started.",
+    inputSchema: obj({
+      laptop: { type: "string", description: "The laptop's BobNet id (e.g. ubu1); unset, this one." },
+      dry_run: { type: "boolean", description: "Plan only. Default: false here, true on another laptop." },
+      project: { type: "string", description: "One project's steps only." },
+    }),
+  },
 ] as const;
 
 /** Tools that are the laptop orchestrator's own, never a lead worker's (lead-tools.ts leaves them out). */
-export const ORCHESTRATOR_ONLY: ReadonlySet<string> = new Set(["upgrade_supervisor"]);
+export const ORCHESTRATOR_ONLY: ReadonlySet<string> = new Set(["upgrade_supervisor", "cleanup"]);
 
 /**
  * The tools' bodies. With `lead`, they run for a lead worker (its project's orchestrator, run as a
@@ -438,6 +449,12 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
       if (opts.lead) throw new SupervisorError("upgrade_supervisor is the laptop's orchestrator's, never a lead's (ADR 0008 §5)");
       const u = UpgradeArgs.parse(a);
       return sup.upgradeSupervisor(u.laptop, u.tag, u.restart);
+    },
+    cleanup: (a) => {
+      // Beside upgrade_supervisor (BOB-123): the laptop's orchestrator's, never a lead's.
+      if (opts.lead) throw new SupervisorError("cleanup is the laptop's orchestrator's, never a lead's");
+      const c = CleanupArgs.parse(a);
+      return sup.cleanupTool(c.laptop, c.dry_run, c.project);
     },
   };
 }

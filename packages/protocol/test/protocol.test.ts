@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressKey, CLIENT_FRAME_TYPES, ClientFrame, findSecret, LaptopSnapshot, redactSecrets, parseRecipient, PROTOCOL_VERSION, WorkerSnapshot } from "../src/index.ts";
+import { addressKey, CleanupReport, CLIENT_FRAME_TYPES, ClientFrame, findSecret, LaptopSnapshot, redactSecrets, parseRecipient, PROTOCOL_VERSION, WorkerSnapshot } from "../src/index.ts";
 import { redactSecrets as redactSecretsBb51add } from "./fixtures/secrets-bb51add.ts";
 
 describe("parseRecipient", () => {
@@ -528,5 +528,38 @@ describe("the laptop mark's data (BOB-70, ADR 0007 §7)", () => {
     const got = old.parse({ ...worker, remote_from: "supervisor@mbp-1", remote_by: "poe" });
     expect(got).not.toHaveProperty("remote_from");
     expect(got).not.toHaveProperty("remote_by");
+  });
+});
+
+describe("a laptop's last cleanup (BOB-123 AC 6)", () => {
+  const snap = { supervisor: { started_at: "x", concurrency: 1, active: 0, queued: 0 }, workers: [], pending: [], usage: [] };
+  const run = {
+    at: "2026-11-21T22:00:00.000Z", trigger: "floor", skipped: null, freed_bytes: 1_500_000_000,
+    projects: [{ project: "helix", freed_bytes: null, steps: [{ step: "ignored", ok: true, error: null, skipped: null, acted: 3, freed_bytes: null }, { step: "docker", ok: false, error: "timed out after 30 min", skipped: null, acted: 0, freed_bytes: null }] }],
+    steps: [{ step: "logs", ok: true, error: null, skipped: null, acted: 12, freed_bytes: 900_000_000 }],
+  };
+
+  it("is null in an older supervisor's snapshot, which still reads", () => {
+    expect(LaptopSnapshot.parse(snap).cleanup).toBeNull();
+    expect(ClientFrame.parse({ t: "report", rid: "r1", as: "supervisor", snapshot: snap })).toMatchObject({ snapshot: { cleanup: null } });
+  });
+
+  it("carries the run: when, trigger, freed per project (null unknown, never 0), failed steps", () => {
+    expect(LaptopSnapshot.parse({ ...snap, cleanup: run }).cleanup).toEqual(run);
+    expect(LaptopSnapshot.parse({ ...snap, cleanup: { at: "y", trigger: "schedule", skipped: "busy", freed_bytes: null, projects: [] } }).cleanup).toEqual({ at: "y", trigger: "schedule", skipped: "busy", freed_bytes: null, projects: [], steps: [] });
+    // A step a newer supervisor has still reads.
+    expect(CleanupReport.parse({ ...run, steps: [{ step: "a-new-step", ok: true, freed_bytes: 1 }] }).steps[0]).toEqual({ step: "a-new-step", ok: true, error: null, skipped: null, acted: 0, freed_bytes: 1 });
+  });
+
+  it("is bounded: a step's error, the steps, the projects", () => {
+    const step = { step: "docker", ok: false, error: "x".repeat(301), skipped: null, acted: 0, freed_bytes: null };
+    expect(CleanupReport.safeParse({ ...run, projects: [{ project: "p", freed_bytes: 0, steps: [step] }] }).success).toBe(false);
+    expect(CleanupReport.safeParse({ ...run, projects: Array.from({ length: 51 }, () => run.projects[0]) }).success).toBe(false);
+    expect(CleanupReport.safeParse({ ...run, freed_bytes: 1.5 }).success).toBe(false);
+  });
+
+  it("an older broker's schema drops it and still takes the snapshot", () => {
+    const got = LaptopSnapshot.omit({ cleanup: true }).parse({ ...snap, cleanup: run });
+    expect(got).not.toHaveProperty("cleanup");
   });
 });

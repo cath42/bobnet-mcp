@@ -79,6 +79,7 @@ describe("orchestrator MCP server", () => {
       [
         "answer_request",
         "audit_log",
+        "cleanup",
         "list_projects",
         "list_workers",
         "pending_requests",

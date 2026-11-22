@@ -23,6 +23,8 @@ describe("v: 2 requests: each op with §2's fields", () => {
     { v: 2, op: "answer", id: "r_1", decision: "answer", answers: { "Which?": "A" }, message: "go", user_decided: true, resume: false },
     { v: 2, op: "upgrade", tag: "v2.0.0-rc.43" },
     { v: 2, op: "upgrade", tag: "v2.1.0", restart: "now" },
+    { v: 2, op: "cleanup" },
+    { v: 2, op: "cleanup", dry_run: false, project: "helix" },
   ];
   it.each(valid.map((b) => [b.op, b]))("parses a valid %s", (_op, body) => {
     expect(RemoteRequestV2.parse(body)).toEqual(body);
@@ -50,6 +52,8 @@ describe("v: 2 requests: each op with §2's fields", () => {
     ["upgrade with a bad restart", { v: 2, op: "upgrade", tag: "v2.0.0", restart: "later" }, /^bad request: restart /],
     ["upgrade with a path", { v: 2, op: "upgrade", tag: "v2.0.0", path: "/tmp/x" }, /^bad request: path is not allowed$/],
     ["upgrade with an archive", { v: 2, op: "upgrade", tag: "v2.0.0", archive: "H4sI" }, /^bad request: archive is not allowed$/],
+    ["cleanup with a path", { v: 2, op: "cleanup", path: "/tmp" }, /^bad request: path is not allowed$/],
+    ["cleanup with a string for dry_run", { v: 2, op: "cleanup", dry_run: "no" }, /^bad request: dry_run /],
   ];
   it.each(invalid)("refuses %s", (_what, body, error) => {
     expect(RemoteRequestV2.safeParse(body).success).toBe(false);

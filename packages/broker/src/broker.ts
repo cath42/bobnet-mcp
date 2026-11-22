@@ -443,6 +443,12 @@ export class Broker extends DurableObject<Env> {
     // Reports name whom the owner's actions, and token, go to: only the supervisor's count.
     if (pinned && pinned !== peer.name) throw new FrameError("forbidden", `Only ${pinned}, the supervisor, reports for ${peer.laptop}`);
     const at = new Date().toISOString();
+    // The last cleanup stays with the laptop (BOB-123): a report without one (a supervisor before cleanups, a new db) keeps it.
+    if (!snapshot.cleanup) {
+      const was = this.sql.exec<{ snapshot: string }>("SELECT snapshot FROM laptop_reports WHERE laptop = ?", peer.laptop).toArray()[0];
+      const kept = was ? ((JSON.parse(was.snapshot) as Partial<LaptopSnapshot>).cleanup ?? null) : null;
+      if (kept) snapshot = { ...snapshot, cleanup: kept };
+    }
     this.sql.exec(
       `INSERT INTO laptop_reports (laptop, snapshot, at, reporter) VALUES (?, ?, ?, ?)
        ON CONFLICT (laptop) DO UPDATE SET snapshot = excluded.snapshot, at = excluded.at, reporter = excluded.reporter`,

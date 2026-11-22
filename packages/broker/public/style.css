@@ -57,6 +57,15 @@ section { min-width: 0; }
 .card .sub, .muted { color: var(--muted); font-size: 13px; }
 .card .task { overflow-wrap: anywhere; }
 .card .meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* A laptop's last cleanup (BOB-123): a muted line, a project per row, a failed step in red. */
+.card .cleanup { display: grid; gap: 2px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.card .cleanup b { color: var(--text); font-weight: 600; }
+.card .cleanup ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.card .cleanup li { display: grid; }
+.card .cleanup li > .fail, .card .cleanup li > .skip { padding-left: 12px; }
+#laptops .card { align-content: start; }
+.card .cleanup .num { font-variant-numeric: tabular-nums; color: var(--text); }
+.card .cleanup .fail { color: var(--bad); }
 .card .checkpoint { font-size: 13px; border-left: 3px solid var(--accent); padding-left: 8px; overflow-wrap: anywhere; }
 
 .badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }

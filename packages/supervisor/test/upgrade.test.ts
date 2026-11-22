@@ -226,8 +226,8 @@ describe("the grant (AC 2)", () => {
     expect([...c.remote.get("z@l3")!]).toEqual([]);
     expect(c.upgrade).toBeUndefined();
     expect(c.releaseRoot).toBe(DEFAULT_RELEASE_ROOT);
-    expect(() => parseSupervisorConfig(base(`  x@l1: {}\n`), (d) => d)).toThrow("must grant spawn, upgrade: true, or both");
-    expect(() => parseSupervisorConfig(base(`  x@l1: { upgrade: false }\n`), (d) => d)).toThrow("must grant spawn, upgrade: true, or both");
+    expect(() => parseSupervisorConfig(base(`  x@l1: {}\n`), (d) => d)).toThrow("must grant spawn, upgrade: true, cleanup: true, or more than one");
+    expect(() => parseSupervisorConfig(base(`  x@l1: { upgrade: false }\n`), (d) => d)).toThrow("must grant spawn, upgrade: true, cleanup: true, or more than one");
     const u = parseSupervisorConfig(base(`  y@l2: { upgrade: true }\n`, `upgrade:\n  repo: ~/Code/bobnet\n`), (d) => d);
     expect(u.upgrade).toEqual({ repo: join(homedir(), "Code/bobnet"), root: DEFAULT_RELEASE_ROOT, line: "v2" });
     const r = parseSupervisorConfig(base(`  y@l2: { upgrade: true }\n`, `upgrade:\n  repo: /r\n  root: /opt/bobnet\n  line: release/v3\n`), (d) => d);
@@ -1130,7 +1130,7 @@ describe("bin.ts check: the preflight (AC 4)", () => {
     const problems = preflight(dir, release(">=26"), "24.1.0", env);
     expect(problems).toEqual([
       "engines: node 24.1.0 doesn't satisfy >=26",
-      expect.stringMatching(/^supervisor\.yaml: .*must grant spawn, upgrade: true, or both/),
+      expect.stringMatching(/^supervisor\.yaml: .*must grant spawn, upgrade: true, cleanup: true, or more than one/),
       expect.stringMatching(/^config\.json: /),
     ]);
   });

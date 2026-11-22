@@ -71,6 +71,8 @@ export const RemoteRequestV2 = z.discriminatedUnion("op", [
       restart: z.enum(UPGRADE_RESTARTS).optional(),
     })
     .strict(),
+  // A disk cleanup on the target (BOB-123), its own grant beside upgrade's: a dry run unless `dry_run: false`.
+  z.object({ v, op: z.literal("cleanup"), dry_run: z.boolean().optional(), project: z.string().min(1).max(40).optional() }).strict(),
 ]);
 export type RemoteRequestV2 = z.infer<typeof RemoteRequestV2>;
 export type RemoteOp = RemoteRequestV2["op"];

@@ -126,6 +126,42 @@ export const WorkerSnapshot = z.object({
 });
 export type WorkerSnapshot = z.infer<typeof WorkerSnapshot>;
 
+/** A cleanup's steps (BOB-123), the fixed set a project's `cleanup` lists from, and `logs`, the supervisor's own; read as strings on the wire, so a newer one still parses. */
+export const CLEANUP_STEPS = ["worktrees", "ignored", "paths", "docker", "playwright", "pnpm-store", "old-pnpm-stores", "runner"] as const;
+export type CleanupStep = (typeof CLEANUP_STEPS)[number];
+
+/** Bytes freed: the change in the volume's free space; null when it couldn't be read, never 0 for that. */
+const freed = z.number().int().nullable();
+
+/** One step's outcome. */
+export const CleanupStepReport = z.object({
+  step: z.string().max(20),
+  ok: z.boolean(),
+  /** Why it failed or timed out; null when it ran. */
+  error: z.string().max(300).nullable().default(null),
+  /** Why it did nothing although it could run (a runner job running); null when it ran. */
+  skipped: z.string().max(200).nullable().default(null),
+  /** Paths removed or prunes run. */
+  acted: z.number().int().nonnegative().default(0),
+  freed_bytes: freed,
+});
+export type CleanupStepReport = z.infer<typeof CleanupStepReport>;
+
+/**
+ * A laptop's last cleanup (BOB-123), as its supervisor ran it: when, what started it (`schedule`, `floor`
+ * or `demand`), per project each step's outcome, and the supervisor's own steps (its logs). `skipped:
+ * "busy"` is a run that got no run slot in time; it runs again at the next tick, and has no steps.
+ */
+export const CleanupReport = z.object({
+  at: z.string().max(40),
+  trigger: z.string().max(20),
+  skipped: z.string().max(20).nullable().default(null),
+  freed_bytes: freed,
+  projects: z.array(z.object({ project: z.string().max(40), freed_bytes: freed, steps: z.array(CleanupStepReport).max(20) })).max(50),
+  steps: z.array(CleanupStepReport).max(10).default([]),
+});
+export type CleanupReport = z.infer<typeof CleanupReport>;
+
 export const LaptopSnapshot = z.object({
   supervisor: z.object({
     started_at: z.string(),
@@ -165,6 +201,8 @@ export const LaptopSnapshot = z.object({
       }),
     )
     .max(500),
+  /** Its last cleanup (BOB-123); null before its first, and from a supervisor before cleanups. */
+  cleanup: CleanupReport.nullable().default(null),
 });
 export type LaptopSnapshot = z.infer<typeof LaptopSnapshot>;
 

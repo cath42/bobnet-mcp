@@ -1,4 +1,4 @@
-// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5) and its follow-ups (the CI line under Working now), a cut question opened (BOB-31), a question's edits (BOB-119) at phone, tablet and desktop
+// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5) and its follow-ups (the CI line under Working now), a cut question opened (BOB-31), a question's edits (BOB-119), a laptop's last cleanup (BOB-123) at phone, tablet and desktop
 // widths, against a fake broker in the page holding a copy of BobNet's board (2026-11-14; its backlog
 // 2026-11-15). The page is public/ as served.
 //   node test-ui/shots.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob7-*.png, bob8-*.png, bob10-*.png, bob3-*.png)
@@ -297,6 +297,20 @@ function fakeBroker() {
           { id: "r_8", worker_id: "w_da", name: "Daisy", kind: "approval", tool: "Bash", tier: "orchestrator", created_at: iso(2), preview: "git push origin HEAD" }] } },
     ];
   }
+  // BOB-123: the laptop rows on Sessions, mbp-1 after a floor cleanup (helix's docker timed out, bobnet's runner skipped while a job ran,
+  // a project whose free space couldn't be read), ubu1 with none yet.
+  if (window.BOB123) {
+    const step = (step, freed, over = {}) => ({ step, ok: true, error: null, skipped: null, acted: 2, freed_bytes: freed, ...over });
+    dashboard.laptops = [
+      { laptop: "mbp-1", at: iso(0), snapshot: { supervisor: { started_at: iso(600), concurrency: 3, active: 1, queued: 0 }, workers: [], pending: [], usage: [],
+        cleanup: { at: iso(95), trigger: "floor", skipped: null, freed_bytes: 7_900_000_000, projects: [
+          { project: "helix", freed_bytes: 6_400_000_000, steps: [step("worktrees", 5_100_000_000), step("ignored", 1_300_000_000), step("docker", null, { ok: false, error: "timed out after 30 min", acted: 0 })] },
+          { project: "bobnet", freed_bytes: 1_200_000_000, steps: [step("ignored", 400_000_000), step("runner", 0, { acted: 0, skipped: "a runner job is running from /Users/ct/actions-runner-vitals" }), step("old-pnpm-stores", 800_000_000)] },
+          { project: "athletic", freed_bytes: null, steps: [step("worktrees", null)] },
+        ], steps: [step("logs", 300_000_000, { acted: 212 })] } } },
+      { laptop: "ubu1", at: iso(0), snapshot: { supervisor: { started_at: iso(300), concurrency: 3, active: 0, queued: 0 }, workers: [], pending: [], usage: [] } },
+    ];
+  }
   // Now's CI banner, now a line under Working now (BOB-5 as built 3): one run in progress, one failed.
   if (window.CI) dashboard.boards.push({ laptop: "mbp-1", at: iso(0), board: { project: "bobnet", ref: "f90256f0", backlog: null, sessions: [], runs: [], baseline: null, commits: [],
     ci: [{ name: "test", status: "in_progress", conclusion: null, created_at: iso(4), sha: "1a2b3c4d5e6f" }, { name: "e2e", status: "completed", conclusion: "failure", created_at: iso(12), sha: "9f8e7d6c5b4a" }] } });
@@ -388,6 +402,8 @@ const all = [
   // BOB-119: an edited action and question on Waits on you, A-24's edits open; the feature page's next step, its two edits open by default.
   ["bob119-waits-edits", "waits", [(p) => p.locator('li[data-ref="A-24"] details.edits summary').click()], false, null, "#waits-holding"],
   ["bob119-feature-edits", "feature/bobnet/BOB-4", [(p) => p.locator("#next").scrollIntoViewIfNeeded()], false, null, "#next"],
+  // BOB-123: each laptop's last cleanup on its row (Sessions), one with none yet.
+  ["bob123-laptops", "sessions", [(p) => p.locator("#laptops").scrollIntoViewIfNeeded()], false, null, "#laptops"],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 
@@ -400,12 +416,15 @@ try {
       if (name.startsWith("bob44") && w === "1024") continue;
       // So does BOB-119's.
       if (name.startsWith("bob119") && w === "1024") continue;
+      // And BOB-123's.
+      if (name.startsWith("bob123") && w === "1024") continue;
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2, colorScheme: scheme ?? "light" });
       if (name.startsWith("bob31")) await page.addInitScript(() => (window.BOB31 = true));
       if (name.startsWith("bob3") && !name.startsWith("bob31")) await page.addInitScript(() => (window.BOB3 = true));
       if (name.startsWith("bob4") || name.startsWith("bob119")) await page.addInitScript(() => (window.BOB4 = true));
       if (name.startsWith("bob119")) await page.addInitScript(() => (window.BOB119 = true));
       if (name.startsWith("bob44")) await page.addInitScript(() => (window.BOB44 = true));
+      if (name.startsWith("bob123")) await page.addInitScript(() => (window.BOB123 = true));
       if (name.includes("-stale")) await page.addInitScript(() => (window.STALE = true));
       if (name.startsWith("bob5")) {
         await page.addInitScript(() => (window.BOB5 = true));
@@ -418,7 +437,7 @@ try {
       }
       await page.addInitScript(fakeBroker);
       await page.goto(`${base}#${hash}`);
-      await page.waitForSelector(hash.startsWith("triage") ? ".totals" : hash.startsWith("waits") ? '#waits-holding li[data-kind="question"]' : hash.startsWith("overview") ? ".prow" : hash.startsWith("feature") ? "#feature-head" : "section.release");
+      await page.waitForSelector(hash.startsWith("triage") ? ".totals" : hash.startsWith("waits") ? '#waits-holding li[data-kind="question"]' : hash.startsWith("overview") ? ".prow" : hash.startsWith("feature") ? "#feature-head" : hash.startsWith("sessions") ? "#laptops .card" : "section.release");
       for (const step of steps) {
         await step(page);
         await page.waitForTimeout(400);

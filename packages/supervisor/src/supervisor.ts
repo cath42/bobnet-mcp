@@ -17,6 +17,7 @@ import {
   type Envelope,
   isValidSegment,
   ItemRef,
+  type CleanupReport,
   type LaptopSnapshot,
   LIMITS,
   parseRecipient,
@@ -41,7 +42,8 @@ import type { Identity } from "@bobnet/client/config";
 import type { PushFrame, RequestFrame } from "@bobnet/client/connection";
 import type { Logger } from "@bobnet/client/log";
 import type { OwnerCheck } from "./owner.ts";
-import { EFFORTS, type Effort, type ProjectConfig, type RoleConfig, type RunConfig, type SupervisorConfig } from "./config.ts";
+import { checkCleanupPaths, EFFORTS, type Effort, gitIgnores, guardedFolders, type ProjectConfig, type RoleConfig, type RunConfig, type SupervisorConfig } from "./config.ts";
+import { Cleanup, CleanupBusy, type CleanupDeps, type CleanupOutcome, cleanupView } from "./cleanup.ts";
 import { CI_POLL_MS, GhCiPoll, repoName } from "./ci-poll.ts";
 import { assignSessions, Boards, type DeclaredSession, sessionName, workerTasks } from "./board.ts";
 import { Inbox } from "@bobnet/client/inbox";
@@ -149,12 +151,14 @@ const WITHHELD = "[withheld: looks like a credential]";
 const REMOTE_RESTARTED = "the target restarted while handling it; list shows whether it ran";
 
 /** A request's ttl_seconds (§2): one the broker hasn't delivered by then is dropped, so it never starts late. */
-const remoteTtl = (op: string) => (op === "spawn" || op === "upgrade" ? 30 : 20);
+const remoteTtl = (op: string) => (op === "spawn" || op === "upgrade" || op === "cleanup" ? 30 : 20);
 /**
  * How long the requester waits for a reply: the ttl and 30 s; a spawn that joins a board session can
  * take a minute, and an upgrade's reply waits for its git fetch and checks (ADR 0008 §2), so 90 s each.
  */
-export const remoteWaitMs = (op: string) => (op === "spawn" || op === "upgrade" ? 90_000 : (remoteTtl(op) + 30) * 1000);
+export const remoteWaitMs = (op: string) => (op === "cleanup" ? CLEANUP_REMOTE_WAIT_MS : op === "spawn" || op === "upgrade" ? 90_000 : (remoteTtl(op) + 30) * 1000);
+/** A remote dry run measures every folder it would clear, which takes a while on a full disk (BOB-123). */
+const CLEANUP_REMOTE_WAIT_MS = 10 * 60_000;
 /**
  * The first release whose supervisor serves `v: 2` (ADR 0007 §9): an older target is refused before
  * anything is sent. The release after rc.38, the first with BOB-62's target; Mario's to move if
@@ -271,6 +275,15 @@ function fitList(all: Array<Record<string, unknown>>): { workers: Array<Record<s
   let workers = all;
   while (workers.length > 0 && !fits({ workers })) workers = workers.slice(1);
   return workers.length < all.length ? { workers, truncated: true } : { workers };
+}
+
+/** A cleanup's outcome cut to fit a reply's body: fewer paths listed per step, the rest counted. */
+function fitCleanup(o: CleanupOutcome): Record<string, unknown> {
+  for (const listed of [50, 20, 5, 0]) {
+    const view = cleanupView(o, listed);
+    if (fits(view)) return listed === 50 ? view : { ...view, truncated: true };
+  }
+  return { dry_run: o.dry_run, trigger: o.trigger, ...(o.report ? { freed_bytes: o.report.freed_bytes } : {}), truncated: true, note: "too many projects to list; the audit log has it" };
 }
 
 /** A request in `list` (§2): the `request` event's fields and its state, the input left to the `request` op. */
@@ -428,6 +441,10 @@ export class Supervisor {
   private readonly baselines = new Map<string, Usage>();
   private readonly ownerCheck: OwnerCheck | null;
   private readonly slots: RunSlots;
+  /** The laptop's disk cleanup (BOB-123). */
+  private readonly cleanup: Cleanup;
+  /** Its last real run, for the snapshot: read back from the audit at start. */
+  private lastCleanup: CleanupReport | null = null;
   /** Run slots held by tool calls, by tool use id, freed when the call returns. */
   private readonly slotCalls = new Map<string, { workerId: string; release: () => void }>();
   private readonly consults = new Map<string, Consult>();
@@ -514,6 +531,8 @@ export class Supervisor {
     releases?: Releases | null;
     /** An upgrade's exit (§4): shuts down and exits 75. Without it, an upgrade that switched is only logged. */
     restart?: () => void;
+    /** The cleanup's clock, free space, commands and waits (BOB-123); tests give their own. */
+    cleanup?: Partial<Pick<CleanupDeps, "now" | "freeBytes" | "run" | "commands" | "stepTimeoutMs" | "slotWaitMs" | "config" | "playwrightDir" | "pnpmStorePath" | "processes" | "logsDir">>;
   }) {
     this.detect = deps.detect ?? findSecret;
     this.restartForUpgrade = deps.restart ?? (() => this.log.error("an upgrade switched current, but this supervisor has no restart to run: restart it by hand"));
@@ -546,6 +565,27 @@ export class Supervisor {
       onChange: () => this.writeStatus(),
       onGrant: (e) => this.onSlotGranted(e),
       onRelease: (e) => this.onSlotReleased(e),
+    });
+    this.cleanup = new Cleanup({
+      projects: () => [...this.config.projects.values()],
+      config: deps.config.cleanup,
+      busyDirs: () => this.store.workers({ states: ["queued", ...ACTIVE_STATES] }).map((w) => this.roleOf(w).dir),
+      standingDirs: () => [
+        ...this.roles().flatMap((r) => [r.dir, ...r.writeRoots]),
+        ...[...this.config.projects.values()].flatMap((p) => (p.orchestratorDir ? [p.orchestratorDir] : [])),
+        ...guardedFolders(this.config),
+        this.config.stateDir,
+      ],
+      logsDir: join(deps.config.stateDir, "logs"),
+      liveLogs: () => this.store.workers({ states: ["queued", ...ACTIVE_STATES] }).map((w) => this.logPath(w)),
+      acquireSlot: (signal) => this.slots.acquire("cleanup", "supervisor", "cleanup", signal),
+      record: (r) => {
+        this.lastCleanup = r;
+        this.store.audit("supervisor", "cleanup:run", null, r);
+        this.report();
+      },
+      log: deps.log,
+      ...deps.cleanup,
     });
     this.captures = new CaptureQueue((as, op, ctx, waitMs) => this.broker.boardOp(as, op, ctx, waitMs), {
       ...(deps.captureDir ? { dir: deps.captureDir } : {}),
@@ -581,6 +621,9 @@ export class Supervisor {
 
   /** Reconciles state left by a previous run, joins BobNet, and starts scheduling. */
   async start(): Promise<void> {
+    // A cleanup path git doesn't ignore stops the start, named (BOB-123): it would never be cleared.
+    checkCleanupPaths(this.config, gitIgnores);
+    this.lastCleanup = this.store.lastAudit<CleanupReport>("cleanup:run");
     // A sandboxed role's workers fail at once where the sandbox can't run (stock Ubuntu 24.04): said at start, not at the first spawn.
     if (this.roles().some((r) => r.sandbox)) {
       this.sandboxBroken = await this.sandboxCheck();
@@ -672,6 +715,7 @@ export class Supervisor {
     this.heartbeat = setInterval(() => this.report(true), REPORT_HEARTBEAT_MS);
     this.heartbeat.unref();
     this.boards?.start();
+    this.cleanup.start();
     void this.pollCi();
     this.ciTimer = setInterval(() => void this.pollCi(), CI_POLL_MS);
     this.ciTimer.unref();
@@ -686,6 +730,7 @@ export class Supervisor {
   async shutdown(): Promise<void> {
     this.closing = true;
     this.boards?.stop();
+    this.cleanup.stop();
     if (this.ciTimer) clearInterval(this.ciTimer);
     if (this.stallTimer) clearInterval(this.stallTimer);
     if (this.holdTimer) clearInterval(this.holdTimer);
@@ -2068,6 +2113,11 @@ export class Supervisor {
         // Its own grant, apart from spawn (ADR 0008 §2): off unless the entry says upgrade: true.
         if (!this.config.remoteUpgrade.has(from.toLowerCase())) throw new SupervisorError(`${from} may not upgrade this supervisor: its remote entry has no upgrade: true`);
         return this.upgradeAsk(msgId, from, req.tag, req.restart);
+      case "cleanup": {
+        // Its own grant beside upgrade's (BOB-123): off unless the entry says cleanup: true. A dry run unless it says dry_run: false.
+        if (!this.config.remoteCleanup.has(from.toLowerCase())) throw new SupervisorError(`${from} may not run a cleanup here: its remote entry has no cleanup: true`);
+        return this.cleanupHere(req.dry_run ?? true, req.project, `remote:${from}`);
+      }
     }
   }
 
@@ -2191,6 +2241,48 @@ export class Supervisor {
     }
     if (r["ok"] !== true) throw new SupervisorError(`${laptop}'s reply to the upgrade was withheld (it looked like a credential to the broker); its stages still come as notices`);
     return { laptop: laptopOf(to), from: r["from"], to: r["to"], restart: restart ?? "when_idle", note };
+  }
+
+  // ---------- Disk cleanup (BOB-123) ----------
+
+  /**
+   * A cleanup asked for, of this laptop: a dry run answers its plan; a real run, asked here, its
+   * outcome once done, and asked from another laptop, that it started (it may wait for the slot and
+   * run long past a reply's wait); its outcome is on the dashboard's laptop row and in the audit.
+   */
+  private async cleanupHere(dryRun: boolean, project: string | undefined, by: string, wait = !by.startsWith("remote:")): Promise<Record<string, unknown>> {
+    if (project !== undefined && !this.config.projects.get(project)?.cleanup.length) throw new SupervisorError(`no project ${project} with cleanup steps on ${this.laptop ?? "this laptop"}`);
+    const run = this.cleanup.run({ trigger: "demand", dryRun, ...(project !== undefined ? { project } : {}) }).catch((err: Error) => {
+      throw err instanceof CleanupBusy ? new SupervisorError(err.message) : err;
+    });
+    if (!dryRun && !wait) {
+      run.catch((err: Error) => this.log.error("cleanup failed", { by, err: err.message }));
+      this.store.audit(by, "cleanup:started", null, { project: project ?? null });
+      return { laptop: this.laptop, started: true, note: "its outcome shows on the dashboard's laptop row when it ends" };
+    }
+    const out = await run;
+    if (dryRun) this.store.audit(by, "cleanup:dry_run", null, { project: project ?? null });
+    return { laptop: this.laptop, ...fitCleanup(out) };
+  }
+
+  /**
+   * The orchestrator's cleanup tool (BOB-123): this laptop's in-process, a real run unless `dry_run`;
+   * another's as a `v: 2` request under its `cleanup: true` grant, a dry run unless `dry_run: false`.
+   */
+  async cleanupTool(laptop: string | undefined, dryRun: boolean | undefined, project: string | undefined): Promise<Record<string, unknown>> {
+    if (this.isHere(laptop)) return this.cleanupHere(dryRun ?? false, project, "orchestrator");
+    const to = await this.remoteTarget(laptop!);
+    const out = await this.remoteRequest(to, { v: 2, op: "cleanup", ...(dryRun !== undefined ? { dry_run: dryRun } : {}), ...(project !== undefined ? { project } : {}) });
+    if (out.outcome !== "reply") throw new SupervisorError(out.outcome === "unknown" ? out.error : `no reply from ${laptop} to the cleanup`);
+    const r = out.reply;
+    if (r["ok"] === false) {
+      const error = typeof r["error"] === "string" ? r["error"] : `${laptop} refused the cleanup`;
+      if (/^bad request: op /.test(error)) throw new SupervisorError(`${laptop}'s supervisor has no cleanup op (a release before it); upgrade it first. Its reply: ${error}`);
+      throw new SupervisorError(error);
+    }
+    if (r["ok"] !== true) throw new SupervisorError(`${laptop}'s reply to the cleanup was withheld (it looked like a credential to the broker); its audit log has the run`);
+    const { v: _v, re: _re, req: _req, ok: _ok, ...fields } = r;
+    return { ...fields, laptop: laptopOf(to) };
   }
 
   /**
@@ -3442,6 +3534,7 @@ export class Supervisor {
         };
       }),
       usage: [...days.values()].sort((a, b) => a.day.localeCompare(b.day)).slice(-500),
+      cleanup: this.lastCleanup,
     };
   }
 

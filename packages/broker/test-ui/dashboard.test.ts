@@ -289,6 +289,39 @@ describe("Sessions", () => {
     await go("#sessions");
   });
 
+  it("shows each laptop's last cleanup on its row: when, why, freed per project (unknown as such), failed and skipped steps; none yet (BOB-123 AC 6)", async () => {
+    const ws = FakeSocket.last;
+    const card = () => [...$("laptops").children].find((c) => c.querySelector(".name")!.textContent === "mbp-1")!;
+    const line = () => card().querySelector(".cleanup")!;
+    // An older supervisor's snapshot has no cleanup: it reads as none yet.
+    expect(dashboard.laptops[0]!.snapshot).not.toHaveProperty("cleanup");
+    expect(line().textContent).toBe("No cleanup yet");
+    const cleanup = {
+      at: iso(90), trigger: "floor", skipped: null, freed_bytes: 3_400_000_000,
+      projects: [
+        { project: "helix", freed_bytes: 3_100_000_000, steps: [{ step: "worktrees", ok: true, error: null, skipped: null, acted: 4, freed_bytes: 3_000_000_000 }, { step: "docker", ok: false, error: "timed out after 30 min", skipped: null, acted: 0, freed_bytes: null }] },
+        { project: "bobnet", freed_bytes: null, steps: [{ step: "runner", ok: true, error: null, skipped: "a runner job is running from /Users/ct/actions-runner", acted: 0, freed_bytes: null }] },
+      ],
+      steps: [{ step: "logs", ok: true, error: null, skipped: null, acted: 12, freed_bytes: 300_000_000 }],
+    };
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: { ...dashboard.laptops[0]!.snapshot, cleanup } });
+    await settle();
+    expect(line().querySelector(":scope > span")!.textContent).toBe("Last cleanup 1h 30m ago · disk low · freed 3.4 GB");
+    expect([...line().querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+      "helix 3.1 GBdocker failed: timed out after 30 min",
+      "bobnet unknownrunner skipped: a runner job is running from /Users/ct/actions-runner",
+      "supervisor logs 300 MB",
+    ]);
+    expect(line().querySelector(".fail")!.textContent).toBe("docker failed: timed out after 30 min");
+    expect(view().textContent).not.toMatch(/\$\d/);
+    // A run that got no run slot says so.
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: { ...dashboard.laptops[0]!.snapshot, cleanup: { at: iso(5), trigger: "schedule", skipped: "busy", freed_bytes: null, projects: [], steps: [] } } });
+    await settle();
+    expect(line().textContent).toBe("Cleanup skipped · the run slot was busy · scheduled · 5m ago · it tries again at the next check");
+    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
+    await settle();
+  });
+
   it("filters the feed by task", async () => {
     const ws = FakeSocket.last;
     ws.frame({ t: "update", item: { seq: 2, from: "Bob@mbp-1", laptop: "mbp-1", text: "LAND-41.16 · landed", at: iso(0) } });
