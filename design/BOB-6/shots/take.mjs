@@ -25,6 +25,7 @@ const shots = [
   ["s1-offered-top", [], false],
   ["s1-offered-dark", [], true, "dark"],
   ["s2-limit", [scen("Helix: one open feature")], true],
+  ["s2-limit-top", [scen("Helix: one open feature")], false],
   ["s3-held", [scen("Held by your question")], true],
   ["s4-editor", [start, top], false],
   ["s4-editor-full", [start], true],
@@ -37,6 +38,7 @@ const shots = [
   ["s9-pending-offline", [offline, start, send, ask], true],
   ["s10-declined", [start, edit, send, ask, (p) => p.locator(".proto-bar").getByRole("button", { name: "declines it" }).click()], true],
   ["s11-started", [start, edit, send, ask, (p) => p.locator(".proto-bar").getByRole("button", { name: "starts it" }).click()], true],
+  ["s13-no-supervisor", [(p) => p.locator(".proto-bar").getByRole("button", { name: "none runs it" }).click()], true],
   ["s12-withdraw", [start, send, ask, (p) => p.getByRole("button", { name: "Withdraw request" }).click()], false],
 ];
 

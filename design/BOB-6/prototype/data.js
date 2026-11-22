@@ -2,37 +2,41 @@
 // no real tokens, secrets or message ids. "Now" is Sun 22 Nov 10:20.
 "use strict";
 
-const BRIEF_BOB6 = (kind, label) => `BOB-6 ${kind} ${label}, bobnet
-Start a session from the UI, as a request to poe
-Criteria: board_get BOB-6 (AC1 to AC4, DoD 1 to 5)
+// The brief's shape is ADR 0010 §3's: the service assembles it, the dashboard only shows it.
+const BRIEF_BOB6 = (kind, label) => `Start BOB-6 ${kind} ${label} (bobnet): Start a session from the UI, as a request to poe.
+Casper asked for it from the dashboard: start request S-7.
 
+Session: { feature: "BOB-6", kind: "${kind}", label: "${label}" }
 Skill: lead/skills/${kind}.md
 
-Last session: BOB-6 design A, closed Sun 22 Nov 09:58, need: none
-Summary: the Start button and the brief editor designed (design/BOB-6/); ADR 0010 for the gates and the start request. 0 blockers, 0 majors.
-Commit: 3f2a9c1
-Handoff: read it with board_get session {BOB-6, design, A}
+Last session: BOB-6 design A, closed 2026-11-22, need none, commit 3f2a9c1.
+Summary: the Start button and the brief editor designed (design/BOB-6/); ADR 0010 for the start rules and the start request.
+Handoff: ~/.local/state/bobnet/handoffs/bobnet/w_sample01.md; the text is in board_get session { feature: "BOB-6", kind: "design", label: "A" }
 
-Casper's answers on this feature:
-- Q-131 "Where does Start live?"
-  Chosen: on the feature page.
+Casper's answers on BOB-6:
+- Q-133, answered 2026-11-22 on the dashboard: May you withdraw a request before it starts?
+  Option: yes: Yes, until it starts
+  His words: "Yes. And tell poe when I do."
+- Q-131, answered 2026-11-21 on the dashboard: Where does Start live?
+  Option: feature: On the feature page
   His words: "On the feature page. I open the feature on my phone anyway, that's where I want the button."
-- Q-133 "May you withdraw a request before it starts?"
-  Chosen: yes, until it starts.
-  His words: "Yes. And tell poe when I do."`;
 
-const BRIEF_LAND57 = `LAND-57 design A, helix
-Retry a failed land from the queue
-Criteria: board_get LAND-57 (AC1 to AC3)
+Read the feature first: board_get BOB-6.`;
 
+const BRIEF_LAND57 = `Start LAND-57 design A (helix): Retry a failed land from the queue.
+Casper asked for it from the dashboard: start request S-12.
+
+Session: { feature: "LAND-57", kind: "design", label: "A" }
 Skill: .claude/skills/helix-design
 
-Last session: none on this feature yet.
+Last session: none yet.
 
-Casper's answers on this feature:
-- Q-290 "Retry from the same commit, or rebase first?"
-  Chosen: rebase first.
-  His words: "Rebase first, always. A retry on a stale base is how we got the red main last week."`;
+Casper's answers on LAND-57:
+- Q-290, answered 2026-11-20 on the dashboard: Retry from the same commit, or rebase first?
+  Option: rebase: Rebase first
+  His words: "Rebase first, always. A retry on a stale base is how we got the red main last week."
+
+Read the feature first: board_get LAND-57.`;
 
 window.SAMPLE = {
   now: "10:20",
@@ -48,17 +52,17 @@ window.SAMPLE = {
       feature: { ref: "BOB-6", title: "Start a session from the UI, as a request to poe", release: "Release 2 · number 1", state: "open", criteria: [0, 4], tasks: null },
       sessions: [
         { kind: "design", label: "A", when: "Sun 06:26 → 09:58", state: "closed", need: "none", blockers: 0, majors: 0, moved: 0, tokens: "1.9M",
-          summary: "The Start button and the brief editor designed (design/BOB-6/); ADR 0010 for the gates and the start request.", commit: "3f2a9c1",
+          summary: "The Start button and the brief editor designed (design/BOB-6/); ADR 0010 for the start rules and the start request.", commit: "3f2a9c1",
           agents: [] },
       ],
       next: "a build session", nextKind: "build",
       kinds: [
         { kind: "design", ok: true, label: "B" },
         { kind: "build", ok: true, label: "A" },
-        { kind: "review", ok: false, code: "after", reason: "review needs a closed build session" },
-        { kind: "retro", ok: false, code: "after", reason: "retro comes after the feature's review" },
+        { kind: "review", ok: false, code: "after", reason: "BOB-6 has no closed build session; bobnet starts review after build" },
+        { kind: "retro", ok: false, code: "after", reason: "BOB-6 has no closed review session; bobnet starts retro after review" },
       ],
-      taken: { design: ["A"] },
+      taken: { design: ["A"] }, req: "S-7",
       brief: BRIEF_BOB6,
       tasks: [],
     },
@@ -69,8 +73,8 @@ window.SAMPLE = {
       next: "a design session", nextKind: "design",
       kinds: [
         { kind: "design", ok: false, code: "limit", reason: "helix allows one open feature at a time: LAND-56 is open", link: "LAND-56" },
-        { kind: "build", ok: false, code: "limit", reason: "helix allows one open feature at a time: LAND-56 is open", link: "LAND-56" },
-        { kind: "review", ok: false, code: "limit", reason: "helix allows one open feature at a time: LAND-56 is open", link: "LAND-56" },
+        { kind: "build", ok: false, code: "after", reason: "LAND-58 has no closed design session; helix starts build after design" },
+        { kind: "review", ok: false, code: "after", reason: "LAND-58 has no closed build session; helix starts review after build" },
       ],
       tasks: [],
     },
@@ -81,10 +85,10 @@ window.SAMPLE = {
       wait: { ref: "Q-140", text: "Search titles only, or descriptions and notes too?" },
       next: "a design session", nextKind: "design",
       kinds: [
-        { kind: "design", ok: false, code: "held", reason: "Q-140 holds BOB-19 design A until you answer it", link: "Q-140" },
-        { kind: "build", ok: false, code: "status", reason: "build needs a closed design session" },
-        { kind: "review", ok: false, code: "after", reason: "review needs a closed build session" },
-        { kind: "retro", ok: false, code: "after", reason: "retro comes after the feature's review" },
+        { kind: "design", ok: false, code: "held", reason: "BOB-19 is held by Q-140", link: "Q-140" },
+        { kind: "build", ok: false, code: "after", reason: "BOB-19 has no closed design session; bobnet starts build after design" },
+        { kind: "review", ok: false, code: "after", reason: "BOB-19 has no closed build session; bobnet starts review after build" },
+        { kind: "retro", ok: false, code: "after", reason: "BOB-19 has no closed review session; bobnet starts retro after review" },
       ],
       tasks: [],
     },
@@ -95,10 +99,10 @@ window.SAMPLE = {
       next: "a design session", nextKind: "design",
       kinds: [
         { kind: "design", ok: true, label: "A" },
-        { kind: "build", ok: false, code: "status", reason: "build needs a closed design session" },
-        { kind: "review", ok: false, code: "after", reason: "review needs a closed build session" },
+        { kind: "build", ok: false, code: "after", reason: "LAND-57 has no closed design session; helix starts build after design" },
+        { kind: "review", ok: false, code: "after", reason: "LAND-57 has no closed build session; helix starts review after build" },
       ],
-      taken: {},
+      taken: {}, req: "S-12",
       brief: () => BRIEF_LAND57,
       refuseOnSend: "helix allows one open feature at a time: LAND-56 opened at 10:18",
       tasks: [],

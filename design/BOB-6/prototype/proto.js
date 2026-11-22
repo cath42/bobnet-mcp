@@ -6,7 +6,7 @@
 const S = window.SAMPLE;
 const KEY = "bobnet.bob6.proto";
 const CAP = 16384;
-const fresh = () => ({ sc: "offered", online: true, reqs: {}, drafts: {}, refused: {}, toast: null });
+const fresh = () => ({ sc: "offered", sup: "online", reqs: {}, drafts: {}, refused: {}, toast: null });
 const load = () => { try { return { ...fresh(), ...JSON.parse(sessionStorage.getItem(KEY) ?? "{}") }; } catch { return fresh(); } };
 let st = load();
 const save = () => sessionStorage.setItem(KEY, JSON.stringify(st));
@@ -30,13 +30,17 @@ const sup = () => proj().supervisor;
 const req = () => st.reqs[st.sc] ?? null;
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 const n = (x) => x.toLocaleString("en-GB");
-const okKinds = () => sc().kinds.filter((k) => k.ok);
+const online = () => st.sup === "online";
+/** start_options' supervisor is null: nothing is offered, and the one reason is the service's. */
+const noSup = () => st.sup === "none";
+const okKinds = () => (noSup() ? [] : sc().kinds.filter((k) => k.ok));
+const refusedKinds = () => (noSup() ? [{ kind: "any", ok: false, code: "supervisor", reason: `no supervisor runs ${sc().project}` }] : sc().kinds.filter((k) => !k.ok));
 const kindOf = (k) => sc().kinds.find((x) => x.kind === k);
-const route = () => { const m = location.hash.match(/^#start\/(\w+)$/); return m && kindOf(m[1])?.ok ? m[1] : null; };
+const route = () => { const m = location.hash.match(/^#start\/(\w+)$/); return m && okKinds().some((k) => k.kind === m[1]) ? m[1] : null; };
 
 /** The supervisor's address, the laptop always shown: it is where the request goes (BOB-44's mark, muted). */
-const supName = (dot = true) => h("span", { class: "sup" }, dot ? h("i", { class: `dot ${st.online ? "on" : ""}`, "aria-hidden": "true" }) : null,
-  h("b", null, sup().name), h("span", { class: `lap${st.online ? "" : " stale"}`, title: `Runs on ${sup().laptop}` }, `@${sup().laptop}`));
+const supName = (dot = true) => h("span", { class: "sup" }, dot ? h("i", { class: `dot ${online() ? "on" : ""}`, "aria-hidden": "true" }) : null,
+  h("b", null, sup().name), h("span", { class: `lap${online() ? "" : " stale"}`, title: `Runs on ${sup().laptop}` }, `@${sup().laptop}`));
 const supText = () => `${sup().name}@${sup().laptop}`;
 
 function toast(text, ok = true, undo = null) { st.toast = { text, ok, undo: undo ? true : null }; undoFn = undo; save(); render(); }
@@ -83,12 +87,12 @@ function protoBar() {
     h("b", null, "Prototype"),
     h("span", { class: "pb-g" }, h("span", null, "Scenario"), h("span", { class: "seg filters" }, S.scenarios.map((x) =>
       h("button", { type: "button", "aria-pressed": String(x.id === st.sc), onclick: () => { st.sc = x.id; st.toast = null; save(); location.hash = ""; render(); } }, x.tab)))),
-    h("span", { class: "pb-g" }, h("span", null, `${sup().name}@${sup().laptop} is`), h("span", { class: "seg" },
-      h("button", { type: "button", "aria-pressed": String(st.online), onclick: () => { st.online = true; save(); render(); } }, "online"),
-      h("button", { type: "button", "aria-pressed": String(!st.online), onclick: () => { st.online = false; save(); render(); } }, "offline"))),
+    h("span", { class: "pb-g" }, h("span", null, "Supervisor"), h("span", { class: "seg" },
+      [["online", `${sup().name}@${sup().laptop} online`], ["offline", "offline"], ["none", "none runs it"]].map(([v, t]) =>
+        h("button", { type: "button", "aria-pressed": String(st.sup === v), disabled: v === "none" && pending || null, onclick: () => { st.sup = v; save(); render(); } }, t)))),
     h("span", { class: "pb-g" }, h("span", null, `Then ${sup().name}`),
-      h("button", { type: "button", disabled: !pending || !st.online || null, onclick: started }, "starts it"),
-      h("button", { type: "button", disabled: !pending || !st.online || null, onclick: declined }, "declines it")),
+      h("button", { type: "button", disabled: !pending || !online() || null, onclick: started }, "starts it"),
+      h("button", { type: "button", disabled: !pending || !online() || null, onclick: declined }, "declines it")),
     h("button", { type: "button", class: "more-t", onclick: () => { sessionStorage.removeItem(KEY); st = fresh(); location.hash = ""; render(); } }, "Reset"));
 }
 
@@ -148,7 +152,7 @@ function banner() {
   const go = (e) => { e.preventDefault(); $("next")?.scrollIntoView({ block: "center", behavior: "smooth" }); };
   if (r?.status === "pending")
     return h("div", { class: "banner next-banner req-banner" }, h("b", null, "Requested"),
-      h("a", { href: "#", onclick: go }, `${r.kind} ${r.label} · `, st.online ? ["waiting for ", supText(), " to start it"] : h("span", { class: "off-t" }, `${supText()} is offline; it gets it when it is back`)));
+      h("a", { href: "#", onclick: go }, `${r.kind} ${r.label} · `, online() ? ["waiting for ", supText(), " to start it"] : h("span", { class: "off-t" }, `${supText()} is offline; it gets it when it is back`)));
   if (s.wait)
     return h("a", { href: "#", class: "banner next-banner you", onclick: go }, h("b", null, "Next: waits on you"), h("span", null, `${s.wait.ref} · ${s.wait.text}`));
   if (r?.status === "started")
@@ -158,13 +162,13 @@ function banner() {
     declinedNow ? [h("b", null, "Declined"), h("a", { href: "#", onclick: go }, `${r.kind} ${r.label} · ${sup().name}: “${r.reason}”`)]
       : [h("b", null, "Next"), h("a", { href: "#", onclick: go }, s.next)],
     p ? h("button", { type: "button", class: "primary start-btn", onclick: () => openEditor(p.kind) }, `Start ${p.kind} ${p.label}`)
-      : h("span", { class: "muted cant-t" }, "can't start: ", oneReason() ? reasonText(oneReason()) : "see why below"));
+      : h("span", { class: "muted cant-t" }, "can't start: ", nextReason() ? reasonText(nextReason()) : "see why below"));
 }
 
-/** When every kind is refused for the same reason (Helix's one open feature), the banner says it. */
-function oneReason() {
-  const no = sc().kinds.filter((k) => !k.ok);
-  return no.length && no.every((k) => k.reason === no[0].reason) ? no[0] : null;
+/** Nothing may start: the banner gives the reason for the kind the Next line names (or the only one). */
+function nextReason() {
+  const no = refusedKinds();
+  return no.find((k) => k.kind === sc().nextKind) ?? no[0] ?? null;
 }
 
 function onNow() {
@@ -182,7 +186,7 @@ function stepItem(ss) {
       ss.state === "closed" ? h("div", { class: "outcome" }, h("span", { class: "need", "data-need": ss.need }, `need: ${ss.need}`),
         h("span", null, `${ss.blockers} blockers · ${ss.majors} majors`), h("span", null, `moved ${ss.moved} tasks`), h("span", { class: "muted" }, `${ss.tokens} tokens`)) : null,
       ss.agents?.length ? h("ul", { class: "lines s-agents" }, ss.agents.map((w) => h("li", null, h("span", { class: "l-who" }, h("i", { class: "dot on", "aria-hidden": "true" }), h("b", null, w.name), h("span", { class: "muted" }, ` ${w.role} · `), h("span", { style: "color:var(--ok)" }, "running"), h("span", { class: "muted" }, ` · ${w.tokens} tokens`))))) : null,
-      r ? h("div", { class: "from-req" }, h("span", null, "From your request: sent ", r.at0, ", started ", r.startedAt, " by ", supName(false), ".",
+      r ? h("div", { class: "from-req" }, h("span", null, `From your request ${r.ref}: sent `, r.at0, ", started ", r.startedAt, " by ", supName(false), ".",
         r.edited ? " Brief edited by you." : ""),
         h("details", { class: "sent" }, h("summary", null, "The brief you sent"), h("pre", { class: "handoff" }, r.brief))) : null,
       ss.summary ? h("div", { class: "sub" }, ss.summary) : null,
@@ -194,19 +198,20 @@ function nextItem() {
   const s = sc(), r = req(), p = primary(), ok = okKinds();
   if (r?.status === "started") return h("li", { class: "step next", id: "next" }, h("span", { class: "dot2", "aria-hidden": "true" }),
     h("div", { class: "card" }, h("div", { class: "top" }, h("span", { class: "kind" }, "Next"), h("b", null, "a review session")), h("div", { class: "sub muted" }, `Once ${r.kind} ${r.label} closes`)));
-  const no = s.kinds.filter((k) => !k.ok);
+  // The Next kind's reason first; each sentence once.
+  const no = refusedKinds().sort((a, b) => (b.kind === s.nextKind) - (a.kind === s.nextKind));
   const reasons = [...new Map(no.map((k) => [k.reason, k])).values()];
   return h("li", { class: `step next${s.wait ? " you" : ""}`, id: "next" }, h("span", { class: "dot2", "aria-hidden": "true" }),
     h("div", { class: "card" },
       h("div", { class: "top" }, h("span", { class: "kind" }, "Next"), h("b", null, s.wait ? "Waits on you" : s.next)),
       s.wait ? h("div", null, h("span", { class: "id" }, s.wait.ref), " ", h("b", null, s.wait.text)) : null,
-      r?.status === "declined" ? h("div", { class: "req-note declined" }, h("b", null, `${supText()} declined ${r.kind} ${r.label}`), ` at ${r.at}: `, h("q", null, r.reason)) : null,
-      r?.status === "withdrawn" ? h("div", { class: "req-note" }, `You withdrew ${r.kind} ${r.label} at ${r.at}; ${sup().name} was told.`) : null,
+      r?.status === "declined" ? h("div", { class: "req-note declined" }, h("b", null, `${supText()} declined ${r.kind} ${r.label}`), ` (${r.ref}) at ${r.at}: `, h("q", null, r.reason)) : null,
+      r?.status === "withdrawn" ? h("div", { class: "req-note" }, `You withdrew ${r.kind} ${r.label} (${r.ref}) at ${r.at}; ${sup().name} was told.`) : null,
       ok.length
         ? h("div", { class: "start" },
             h("div", { class: "start-row" }, h("button", { type: "button", class: "primary", onclick: () => openEditor(p.kind) }, `Start ${p.kind} ${p.label}`),
               ok.filter((k) => k !== p).map((k) => h("button", { type: "button", onclick: () => openEditor(k.kind) }, `Start ${k.kind} ${k.label}`))),
-            h("p", { class: "start-to" }, "Goes to ", supName(), st.online ? ", who decides who runs it." : h("span", { class: "off-t" }, ", offline now: it gets the request when it is back.")),
+            h("p", { class: "start-to" }, "Goes to ", supName(), online() ? ", who decides who runs it." : h("span", { class: "off-t" }, ", offline now: it gets the request when it is back.")),
             reasons.length ? h("div", { class: "not-now" }, h("span", null, "Not now"), h("ul", null, reasons.map((k) => h("li", null, reasonText(k))))) : null)
         : h("div", { class: "start cant" }, h("b", null, "Can't start a session now"),
             reasons.length === 1 ? h("div", null, reasonText(reasons[0])) : h("ul", null, reasons.map((k) => h("li", null, reasonText(k)))))));
@@ -217,9 +222,9 @@ function requestedItem() {
   const r = req();
   return h("li", { class: "step next requested", id: "next", dataset: { kind: r.kind } }, h("span", { class: "dot2", "aria-hidden": "true" }),
     h("div", { class: "card" },
-      h("div", { class: "top" }, h("span", { class: "kind" }, "Requested"), h("b", null, `${r.kind} ${r.label}`), h("span", { class: "when" }, `sent ${r.at0}`),
-        h("span", { class: "badge", "data-state": st.online ? "in progress" : "waiting" }, st.online ? "requested" : "supervisor offline")),
-      st.online
+      h("div", { class: "top" }, h("span", { class: "kind" }, "Requested"), h("b", null, `${r.kind} ${r.label}`), h("span", { class: "id" }, r.ref), h("span", { class: "when" }, `sent ${r.at0}`),
+        h("span", { class: "badge", "data-state": online() ? "in progress" : "waiting" }, online() ? "requested" : "supervisor offline")),
+      online()
         ? h("div", { class: "req-wait" }, "Waiting for ", supName(), " to start it. It decides who runs it.")
         : h("div", { class: "req-wait off" }, supName(), ` is offline: no report since ${sup().lastReport}. It gets your request when it is back; nothing is lost.`),
       h("div", { class: "sub muted" }, `Sent by you at ${r.at0}${r.edited ? " · brief edited by you" : " · BobNet's brief"} · ${n(r.brief.length)} characters`),
@@ -270,7 +275,7 @@ function editorPage(kind) {
             h("input", { id: "label", type: "text", maxlength: 40, value: d.label, autocomplete: "off", "aria-invalid": labErr ? "true" : null, "aria-describedby": "label-h",
               onchange: (e) => { d.label = e.target.value; d.touched = true; if (!d.edited) d.text = s.brief(kind, d.label.trim() || k.label); save(); render(); } }),
             h("span", { id: "label-h", class: `fh${labErr ? " err" : ""}` }, labErr ?? `${f.ref} ${kind} ${lab}. BobNet proposed ${k.label}.`)),
-          h("div", { class: "fld" }, h("span", { class: "fl" }, "Goes to"), h("span", null, supName(), st.online ? h("span", { class: "muted" }, " · online") : h("span", { class: "off-t" }, ` · offline since ${sup().lastReport}; it gets it when it is back`))),
+          h("div", { class: "fld" }, h("span", { class: "fl" }, "Goes to"), h("span", null, supName(), online() ? h("span", { class: "muted" }, " · online") : h("span", { class: "off-t" }, ` · offline since ${sup().lastReport}; it gets it when it is back`))),
           h("p", { class: "note se-note" }, `Nothing starts until ${sup().name} starts it. ${sup().name} decides who runs it and declares the session and its tasks, as with any spawn.`)),
         h("div", { class: "se-main" },
           h("label", { class: "fl", for: "brief" }, "Brief"),
@@ -297,15 +302,15 @@ function confirmAsk(kind) {
   const s = sc(), d = draftOf(kind), lab = d.label.trim();
   dialog(`Ask ${sup().name} to start ${s.feature.ref} ${kind} ${lab}?`,
     [h("p", null, `${supText()} gets this brief as you wrote it and decides who runs it. Nothing starts until it does, and you can withdraw the request until then.`),
-      !st.online ? h("p", { class: "off-t" }, `${supText()} is offline now. The request waits for it; nothing is lost.`) : null,
+      !online() ? h("p", { class: "off-t" }, `${supText()} is offline now. The request waits for it; nothing is lost.`) : null,
       h("p", { class: "note" }, `Sent as ${S.me} · ${d.edited ? "brief edited by you" : "BobNet's brief"} · ${n(d.text.length)} characters`)],
     "Back to the brief", `Ask ${sup().name}`, "primary", () => {
       if (s.refuseOnSend) { st.refused[st.sc] = s.refuseOnSend; save(); render(); window.scrollTo(0, 0); return; }
-      st.reqs[st.sc] = { kind, label: lab, brief: d.text, edited: d.edited, at0: S.now, status: "pending" };
+      st.reqs[st.sc] = { ref: s.req, kind, label: lab, brief: d.text, edited: d.edited, at0: S.now, status: "pending" };
       delete st.drafts[`${st.sc}/${kind}`];
       save();
       location.hash = "";
-      toast(st.online ? `Sent to ${supText()}. It starts ${kind} ${lab} or says why not.` : `Saved. ${supText()} is offline; it gets the request when it is back.`);
+      toast(online() ? `Asked: ${s.req}, sent to ${supText()}. It starts ${kind} ${lab} or says why not.` : `Asked: ${s.req}, saved; waiting for ${supText()} to come online.`);
     });
 }
 
@@ -315,7 +320,7 @@ function withdrawAsk() {
     [h("p", null, `${sup().name} is told, and won't start it. You can ask again later; the brief you sent comes back in the editor.`)],
     "Keep it", "Withdraw", "danger", () => {
       Object.assign(r, { status: "withdrawn", at: S.now });
-      toast(`Withdrawn. ${supText()} is told.`);
+      toast(online() ? `Withdrawn: ${r.ref}. ${supText()} is told.` : `Withdrawn: ${r.ref}. Waiting for ${supText()} to come online to tell it.`);
     });
 }
 
