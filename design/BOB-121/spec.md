@@ -12,9 +12,13 @@ the `usage` and `project` reads §3, the current release §4) and ADR 0013 (a re
 
 **How the prototype maps to the build.** `prototype/proto.css` is new rules on `style.css`'s tokens
 only; they move into `style.css`. `core.js` and `views.js` draw each piece the way `app.js` should.
-`data.js` is made-up data in the reads' shapes. The panel at the foot of a page, "Prototype: show
-other states", isn't part of the design. It switches the sample to a quiet laptop, nothing on Needs
-you, or an older supervisor.
+`data.js` is made-up data in the reads' shapes.
+
+**"Prototype: show other states" is not part of the product. Don't build it.** The panel at the foot
+of the prototype's pages is a preview switch for the prototype only (Casper, Q-13: "weird"): it swaps
+the sample to a quiet laptop, nothing on Needs you, or an older supervisor, so those states can be
+seen. The dashboard shows them when they are true, never by a switch; `.proto-states` stays out of
+`style.css` (§3). The prototype doesn't draw a day's detail; §2.9 is the design for it.
 
 ---
 
@@ -313,15 +317,75 @@ Today's page, with these changes:
     value on top. Today's bar is lighter ("so far").
 - Tap or Enter on a day selects it (outlined) and adds the day's line under the graph: "Fri 13 Nov:
   139.1M Sonnet-equivalent tokens", its split by model ("opus 128.0M · sonnet 11.0M · haiku 115k"),
-  and "Biggest: LAND-49 build 2 104.0M, …" (links to the feature page).
+  and "Biggest: LAND-49 build 2 104.0M, …" (links to the feature page; `usage`'s `top`, the three
+  biggest by the switch). Under the day line the **day's detail** opens (below, after Q-13).
 - Under the graph:
   - "1 spike over twice the median day: 21 Nov 84.3M" (each a button that selects the day);
   - "98.0M tokens on an unnamed model, counted at ×1" (only when N > 0);
   - "1 run lost, tokens unknown: not counted".
-- Foot: "Tap a day for what made it. A run's tokens are spread over the days it ran; today's include
-  the workers running now, so far. A context-per-call chart is on each session's card, on the
-  feature's page."
+- Foot: "Tap a day for what made it and its context per call. A run's tokens are spread over the days
+  it ran; today's include the workers running now, so far. A session's own context per call is on its
+  card, on the feature's page."
 - Tokens only, everywhere: no currency, no price.
+
+#### A day's detail (after Q-13)
+
+Casper: "I liked the calls/context line graphs, would i click on a bar to see the detailed
+context/call by agent and in total?" Yes: the tap above opens them for that day. The data is
+`usage_day` (ADR 0014 §3a, build brief D8), fetched on the tap and kept per project, day, span and
+tz (D5); the calls per day come from `usage` (each point's `calls` and `by_role`), already loaded.
+
+- **Where:** inside the project's card, under the day line, the card's full width. One open day per
+  card; tapping another day moves it there. Other cards are untouched.
+- **Head:** "Fri 13 Nov in detail", a [Total | By agent] switch (`.seg`, as the session card's
+  "Whole session"), and a Close button (×, `aria-label="Close Fri 13 Nov's detail"`).
+  - **By agent** adds a second row of buttons, one per role with calls that day, most calls first
+    ("luigi · 212 calls"). The first is picked. On a phone the row scrolls sideways; it doesn't wrap.
+- **Graph 1, Context per call:** x is the call (1 … the day's calls), y is context in tokens.
+  - Total: the day's runs in start order, their points summed as they go, solid `--accent`, 2.5 px.
+    Today's line is named "Sun 22 Nov so far" and includes the running workers (D5).
+  - By agent: the role's runs that day, one after another; a new run starts again from a small
+    context, drawn as today's `roleLine` does (the reset dotted). The role's p25-p75 is the grey band,
+    as on the session card today.
+  - The baseline, dashed `--muted`, 2 px: `baseline.total.p50` or the role's `p50`, as "Baseline
+    (Toad)" below says. It stops where it stops; the day's line goes on.
+  - Hover or focus on a call shows a tip: "call 120 · 84k context · median 61k" (the median only
+    where the baseline reaches).
+  - Context is the model's own window, so it is **raw tokens with the weigh switch on or off**. Under
+    Sonnet-equivalent the graph says so in its note: "Context is raw tokens: weighing applies to the
+    bars."
+- **Graph 2, Calls per day:** x is the period's days (as the bars), y is calls. A solid `--accent`
+  line of the day's calls (Total: `calls`; By agent: that role's `by_role` calls), the median day
+  dashed `--muted` across, and the tapped day a filled dot with its value on it. Today's point is
+  hollow ("so far"). A day with no calls is 0, not a gap.
+- **Key** under both graphs: "Fri 13 Nov · 412 calls" (solid) and "median day · 286 calls"
+  (dashed); By agent adds "luigi's runs, middle half" (band). Then Toad's sentence, as below, with
+  the period's days and the role's name filled in.
+- **Widths:**
+  - Phone (390): the graphs stack, Context then Calls, each the card's width and 180 px tall. Axis
+    labels: three on y, first and last call (or first and last day) on x.
+  - Tablet (1024, one column of cards): the two graphs side by side, Context 3/5 of the width and
+    Calls 2/5, 220 px tall.
+  - Desktop (1440, two columns, each card ~680 px): stacked as on a phone, 220 px tall. The card grows
+    downward; the card beside it keeps its height (the grid aligns to the start, not stretch).
+- **States:**
+  - Loading: the day line shows at once (from `usage`); the detail shows its head and a frame the
+    graphs' height with "Loading Fri 13 Nov's calls…", so nothing jumps when they arrive. The switch
+    works while loading.
+  - Failed: "Couldn't load Fri 13 Nov's calls." and a Retry button, in the same frame.
+  - No calls that day: "No calls on Fri 13 Nov." in the frame, no graphs; plus "1 run lost: no context
+    recorded" when `lost` > 0. The Total/By agent switch is hidden.
+  - No baseline (fewer than 3 days reach call 1, or 3 of the role's runs): no dashed line or band, and
+    the note says "No dashed line: fewer than 3 days in these 30 to compare with" (By agent: "fewer than
+    3 luigi runs in these 30 days").
+  - A role whose runs that day were all lost isn't in the By agent row. Lost runs show as "1 run lost:
+    no context recorded" under the key, whatever the switch.
+- **Closing:** the Close button, tapping the selected bar again, or Escape while focus is in the card.
+  Focus goes back to the day's bar. Switching 14/30 days refetches it for the new period; if the day
+  falls outside it, the detail and the day line close. The weigh switch doesn't close or refetch it.
+- **Link:** the open day is in the hash, `#usage/<key>/<YYYY-MM-DD>` (with Total or By agent and the
+  role as the session card keeps them in `state`). Opening that link scrolls to the card with the
+  detail open.
 
 **Baseline (Toad):** the dashed line on a day's context-per-call graphs is the **median over the
 chosen period** (14 or 30 days). It is the same span and the same kind of figure as the bars' "median
@@ -355,8 +419,8 @@ went to Sessions). Contents, all from the Sessions tab and drawn as there:
 - **Agents**: online of total, the table (agent, team, client version, status or last seen, in/out
   24 h, inbox).
 - **Rules for every project** (BOB-118): each global admin with Remove admin, as `#rules` today.
-- **Messages in the last 24 hours**, folded: who messaged whom. Kept for debugging; Casper decides
-  (§6).
+- **Messages in the last 24 hours**, folded: who messaged whom. Kept for debugging, as Casper
+  agreed (Q-13, §6 Q5).
 
 Session updates and "Workers ended in the last 24 hours" are dropped. The first are the checkpoint
 on each agent's detail row and the summaries on the feature page. The second are runs on the
@@ -391,6 +455,16 @@ forms). The seg switches are ≥32 px, as today.
   remains in `app.js`.
 - Usage: one series per project, with no project picked; the toggle switches every number on the
   page; the unknown line shows only when N > 0; a lost run is never 0.
+- Usage, a day's detail (fake broker answering `usage_day`):
+  - a tap and Enter on a bar each open it with one `usage_day` call; a second tap on the same day
+    doesn't fetch again; Close, a second tap on the bar and Escape close it and focus the bar;
+  - Total's key reads "<day> · <n> calls" and "median day · <m> calls"; the dashed line has as many
+    points as `baseline.total.p50`, and none when it is empty (with the "No dashed line" note);
+  - By agent lists the day's roles, most calls first; picking one draws its band and median;
+  - a day with no calls shows "No calls on <day>." and no switch; a failed read shows Retry;
+  - the weigh switch changes no context figure; 30 → 14 days with a day 20 days back closes it;
+  - `#usage/<key>/<day>` opens with the detail open;
+  - today's detail includes a running worker's calls (D5's test).
 - Old links: `#sessions` and `#waits` land as §2.0 says; no Sessions tab exists.
 - BOB-51's dashboard tests (BOB-51 spec, "Tests"), unchanged.
 
@@ -429,17 +503,20 @@ forms). The seg switches are ≥32 px, as today.
    rather Peach confirms.
 **For Toad**
 
-2. **CI history.** Passed runs and the five before need the laptop's board report `ci` to keep, per
+2. **CI history.** *Answered by Toad (ADR 0014 §3a, build brief D9): the board's `ci_runs`, latest
+   and 5 before per workflow, the landing agent through `pushes`.* Passed runs and the five before need the laptop's board report `ci` to keep, per
    workflow, its last five runs (passed included), each with its sha, start, end and conclusion.
    "Who landed it" ("Toad's land") needs a land→run link. If there is none, drop it: the sha stays.
-3. **A feature's own criteria count** (Roadmap's "where it stands") apart from its tasks', and the
+3. *Answered by Toad (ADR 0014 §3a, build brief D10).* **A feature's own criteria count** (Roadmap's "where it stands") apart from its tasks', and the
    unticked ones' text for a Done feature. I assume the `get` of a feature has them. The roadmap
    list needs the own count.
-4. **A day's biggest sessions** on Usage: the `usage` read has `by_model` per day but no per-session
+4. *Answered by Toad (ADR 0014 §3a, build brief D3): each `usage` point gains `top`.* **A day's
+   biggest sessions** on Usage: the `usage` read has `by_model` per day but no per-session
    split. The day line can show models only, or the read gains `top: [{ session, raw, weighted }]`
    (≤3).
 
 **For Casper (through Mario)**
 
-5. **The Laptops page and the message log.** Is it right that laptop health, agents and rules live
+5. *Covered by Casper's "yes build it with the changes" (Q-13): build the Laptops page and the
+   folded message log as prototyped (§2.11).* **The Laptops page and the message log.** Is it right that laptop health, agents and rules live
    there, off the tabs? And should "who messaged whom" stay at all?
