@@ -520,6 +520,9 @@ export interface ReleaseRecord {
   backlog?: BacklogCounts;
 }
 
+/** A project's current release (ADR 0014 §4) and its 1-based place in the board's order of releases. */
+export type CurrentRelease = ReleaseRecord & { number: number };
+
 /** A triage list's counts: items not archived, the bugs among them, and the oldest's creation. */
 export interface BacklogCounts {
   items: number;
@@ -589,7 +592,7 @@ export interface AnsweredRecord {
 /** A project on the overview (spec: Overview, Projects). Who is on a feature now is the snapshot's. */
 export interface OverviewRow {
   project: ProjectRecord;
-  /** The first open release, by order, and its number in that order (1, 2, 3). */
+  /** The current release (ADR 0014 §4: the first not closed with work in it), and its number in the board's order (1, 2, 3). */
   release: ReleaseRecord | null;
   release_number: number | null;
   /** Its open features: `open_since` set and not Done (notes 15). */
@@ -817,7 +820,7 @@ export interface StatusRow {
     /** Features not Done, not archived, with no criteria. */
     no_criteria: Array<{ ref: string; title: string }>;
     triage: { count: number; oldest: { ref: string; at: string } | null };
-    /** The open release: its features not Done, and those Ready with criteria. */
+    /** The current release (ADR 0014 §4), as the Overview's: its features not Done, and those Ready with criteria. */
     release: { ref: string; todo: number; ready: number } | null;
     thin: boolean;
   };

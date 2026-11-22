@@ -634,13 +634,35 @@ export class BoardStore {
     return row.kind === "feature" ? this.refOf(item) : row.kind === "task" && row.parent !== null ? this.refOf(row.parent) : null;
   }
 
+  /**
+   * A project's current release (ADR 0014 §4): the first in the board's order that isn't closed and
+   * holds a feature not Done and not archived; else the last that isn't closed (its work done, waiting
+   * for Casper's close); else none. `number`: its place in that order, from 1. `done_unclosed`: the
+   * releases before it, not closed, with features and every one of them Done. The Overview, the status
+   * read and the project page all take it from here.
+   */
+  private currentRelease(p: ProjectRow): { release: ReleaseRecord | null; number: number | null; done_unclosed: Array<{ ref: string; title: string }> } {
+    const releases = this.sql
+      .exec<ReleaseRow & { todo: number; total: number }>(
+        `SELECT r.*,
+           (SELECT count(*) FROM items i WHERE i.release = r.pk AND i.kind = 'feature' AND i.archived_at IS NULL AND i.status != 'Done') AS todo,
+           (SELECT count(*) FROM items i WHERE i.release = r.pk AND i.kind = 'feature' AND i.archived_at IS NULL) AS total
+         FROM releases r WHERE r.project = ? ORDER BY r.ord IS NULL, r.ord, r.pk`,
+        p.pk,
+      )
+      .toArray();
+    let at = releases.findIndex((r) => r.status !== "closed" && r.todo > 0);
+    if (at < 0) at = releases.findLastIndex((r) => r.status !== "closed");
+    if (at < 0) return { release: null, number: null, done_unclosed: [] };
+    const done = releases.slice(0, at).filter((r) => r.status !== "closed" && r.total > 0 && r.todo === 0);
+    return { release: this.releaseRecord(releases[at]!), number: at + 1, done_unclosed: done.map((r) => ({ ref: r.ref, title: r.title })) };
+  }
+
   /** Each project as the overview shows it: who is on a feature now is the dashboard's, from the snapshots. */
   private overview(caller: BoardCaller, op: Op<"overview">): BoardResults["overview"] {
     return {
       projects: this.readableProjects(caller, op.project).map((p): OverviewRow => {
-        const releases = this.sql.exec<ReleaseRow>("SELECT * FROM releases WHERE project = ? ORDER BY ord IS NULL, ord, pk", p.pk).toArray();
-        const number = releases.findIndex((r) => r.status === "open");
-        const release = releases[number];
+        const current = this.currentRelease(p);
         const open = this.sql
           .exec<SummaryRow>(`${SUMMARY} WHERE i.project = ? AND i.kind = 'feature' AND i.open_since IS NOT NULL AND i.status != 'Done' AND i.archived_at IS NULL ${ORDERED}`, p.pk)
           .toArray();
@@ -654,8 +676,8 @@ export class BoardStore {
           .toArray()[0];
         return {
           project: this.projectRecord(p),
-          release: release ? this.releaseRecord(release) : null,
-          release_number: release ? number + 1 : null,
+          release: current.release,
+          release_number: current.number,
           open: open.map(summary),
           next_ready: ready ? summary(ready) : null,
           waits_on_you: this.waitsOf(p).find((w) => w.blocking)?.ref ?? null,
@@ -901,15 +923,9 @@ export class BoardStore {
       )
       .toArray()
       .filter((f) => f.ac_total === 0);
-    const open = this.sql
-      .exec<{ pk: number; ref: string }>("SELECT pk, ref FROM releases WHERE project = ? AND status = 'open' ORDER BY ord IS NULL, ord, pk LIMIT 1", p.pk)
-      .toArray()[0];
-    const release = open
-      ? {
-          ref: open.ref,
-          todo: this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM items WHERE release = ? AND kind = 'feature' AND status != 'Done' AND archived_at IS NULL", open.pk).one().n,
-          ready: ready.filter((f) => f.release_ref === open.ref).length,
-        }
+    const current = this.currentRelease(p).release;
+    const release = current
+      ? { ref: current.ref, todo: current.features.total - current.features.done, ready: ready.filter((f) => f.release_ref === current.ref).length }
       : null;
     const triage = this.sql
       .exec<{ pk: number; created_at: string }>("SELECT pk, created_at FROM items WHERE project = ? AND kind = 'backlog' AND archived_at IS NULL ORDER BY created_at, pk", p.pk)
