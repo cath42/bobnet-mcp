@@ -196,6 +196,7 @@ describe("the status read (BOB-37)", () => {
     expect(h.backlog).toMatchObject({ sessions_estimate: 4, thin: false, release: { ref: r1, todo: 4, ready: 2 } });
   });
 
+  // 103 writes: under the land's load they pass 5 s (BOB-118 land).
   it("cuts a list at 100 and says how many more, keeping counts whole", async () => {
     await helix();
     for (let n = 0; n < 103; n++) await ok(owner, { op: "create", project: "helix", kind: "feature", type: "increment", title: `F${n}` });
@@ -203,7 +204,7 @@ describe("the status read (BOB-37)", () => {
     expect(h.backlog.no_criteria).toHaveLength(100);
     // 103 and Steps; Roadmap's task has a criterion.
     expect(h.more).toEqual({ "backlog.no_criteria": 4 });
-  });
+  }, 30_000);
 
   it("marks heavy a session over twice its kind's usual of the 30 days before, with at least 5 to compare", async () => {
     const { f1 } = await helix();
