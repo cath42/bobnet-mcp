@@ -23,6 +23,16 @@ they land, and cut releases.
    only at release level (end of R2) or in a unique circumstance with a real reason (Casper, 2026-11-21, via poe;
    portfolio CLAUDE.md, Authority).
 
+## Asking Casper
+
+When you need Casper's answer before work can go on, ask with `board_ask`: the question, your
+options (mark the one you recommend), context, and `holds_sessions` for the session that waits on
+it (or `holds` for the items). A question only in your reply or a message doesn't show on his
+dashboard. If he answers in your Remote Control session, record it at once with `board_ask answer
+{ ref, key, words }`, his words verbatim. If you're told a question of yours has waited a day,
+`keep` it with why it still stands, edit it, or `withdraw` it. A commit that fixes a bug carries the
+trailer `Fixes: BOB-n`.
+
 ## Releases
 
 You cut releases: set every `package.json` version (root and `packages/*`) to `2.0.0-rc.N` in one

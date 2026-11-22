@@ -27,6 +27,8 @@ This file is loaded for every role. Your own rules are in your role's folder:
   line is `v2` (not `main`, which is the v0.1 release). Commit, then call the `land` tool: it runs
   `pnpm -r typecheck`, `pnpm -r test` and pushes to `v2`, in the run slot. Never push, fetch or
   rebase yourself; call `rebase`.
+- **A commit that fixes a bug ends with the trailer `Fixes: BOB-n`** (ADR 0011): the land reports it,
+  and the bug shows "fix landed" on Waits until Peach closes it.
 - **Files record, messages coordinate.** Put what you produce in your folder and send the path.
 - **Usage is tokens, never dollars** (a Max subscription), in the UI and in reports.
 - **The dashboard has its own look** (`packages/broker/public/style.css`), never another product's,
