@@ -1596,6 +1596,116 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       await reread([a15, gate, q258, bug, q259]);
     });
 
+    describe("a fixed bug, a row unchanged over a day, a kept one (BOB-49; design/BOB-49/spec.md)", () => {
+      const sha = "5d4617f4bed3884d73deb1a9cc71e1ed366215f4";
+      const subject = "v2: BOB-27: board reports no longer stall behind a row the protocol won't take";
+      const fix = (release: string | null, tags_known: boolean) => ({ sha, subject, landed_at: iso(170), release, tags_known });
+      const bob27 = wait("BOB-27", "bug", "Board reports stuck since 04:10", false, { feature: "BOB-12", since: iso(180), fix: fix("v2.0.0-rc.34", true) });
+      const bob28 = wait("BOB-28", "bug", "The chart is blank", false, { feature: null, since: iso(200), fix: fix(null, true) });
+      const land9 = wait("LAND-9", "bug", "Tracts don't load", false, { project: "helix", feature: null, since: iso(210), asked_by: "Bob@mbp-1", fix: fix(null, false),
+        stale: { changed_at: iso(60 * 26), owner: "Peach@mbp-1", flagged_at: iso(10) } });
+      const q14 = wait("Q-14", "question", "Which laptop runs the Helix supervisor after the move?", true, { feature: "BOB-6", since: iso(60 * 51),
+        holds: { items: [], sessions: [{ feature: "BOB-6", kind: "build", label: "A" }] }, stale: { changed_at: iso(60 * 51), owner: "Mario@mbp-1", flagged_at: iso(40) } });
+      const a30 = wait("A-30", "action", "Rotate the CI token", false, { feature: null, since: iso(60 * 24 + 10), asked_by: "Peach@mbp-1", stale: { changed_at: iso(60 * 24 + 10), owner: "Peach@mbp-1", flagged_at: null } });
+      const gate6 = wait("BOB-6", "review_gate", "Casper's look at Start", true, { feature: "BOB-6", since: iso(60 * 26), asked_by: null, holds: { items: ["BOB-6"], sessions: [] },
+        stale: { changed_at: iso(60 * 26), owner: null, flagged_at: null } });
+      const q15 = wait("Q-15", "question", "Keep the old tab?", false, { feature: "BOB-6", since: iso(60 * 30), kept: { by: "Mario@mbp-1", at: iso(90), reason: "Still waits on the move, which is Friday" } });
+      const meta = (ref: string) => item(ref).querySelector(".meta")!;
+
+      beforeAll(async () => {
+        // Luigi in BOB-6 build A, so Q-14 holds him up by name.
+        const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+        snap.workers = [worker({ id: "w_6", name: "Luigi", project: "bobnet", role: "engineer", session: "BOB-6 build A", task_ref: null, task_refs: [] })] as never;
+        snap.pending = [];
+        FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+        await go("#waits");
+        await reread([bob27, bob28, land9, q14, a30, gate6, q15]);
+      });
+
+      it("moves a bug whose fix landed to When you have time, badged fix landed, with its commit, release and who closes it (spec a)", () => {
+        expect(refs("waits-holding")).toEqual(["Q-14", "BOB-6"]);
+        expect(refs("waits-rest")).toEqual(["Q-15", "A-30", "LAND-9", "BOB-28", "BOB-27"]);
+        expect(item("BOB-27").getAttribute("data-blocking")).toBe("false");
+        const badge = item("BOB-27").querySelector(".badge")!;
+        expect(badge.textContent).toBe("bug · fix landed");
+        expect(badge.getAttribute("data-state")).toBe("fixed");
+        // The fix line sits between the text and the meta.
+        const line = item("BOB-27").querySelector(".fix")!;
+        expect(line.previousElementSibling!.classList.contains("q")).toBe(true);
+        expect(line.nextElementSibling!.classList.contains("meta")).toBe(true);
+        expect(line.textContent).toBe("Fix landed 5d4617f, in v2.0.0-rc.34 · waits on Peach to close it");
+        expect(line.querySelector(".sha")!.getAttribute("title")).toBe(subject);
+        expect(line.querySelector(".muted")!.textContent).toBe(" · waits on Peach to close it");
+        expect(item("BOB-28").querySelector(".fix")!.textContent).toBe("Fix landed 5d4617f, not in a release yet · waits on Peach to close it");
+        expect(item("LAND-9").querySelector(".fix")!.textContent).toBe("Fix landed 5d4617f · waits on Peach to close it");
+        // No Blocks use; from and the triage link stay, and no button.
+        expect(item("BOB-27").querySelector(".holds")).toBeNull();
+        expect(meta("BOB-27").textContent).toBe("from MarioOpen in triage");
+        expect(item("BOB-27").querySelector("button")).toBeNull();
+        expect(item("BOB-27").querySelector(".top .age")!.textContent).toBe("3h 0m");
+      });
+
+      it("says a row unchanged over a day, and whom the board asked to check it: flagged, within the hour, nobody (spec b)", () => {
+        const stale = (ref: string) => item(ref).querySelector(".meta .stale")!;
+        expect(stale("Q-14").textContent).toBe("Unchanged for 2d 3h, Mario asked to check it 40m ago");
+        // After from, before the link.
+        expect(meta("Q-14").textContent).toBe("Holds up Luigi (build A)from MarioUnchanged for 2d 3h, Mario asked to check it 40m agoOpen BOB-6Answer");
+        expect(stale("A-30").textContent).toBe("Unchanged for 24h 10m, Peach is asked within the hour");
+        expect(stale("BOB-6").textContent).toBe("Unchanged for 26h 0m, nobody to ask");
+        // Both ages tick as every age on the page does.
+        expect([...stale("Q-14").querySelectorAll("[data-ago]")].map((x) => x.getAttribute("data-ago"))).toEqual([q14.stale.changed_at, q14.stale.flagged_at]);
+        // A fixed bug can be stale too: the fix line, then the stale span in the meta.
+        expect(item("LAND-9").querySelector(".fix")).not.toBeNull();
+        expect(stale("LAND-9").textContent).toBe("Unchanged for 26h 0m, Peach asked to check it 10m ago");
+        expect(item("LAND-9").querySelector(".kept")).toBeNull();
+      });
+
+      it("quotes the owner's keep, muted, when the row isn't stale; never both (spec b)", () => {
+        expect(item("Q-15").querySelector(".kept")!.textContent).toBe("Kept by Mario 1h 30m ago: “Still waits on the move, which is Friday”");
+        expect(item("Q-15").querySelector(".stale")).toBeNull();
+      });
+
+      it("shows a lead's board_ask question on Needs you as any question, with how long it has been unchanged; the fixed bug only in the count (spec b, c)", async () => {
+        await go("#overview");
+        await answerWith([bob27, bob28, land9, q14, a30, gate6, q15]);
+        const lines = [...$("needs").querySelectorAll("li")];
+        expect(lines.map((l) => l.getAttribute("data-id"))).toEqual(["bobnet/Q-14", "bobnet/BOB-6"]);
+        expect(lines[0]!.querySelector(".badge")!.textContent).toBe("question");
+        expect(lines[0]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-6 · holds up Luigi (build A) · unchanged 2d 3h");
+        expect([...lines[0]!.querySelectorAll("button:not([hidden])")].map((b) => b.textContent)).toEqual(["Answer"]);
+        expect(view().querySelector(".ov-needs .more")!.textContent).toBe("2 hold work up · 5 more when you have time →");
+        expect($("waits-count").textContent).toBe("7");
+        await go("#waits");
+      });
+
+      it("closes his open form when its question is withdrawn, and keeps his draft in the toast (spec b, Withdrawn)", async () => {
+        (item("Q-14").querySelector(".answer-btn") as HTMLButtonElement).click();
+        for (const f of pending("get").filter((x) => x.op["ref"] === "Q-14")) reply(f, { question: { ref: "Q-14", options: [] } });
+        await settle();
+        const box = item("Q-14").querySelector("form.answer textarea") as HTMLTextAreaElement;
+        box.value = "The Mac mini in the hall cupboard, once it has the new disk and the UPS is wired; ask me again on Friday";
+        box.dispatchEvent(new Event("input"));
+        (document.activeElement as HTMLElement)?.blur?.();
+        await reread([bob27, bob28, land9, a30, gate6, q15]);
+        const get = pending("get").find((f) => f.op["ref"] === "Q-14")!;
+        expect(get.op).toEqual({ op: "get", project: "bobnet", ref: "Q-14" });
+        reply(get, { question: { ref: "Q-14", state: "withdrawn", asked_by: "Mario@mbp-1", options: [] } });
+        await settle();
+        expect(view().querySelector("form.answer")).toBeNull();
+        expect($("toast").textContent).toBe("Q-14 was withdrawn by Mario; it no longer waits on you. Your draft: “The Mac mini in the hall cupboard, once it has the new disk and the UPS is wired…”×");
+        ($("toast").querySelector(".close-t") as HTMLButtonElement).click();
+        // An answer form whose question was answered elsewhere isn't closed with a toast.
+        (item("Q-15").querySelector(".answer-btn") as HTMLButtonElement).click();
+        for (const f of pending("get").filter((x) => x.op["ref"] === "Q-15")) reply(f, { question: { ref: "Q-15", options: [] } });
+        await reread([bob27, bob28, land9, a30, gate6]);
+        reply(pending("get").find((f) => f.op["ref"] === "Q-15")!, { question: { ref: "Q-15", state: "answered", asked_by: "Mario@mbp-1", options: [] } });
+        await settle();
+        expect($("toast").hidden).toBe(true);
+        (document.querySelector(".answer-btn, form.answer button[type=button]") as HTMLButtonElement | null)?.click();
+        await reread([a15, gate, q258, bug, q259]);
+      });
+    });
+
     it("drops an item once its source says it is answered, keeping nothing of its own (#3)", async () => {
       await go("#waits");
       FakeSocket.last.frame({ t: "board_changed", project: "helix", seq: 99, refs: ["Q-258"] });

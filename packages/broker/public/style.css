@@ -298,6 +298,7 @@ dialog .note { margin: 0; }
 @media (max-width: 760px) { .capture-btn { margin-left: auto; } }
 /* Triage: totals, bugs among them in red */
 .badge[data-state="bug"] { color: var(--bad); }
+.badge[data-state="fixed"] { color: var(--ok); }
 table.triage td.age { white-space: nowrap; }
 .seg.filters { max-width: 100%; overflow-x: auto; }
 .seg.filters button { white-space: nowrap; }
@@ -395,6 +396,11 @@ a.more-t { text-decoration: none; justify-self: start; padding: 0; min-height: 0
 .waits li .meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 14px; align-items: center; }
 .waits li .meta a, .waits li .top a { color: var(--accent); }
 .waits li .holds { color: var(--bad); }
+/* A fixed bug's line, and a row unchanged over a day or kept (BOB-49 spec) */
+.waits li .fix { font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+.waits li .fix .sha { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.waits li .stale { color: var(--warn); }
+.waits li .kept { overflow-wrap: anywhere; }
 .answer-btn { min-height: 32px; padding: 2px 12px; font-size: 13px; }
 .waits li .meta .answer-btn { margin-left: auto; }
 .ov-needs li.hold > form.answer { grid-column: 1 / -1; }

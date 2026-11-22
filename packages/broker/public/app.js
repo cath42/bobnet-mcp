@@ -1185,6 +1185,7 @@ async function loadOverview() {
     Object.assign(ov, { rows: o.projects, waits: w.waits, answered: w.answered ?? [], error: null });
     pruneWhole();
     noteEditedUnderForm();
+    void closeWithdrawnForm();
   } catch (err) {
     Object.assign(ov, { rows: ov.rows ?? [], waits: ov.waits ?? [], error: err.message });
   } finally {
@@ -1267,6 +1268,8 @@ function waitingText(w) {
 }
 
 const WAIT_KIND = { question: ["question", "question"], action: ["action", "action"], review_gate: ["review", "review gate"], bug: ["bug", "bug · blocks use"] };
+/** A wait's badge: a bug whose fix landed no longer blocks use (BOB-49 spec a). */
+const waitKind = (w) => (w.kind === "bug" && w.fix ? ["fixed", "bug · fix landed"] : WAIT_KIND[w.kind]);
 /** A session by its kind and label ("build A", "review 1"), never repeating the kind; "Fixes" is a build label and stays "Fixes" (spec, BOB-3 gap 5). */
 const stepName = (ss) => (ss.label === "Fixes" || ss.label.toLowerCase().startsWith(`${ss.kind} `) ? ss.label : `${ss.kind} ${ss.label}`);
 /** The agents in a board session, from their declared sessions. */
@@ -1349,7 +1352,7 @@ function ciLines() {
 const queuedLine = () => { const q = workers().filter((w) => w.state === "queued"); return q.length ? h("p", { class: "more queued" }, `${q.length} queued: `, whoNames(q)) : null; };
 
 function waitLine(w) {
-  const [st, label] = WAIT_KIND[w.kind];
+  const [st, label] = waitKind(w);
   const id = waitId(w);
   const whole = [
     w.recommended ? h("div", { class: "rec" }, h("b", null, "Recommended "), w.recommended.text) : null,
@@ -1357,7 +1360,7 @@ function waitLine(w) {
     w.context ? h("a", { href: "#waits", class: "more-t", onclick: () => { state.whole.add(`ctx:${id}`); saveWhole(); scrollAfter = `c-${id}`; } }, "Its context, on Waits on you →") : null,
   ];
   return needsLine(id, w.ref, badge(st, label), w.text, whole,
-    `${projectName(w.project)}${w.feature ? ` · ${w.feature}` : ""} · ${w.kind === "bug" ? "blocks use" : `holds up ${heldNames(w)}`}`,
+    `${projectName(w.project)}${w.feature ? ` · ${w.feature}` : ""} · ${w.kind === "bug" ? "blocks use" : `holds up ${heldNames(w)}`}${w.stale ? ` · unchanged ${since(w.stale.changed_at)}` : ""}`,
     ANSWER_VERB[w.kind], state.answering?.id === id ? answerForm(w) : null);
 }
 
@@ -1592,6 +1595,27 @@ function editedUnderForm(w) {
   return !!a.edited;
 }
 
+/**
+ * His open answer form's question left Waits: if its asker withdrew it, the form closes and a toast says so, with
+ * the start of his draft so his words aren't lost silently (BOB-49 spec b). Answered elsewhere, it is left as it is.
+ */
+async function closeWithdrawnForm() {
+  const a = state.answering;
+  if (!a || a.id.startsWith("perm/") || (ov.waits ?? []).some((x) => waitId(x) === a.id)) return;
+  const [key, ref] = a.id.split("/");
+  let q;
+  try {
+    q = (await boardOp({ op: "get", project: key, ref })).question;
+  } catch {
+    return;
+  }
+  if (q?.state !== "withdrawn" || state.answering !== a) return;
+  const draft = a.words.trim();
+  state.answering = null;
+  toast(`${ref} was withdrawn by ${q.asked_by ? askedBy(q.asked_by) : "its asker"}; it no longer waits on you.${draft ? ` Your draft: “${draft.length > 80 ? `${draft.slice(0, 80)}…` : draft}”` : ""}`, true, null, !!draft);
+  render();
+}
+
 /** While he is in his form the page doesn't redraw: the note goes into it now, and the rest follows on the next redraw. */
 function noteEditedUnderForm() {
   const a = state.answering, w = a && (ov.waits ?? []).find((x) => waitId(x) === a.id);
@@ -1626,8 +1650,34 @@ function editsOf(w, where, opened = false) {
       e.changes.map(change)))));
 }
 
+/** Who closes a fixed bug: the project's PO, else its lead (BOB-49 spec a). */
+function closerOf(key) {
+  const p = svc.projects?.find((x) => x.key === key);
+  return p?.po ? shortName(p.po) : p?.lead ? shortName(p.lead) : "its PO";
+}
+
+/** A fixed bug's line: the commit, its release when one is known, and who closes it (BOB-49 spec a). */
+function fixLine(w) {
+  const f = w.fix;
+  if (!f) return null;
+  const where = f.release ? `, in ${f.release}` : f.tags_known ? ", not in a release yet" : "";
+  return h("div", { class: "fix" }, "Fix landed ", h("span", { class: "sha", title: f.subject }, f.sha.slice(0, 7)), where,
+    h("span", { class: "muted" }, ` · waits on ${closerOf(w.project)} to close it`));
+}
+
+/** How long a row has waited unchanged, and whom the board asked to check it; else its owner's latest keep (BOB-49 spec b). */
+function staleSpan(w) {
+  const s = w.stale;
+  if (s) {
+    const tail = !s.owner ? ", nobody to ask" : s.flagged_at ? [`, ${askedBy(s.owner)} asked to check it `, ago(s.flagged_at), " ago"] : `, ${askedBy(s.owner)} is asked within the hour`;
+    return h("span", { class: "stale" }, "Unchanged for ", ago(s.changed_at), tail);
+  }
+  const k = w.kept;
+  return k ? h("span", { class: "kept" }, `Kept by ${askedBy(k.by)} `, ago(k.at), ` ago: “${k.reason}”`) : null;
+}
+
 function waitItem(w) {
-  const [st, label] = WAIT_KIND[w.kind];
+  const [st, label] = waitKind(w);
   const id = waitId(w), verb = ANSWER_VERB[w.kind], open = state.answering?.id === id;
   const edited = editedUnderForm(w);
   const closed = w.waiting_sessions.map((ss) => `${ss.feature === w.feature ? stepName(ss) : `${ss.feature} ${stepName(ss)}`}`);
@@ -1638,10 +1688,12 @@ function waitItem(w) {
     h("div", { class: "q" }, w.text),
     w.recommended ? h("div", { class: "rec" }, "Recommended: ", w.recommended.text) : null,
     contextRow(w, id),
+    fixLine(w),
     h("div", { class: "meta" },
       w.blocking ? h("span", { class: "holds" }, w.kind === "bug" ? "Blocks use" : `Holds up ${heldNames(w)}`) : null,
       w.blocking ? null : neededBefore(w),
       w.asked_by ? h("span", null, `from ${askedBy(w.asked_by)}`) : null,
+      staleSpan(w),
       editsOf(w, "waits", edited),
       closed.length ? h("span", null, `${upTo2(closed)} closed on it (need: casper)`) : null,
       waitLink(w),
@@ -1984,10 +2036,10 @@ function needLine(x, since, withProject) {
     text = permText(x.p);
     meta = [withProject ? (w ? projectName(w.project) : x.p.laptop) : null, ss?.feature, `holds up ${x.p.name}${ss ? ` (${declaredStep(w)})` : ""}`];
   } else {
-    const [st, label] = WAIT_KIND[x.w.kind];
+    const [st, label] = waitKind(x.w);
     badgeEl = badge(st, label);
     text = x.w.text;
-    meta = [withProject ? projectName(x.w.project) : null, x.w.feature, x.w.kind === "bug" ? "blocks use" : x.w.blocking ? `holds up ${heldNames(x.w)}` : "when you have time"];
+    meta = [withProject ? projectName(x.w.project) : null, x.w.feature, x.w.kind === "bug" && x.w.blocking ? "blocks use" : x.w.blocking ? `holds up ${heldNames(x.w)}` : "when you have time"];
   }
   return h("li", { class: "hold need", dataset: { blocking: String(x.blocking), id } }, badgeEl,
     h("a", { class: "l-t", href: "#waits", onclick: go }, text),
@@ -3051,3 +3103,5 @@ setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send('{"t":"ping"}'), 
 setInterval(() => ws?.readyState === WebSocket.OPEN && (dashboardRid = request("dashboard")), 60_000);
 // The Status tab's dot, on any view (ADR 0005 §2: every 60 s when Status and the Overview aren't showing).
 setInterval(() => ws?.readyState === WebSocket.OPEN && svc.projects && loadStatus(), 60_000);
+// Waits, hourly: a row goes stale and is flagged with no change on the board to say so (ADR 0011 §2; review A m3).
+setInterval(() => ws?.readyState === WebSocket.OPEN && svc.projects && loadOverview(), 60 * 60_000);
