@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { Envelope, LaptopSnapshot } from "@bobnet/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseSupervisorConfig, strandedState } from "../src/config.ts";
@@ -1056,5 +1057,218 @@ describe("ADR 0013 §1: a request's whole ask on the report (BOB-51)", () => {
     expect(kept.slice(kept.indexOf(false)).every((k) => !k)).toBe(true);
     const bytes = snap.pending.reduce((n, p) => n + (p.ask ? Buffer.byteLength(JSON.stringify(p.ask)) : 0), 0);
     expect(bytes).toBeLessThanOrEqual(ASK_BUDGET);
+  });
+});
+
+describe("ADR 0013 §2: where a decision came from, and the report's decided (BOB-51)", () => {
+  const action = (a: Record<string, unknown>) =>
+    ({ t: "action", id: `a_${Math.random()}`, to: "supervisor@mbp-1", by: "owner@example.com", token: "good-token", action: a }) as never;
+  /** One escalated call of the running worker, and its request id. */
+  async function asked(sup: Supervisor, session: { ask: (t: string, i: Record<string, unknown>) => Promise<unknown> }, tool = "Bash", input: Record<string, unknown> = { command: "git push origin HEAD:main" }) {
+    const n = store.requests(["open"]).length;
+    const result = session.ask(tool, input);
+    await until(() => store.requests(["open"]).length === n + 1);
+    return { result, id: store.requests(["open"]).at(-1)!.id };
+  }
+
+  it("lists a dashboard allow and a dashboard deny, newest first, the note verbatim; and says Denied by Casper with no note", async () => {
+    const { sup, broker, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const s = sessions[0]!;
+    const a = await asked(sup, s);
+    sup.onPush(action({ kind: "answer", request: a.id, decision: "allow", message: "Once only, then land." }));
+    await expect(a.result).resolves.toMatchObject({ behavior: "allow" });
+    const d = await asked(sup, s);
+    sup.onPush(action({ kind: "answer", request: d.id, decision: "deny", message: "Use the land tool" }));
+    await expect(d.result).resolves.toEqual({ behavior: "deny", message: "Denied: Use the land tool" });
+    const bare = await asked(sup, s);
+    sup.onPush(action({ kind: "answer", request: bare.id, decision: "deny" }));
+    await expect(bare.result).resolves.toEqual({ behavior: "deny", message: "Denied by Casper" });
+    await until(() => broker.results.length === 3);
+    expect(store.request(a.id)).toMatchObject({ via: "dashboard", decided_by: "human" });
+
+    const decided = sup.snapshot().decided!;
+    expect(decided.map((r) => r.id)).toEqual([bare.id, d.id, a.id]);
+    expect(decided[2]).toEqual({
+      id: a.id,
+      worker_id: store.request(a.id)!.worker_id,
+      name: "Bill",
+      project: "helix",
+      kind: "approval",
+      tool: "Bash",
+      created_at: store.request(a.id)!.created_at,
+      decided_at: store.request(a.id)!.decided_at,
+      decision: "allow",
+      preview: "git push origin HEAD:main",
+      note: "Once only, then land.",
+    });
+    expect(decided[1]).toMatchObject({ decision: "deny", note: "Use the land tool" });
+    expect(decided[0]).toMatchObject({ decision: "deny", note: null });
+  });
+
+  it("leaves out the orchestrator's answers, a relayed user_decided one, a timeout, and one decided 25 h ago", async () => {
+    const { sup, broker, sessions } = await setup("request_timeout_minutes: 0.002");
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const s = sessions[0]!;
+    expect(sup.snapshot().decided).toEqual([]);
+    const orch = await asked(sup, s, "WebFetch", { url: "https://x" });
+    sup.answer(orch.id, { decision: "allow" }, "orchestrator");
+    await orch.result;
+    // answer_request with user_decided: Casper's decision, relayed by his orchestrator, not made on the dashboard.
+    const relayed = await asked(sup, s);
+    sup.answer(relayed.id, { decision: "allow", message: "ok" }, "human");
+    await relayed.result;
+    const timedOut = await asked(sup, s, "WebFetch", { url: "https://y" });
+    await expect(timedOut.result).resolves.toMatchObject({ behavior: "deny" });
+    expect(store.request(timedOut.id)!.state).toBe("expired");
+    expect(sup.snapshot().decided).toEqual([]);
+
+    const old = await asked(sup, s);
+    sup.onPush(action({ kind: "answer", request: old.id, decision: "allow" }));
+    await old.result;
+    await until(() => broker.results.length === 1);
+    expect(sup.snapshot().decided!.map((r) => r.id)).toEqual([old.id]);
+    (store as unknown as { db: { prepare: (q: string) => { run: (...a: unknown[]) => void } } }).db
+      .prepare("UPDATE requests SET decided_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 25 * 3600_000).toISOString(), old.id);
+    expect(sup.snapshot().decided).toEqual([]);
+  });
+
+  it("withholds a note that looks like a credential, as preview is", async () => {
+    const { sup, broker, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const a = await asked(sup, sessions[0]!);
+    sup.onPush(action({ kind: "answer", request: a.id, decision: "deny", message: `use AKIA${"ABCDEFGHIJKLMNOP"} instead` }));
+    await until(() => broker.results.length === 1);
+    expect(sup.snapshot().decided![0]!.note).toBe("[hidden: looks like it contains a credential]");
+  });
+
+  it("an orchestrator's deny with no message still reads Denied by the orchestrator", async () => {
+    const { sup, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const r = await asked(sup, sessions[0]!, "WebFetch", { url: "https://x" });
+    sup.answer(r.id, { decision: "deny" }, "orchestrator");
+    await expect(r.result).resolves.toEqual({ behavior: "deny", message: "Denied by the orchestrator" });
+  });
+
+  it("migrates an old db: requests gains via and its index", () => {
+    const file = join(dir, "old.db");
+    const old = new DatabaseSync(file);
+    old.exec(`CREATE TABLE requests (
+      id TEXT PRIMARY KEY, worker_id TEXT NOT NULL, kind TEXT NOT NULL, tool TEXT NOT NULL, input TEXT NOT NULL,
+      tier TEXT NOT NULL, rule TEXT NOT NULL, reason TEXT NOT NULL, state TEXT NOT NULL, decision TEXT,
+      message TEXT, answers TEXT, decided_by TEXT, created_at TEXT NOT NULL, decided_at TEXT);
+      INSERT INTO requests VALUES ('r_old', 'w_1', 'approval', 'Bash', '{}', 'human', 'r', 'x', 'answered', 'allow', NULL, NULL, 'human', '2026-11-21T00:00:00.000Z', '2026-11-21T00:01:00.000Z');`);
+    old.close();
+    const migrated = new Store(file);
+    try {
+      expect(migrated.request("r_old")).toMatchObject({ state: "answered", via: null });
+      const check = new DatabaseSync(file);
+      const indexes = check.prepare("PRAGMA index_list(requests)").all() as Array<{ name: string }>;
+      expect(indexes.map((i) => i.name)).toContain("requests_via");
+      expect((check.prepare("PRAGMA index_info(requests_via)").all() as Array<{ name: string }>).map((c) => c.name)).toEqual(["via", "decided_at"]);
+      check.close();
+    } finally {
+      migrated.close();
+    }
+  });
+});
+
+describe("ADR 0013 §3: a note with allow or answer is the agent's next message (BOB-51)", () => {
+  const action = (a: Record<string, unknown>) =>
+    ({ t: "action", id: `a_${Math.random()}`, to: "supervisor@mbp-1", by: "owner@example.com", token: "good-token", action: a }) as never;
+
+  it("an allow with a note from the dashboard: the call goes on, then the note is the next user message, and note_delivered is true", async () => {
+    const { sup, broker, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const s = sessions[0]!;
+    await until(() => s.inputs.length === 1);
+    const pending = s.ask("Bash", { command: "git push origin HEAD:main" });
+    await until(() => sup.pending().length === 1);
+    const id = sup.pending()[0]!.id;
+    sup.onPush(action({ kind: "answer", request: id, decision: "allow", message: "Once only, then land." }));
+    await expect(pending).resolves.toEqual({ behavior: "allow", updatedInput: { command: "git push origin HEAD:main" } });
+    await until(() => s.inputs.length === 2);
+    expect(s.inputs[1]).toBe(`Note from Casper with the Allow of request ${id} (Bash): Once only, then land.`);
+    await until(() => broker.results.length === 1);
+    expect(broker.results[0]).toMatchObject({ ok: true, note_delivered: true });
+  });
+
+  it("an allow or deny without a note sends no line and no note_delivered; a deny's note is its result, not a message", async () => {
+    const { sup, broker, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const s = sessions[0]!;
+    await until(() => s.inputs.length === 1);
+    const a = s.ask("Bash", { command: "git push origin HEAD:main" });
+    await until(() => sup.pending().length === 1);
+    sup.onPush(action({ kind: "answer", request: sup.pending()[0]!.id, decision: "allow" }));
+    await a;
+    const d = s.ask("Bash", { command: "git push origin HEAD:main" });
+    await until(() => sup.pending().length === 1);
+    sup.onPush(action({ kind: "answer", request: sup.pending()[0]!.id, decision: "deny", message: "no" }));
+    await d;
+    await until(() => broker.results.length === 2);
+    expect(broker.results.map((r) => "note_delivered" in r)).toEqual([false, false]);
+    await tick(20);
+    expect(s.inputs).toHaveLength(1);
+  });
+
+  it("an answer with a note, from the orchestrator: the line names it, after the answers", async () => {
+    const { sup, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const s = sessions[0]!;
+    await until(() => s.inputs.length === 1);
+    const input = { questions: [{ question: "Which index?", header: "Index", options: [{ label: "GiST" }, { label: "BRIN" }], multiSelect: false }] };
+    const pending = s.ask("AskUserQuestion", input);
+    await until(() => sup.pending().length === 1);
+    const id = sup.pending()[0]!.id;
+    const out = sup.answer(id, { decision: "answer", answers: { "Which index?": "GiST" }, message: "GiST, as ADR 0004 says." }, "orchestrator");
+    expect(out.note_delivered).toBe(true);
+    await expect(pending).resolves.toEqual({ behavior: "allow", updatedInput: { ...input, answers: { "Which index?": "GiST" } } });
+    await until(() => s.inputs.length === 2);
+    expect(s.inputs[1]).toBe(`Note from Bob with the answer to request ${id} (AskUserQuestion): GiST, as ADR 0004 says.`);
+  });
+
+  it("an orphan's allow with a note: the line is in the resumed worker's first turn", async () => {
+    const first = await setup();
+    const w = first.sup.spawn({ project: "helix", role: "bill", task: "push the ADR" });
+    await until(() => first.sessions.length === 1);
+    await until(() => store.worker(w.id)!.session_id !== null);
+    void first.sessions[0]!.ask("WebFetch", { url: "https://x" });
+    await until(() => first.sup.pending().length === 1);
+    const reqId = first.sup.pending()[0]!.id;
+
+    const second = await setup();
+    const out = second.sup.answer(reqId, { decision: "allow", message: "Only the docs page." }, "orchestrator");
+    expect(out).toMatchObject({ resumed: expect.anything(), note_delivered: true });
+    await until(() => second.sessions.length === 1);
+    const s = second.sessions[0]!;
+    await until(() => s.inputs.length === 1);
+    expect(s.inputs[0]).toMatch(new RegExp(`It has been approved; retry it now\\. Continue your task from where you left off\\.\\n\\nNote from Bob with the Allow of request ${reqId} \\(WebFetch\\): Only the docs page\\.\\n`));
+  });
+
+  it("a note for a worker whose input has closed: note_delivered false, audited note:undelivered", async () => {
+    const { sup, broker, sessions } = await setup();
+    const w = sup.spawn({ project: "helix", role: "bill", task: "t" });
+    await until(() => sessions.length === 1);
+    const s = sessions[0]!;
+    const pending = s.ask("Bash", { command: "git push origin HEAD:main" });
+    await until(() => sup.pending().length === 1);
+    const id = sup.pending()[0]!.id;
+    // Its turn ends with the call still waiting (as a cancelled call can leave it): the input closes.
+    s.finish();
+    await until(() => sup.status(w.id).state === "done");
+    sup.onPush(action({ kind: "answer", request: id, decision: "allow", message: "go on" }));
+    await until(() => broker.results.length === 1);
+    expect(broker.results[0]).toMatchObject({ ok: true, note_delivered: false });
+    await pending;
+    expect(store.auditLog().find((a) => a.action === "note:undelivered")).toMatchObject({ actor: "human", worker_id: w.id, detail: JSON.stringify({ request: id }) });
   });
 });

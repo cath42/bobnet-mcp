@@ -118,7 +118,7 @@ export class Router {
    * Settles an open request. `decidedBy` "human" is required for human-tier
    * requests. Returns the request so the caller can resume an orphaned worker.
    */
-  answer(requestId: string, answer: Answer, decidedBy: Exclude<DecidedBy, "policy" | "timeout" | "stop">): RequestRow {
+  answer(requestId: string, answer: Answer, decidedBy: Exclude<DecidedBy, "policy" | "timeout" | "stop">, via: "dashboard" | null = null): RequestRow {
     const { store } = this.deps;
     const req = store.request(requestId);
     if (!req) throw new AnswerError(`No request ${requestId}`);
@@ -139,6 +139,7 @@ export class Router {
       message: answer.message ?? null,
       answers: answer.decision === "answer" ? JSON.stringify(answer.answers) : null,
       decided_by: decidedBy,
+      via,
     });
     store.audit(decidedBy, `answer:${answer.decision}`, req.worker_id, { request: requestId, tool: req.tool });
 
@@ -147,7 +148,7 @@ export class Router {
       if (waiter.timer) clearTimeout(waiter.timer);
       this.waiting.delete(requestId);
       this.deps.setWorkerState(waiter.workerId, "running");
-      waiter.resolve(toResult(answer, waiter.input));
+      waiter.resolve(toResult(answer, waiter.input, decidedBy));
     }
     return store.request(requestId)!;
   }
@@ -224,13 +225,13 @@ export function authorOf(role: RoleConfig): string {
   return role.env["GIT_AUTHOR_NAME"] ?? role.name;
 }
 
-function toResult(answer: Answer, input: Record<string, unknown>): PermissionResult {
+function toResult(answer: Answer, input: Record<string, unknown>, decidedBy: DecidedBy): PermissionResult {
   switch (answer.decision) {
     case "allow":
       return { behavior: "allow", updatedInput: input };
     case "answer":
       return { behavior: "allow", updatedInput: { ...input, answers: answer.answers } };
     case "deny":
-      return { behavior: "deny", message: answer.message ? `Denied: ${answer.message}` : "Denied by the orchestrator" };
+      return { behavior: "deny", message: answer.message ? `Denied: ${answer.message}` : decidedBy === "human" ? "Denied by Casper" : "Denied by the orchestrator" };
   }
 }

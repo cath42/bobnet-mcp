@@ -169,7 +169,10 @@ export const TOOLS = [
       {
         id: { type: "string" },
         decision: { type: "string", enum: ["allow", "deny", "answer"] },
-        message: { type: "string" },
+        message: {
+          type: "string",
+          description: "With deny, the reason the worker reads. With allow or answer, a note that reaches the worker as its next message; the result's note_delivered says whether it did.",
+        },
         answers: { type: "object", additionalProperties: { type: "string" } },
         user_decided: { type: "boolean" },
         resume: { type: "boolean", description: "Orphaned requests only: false closes it without resuming the worker." },
@@ -407,8 +410,15 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
           user_decided: x.user_decided,
           resume: x.resume,
         });
+        // A note with allow or answer (ADR 0013 §3): an older target replies without note_delivered, and dropped it.
+        const noted = x.decision !== "deny" && x.message
+          ? {
+              note_delivered: r["note_delivered"] === true,
+              ...(typeof r["note_delivered"] !== "boolean" ? { note: `not delivered: ${laptop}'s supervisor is older and drops a note sent with allow` } : {}),
+            }
+          : {};
         // An orphan answered whose resume failed there says so (BOB-99).
-        return { id: r["request"], state: r["state"], decision: r["decision"], ...(r["resumed"] ? { resumed: r["resumed"] } : {}), ...(typeof r["resume_error"] === "string" ? { not_resumed: r["resume_error"] } : {}), laptop };
+        return { id: r["request"], state: r["state"], decision: r["decision"], ...(r["resumed"] ? { resumed: r["resumed"] } : {}), ...(typeof r["resume_error"] === "string" ? { not_resumed: r["resume_error"] } : {}), ...noted, laptop };
       }
       // A lead's own requests are Casper's: it never approves its own call.
       if (opts.lead && sup.requestDetail(x.id).worker_id === opts.lead) throw new AnswerError(`${x.id} is your own request; Casper answers it`);
@@ -421,7 +431,7 @@ export function handlers(sup: Supervisor, opts: { lead?: string } = {}): Record<
           : { decision: x.decision, ...(x.message ? { message: x.message } : {}) };
       // Only what was settled: the request's input is already known to whoever answered it.
       const r = sup.answer(x.id, answer, x.user_decided ? "human" : "orchestrator", x.resume);
-      return { id: r.request.id, state: r.request.state, decision: r.request.decision, ...(r.resumed ? { resumed: r.resumed.id } : {}) };
+      return { id: r.request.id, state: r.request.state, decision: r.request.decision, ...(r.resumed ? { resumed: r.resumed.id } : {}), ...(r.note_delivered !== undefined ? { note_delivered: r.note_delivered } : {}) };
     },
     list_projects: () => sup.projects(),
     audit_log: (a) => sup.audit(AuditArgs.parse(a).limit),

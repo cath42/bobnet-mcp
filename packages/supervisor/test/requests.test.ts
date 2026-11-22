@@ -867,7 +867,8 @@ describe("answer_request for a remote id: the target's result; the copy clears w
     const tools = handlers(t.mbp.sup);
     const got = JSON.parse((await callTool(tools, "answer_request", { id: "r_1", decision: "allow", message: "go" })).content[0]!.text);
     expect(t.asked.filter((b) => b["op"] === "answer")).toEqual([{ v: 2, op: "answer", id: "r_1", decision: "allow", message: "go", user_decided: false, resume: true }]);
-    expect(got).toEqual({ id: "r_1", state: "answered", decision: "allow", laptop: "ubu1" });
+    // A target before ADR 0013 replies without note_delivered: it dropped the note.
+    expect(got).toEqual({ id: "r_1", state: "answered", decision: "allow", note_delivered: false, note: "not delivered: ubu1's supervisor is older and drops a note sent with allow", laptop: "ubu1" });
     // The reply alone settles the copy, should its settled be missed; decided by whom the answer said.
     expect(t.ask()).toMatchObject({ state: "answered", decision: "allow", decided_by: "orchestrator" });
     expect(JSON.parse((await callTool(tools, "pending_requests", {})).content[0]!.text)).toEqual([]);
@@ -1146,7 +1147,7 @@ describe("one answerer for a worker spawned without v: 2; a v: 2 spawn's by is a
 
 describe("fitRequest cuts answers, and a request still over goes with its input a stub (BOB-99 AC 1)", () => {
   const FIT = LIMITS.bodyChars - 1024;
-  const row = (over: Partial<RequestRow> = {}): RequestRow => ({ id: "r_1", worker_id: "w_1", kind: "question", tool: "AskUserQuestion", input: "{}", tier: "orchestrator", rule: "probe", reason: "the probe", state: "answered", decision: "answer", message: null, answers: null, decided_by: "orchestrator", created_at: "2026-11-21T10:00:00.000Z", decided_at: "2026-11-21T10:01:00.000Z", ...over });
+  const row = (over: Partial<RequestRow> = {}): RequestRow => ({ id: "r_1", worker_id: "w_1", kind: "question", tool: "AskUserQuestion", input: "{}", tier: "orchestrator", rule: "probe", reason: "the probe", state: "answered", decision: "answer", message: null, answers: null, decided_by: "orchestrator", created_at: "2026-11-21T10:00:00.000Z", decided_at: "2026-11-21T10:01:00.000Z", via: null, ...over });
 
   it("large answers are cut until the request fits, truncated: true", () => {
     const answers = JSON.stringify({ "Which index?": "GiST ".repeat(8_000) });

@@ -280,7 +280,11 @@ export class FakeLink implements BrokerLink {
     return { ref: null, seq: 1 } as BoardResults[K];
   }
 
+  /** The action results this laptop's supervisor sent, as the broker would forward them to the owner. */
+  readonly results: Array<Extract<Parameters<BrokerLink["sendRaw"]>[0], { t: "action_result" }>> = [];
+
   sendRaw(frame: Parameters<BrokerLink["sendRaw"]>[0]): void {
     if (frame.t === "ack") this.net.ack(this, frame.as, frame.ids);
+    else this.results.push(frame);
   }
 }

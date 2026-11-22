@@ -73,7 +73,7 @@ export interface BrokerLink {
   sendRaw(
     frame:
       | { t: "ack"; as: string; ids: string[] }
-      | { t: "action_result"; as: string; id: string; ok: boolean; message: string },
+      | { t: "action_result"; as: string; id: string; ok: boolean; message: string; note_delivered?: boolean },
   ): void;
 }
 
@@ -1088,38 +1088,73 @@ export class Supervisor {
 
   /**
    * Answers a request. An orphaned one resumes its worker's session with the
-   * answer, unless `resume` is false: then the request is simply closed.
+   * answer, unless `resume` is false: then the request is simply closed. `via` records where it was
+   * decided (ADR 0013 §2). A note with allow or answer is the agent's next message (§3), and
+   * `note_delivered` says whether it got there.
    */
-  answer(id: string, answer: Answer, decidedBy: "orchestrator" | "human", resume = true): { request: RequestRow; resumed?: WorkerRow } {
+  answer(
+    id: string,
+    answer: Answer,
+    decidedBy: "orchestrator" | "human",
+    resume = true,
+    via: "dashboard" | null = null,
+  ): { request: RequestRow; resumed?: WorkerRow; note_delivered?: boolean } {
     const before = this.store.request(id);
     if (before?.state === "orphaned" && !resume) {
       if (answer.decision !== "deny") throw new SupervisorError(`Dismiss ${id} with decision "deny"; nothing will run`);
-      this.store.settleRequest(id, { state: "answered", decision: "deny", message: answer.message ?? "dismissed", answers: null, decided_by: decidedBy });
+      this.store.settleRequest(id, { state: "answered", decision: "deny", message: answer.message ?? "dismissed", answers: null, decided_by: decidedBy, via });
       this.store.audit(decidedBy, "dismiss", before.worker_id, { request: id });
       this.writeStatus();
       return { request: this.store.request(id)! };
     }
-    const request = this.router.answer(id, answer, decidedBy);
-    if (before?.state !== "orphaned") return { request };
+    const request = this.router.answer(id, answer, decidedBy, via);
+    const note = this.noteLine(request, answer, decidedBy);
+    const undelivered = () => {
+      this.store.audit(decidedBy, "note:undelivered", request.worker_id, { request: request.id });
+      return { request, note_delivered: false };
+    };
+    if (before?.state !== "orphaned") {
+      if (note === null) return { request };
+      // After the router resolved the waiter: the SDK takes the line as the next user turn, after the allowed call.
+      return this.runs.get(request.worker_id)?.inject(note) ? { request, note_delivered: true } : undelivered();
+    }
 
     const w = this.store.worker(request.worker_id)!;
-    if (!w.session_id) return { request };
-    const resumed = this.spawn({
-      project: w.project,
-      role: w.role,
-      task: resumeTask(request, answer),
-      tasks: storedTasks(w),
-      carrySession: w.declared_session,
-      ...(w.handoff ? { handoff: w.handoff } : {}),
-      resume_session: w.session_id,
-      ...(w.spawned_by ? { spawnedBy: w.spawned_by } : {}),
-      ...remoteOf(w),
-      as: isLead(w) ? "lead" : "worker",
-    });
+    if (!w.session_id) return note === null ? { request } : undelivered();
+    let resumed: WorkerRow;
+    try {
+      resumed = this.spawn({
+        project: w.project,
+        role: w.role,
+        task: resumeTask(request, answer, note),
+        tasks: storedTasks(w),
+        carrySession: w.declared_session,
+        ...(w.handoff ? { handoff: w.handoff } : {}),
+        resume_session: w.session_id,
+        ...(w.spawned_by ? { spawnedBy: w.spawned_by } : {}),
+        ...remoteOf(w),
+        as: isLead(w) ? "lead" : "worker",
+      });
+    } catch (err) {
+      if (note !== null) undelivered();
+      throw err;
+    }
     if (answer.decision === "allow") this.preapproved.set(resumed.id, [{ tool: request.tool, input: request.input }]);
     // Its spawner's copies follow the session to the new id (ADR 0007 §4).
     this.v2Event(resumed, { event: "resumed", previous: w.id, request: request.id });
-    return { request, resumed };
+    return { request, resumed, ...(note !== null ? { note_delivered: true } : {}) };
+  }
+
+  /**
+   * The line a note with allow or answer reaches the agent as (ADR 0013 §3), or null when there is none:
+   * from Casper when he decided, else from the worker's orchestrator as its brief names it.
+   */
+  private noteLine(r: RequestRow, answer: Answer, decidedBy: "orchestrator" | "human"): string | null {
+    if (answer.decision === "deny" || !answer.message) return null;
+    const w = this.store.worker(r.worker_id);
+    const who = decidedBy === "human" ? "Casper" : w && isV2(w) ? `${w.remote_by}@${laptopOf(w.spawned_by!)}` : this.orchestratorOf(w?.project);
+    const what = answer.decision === "allow" ? `the Allow of request ${r.id}` : `the answer to request ${r.id}`;
+    return `Note from ${who} with ${what} (${r.tool}): ${answer.message}`;
   }
 
   /**
@@ -2188,16 +2223,18 @@ export class Supervisor {
         if (req.decision === "answer" && !req.answers) throw new SupervisorError(`decision "answer" needs answers`);
         const answer: Answer = req.decision === "answer" ? { decision: "answer", answers: req.answers!, ...(req.message ? { message: req.message } : {}) } : { decision: req.decision, ...(req.message ? { message: req.message } : {}) };
         // As a local answer from here on (§4): the router's checks (a human tier needs user_decided, the decision fits the kind), resume for an orphan.
-        let done: { request: RequestRow; resumed?: WorkerRow };
+        let done: ReturnType<Supervisor["answer"]>;
         try {
           done = this.answer(r.id, answer, req.user_decided ? "human" : "orchestrator", req.resume);
         } catch (err) {
           // The answer applied and only the orphan's resume failed (BOB-99): answered, not resumed, and the reply says so.
           const now = this.store.request(r.id);
           if (r.state !== "orphaned" || now?.state !== "answered") throw err;
-          return { request: r.id, worker_id: r.worker_id, state: now.state, decision: now.decision, resume_error: `${r.id} is answered, but ${r.worker_id} didn't resume: ${(err as Error).message}` };
+          const noted = req.decision !== "deny" && req.message ? { note_delivered: false } : {};
+          return { request: r.id, worker_id: r.worker_id, state: now.state, decision: now.decision, resume_error: `${r.id} is answered, but ${r.worker_id} didn't resume: ${(err as Error).message}`, ...noted };
         }
-        return { request: done.request.id, worker_id: r.worker_id, state: done.request.state, decision: done.request.decision, ...(done.resumed ? { resumed: done.resumed.id } : {}) };
+        const noted = done.note_delivered !== undefined ? { note_delivered: done.note_delivered } : {};
+        return { request: done.request.id, worker_id: r.worker_id, state: done.request.state, decision: done.request.decision, ...(done.resumed ? { resumed: done.resumed.id } : {}), ...noted };
       }
       case "upgrade":
         // Its own grant, apart from spawn (ADR 0008 §2): off unless the entry says upgrade: true.
@@ -2445,8 +2482,8 @@ export class Supervisor {
 
   /** A dashboard action: only after the owner's own token checks out. */
   private async onAction(frame: Extract<ServerFrame, { t: "action" }>): Promise<void> {
-    const reply = (ok: boolean, message: string) =>
-      this.broker.sendRaw({ t: "action_result", as: this.config.name, id: frame.id, ok, message });
+    const reply = (ok: boolean, message: string, noteDelivered?: boolean) =>
+      this.broker.sendRaw({ t: "action_result", as: this.config.name, id: frame.id, ok, message, ...(noteDelivered !== undefined ? { note_delivered: noteDelivered } : {}) });
     if (!this.ownerCheck) return reply(false, "Dashboard actions aren't set up on this laptop (no Access settings in config.json)");
     if (!(await this.ownerCheck(frame.token, frame.by))) {
       this.store.audit("dashboard", "refused", null, { id: frame.id, by: frame.by, reason: "owner token did not verify" });
@@ -2456,9 +2493,10 @@ export class Supervisor {
     this.store.audit(`human:${frame.by}`, `dashboard:${a.kind}`, a.kind === "answer" ? null : a.worker, { id: frame.id, action: a });
     try {
       if (a.kind === "answer") {
-        const answer: Answer = a.decision === "deny" ? { decision: "deny", message: a.message ?? "denied from the dashboard" } : { decision: "allow", ...(a.message ? { message: a.message } : {}) };
-        const { request, resumed } = this.answer(a.request, answer, "human");
-        reply(true, `${request.id} ${a.decision === "allow" ? "allowed" : "denied"}${resumed ? `; ${resumed.id} resumes the worker` : ""}`);
+        // His words only: a deny without them reads "Denied by Casper" (ADR 0013 §2).
+        const answer: Answer = { decision: a.decision, ...(a.message ? { message: a.message } : {}) };
+        const { request, resumed, note_delivered } = this.answer(a.request, answer, "human", true, "dashboard");
+        reply(true, `${request.id} ${a.decision === "allow" ? "allowed" : "denied"}${resumed ? `; ${resumed.id} resumes the worker` : ""}`, note_delivered);
       } else if (a.kind === "stop") {
         await this.stop(a.worker, "stopped from the dashboard");
         reply(true, `${a.worker} stopped`);
@@ -3670,10 +3708,32 @@ export class Supervisor {
           ask: asks.get(r.id) ?? null,
         };
       }),
+      decided: this.decided(dayAgo),
       usage: [...days.values()].sort((a, b) => a.day.localeCompare(b.day)).slice(-500),
       cleanup: this.lastCleanup,
       board_outbox: this.boardOutbox(),
     };
+  }
+
+  /** What Casper decided from the dashboard since `since`, newest first, at most 50 (ADR 0013 §2); his note withheld as `preview` is. */
+  private decided(since: string): NonNullable<LaptopSnapshot["decided"]> {
+    return this.store.decidedVia("dashboard", since, 50).flatMap((r) => {
+      if (r.decision !== "allow" && r.decision !== "deny") return [];
+      const w = this.store.worker(r.worker_id);
+      return [{
+        id: r.id,
+        worker_id: r.worker_id,
+        name: w ? this.roleOf(w).name : "?",
+        project: w?.project ?? "?",
+        kind: r.kind,
+        tool: r.tool.slice(0, 80),
+        created_at: r.created_at,
+        decided_at: r.decided_at!,
+        decision: r.decision,
+        preview: preview(r),
+        note: r.message === null ? null : findSecret(r.message) ? HIDDEN : clip(r.message, 2000),
+      }];
+    });
   }
 
   /** The board reports not yet sent (ADR 0012 §3); the code only while the row it was met on is still the head. */
@@ -3779,6 +3839,9 @@ function oneLine(r: RequestRow): string {
   return text.length > 160 ? `${text.slice(0, 159)}…` : text;
 }
 
+/** What stands for a preview or a note that looks like it holds a credential. */
+const HIDDEN = "[hidden: looks like it contains a credential]";
+
 /** What a request asks, short enough for the dashboard; never a credential. */
 function preview(r: RequestRow): string {
   let text: string;
@@ -3790,7 +3853,7 @@ function preview(r: RequestRow): string {
   } catch {
     text = r.input;
   }
-  if (findSecret(text)) return "[hidden: looks like it contains a credential]";
+  if (findSecret(text)) return HIDDEN;
   return text.length > 400 ? `${text.slice(0, 399)}…` : text;
 }
 
@@ -3968,14 +4031,16 @@ export function savedOutputCheck(tool: string, input: Record<string, unknown>, r
   };
 }
 
-function resumeTask(req: RequestRow, answer: Answer): string {
+/** An orphan's resume: its request's outcome, and the note with an allow or answer (ADR 0013 §3) as its own line. */
+function resumeTask(req: RequestRow, answer: Answer, note: string | null = null): string {
   const outcome =
     answer.decision === "allow"
       ? "approved; retry it now"
       : answer.decision === "answer"
         ? `answered: ${JSON.stringify(answer.answers)}`
         : `denied${answer.message ? `: ${answer.message}` : ""}`;
-  return `You were stopped while waiting on request ${req.id} (${req.tool}). It has been ${outcome}. Continue your task from where you left off.`;
+  const task = `You were stopped while waiting on request ${req.id} (${req.tool}). It has been ${outcome}. Continue your task from where you left off.`;
+  return note === null ? task : `${task}\n\n${note}`;
 }
 
 /** At most this many fixes in one push, as the protocol takes them. */

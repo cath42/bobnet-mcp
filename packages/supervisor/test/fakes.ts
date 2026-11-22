@@ -179,7 +179,7 @@ export class FakeBroker implements BrokerLink {
     return { id: `m_${this.sent.length}`, delivered_to: frame.to, queued_for: [] } as R;
   }
 
-  readonly results: Array<{ id: string; ok: boolean; message: string }> = [];
+  readonly results: Array<{ id: string; ok: boolean; message: string; note_delivered?: boolean }> = [];
 
   /** Board operations made, in order, with who and ctx. */
   readonly boardOps: Array<{ as: string; ctx: BoardCtx | undefined; op: BoardOpInput }> = [];
@@ -196,7 +196,7 @@ export class FakeBroker implements BrokerLink {
 
   sendRaw(frame: Parameters<BrokerLink["sendRaw"]>[0]): void {
     if (frame.t === "ack") this.acks.push({ as: frame.as, ids: frame.ids });
-    else this.results.push({ id: frame.id, ok: frame.ok, message: frame.message });
+    else this.results.push({ id: frame.id, ok: frame.ok, message: frame.message, ...(frame.note_delivered !== undefined ? { note_delivered: frame.note_delivered } : {}) });
   }
 
   toOrchestrator(): string[] {

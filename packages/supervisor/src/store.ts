@@ -68,6 +68,8 @@ export interface RequestRow {
   decided_by: string | null;
   created_at: string;
   decided_at: string | null;
+  /** Where it was decided (ADR 0013 §2): "dashboard" when Casper settled it there, else null. */
+  via: string | null;
 }
 
 export interface InboxRow {
@@ -277,6 +279,9 @@ export class Store {
     if (!cols.has("run_as")) this.db.exec("ALTER TABLE workers ADD COLUMN run_as TEXT");
     if (!cols.has("remote_by")) this.db.exec("ALTER TABLE workers ADD COLUMN remote_by TEXT");
     if (!cols.has("spawn_req")) this.db.exec("ALTER TABLE workers ADD COLUMN spawn_req TEXT");
+    const requestCols = new Set((this.db.prepare("PRAGMA table_info(requests)").all() as Array<{ name: string }>).map((c) => c.name));
+    if (!requestCols.has("via")) this.db.exec("ALTER TABLE requests ADD COLUMN via TEXT");
+    this.db.exec("CREATE INDEX IF NOT EXISTS requests_via ON requests (via, decided_at)");
     // The outbox also holds the supervisor's board reports (ADR 0001 §9): kind board_op, to_name the peer, body { ctx, op }.
     const outCols = new Set((this.db.prepare("PRAGMA table_info(outbox)").all() as Array<{ name: string }>).map((c) => c.name));
     if (!outCols.has("kind")) this.db.exec("ALTER TABLE outbox ADD COLUMN kind TEXT NOT NULL DEFAULT 'message'");
@@ -390,7 +395,7 @@ export class Store {
 
   // ---------- Requests ----------
 
-  createRequest(r: Omit<RequestRow, "id" | "state" | "decision" | "message" | "answers" | "decided_by" | "created_at" | "decided_at">): RequestRow {
+  createRequest(r: Omit<RequestRow, "id" | "state" | "decision" | "message" | "answers" | "decided_by" | "created_at" | "decided_at" | "via">): RequestRow {
     const id = `r_${randomUUID().slice(0, 8)}`;
     this.run(
       `INSERT INTO requests (id, worker_id, kind, tool, input, tier, rule, reason, state, created_at)
@@ -414,16 +419,21 @@ export class Store {
   /** Settles a request once; returns false if it was already settled. */
   settleRequest(
     id: string,
-    patch: { state: "answered" | "expired"; decision: string; message: string | null; answers: string | null; decided_by: string },
+    patch: { state: "answered" | "expired"; decision: string; message: string | null; answers: string | null; decided_by: string; via?: string | null },
   ): boolean {
     const before = this.request(id);
     if (!before || (before.state !== "open" && before.state !== "orphaned")) return false;
     this.run(
-      "UPDATE requests SET state = ?, decision = ?, message = ?, answers = ?, decided_by = ?, decided_at = ? WHERE id = ?",
-      patch.state, patch.decision, patch.message, patch.answers, patch.decided_by, now(), id,
+      "UPDATE requests SET state = ?, decision = ?, message = ?, answers = ?, decided_by = ?, decided_at = ?, via = ? WHERE id = ?",
+      patch.state, patch.decision, patch.message, patch.answers, patch.decided_by, now(), patch.via ?? null, id,
     );
     this.onRequestChange?.(this.request(id)!);
     return true;
+  }
+
+  /** The requests settled from `via` since `sinceIso`, newest first, at most `limit` (ADR 0013 §2). */
+  decidedVia(via: string, sinceIso: string, limit: number): RequestRow[] {
+    return this.all<RequestRow>("SELECT * FROM requests WHERE via = ? AND decided_at >= ? ORDER BY decided_at DESC LIMIT ?", via, sinceIso, limit);
   }
 
   /** An open request whose worker died with the supervisor; answering it resumes the worker. */
