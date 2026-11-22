@@ -121,3 +121,9 @@ result.
    `Holds:`; screenshot the toast.
 2. Release and restart of mbp-1's supervisor (and ubu1's). AC2 goes live. First confirm that mbp-1
    registers helix (`board: service`). Check: poe@mbp-1's orchestrator gets the forwarded text.
+
+## After sign-off (2026-11-22)
+
+Mario raised, as a major after sign-off, that the supervisor forwarded only to `orchestratorOf`. Ruling
+(consult c_6d88fb52) is in ADR 0009's second addendum: forward to `config.orchestrator`, and also to
+`project.orchestrator` if it differs from `config.orchestrator` and from the asker.

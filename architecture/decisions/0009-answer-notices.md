@@ -222,3 +222,11 @@ The MCP tool `board_ask answer` returns the same `told` and `waiting`, so a reco
 - **The four results carry `supervisor: string | null`** beside `told` and `waiting` (`BoardTold`,
   `protocol/src/board.ts`). The broker sets it, and the toast's "no supervisor runs <project>" reads it. A reply
   without it (the board alone, or a failed drain) says neither clause.
+
+## Addendum (2026-11-22, consult c_6d88fb52, Mario's major after sign-off)
+
+- **Who the supervisor forwards to.** The supervisor forwards an answer to its laptop's
+  `config.orchestrator`. It also forwards to `project.orchestrator`, but only if that differs from
+  `config.orchestrator` and from the asker, since the asker already has the text from the broker.
+- **`orchestratorOf` is no longer the sole target.** It is one of the two addresses, deduplicated against
+  the other and against the asker.
