@@ -86,6 +86,17 @@ const USAGE_MODELS_MAX = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** A CI workflow's history: its latest run and the 5 before it (ADR 0014 §3a, spec §2.4). */
 const CI_HISTORY = 6;
+/**
+ * A project's CI history (ciOf): its runs ranked per workflow first, then only the kept ones joined to
+ * pushes, whose lower(repo) no index serves (Toad, BOB-121 review A, B1). Joined before the window,
+ * every run scanned every push.
+ */
+export const CI_HISTORY_SQL = `SELECT h.name, h.branch, h.status, h.sha, h.url, h.started_at, h.ended_at, r.agent FROM (
+    SELECT c.*, row_number() OVER (PARTITION BY c.name ORDER BY coalesce(c.started_at, c.ended_at) DESC NULLS FIRST, c.pk DESC) AS n
+    FROM ci_runs c WHERE c.project = ? AND c.source != 'slot') h
+  LEFT JOIN pushes u ON u.project = h.project AND lower(u.repo) = lower(h.repo) AND u.sha = h.sha
+  LEFT JOIN runs r ON r.pk = u.run
+  WHERE h.n <= ${CI_HISTORY} ORDER BY h.name, h.n`;
 /** Backlog is thin below this many Ready features with criteria while the open release has work to do. */
 const THIN_READY = 2;
 
@@ -717,19 +728,7 @@ export class BoardStore {
    * the agent of the run whose push it was. Slot runs are no workflow.
    */
   private ciOf(p: ProjectRow): CiWorkflow[] {
-    const rows = this.sql
-      .exec<CiHistoryRun & Record<string, SqlStorageValue>>(
-        `SELECT name, branch, status, sha, url, started_at, ended_at, agent FROM (
-           SELECT c.name, c.branch, c.status, c.sha, c.url, c.started_at, c.ended_at, r.agent,
-             row_number() OVER (PARTITION BY c.name ORDER BY coalesce(c.started_at, c.ended_at) DESC NULLS FIRST, c.pk DESC) AS n
-           FROM ci_runs c
-           LEFT JOIN pushes u ON u.project = c.project AND lower(u.repo) = lower(c.repo) AND u.sha = c.sha
-           LEFT JOIN runs r ON r.pk = u.run
-           WHERE c.project = ? AND c.source != 'slot')
-         WHERE n <= ${CI_HISTORY} ORDER BY name, n`,
-        p.pk,
-      )
-      .toArray();
+    const rows = this.sql.exec<CiHistoryRun & Record<string, SqlStorageValue>>(CI_HISTORY_SQL, p.pk).toArray();
     const flows = new Map<string, CiHistoryRun[]>();
     for (const r of rows) flows.set(r.name, [...(flows.get(r.name) ?? []), { name: r.name, branch: r.branch, status: r.status, sha: r.sha, url: r.url, started_at: r.started_at, ended_at: r.ended_at, agent: r.agent }]);
     return [...flows].map(([name, runs]) => ({ name, runs }));

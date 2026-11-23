@@ -2,6 +2,7 @@ import type { BoardCaller, BoardOpInput, BoardReply, BoardResults } from "@bobne
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { CI_HISTORY_SQL } from "../src/board/store.ts";
 
 // BOB-121's project data (ADR 0014 §3, §3a, §4): the current release, a project's page, its CI
 // history and a feature's own criteria, called as the broker calls them.
@@ -182,6 +183,38 @@ describe("CI history from the board (ADR 0014 §3a, BOB-168)", () => {
       [SHA(2), null],
       [SHA(1), "Toad"],
     ]);
+  });
+
+  it("keeps 6 per workflow over many runs and pushes, joining pushes only for those (Toad, BOB-121 review A, B1)", async () => {
+    await ok(owner, { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", repos: ["cath42/helix"] });
+    const runs = 400;
+    const sha = (n: number) => n.toString(16).padStart(40, "0");
+    let read = 0;
+    await sql((s) => {
+      const p = s.exec<{ pk: number }>("SELECT pk FROM projects WHERE key = 'helix'").one().pk;
+      for (let n = 1; n <= runs; n++) {
+        const at = new Date(Date.parse("2026-11-20T10:00:00Z") + n * 60_000).toISOString();
+        s.exec(
+          "INSERT INTO ci_runs (source, external_id, project, name, repo, branch, sha, status, started_at) VALUES ('github-actions', ?, ?, ?, 'cath42/helix', 'main', ?, 'passed', ?)",
+          `run-${n}`,
+          p,
+          n % 2 ? "ci" : "deploy",
+          sha(n),
+          at,
+        );
+        s.exec("INSERT INTO pushes (project, repo, branch, sha, worker, at) VALUES (?, 'cath42/helix', 'v2', ?, 'w_bill', ?)", p, sha(n), at);
+      }
+      const history = s.exec(CI_HISTORY_SQL, p);
+      history.toArray();
+      read = history.rowsRead;
+    });
+    const flows = (await overviewRow()).ci!;
+    expect(flows.map((f) => [f.name, f.runs.length, f.runs[0]!.sha])).toEqual([
+      ["ci", 6, sha(runs - 1)],
+      ["deploy", 6, sha(runs)],
+    ]);
+    // Joined before the window, every run scanned every push: about runs × pushes, 161615 rows here.
+    expect(read).toBeLessThan(runs * 2 * 6 * 2);
   });
 
   it("gives every project on the Overview its ci, none as an empty list", async () => {
