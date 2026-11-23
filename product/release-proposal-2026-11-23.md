@@ -36,8 +36,11 @@ Goal: one board for every project, read and written through BobNet. **Done.**
 - Slot in, as Done: **BOB-119** (questions editable; Casper put it in R1 on 2026-11-21), **BOB-31** (expand
   a truncated question), **BOB-47** (Athletic's board moved, as BOB-9 did Helix's).
 - Take out: **BOB-115** (Vitals) to no release: it waits only on the broker's 30-day sweep (~2026-12-17),
-  and closes then. **BOB-118** to R4. **BOB-77, BOB-82** to R4 with BOB-158, or archived if poe says BOB-44
-  made them moot (they were "fold into BOB-118 or archive" on 2026-11-21).
+  and closes then. **BOB-77, BOB-82** to R4 with BOB-158, or archived if poe says BOB-44 made them moot
+  (they were "fold into BOB-118 or archive" on 2026-11-21).
+- Accept **BOB-118** (owner makes an agent global admin): it is built (57e7002, the dashboard's #rules, with
+  its test) and live with the deploys since, but its card was never closed. I check it against its
+  description and mark it Done in R1.
 - Then I close R1.
 
 ### R2 Run the team from your phone: close it
@@ -83,15 +86,14 @@ Goal: the dashboard looked at whole, use case first, as the prototype you approv
 
 ### R4 Runs without you
 
-Goal: work goes on through the night and lands don't fail on a busy laptop; poe changes configs and
-grants without your hands.
+Goal: work goes on through the night and lands don't fail on a busy laptop; poe changes a laptop's
+config without your hands.
 
 | # | Feature | Why in this order |
 |---|---|---|
 | 1 | **BOB-188** resume by itself after a usage limit resets | your ask (1 am stalls till morning); I placed it right after BOB-121, ahead of upkeep, when poe captured it |
 | 2 | **Lands fail only for real**: BOB-190 (run a project's land hook on another laptop, e.g. ubu1) promoted to the feature, with the timing flakes as its tasks: **BOB-165**, BOB-112, BOB-124, BOB-88, BOB-114, BOB-160 | load and wall-clock asserts refused good lands for BobNet (4 for D9) and Helix (LAND-110) |
 | 3 | **BOB-158** poe changes another laptop's supervisor.yaml (first use BOB-127) | unblocks BOB-127; uses BOB-44's remote ops |
-| 4 | **BOB-118** owner makes an agent global admin (promoted to a feature) | your "make you or mario a global admin so permissions can be delegated"; BOB-6's rollout needs grants given without you |
 
 ### R5 Routine upkeep
 
@@ -146,7 +148,7 @@ Since BOB-189, I can create, edit and close releases myself. Once you approve:
 
 | Release | On the board |
 |---|---|
-| R1 | slot BOB-119, BOB-31, BOB-47; move the four backlog items out; **close** |
+| R1 | slot BOB-119, BOB-31, BOB-47; accept BOB-118; move BOB-115, BOB-77, BOB-82 out; **close** |
 | R2 | rename to "Run the team from your phone", goal set; slot BOB-122, BOB-44, BOB-48, BOB-51, BOB-111, BOB-49; move BOB-6 to R6; close after BOB-111 and BOB-49 are accepted |
 | R3 Dashboard revamp | **create as planned**; it opens with BOB-121's next session |
 | R4 Runs without you | **create as planned** |
