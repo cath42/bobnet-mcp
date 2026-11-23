@@ -147,7 +147,8 @@ interface UsageSeries {
   workers are labelled "so far". A worker that has ended is the board's, so nothing is counted twice
   once its `run_end` arrives.
 
-**`{ op: "project", project, days = 14 (1..90) }`** → `ProjectPage`:
+**`{ op: "project", project, days = 14 (1..90), tz = "UTC" }`** → `ProjectPage` (`tz`, as the usage read's; the
+backlog's lists are cut at 100, as the status read's; both as built, BOB-121 review B):
 
 ```ts
 interface ProjectPage {
