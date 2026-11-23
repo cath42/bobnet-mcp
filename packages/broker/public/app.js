@@ -33,6 +33,8 @@ const state = {
   weigh: false,
   /** When the page last read the laptops whole (this device's clock), null before it has: what Needs you is up to date with. */
   refreshed: null,
+  /** When this socket was welcomed (this device's clock): what was read before it may have changed while the page was cut off. */
+  welcomed: 0,
   last: 10,
 };
 /** Messages kept in the page, as many as the broker's snapshot has. */
@@ -86,9 +88,9 @@ function s(tag, attrs, ...children) {
 
 // ---------- Actions ----------
 
-/** Requests sent and not yet answered by the broker, by rid: the button, and the toast its result reads as, if not the supervisor's. */
+/** Requests sent and not yet answered by the broker, by rid: the button, the toast its result reads as, if not the supervisor's, and what waits on it. */
 const sentActions = new Map();
-/** The toast a sent action's result reads as, by the broker's action id: a text, or what makes [text, tone] from the result. */
+/** The same by the broker's action id, until its result: `done`, a text or what makes [text, tone] from the result; `settled`, called with whether it was taken. */
 const actionToasts = new Map();
 let toastTimer = null;
 
@@ -105,15 +107,18 @@ function toast(text, ok = true, undo = null, keep = false) {
   if (!keep) toastTimer = setTimeout(() => (el.hidden = true), 8000);
 }
 
-/** Sends a dashboard action to a laptop's supervisor; the button stays disabled until it's settled. True once sent. With `done`, its result's toast. */
-function act(laptop, action, button, confirmText, done = null) {
+/**
+ * Sends a dashboard action to a laptop's supervisor; the button stays disabled until it's settled. True once sent.
+ * With `done`, its result's toast; `settled` hears whether it was taken: true, or false when it was refused.
+ */
+function act(laptop, action, button, confirmText, done = null, settled = null) {
   if (confirmText && !confirm(confirmText)) return false;
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     toast("Not connected; try again in a moment.", false);
     return false;
   }
   const id = String(++rid);
-  sentActions.set(id, { button, done });
+  sentActions.set(id, { button, done, settled });
   if (button) button.disabled = true;
   ws.send(JSON.stringify({ t: "action", rid: id, laptop, action }));
   return true;
@@ -1333,11 +1338,41 @@ const brokerNow = () => Date.now() - skew;
 const staleReport = (l) => brokerNow() - Date.parse(l.at) > 3 * 60_000;
 /** A request lives a day wherever it is shown: the supervisor's ORPHAN_TTL_MS, applied here too for an older supervisor or a stale report (ADR 0012 §1). */
 const REQUEST_MAX_AGE_MS = 24 * 3600_000;
-/** A laptop's pending rows under a day old, by the broker's clock, whose worker runs: a stopped one's request is history too (spec 2.2). */
+/**
+ * The worker of an orphaned request: one of Casper's own, asked before its laptop's supervisor last started, its
+ * worker stopped by that restart and its role not run again since, on any laptop. Answering it starts the worker
+ * again (BOB-176 c14). Null for any other request.
+ */
+function orphanOf(l, p) {
+  if (p.tier !== "human" || Date.parse(p.created_at) >= Date.parse(l.snapshot.supervisor.started_at)) return null;
+  const w = l.snapshot.workers.find((y) => y.id === p.worker_id);
+  if (w?.state !== "failed" || !w.ended_at) return null;
+  const again = workers().some((y) => y.id !== w.id && y.project === w.project && y.role === w.role
+    && (y.state === "queued" || ACTIVE.includes(y.state) || (y.started_at && Date.parse(y.started_at) > Date.parse(w.ended_at))));
+  return again ? null : w;
+}
+/**
+ * Whether a request's worker can still take its answer: it runs, or it is an orphan. Listed and not active, it stopped.
+ * Absent from the report's 100 it is unknown: its request stays, unless it is from before the supervisor's start (Toad, review C minor 1).
+ */
+function answerable(l, p) {
+  const w = l.snapshot.workers.find((y) => y.id === p.worker_id);
+  if (!w) return Date.parse(p.created_at) >= Date.parse(l.snapshot.supervisor.started_at);
+  return ACTIVE.includes(w.state) || !!orphanOf(l, p);
+}
+/** Requests decided from this page, by id, whose laptop's report still has them: they left when the supervisor took the answer. */
+const decidedHere = new Set();
+/** Once a report drops one, it is the report's again. */
+function pruneDecidedHere() {
+  if (!decidedHere.size) return;
+  const listed = new Set([...state.laptops.values()].flatMap((l) => l.snapshot.pending.map((p) => permId({ ...p, laptop: l.laptop }))));
+  for (const id of decidedHere) if (!listed.has(id)) decidedHere.delete(id);
+}
+/** A laptop's pending rows under a day old, by the broker's clock, not just decided here, that an answer still reaches (spec 2.2). */
 const livePending = (l) => l.snapshot.pending.filter((p) => brokerNow() - Date.parse(p.created_at) <= REQUEST_MAX_AGE_MS
-  && l.snapshot.workers.some((w) => w.id === p.worker_id && ACTIVE.includes(w.state)));
-/** Requests a live supervisor can still act on: a stale laptop's last list is never offered (BOB-26). */
-const pendingAll = () => [...state.laptops.values()].filter((l) => !staleReport(l)).flatMap((l) => livePending(l).map((p) => ({ ...p, laptop: l.laptop })));
+  && !decidedHere.has(permId({ ...p, laptop: l.laptop })) && answerable(l, p));
+/** Requests a live supervisor can still act on: a stale laptop's last list is never offered (BOB-26). `orphan`: the worker its answer starts again. */
+const pendingAll = () => [...state.laptops.values()].filter((l) => !staleReport(l)).flatMap((l) => livePending(l).map((p) => ({ ...p, laptop: l.laptop, orphan: orphanOf(l, p) })));
 /** The service's projects, or while its list can't be read the overview's, which are the same. */
 const knownProjects = () => svc.projects ?? ov.rows?.map((r) => r.project) ?? [];
 const projectName = (key) => knownProjects().find((p) => p.key === key)?.name ?? key;
@@ -1469,11 +1504,11 @@ function ciWords(wf) {
 /** One workflow: its latest run, then the runs before it as dots, newest first. `project`: its name, "" for a later row of the same one, null to leave the cell out. */
 function ciRow(wf, project) {
   const r = wf.runs[0], [mark, tone] = CI_MARK[r.status];
-  const name = h("b", null, wf.name);
   const link = (cls, ...kids) => h("a", { class: cls, href: r.url, target: "_blank", rel: "noopener" }, ...kids);
+  const name = [h("span", { class: `ci-mark${r.status === "running" ? " spin" : ""}`, "aria-hidden": "true" }, mark), h("b", null, wf.name), r.branch ? h("span", { class: "muted" }, ` on ${r.branch}`) : null];
   return h("li", { class: "ci-row", dataset: { tone, status: r.status } },
     project === null ? null : h("span", { class: "ci-p" }, project),
-    h("span", { class: "ci-wf" }, h("span", { class: `ci-mark${r.status === "running" ? " spin" : ""}`, "aria-hidden": "true" }, mark), r.url ? link("ci-name", name) : name, r.branch ? h("span", { class: "muted" }, ` on ${r.branch}`) : null),
+    r.url ? link("ci-wf", ...name) : h("span", { class: "ci-wf" }, ...name),
     h("span", { class: "ci-st" }, h("span", { class: "ci-word" }, ciWords(wf)),
       h("span", { class: "muted" }, r.sha ? ` · ${r.sha.slice(0, 7)}` : "", r.agent ? ` · ${shortName(r.agent)}'s land` : "")),
     h("span", { class: "ci-hist" }, wf.runs.slice(1, 6).map((x) => {
@@ -1548,14 +1583,21 @@ async function loadQuestion(key, ref, edits = 0) {
 /** The button that opens an item's answer form; one form is open at a time (notes 40). */
 function answerToggle(id, verb) {
   const open = state.answering?.id === id;
-  return h("button", { type: "button", class: "answer-btn", "aria-expanded": String(open), onclick: (e) => {
+  return h("button", { type: "button", class: "answer-btn", "aria-expanded": String(open), disabled: (open && state.answering.sending) || null, onclick: (e) => {
     e.stopPropagation();
     state.answering = open ? null : { id, pick: null, words: "" };
     // He answers what he has read: the form opens the line whole too (BOB-31).
     if (!open) { state.whole.add(id); saveWhole(); }
     render();
-    if (!open) $("view").querySelector("form.answer")?.querySelector("input, textarea")?.focus();
+    if (open) return;
+    // A permission is read first: its top comes under the header, and no keyboard covers the command.
+    if (id.startsWith("perm/")) return underHeader($(`w-${id}`));
+    $("view").querySelector("form.answer")?.querySelector("input, textarea")?.focus();
   } }, open ? "Close" : verb);
+}
+/** Brings an element's top just under the header, which is as tall as its tabs need. */
+function underHeader(el) {
+  if (el) window.scrollBy(0, el.getBoundingClientRect().top - document.querySelector("header").getBoundingClientRect().bottom - 8);
 }
 
 /** The form under a question or an action (notes 41, 42): his words go to the board verbatim; the lead gets a message. */
@@ -1638,35 +1680,70 @@ async function undoAnswer(w, seq) {
 /** Whether a laptop's supervisor sends a note with Allow (ADR 0013 §2): an older one, whose report has no `decided`, drops it. */
 const takesNotes = (laptop) => state.laptops.get(laptop)?.snapshot.decided !== undefined;
 
+/** A supervisor that hasn't answered by now may have gone: his form is his again. */
+const ANSWER_WAIT_MS = 30_000;
+
 /**
  * A permission's form (notes 42; BOB-51): a note, then Deny or Allow, with a confirmation for Allow. On an older
- * supervisor's laptop the note goes only with Deny. The supervisor's answer can't be taken back: no Undo.
+ * supervisor's laptop the note goes only with Deny. The supervisor's answer can't be taken back: no Undo. Sent, it
+ * stays as it is, its buttons off, until the result: taken, the request leaves with it; refused, his words are kept.
  */
 function permissionForm(p) {
-  const a = state.answering, asks = p.kind === "question", notes = takesNotes(p.laptop);
+  const a = state.answering, asks = p.kind === "question", notes = takesNotes(p.laptop), orphan = !!p.orphan;
   const close = () => { state.answering = null; render(); };
   const what = `${p.name}'s ${asks ? "question" : p.tool}`;
+  const again = orphan ? `; it starts again on ${p.laptop}` : "";
+  const buttons = () => [...($(`w-${permId(p)}`)?.querySelectorAll("form.answer button, .acts .answer-btn") ?? [])];
   const decide = (decision, b) => {
     const message = decision === "deny" || notes ? a.words.trim() : "";
-    const done = decision === "deny" ? `Denied ${what}${message ? `; your note went to ${p.name}` : ""}.`
-      : !message ? `Allowed ${what}.`
-      : (f) => f.note_delivered ? [`Allowed ${what}; your note went to ${p.name}.`]
-        : f.note_delivered === false ? [`Allowed ${what}, but your note didn't reach ${p.name} (it had stopped).`, "warn"]
-        : [`Allowed ${what}, but ${p.laptop}'s supervisor is older and dropped your note.`, "warn"];
-    const sent = act(p.laptop, { kind: "answer", request: p.id, decision, ...(message ? { message } : {}) }, b,
-      decision === "allow" ? `Allow ${p.name} to run ${p.tool}?\n\n${p.preview}${message ? "\n\nYour note goes with it." : ""}` : null, done);
-    if (sent) close();
+    const did = `${decision === "deny" ? "Denied" : "Allowed"} ${what}${again}`;
+    const noted = orphan ? ", with your note" : `; your note went to ${p.name}`;
+    // A deny takes its note with it: only one sent with Allow may not arrive (ADR 0013 §3).
+    const done = !message || decision === "deny" ? `${did}${message ? noted : ""}.`
+      : (f) => f.note_delivered ? [`${did}${noted}.`]
+        : f.note_delivered === false ? [`${did}, but your note didn't reach ${p.name} (it had stopped).`, "warn"]
+        : [`${did}, but ${p.laptop}'s supervisor is older and dropped your note.`, "warn"];
+    // A phone's dialog is the last thing he reads: it says when it isn't the whole command (Toad, review C minor 4).
+    const cut = (p.ask?.text.length ?? 0) > p.preview.length;
+    const asking = [`Allow ${p.name} to run ${p.tool}?`, p.preview,
+      cut ? `The command is cut here; ${p.ask.cut ? "more of it is shown above" : "it is shown whole above"}.` : null,
+      orphan ? `${p.name} stopped when ${p.laptop} restarted. Allow starts it again.` : null,
+      message ? "Your note goes with it." : null].filter(Boolean).join("\n\n");
+    let timer = null;
+    const settled = (ok) => {
+      clearTimeout(timer);
+      a.sending = false;
+      if (!ok) {
+        for (const x of buttons()) x.disabled = false;
+        return;
+      }
+      decidedHere.add(permId(p));
+      if (state.answering !== a) return scheduleRender();
+      state.answering = null;
+      render();
+    };
+    if (!act(p.laptop, { kind: "answer", request: p.id, decision, ...(message ? { message } : {}) }, b, decision === "allow" ? asking : null, done, settled)) return;
+    a.sending = true;
+    for (const x of buttons()) x.disabled = true;
+    timer = setTimeout(() => {
+      settled(false);
+      toast(`${p.laptop}'s supervisor hasn't answered yet.`, "warn");
+    }, ANSWER_WAIT_MS);
   };
+  const who = orphan
+    ? `${p.name} stopped when ${p.laptop} restarted. ${asks ? "Deny" : "Allow or Deny"} starts it again, with ${asks ? "your note" : notes ? "your decision and your note" : "your decision; a note goes only with Deny"}. It can't be taken back.`
+    : asks ? `Answer it through the orchestrator, or deny it here; ${p.name} gets your note. It can't be taken back.`
+    : notes ? `${p.name} gets your decision, and your note as its next message. It can't be taken back.`
+    : `${p.name} gets your decision; a note goes only with Deny. It can't be taken back.`;
+  const off = (b) => { b.disabled = !!a.sending; return b; };
   return h("form", { class: "answer", onsubmit: (e) => e.preventDefault() },
     h("label", { class: "words" }, h("span", null, notes ? `Note to ${p.name} (optional)` : `Note to ${p.name}, sent with Deny (optional)`),
       h("textarea", { rows: 2, placeholder: notes && !asks ? "e.g. fine, but use the pool's stop script next time" : "e.g. not that process; use the pool's stop script", oninput: (e) => (a.words = e.target.value) }, a.words)),
     h("div", { class: "foot" },
-      h("span", { class: "who-gets" }, asks ? `Answer it through the orchestrator, or deny it here; ${p.name} gets your note. It can't be taken back.`
-        : notes ? `${p.name} gets your decision, and your note as its next message. It can't be taken back.`
-        : `${p.name} gets your decision; a note goes only with Deny. It can't be taken back.`),
-      h("button", { type: "button", onclick: close }, "Cancel"),
-      button("Deny", "danger", (b) => decide("deny", b)),
-      asks ? null : button("Allow", "primary", (b) => decide("allow", b))));
+      h("span", { class: "who-gets" }, who),
+      off(h("button", { type: "button", onclick: close }, "Cancel")),
+      off(button("Deny", "danger", (b) => decide("deny", b))),
+      asks ? null : off(button("Allow", "primary", (b) => decide("allow", b)))));
 }
 
 /** "needed before …": an item, a release or a few words (notes 35). */
@@ -1798,10 +1875,10 @@ function needItem(x, { compact = false, page = false, project = true, before = n
   const toggle = () => toggleWhole(id);
   const where = [project ? (key ? projectName(key) : p.laptop) : null, feature && feature !== w?.ref ? h("a", { class: "id", href: featureHref(key, feature) }, feature) : null].filter(Boolean);
   const closed = w ? w.waiting_sessions.map((y) => `${y.feature === w.feature ? stepName(y) : `${y.feature} ${stepName(y)}`}`) : [];
-  const holds = p ? ["holds up ", worker ? heldIn([worker], ss ? declaredStep(worker) : null) : p.name] : w.kind === "bug" ? "blocks use" : ["holds up ", heldParts(w)];
+  const holds = p?.orphan ? null : p ? ["holds up ", worker ? heldIn([worker], ss ? declaredStep(worker) : null) : p.name] : w.kind === "bug" ? "blocks use" : ["holds up ", heldParts(w)];
   const meta = [
     where.length ? where.map((y, i) => [i ? " › " : null, y]) : null,
-    x.blocking ? h("span", { class: "holds" }, holds) : before ? "when you have time" : null,
+    p?.orphan ? h("span", { class: "stopped" }, "stopped by a restart ", ago(p.orphan.ended_at), " ago") : x.blocking ? h("span", { class: "holds" }, holds) : before ? "when you have time" : null,
     w?.asked_by ? `from ${askedBy(w.asked_by)}` : null,
     w ? neededBefore(w) : null,
     p ? `on ${p.laptop}` : null,
@@ -1858,18 +1935,20 @@ function needsBody(items, overview = false) {
 }
 
 const FRESH_MS = 3 * 60_000;
-/** Whether what the page shows may be behind: cut off, a read that failed, or none for three minutes. */
-const pageLate = () => $("conn").dataset.state !== "live" || !!ov.error || Date.now() - (state.refreshed ?? 0) > FRESH_MS;
+/** The waits were last read before this socket's welcome: a change while it was cut off isn't in them (Toad, review C minor 2). */
+const waitsBehind = () => ov.at !== null && ov.at < state.welcomed;
+/** Whether what the page shows may be behind: cut off, a read that failed, none for three minutes, or the waits not yet read again. */
+const pageLate = () => $("conn").dataset.state !== "live" || !!ov.error || waitsBehind() || Date.now() - (state.refreshed ?? 0) > FRESH_MS;
 /** What Needs you is up to date with: each laptop that reports, or in warn that the page itself isn't (spec 2.2). */
 function freshLine() {
   if (!ov.waits) return null;
   if (pageLate()) {
-    const at = ov.error ? ov.at : state.refreshed;
+    const at = ov.error || waitsBehind() ? ov.at : state.refreshed;
     return h("p", { class: "fresh late", dataset: { late: "true" } }, "Last updated ", at ? [ago(new Date(at).toISOString()), " ago"] : "before this page opened");
   }
   const live = [...state.laptops.values()].filter((l) => !staleReport(l));
   return h("p", { class: "fresh", dataset: { late: "false" } }, live.length ? ["Up to date: ", live.map((l, i) => [i ? ", " : null, `${l.laptop} reported `, ago(l.at), " ago"]), "."] : "Up to date. No laptop is reporting.",
-    " An item leaves when it's answered or its worker stops.");
+    " An item leaves when it's answered or its worker stops for good.");
 }
 
 /** Show context / Hide context, and the asker's context whole under it; none without one (BOB-31). An older broker sends no field. */
@@ -1935,7 +2014,7 @@ function viewNeeds() {
     h("section", { class: "card needs-page" }, needsBody(shown)),
     today.length ? h("section", { id: "needs-answered" }, h("h2", null, "Answered from here today ", h("span", { class: "count" }, today.length)),
       h("ul", { class: "list waits" }, today.map((x) => x.el()))) : null,
-    h("p", { class: "note" }, "Oldest first in each group. Answer here or in the project's conversation: your answer is kept on the item word for word, and the project's lead gets a message. A permission request shows for a day at most, and only while its worker runs; a quiet laptop's requests wait under its banner. A review and a bug open where they are looked at."),
+    h("p", { class: "note" }, "Oldest first in each group. Answer here or in the project's conversation: your answer is kept on the item word for word, and the project's lead gets a message. A permission request shows for a day at most, until its worker stops for good; a quiet laptop's requests wait under its banner. A review and a bug open where they are looked at."),
   ];
 }
 
@@ -3302,6 +3381,7 @@ function connect() {
     switch (f.t) {
       case "welcome":
         backoff = 1000;
+        state.welcomed = Date.now();
         dashboardRid = request("dashboard");
         // A write the drop cut off goes again under its key: the board answers a repeat with its first reply (Toad, BOB-7 review).
         for (const op of sentOps.values()) if (op.frame) ws.send(op.frame);
@@ -3315,16 +3395,18 @@ function connect() {
           break;
         }
         if (sentActions.has(f.rid)) {
-          const { button: b } = sentActions.get(f.rid);
+          const { button: b, settled } = sentActions.get(f.rid);
           sentActions.delete(f.rid);
           if (b) b.disabled = false;
+          settled?.(false);
           toast(f.message, false);
         }
         break;
       case "action_result":
         {
-          const done = f.ok ? actionToasts.get(f.id) : null;
+          const sent = actionToasts.get(f.id), done = f.ok ? sent?.done : null;
           actionToasts.delete(f.id);
+          sent?.settled?.(f.ok);
           toast(...(typeof done === "function" ? done(f) : [done ?? f.message, f.ok]));
         }
         break;
@@ -3335,9 +3417,9 @@ function connect() {
           break;
         }
         if (sentActions.has(f.rid)) {
-          const { done } = sentActions.get(f.rid);
+          const { done, settled } = sentActions.get(f.rid);
           sentActions.delete(f.rid);
-          if (done && f.result?.id) actionToasts.set(f.result.id, done);
+          if ((done || settled) && f.result?.id) actionToasts.set(f.result.id, { done, settled });
           toast("Sent; waiting for the supervisor…");
           break;
         }
@@ -3348,6 +3430,7 @@ function connect() {
           state.laptops = new Map(f.result.laptops.map((l) => [l.laptop, l]));
           state.boards = new Map((f.result.boards ?? []).map((b) => [`${b.laptop}|${b.board.project}`, b]));
           state.traffic = f.result.traffic;
+          pruneDecidedHere();
           // Live before the render: the stale banners draw only on a live page.
           setConn("live");
           render();
@@ -3365,6 +3448,7 @@ function connect() {
       case "report":
         skew = Date.now() - Date.parse(f.at);
         state.laptops.set(f.laptop, { laptop: f.laptop, at: f.at, snapshot: f.snapshot });
+        pruneDecidedHere();
         scheduleRender();
         break;
       case "board":
@@ -3379,7 +3463,8 @@ function connect() {
           for (const id of feats.keys()) if (id.startsWith(`${f.project}/`)) loadFeature(f.project, id.slice(f.project.length + 1));
         }
         usageDayChanged(f.project);
-        if (ov.rows || ov.error) loadOverview();
+        // One during the first read too: it is read again when that ends (Toad, review C minor 5).
+        if (ov.rows || ov.error || ov.loading) loadOverview();
         if (rules.rows) loadRules();
         statusChanged();
         break;
@@ -3396,6 +3481,13 @@ function connect() {
       op.reject(new Error("The connection dropped; try again in a moment."));
       sentOps.delete(id);
     }
+    // An answer sent and not answered: his form is his again. Its result may still come over the next socket.
+    const cut = [...sentActions, ...actionToasts].filter(([, a]) => a.settled);
+    for (const [id, a] of cut) {
+      sentActions.delete(id);
+      a.settled(false);
+    }
+    if (cut.length) toast("The connection dropped before the supervisor answered.", "warn");
     setTimeout(connect, backoff);
     backoff = Math.min(backoff * 2, 30_000);
   });

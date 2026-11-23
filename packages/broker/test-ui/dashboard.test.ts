@@ -1604,6 +1604,17 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     it("allows or denies an older supervisor's permission as before: the note only with Deny, confirming Allow, no Undo (#5; BOB-5 as built 1, 2; BOB-176 c5)", async () => {
       (item("r_9").querySelector(".answer-btn") as HTMLButtonElement).click();
       const form = () => item("r_9").querySelector("form.answer")!;
+      const reported = async (rows: unknown[]) => {
+        FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: { ...dashboard.laptops[0]!.snapshot, workers: [worker({ state: "waiting-approval" })], pending: rows } });
+        await settle();
+      };
+      /** Taken, it left; asked again, it is there again with its form. */
+      const askedAgain = async () => {
+        expect(item("r_9")).toBeNull();
+        await reported([]);
+        await reported([perm]);
+        (item("r_9").querySelector(".answer-btn") as HTMLButtonElement).click();
+      };
       // The item is open above it, its command whole: the form doesn't say it again.
       expect(item("r_9").classList.contains("open")).toBe(true);
       expect(form().querySelector(".preview")).toBeNull();
@@ -1625,14 +1636,13 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       const allow = FakeSocket.last.sent.at(-1)!;
       expect(allow).toMatchObject({ t: "action", laptop: "mbp-1", action: { kind: "answer", request: "r_9", decision: "allow" } });
       expect((allow["action"] as Record<string, unknown>)["message"]).toBeUndefined();
-      expect(item("r_9").querySelector("form.answer")).toBeNull();
+      expect([...form().querySelectorAll("button")].map((b) => b.disabled)).toEqual([true, true, true]);
       FakeSocket.last.frame({ t: "ok", rid: allow["rid"], result: { id: "a_allow" } });
       FakeSocket.last.frame({ t: "action_result", id: "a_allow", laptop: "mbp-1", ok: true, message: "r_9 allowed" });
       expect($("toast").textContent).toBe("Allowed records-agent's Bash.");
       expect($("toast").querySelector("button")).toBeNull();
       // Deny needs no confirmation; its note goes, and the toast says so.
-      (item("r_9").querySelector(".answer-btn") as HTMLButtonElement).click();
-      box.value = "";
+      await askedAgain();
       const note = form().querySelector("textarea") as HTMLTextAreaElement;
       note.value = "use the pool's stop script";
       note.dispatchEvent(new Event("input"));
@@ -1643,7 +1653,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       FakeSocket.last.frame({ t: "action_result", id: "a_deny", laptop: "mbp-1", ok: true, message: "r_9 denied" });
       expect($("toast").textContent).toBe("Denied records-agent's Bash; your note went to records-agent.");
       // No note: no "; your note …". A refusal reads as the supervisor's own words.
-      (item("r_9").querySelector(".answer-btn") as HTMLButtonElement).click();
+      await askedAgain();
       const empty = form().querySelector("textarea") as HTMLTextAreaElement;
       empty.value = "";
       empty.dispatchEvent(new Event("input"));
@@ -1653,6 +1663,8 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect($("toast").textContent).toBe("Denied records-agent's Bash.");
       FakeSocket.last.frame({ t: "action_result", id: "a_other", laptop: "mbp-1", ok: false, message: "r_9 isn't pending" });
       expect($("toast").textContent).toBe("r_9 isn't pending");
+      await reported([]);
+      await reported([perm]);
       // A laptop that sends no decided adds no row, and nothing is said about it (BOB-176 c6).
       expect($("needs-answered")?.querySelector('[data-ref="r_9"]') ?? null).toBeNull();
     });
@@ -3250,19 +3262,20 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
   it("shows a live request only under a day old, from a laptop that reports, while its worker runs; every count is what is shown (c1)", async () => {
     waits = [wait("Q-2", 30), wait("Q-1", 3 * H), wait("A-1", 5 * H, { kind: "action", blocking: false, project: "helix", feature: null }), wait("A-0", 9 * H, { kind: "action", blocking: false, project: "helix", feature: null })];
     const ended = worker({ id: "w_e", name: "Scotty", project: "helix", state: "stopped", ended_at: iso(3) });
-    await open([laptop("mbp-1", 0, { workers: [howard, ended], pending: [ask("r_old", DAY + 1), ask("r_live", DAY - 1), ask("r_ended", 4, { worker_id: "w_e", name: "Scotty" }), ask("r_gone", 4, { worker_id: "w_none" }), ask("r_lead", 4, { tier: "orchestrator" })] }),
+    await open([laptop("mbp-1", 0, { workers: [howard, ended], pending: [ask("r_old", DAY + 1), ask("r_live", DAY - 1), ask("r_ended", 4, { worker_id: "w_e", name: "Scotty" }), ask("r_gone", 4, { worker_id: "w_none" }), ask("r_gone_before", 901, { worker_id: "w_none" }), ask("r_lead", 4, { tier: "orchestrator" })] }),
       laptop("ubu1", 4, { pending: [ask("r_quiet", 10)] })]);
     await go("#needs");
-    expect(refs("needs-holding")).toEqual(["r_live", "Q-1", "Q-2"]);
+    // A worker the report doesn't list is past its 100, not stopped: its request stays, made since the supervisor started.
+    expect(refs("needs-holding")).toEqual(["r_live", "Q-1", "Q-2", "r_gone"]);
     expect(refs("needs-rest")).toEqual(["A-0", "A-1"]);
     expect(view().querySelector(".stale-banners .banner")!.textContent).toContain("ubu1 stopped reporting");
-    expect(segs()).toEqual(["All projects 5", "BobNet 2", "Helix 3"]);
-    expect(view().querySelectorAll("li.need")).toHaveLength(5);
-    expect($("needs-n").textContent).toBe("5");
+    expect(segs()).toEqual(["All projects 6", "BobNet 2", "Helix 3"]);
+    expect(view().querySelectorAll("li.need")).toHaveLength(6);
+    expect($("needs-n").textContent).toBe("6");
     // The Overview: the same items, the same count.
     await go("#overview");
     expect($("needs-count").textContent).toBe($("needs-n").textContent);
-    expect(view().querySelectorAll(".ov-needs li.need")).toHaveLength(5);
+    expect(view().querySelectorAll(".ov-needs li.need")).toHaveLength(6);
     expect(view().querySelector(".stale-banners .banner")).not.toBeNull();
     // Two minutes on, the one at 23 h 59 min is over a day old.
     vi.setSystemTime(now.getTime() + 2 * 60_000);
@@ -3270,7 +3283,14 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
     await settle();
     expect(view().querySelector('[data-ref="r_live"]')).toBeNull();
     expect([$("needs-count").textContent, $("needs-n").textContent]).toEqual(["4", "4"]);
-    // Its worker stops: the request leaves with it, the report listing it or not.
+    // An active worker past the report's 100: its request stays, unless it was made before the supervisor started.
+    const others = Array.from({ length: 100 }, (_, i) => worker({ id: `w_x${i}`, project: "bobnet", state: "done", ended_at: iso(5) }));
+    report("mbp-1", 0, { workers: others, pending: [ask("r_old_lead", 899), ask("r_before", 901)] });
+    await settle();
+    expect(view().querySelector('[data-ref="r_old_lead"]')).not.toBeNull();
+    expect(view().querySelector('[data-ref="r_before"]')).toBeNull();
+    expect($("needs-n").textContent).toBe("5");
+    // Its worker is listed and stopped: the request leaves with it.
     report("mbp-1", 0, { pending: [ask("r_new", 1)] });
     await settle();
     expect($("needs-n").textContent).toBe("5");
@@ -3305,7 +3325,7 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
     await open([laptop("mbp-1", 0.3), laptop("ubu1", 0.6), laptop("mini", 9)]);
     for (const page of ["#needs", "#overview"]) {
       await go(page);
-      expect(view().querySelector(".fresh")!.textContent).toBe("Up to date: mbp-1 reported 18s ago, ubu1 reported 36s ago. An item leaves when it's answered or its worker stops.");
+      expect(view().querySelector(".fresh")!.textContent).toBe("Up to date: mbp-1 reported 18s ago, ubu1 reported 36s ago. An item leaves when it's answered or its worker stops for good.");
       expect(view().querySelector(".fresh")!.classList.contains("late")).toBe(false);
     }
     // Four minutes with no refresh of its own: it says so instead, with no frame to tell it.
@@ -3316,7 +3336,7 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
     expect(view().querySelector(".fresh")!.classList.contains("late")).toBe(true);
     refresh([laptop("mbp-1", -4)]);
     await settle();
-    expect(view().querySelector(".fresh")!.textContent).toBe("Up to date: mbp-1 reported 0s ago. An item leaves when it's answered or its worker stops.");
+    expect(view().querySelector(".fresh")!.textContent).toBe("Up to date: mbp-1 reported 0s ago. An item leaves when it's answered or its worker stops for good.");
     // Its own read failed: the items stay, with when they were read.
     down = ["waits"];
     await reread();
@@ -3337,11 +3357,293 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
     await new Promise((r) => setTimeout(r, 1100));
   });
 
+  it("says so after a reconnect until the waits are read again (c3; Toad, review C minor 2)", async () => {
+    waits = [wait("Q-1", H)];
+    await open([laptop("mbp-1", 0)]);
+    await go("#needs");
+    expect(view().querySelector(".fresh")!.textContent).toMatch(/^Up to date: /);
+    // An hour asleep, then the socket is new: the laptops are read again before the waits are.
+    FakeSocket.last.dispatchEvent(new Event("close"));
+    await new Promise((x) => setTimeout(x, 1100));
+    vi.setSystemTime(now.getTime() + 60 * 60_000);
+    FakeSocket.last.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
+    refresh([laptop("mbp-1", -60)]);
+    expect(view().querySelector(".fresh.late")!.textContent).toBe("Last updated 1h 0m ago");
+    waits = [];
+    await answer();
+    expect(refs("needs-holding")).toEqual([]);
+    expect(view().querySelector(".fresh")!.textContent).toBe("Up to date: mbp-1 reported 0s ago. An item leaves when it's answered or its worker stops for good.");
+    vi.setSystemTime(now);
+  });
+
+  it("reads again after a board_changed that came during the first read (c11)", async () => {
+    waits = [wait("Q-1", H)];
+    await freshPage();
+    done.clear();
+    FakeSocket.last.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
+    refresh([laptop("mbp-1", 0)]);
+    const ops = (op: string) => FakeSocket.last.sent.filter((f) => (f["op"] as { op?: string } | undefined)?.op === op);
+    FakeSocket.last.frame({ t: "ok", rid: ops("projects")[0]!["rid"], result: { projects: [bobnet, helix] } });
+    done.add(ops("projects")[0]!["rid"]);
+    await new Promise((x) => setTimeout(x, 20));
+    expect(ops("waits")).toHaveLength(1);
+    // Asked, and not yet answered: the change isn't in what this read answers.
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 2, refs: ["Q-2"] });
+    FakeSocket.last.frame({ t: "ok", rid: ops("waits")[0]!["rid"], result: { waits: [wait("Q-1", H)], answered: [] } });
+    done.add(ops("waits")[0]!["rid"]);
+    waits = [wait("Q-1", H), wait("Q-2", 1)];
+    await answer();
+    await go("#needs");
+    expect(refs("needs-holding")).toEqual(["Q-1", "Q-2"]);
+  });
+
+  describe("answering a permission (c10)", () => {
+    const asked: string[] = [];
+    const form = (ref: string) => item(ref).querySelector("form.answer")!;
+    const press = (ref: string, label: string) => click([...form(ref).querySelectorAll("button")].find((b) => b.textContent === label));
+    const type = (ref: string, words: string) => {
+      const box = form(ref).querySelector("textarea") as HTMLTextAreaElement;
+      box.value = words;
+      box.dispatchEvent(new Event("input"));
+    };
+    const off = (ref: string) => [...item(ref).querySelectorAll("form.answer button, .acts button")].map((b) => (b as HTMLButtonElement).disabled);
+    const ok = () => {
+      const sent = FakeSocket.last.sent.at(-1)!;
+      FakeSocket.last.frame({ t: "ok", rid: sent["rid"], result: { id: `act-${sent["rid"]}` } });
+      return (over: Record<string, unknown> = {}) => FakeSocket.last.frame({ t: "action_result", id: `act-${sent["rid"]}`, laptop: "mbp-1", ok: true, message: "taken", ...over });
+    };
+
+    beforeAll(() => {
+      globalThis.confirm = (q?: string) => (asked.push(String(q)), true);
+    });
+
+    it("takes the item and its count away at once when it is taken, until the report drops it (m3)", async () => {
+      waits = [];
+      await open([laptop("mbp-1", 0, { pending: [ask("r_1", 3), ask("r_2", 2)] })]);
+      await go("#needs");
+      click(item("r_1").querySelector(".answer-btn"));
+      press("r_1", "Allow");
+      const result = ok();
+      expect($("needs-n").textContent).toBe("2");
+      result();
+      expect(refs("needs-holding")).toEqual(["r_2"]);
+      expect($("needs-n").textContent).toBe("1");
+      // The laptop's next report was made before it heard: still away, on a full refresh too.
+      report("mbp-1", 0, { pending: [ask("r_1", 3), ask("r_2", 2)] });
+      await settle();
+      refresh([laptop("mbp-1", 0, { pending: [ask("r_1", 3), ask("r_2", 2)] })]);
+      await settle();
+      expect(refs("needs-holding")).toEqual(["r_2"]);
+      report("mbp-1", 0, { pending: [ask("r_2", 2)] });
+      await settle();
+      expect($("needs-n").textContent).toBe("1");
+    });
+
+    it("keeps the form and his words until the result, its buttons off; refused, they are his again (m4)", async () => {
+      await open([laptop("mbp-1", 0, { pending: [ask("r_1", 3)] })]);
+      await go("#needs");
+      click(item("r_1").querySelector(".answer-btn"));
+      type("r_1", "Keep the stash");
+      expect(off("r_1")).toEqual([false, false, false, false]);
+      const words = () => (form("r_1").querySelector("textarea") as HTMLTextAreaElement).value;
+      press("r_1", "Allow");
+      expect([off("r_1"), words()]).toEqual([[true, true, true, true], "Keep the stash"]);
+      // A redraw meanwhile keeps both.
+      report("mbp-1", 0, { pending: [ask("r_1", 3)] });
+      await settle();
+      expect([off("r_1"), words()]).toEqual([[true, true, true, true], "Keep the stash"]);
+      ok()({ ok: false, message: "r_1 is already answered" });
+      expect($("toast").textContent).toBe("r_1 is already answered");
+      expect([off("r_1"), words()]).toEqual([[false, false, false, false], "Keep the stash"]);
+      // Refused by the broker, before it got to the laptop.
+      press("r_1", "Deny");
+      FakeSocket.last.frame({ t: "error", rid: FakeSocket.last.sent.at(-1)!["rid"], code: "offline", message: "No supervisor is online on mbp-1" });
+      expect([off("r_1"), words(), $("toast").textContent]).toEqual([[false, false, false, false], "Keep the stash", "No supervisor is online on mbp-1"]);
+      // Cut off before the result: his again too, and the result that comes over the next socket still closes it.
+      press("r_1", "Allow");
+      const result = ok();
+      FakeSocket.last.dispatchEvent(new Event("close"));
+      expect([off("r_1"), words(), $("toast").dataset["ok"]]).toEqual([[false, false, false, false], "Keep the stash", "warn"]);
+      await new Promise((x) => setTimeout(x, 1100));
+      result({ note_delivered: true });
+      expect(item("r_1")).toBeNull();
+      expect($("toast").textContent).toBe("Allowed Howard's Bash; your note went to Howard.");
+    });
+
+    it("gives the form back when the supervisor never answers (m4)", async () => {
+      await open([laptop("mbp-1", 0, { pending: [ask("r_1", 3)] })]);
+      await go("#needs");
+      click(item("r_1").querySelector(".answer-btn"));
+      const real = globalThis.setTimeout, late: Array<() => void> = [];
+      globalThis.setTimeout = ((f: () => void, ms?: number) => (ms === 30_000 ? (late.push(f), 0) : real(f, ms))) as typeof setTimeout;
+      try { press("r_1", "Deny"); } finally { globalThis.setTimeout = real; }
+      ok();
+      expect(off("r_1")).toEqual([true, true, true, true]);
+      for (const f of late) f();
+      expect([off("r_1"), $("toast").textContent]).toEqual([[false, false, false, false], "mbp-1's supervisor hasn't answered yet."]);
+    });
+
+    it("opens on the command: the item's top under the header, the note not focused (m5)", async () => {
+      waits = [wait("Q-1", H)];
+      await open([laptop("mbp-1", 0, { pending: [ask("r_1", 3)] })]);
+      await go("#needs");
+      const was = window.scrollBy, scrolled: unknown[][] = [];
+      const rect = Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect = function (this: Element) { return { top: this.id === "w-perm/mbp-1/r_1" ? 500 : 0, bottom: this.tagName === "HEADER" ? 120 : 0 } as DOMRect; };
+      window.scrollBy = ((...a: unknown[]) => void scrolled.push(a)) as typeof window.scrollBy;
+      try {
+        click(item("r_1").querySelector(".answer-btn"));
+        expect(scrolled).toEqual([[0, 372]]);
+        expect(form("r_1").contains(document.activeElement)).toBe(false);
+        // A question's box is where he writes, as before.
+        question = { ref: "Q-1", kind: "question", options: [] };
+        click(item("Q-1").querySelector(".answer-btn"));
+        expect(form("Q-1").contains(document.activeElement)).toBe(true);
+        expect(scrolled).toHaveLength(1);
+      } finally {
+        window.scrollBy = was;
+        Element.prototype.getBoundingClientRect = rect;
+      }
+      waits = [];
+    });
+
+    it("says in Allow's confirmation when the command is cut there, and how much of it is above (Toad 4)", async () => {
+      const long = `${"x".repeat(399)}…`;
+      const rows = [ask("r_1", 4, { preview: long, ask: { text: "x".repeat(2000), cut: false, questions: [] } }), ask("r_2", 3, { preview: long, ask: { text: `${"x".repeat(7999)}…`, cut: true, questions: [] } }),
+        ask("r_3", 2, { preview: "pnpm test", ask: { text: "pnpm test", cut: false, questions: [] } }), ask("r_4", 1, { preview: long, ask: null })];
+      await open([laptop("mbp-1", 0, { pending: rows })]);
+      await go("#needs");
+      const says: string[] = [];
+      globalThis.confirm = (q?: string) => (says.push(String(q)), false);
+      for (const ref of ["r_1", "r_2", "r_3", "r_4"]) {
+        click(item(ref).querySelector(".answer-btn"));
+        press(ref, "Allow");
+      }
+      globalThis.confirm = () => true;
+      expect(says).toEqual([
+        `Allow Howard to run Bash?\n\n${long}\n\nThe command is cut here; it is shown whole above.`,
+        `Allow Howard to run Bash?\n\n${long}\n\nThe command is cut here; more of it is shown above.`,
+        "Allow Howard to run Bash?\n\npnpm test",
+        `Allow Howard to run Bash?\n\n${long}`,
+      ]);
+    });
+  });
+
+  describe("an orphaned request: its worker stopped by a restart (c14, c15)", () => {
+    const START = 10;
+    const stopped = { ...howard, state: "failed", started_at: iso(60), ended_at: iso(START) };
+    const sup = { started_at: iso(START), concurrency: 2, active: 0, queued: 0 };
+    const orphan = (over: Record<string, unknown> = {}) => ask("r_o", 14, { preview: "pnpm build", ask: { text: "pnpm build", cut: false, questions: [] }, ...over });
+    const mbp = (over: Record<string, unknown> = {}, at = 0) => laptop("mbp-1", at, { supervisor: sup, workers: [stopped], pending: [orphan()], ...over });
+    const role = (over: Record<string, unknown>) => ({ ...howard, id: "w_new", ...over });
+    const shows = (laptops: unknown[]) => {
+      refresh(laptops);
+      return [refs("needs-holding").includes("r_o"), $("needs-n").textContent];
+    };
+
+    beforeAll(async () => {
+      waits = [wait("Q-1", H)];
+      await open([mbp()]);
+      await go("#needs");
+    });
+
+    it("is shown and counted, in Holds work up, oldest first", async () => {
+      expect(refs("needs-holding")).toEqual(["Q-1", "r_o"]);
+      expect($("needs-n").textContent).toBe("2");
+      expect(segs()).toEqual(["All projects 2", "BobNet 1", "Helix 1"]);
+    });
+
+    it("is not shown when any condition doesn't hold, and is again when all do", () => {
+      const ubu = (w: Record<string, unknown>, at = 0) => laptop("ubu1", at, { workers: [w] });
+      const not: Record<string, unknown[]> = {
+        "orchestrator tier": [mbp({ pending: [orphan({ tier: "orchestrator" })] })],
+        "over a day": [mbp({ pending: [orphan({ created_at: iso(DAY + 1) })] })],
+        "a quiet laptop": [mbp({}, 4)],
+        "created since the start": [mbp({ pending: [orphan({ created_at: iso(START - 1) })] })],
+        "worker absent": [mbp({ workers: [] })],
+        "worker stopped": [mbp({ workers: [{ ...stopped, state: "stopped" }] })],
+        "worker done": [mbp({ workers: [{ ...stopped, state: "done" }] })],
+        "a fresh worker active on the other laptop": [mbp(), ubu(role({ state: "running", started_at: iso(2) }))],
+        "one queued": [mbp({ workers: [stopped, role({ state: "queued", started_at: null })] })],
+        "one started since and ended": [mbp({ workers: [stopped, role({ state: "done", started_at: iso(8), ended_at: iso(5) })] })],
+      };
+      for (const [why, laptops] of Object.entries(not)) {
+        expect([why, ...shows(laptops)]).toEqual([why, false, "1"]);
+        expect(shows([mbp()])).toEqual([true, "2"]);
+      }
+      // Another role or project, or one of its role that ran before, doesn't count.
+      const others = [role({ role: "architect", state: "running", started_at: iso(2) }), role({ id: "w_p", project: "bobnet", state: "running", started_at: iso(2) }), role({ id: "w_e", state: "done", started_at: iso(50), ended_at: iso(40) })];
+      expect(shows([mbp({ workers: [stopped, ...others] })])).toEqual([true, "2"]);
+      // Answered, it leaves.
+      expect(shows([mbp({ pending: [] })])).toEqual([false, "1"]);
+      shows([mbp()]);
+    });
+
+    it("says its worker stopped, and that answering starts it again; Working now has no row for it (c15)", async () => {
+      const li = () => item("r_o");
+      expect(li().querySelector(".l-m")!.textContent).toBe("Helix › LAND-50 · stopped by a restart 10m ago · on mbp-1");
+      expect(li().querySelector(".stopped")!.textContent).toBe("stopped by a restart 10m ago");
+      expect(li().querySelector(".dot, .holds")).toBeNull();
+      const foot = () => {
+        click(li().querySelector(".answer-btn"));
+        const said = li().querySelector(".who-gets")!.textContent;
+        click(li().querySelector(".answer-btn"));
+        return said;
+      };
+      expect(foot()).toBe("Howard stopped when mbp-1 restarted. Allow or Deny starts it again, with your decision and your note. It can't be taken back.");
+      shows([mbp({ decided: undefined })]);
+      expect(foot()).toBe("Howard stopped when mbp-1 restarted. Allow or Deny starts it again, with your decision; a note goes only with Deny. It can't be taken back.");
+      // A question of his own can only be denied.
+      shows([mbp({ pending: [orphan({ kind: "question", tool: "AskUserQuestion" })] })]);
+      expect(foot()).toBe("Howard stopped when mbp-1 restarted. Deny starts it again, with your note. It can't be taken back.");
+      shows([mbp()]);
+      await go("#overview");
+      expect(view().querySelector("#working")).toBeNull();
+      expect(view().querySelector('.ov-needs [data-ref="r_o"]')).not.toBeNull();
+      await go("#needs");
+    });
+
+    it("confirms and toasts that it starts again (c15)", () => {
+      const asked: string[] = [];
+      globalThis.confirm = (q?: string) => (asked.push(String(q)), true);
+      const decide = (label: string, note: string, result: Record<string, unknown> = {}, over: Record<string, unknown> = {}) => {
+        refresh([mbp({ pending: [] })]);
+        refresh([mbp(over)]);
+        click(item("r_o").querySelector(".answer-btn"));
+        const box = item("r_o").querySelector("form.answer textarea") as HTMLTextAreaElement;
+        box.value = note;
+        box.dispatchEvent(new Event("input"));
+        click([...item("r_o").querySelectorAll("form.answer button")].find((b) => b.textContent === label));
+        const sent = FakeSocket.last.sent.at(-1)!;
+        FakeSocket.last.frame({ t: "ok", rid: sent["rid"], result: { id: `act-${sent["rid"]}` } });
+        FakeSocket.last.frame({ t: "action_result", id: `act-${sent["rid"]}`, laptop: "mbp-1", ok: true, message: "r_o allowed", ...result });
+        expect(item("r_o")).toBeNull();
+        return [$("toast").textContent, $("toast").dataset["ok"]];
+      };
+      expect(decide("Allow", "")).toEqual(["Allowed Howard's Bash; it starts again on mbp-1.", "true"]);
+      expect(asked.at(-1)).toBe("Allow Howard to run Bash?\n\npnpm build\n\nHoward stopped when mbp-1 restarted. Allow starts it again.");
+      expect(decide("Allow", "Keep the stash", { note_delivered: true })).toEqual(["Allowed Howard's Bash; it starts again on mbp-1, with your note.", "true"]);
+      expect(asked.at(-1)).toBe("Allow Howard to run Bash?\n\npnpm build\n\nHoward stopped when mbp-1 restarted. Allow starts it again.\n\nYour note goes with it.");
+      expect(decide("Allow", "Keep the stash", { note_delivered: false })).toEqual(["Allowed Howard's Bash; it starts again on mbp-1, but your note didn't reach Howard (it had stopped).", "warn"]);
+      expect(decide("Allow", "Keep the stash")).toEqual(["Allowed Howard's Bash; it starts again on mbp-1, but mbp-1's supervisor is older and dropped your note.", "warn"]);
+      expect(decide("Allow", "Keep the stash", {}, { decided: undefined })).toEqual(["Allowed Howard's Bash; it starts again on mbp-1.", "true"]);
+      expect(decide("Deny", "")).toEqual(["Denied Howard's Bash; it starts again on mbp-1.", "true"]);
+      expect(decide("Deny", "Not that")).toEqual(["Denied Howard's Bash; it starts again on mbp-1, with your note.", "true"]);
+      globalThis.confirm = () => true;
+    });
+  });
+
   it("sends a note with Allow where the supervisor takes one, and says what became of it (c5)", async () => {
     waits = [];
     const asked: string[] = [];
     globalThis.confirm = (q?: string) => (asked.push(String(q)), true);
     const decide = async (label: string, note: string, result: Record<string, unknown> | null) => {
+      if (!item("r_1")) {
+        // Taken, it left; here it is asked again.
+        report("mbp-1", 0);
+        report("mbp-1", 0, { pending: [ask("r_1", 3)] });
+        await settle();
+      }
       if (!item("r_1").querySelector("form.answer")) click(item("r_1").querySelector(".answer-btn"));
       const box = item("r_1").querySelector("form.answer textarea") as HTMLTextAreaElement;
       box.value = note;
@@ -3369,7 +3671,6 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
     // An older supervisor's report has no decided: today's form, and Allow sends no note.
     report("mbp-1", 0, { pending: [ask("r_1", 3)], decided: undefined });
     await settle();
-    click(item("r_1").querySelector(".answer-btn"));
     expect(item("r_1").querySelector(".words span")!.textContent).toBe("Note to Howard, sent with Deny (optional)");
     expect(await decide("Allow", note, {})).toEqual(["Allowed Howard's Bash.", "true", undefined]);
   });
@@ -3577,7 +3878,7 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
       expect(row("ci").querySelector(".ci-st .muted")!.textContent).toBe(" · 7c1e2a9 · Howard's land");
       expect(row("e2e").querySelector(".ci-st .muted")!.textContent).toBe(" · 57e7002");
       for (const a of row("test").querySelectorAll("a")) expect([a.getAttribute("href"), a.getAttribute("target")]).toEqual(["https://github.com/x/y/actions/runs/4be01c77aa", "_blank"]);
-      expect([...row("test").querySelectorAll("a")].map((a) => a.textContent)).toEqual(["test", "Run ↗"]);
+      expect([...row("test").querySelectorAll("a")].map((a) => a.textContent)).toEqual(["✕test on v2", "Run ↗"]);
       expect(row("pages").querySelectorAll("a")).toHaveLength(0);
       expect([...row("test").children].map((c) => c.className)).toEqual(["ci-p", "ci-wf", "ci-st", "ci-hist", "ci-link"]);
       expect(view().textContent).not.toMatch(/\$\d/);

@@ -1,7 +1,8 @@
 // Screenshots of BOB-121's build C (design/BOB-121/spec.md) at phone, tablet and desktop widths, against a fake broker in
 // the page: the header and Triage (BOB-174), Laptops (BOB-175), Needs you (BOB-176), an agent's ask (BOB-177), CI (BOB-178).
 //   node test-ui/shots-bob121.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob121-*.png)
-// Prints any page error and any page wider than its window.
+// Prints any page error, any page wider than its viewport, a CI row whose words run into what is beside them, and at 390
+// the tap targets under 44 px, by what they say (BOB-176 c12, c13).
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, extname, join } from "node:path";
@@ -30,10 +31,14 @@ function fakeBroker(scene) {
   const iso = (minAgo) => new Date(now - minAgo * 60_000).toISOString();
   const H = 60, D = 24 * 60;
   const project = (key, name, prefix, lead, po) => ({ key, name, prefix, draft_prefix: null, lead, po, repos: [] });
-  const projects = [project("bobnet", "BobNet", "BOB", "Mario@mbp-1", "Peach@mbp-1"), project("helix", "Helix", "LAND", "Picard@mbp-1", "Bill@mbp-1")];
+  const projects = [project("bobnet", "BobNet", "BOB", "Mario@mbp-1", "Peach@mbp-1"), project("helix", "Helix", "LAND", "Picard@mbp-1", "Bill@mbp-1"),
+    ...(scene === "many" ? ["Vitals", "Wildcatter land services", "Northlight mapping", "Field notes and surveys", "County recorder imports"].map((n) => project(n.toLowerCase().replaceAll(" ", "-"), n, n.slice(0, 3).toUpperCase(), "Data@mbp-1", "Troi@mbp-1")) : [])];
+  // Words that don't break: a tool's name of 44 characters, a link of 50, a branch, an agent.
+  const long = scene === "long", tool = "mcp__claude_ai_Google_Calendar__create_event", url = "https://github.com/example/land/issues/new?title=xy";
   const feat = (ref, status, title, over = {}) => ({ ref, kind: "feature", type: "increment", status, title, parent: null, release: "R2", ord: 1000, labels: [], progress: { checked: 4, total: 11 }, tasks: { done: 9, total: 14 }, open_since: null, archived_at: null, ...over });
   const features = {
     bobnet: [feat("BOB-121", "In Progress", "The dashboard, use case first", { release: "R3", open_since: iso(300) }), feat("BOB-9", "Ready", "Move Helix's board off Backlog.md into the service", { release: "R3" })],
+    ...Object.fromEntries(projects.slice(2).map((p) => [p.key, []])),
     helix: [feat("LAND-50", "In Progress", "An agent proposes a change to a recorded lease", { open_since: iso(400) }), feat("LAND-38", "Ready", "Partner audit view of a tract's changes")],
   };
   const release = (ref, title, done, total) => ({ ref, title, goal: null, status: "open", ord: 1000, spec_url: null, closed_at: null, closed_by: null, features: { done, total }, backlog: { items: 2, bugs: 1, oldest: iso(6 * D) } });
@@ -48,6 +53,7 @@ function fakeBroker(scene) {
       { name: "pages", runs: [run("queued", 0, null, "7c1e2a9d01", null, { started_at: null, url: null }), run("queued", 30, null, "57e7002bfa"), run("passed", 90, 2, "a39bd05c11")] },
     ],
   };
+  if (long) Object.assign(ci.helix[0], { name: "release_and_publish_every_package_to_the_registry" }, { runs: [{ ...ci.helix[0].runs[0], agent: "TheLandServiceEndToEndEngineerOnTheNightShift" }, ...ci.helix[0].runs.slice(1)] });
   const overview = (p) => ({
     project: p, release: p.key === "helix" ? release("R2", "R2 Edit and audit", 1, 6) : release("R3", "R3 Vitals", 2, 9), release_number: p.key === "helix" ? 2 : 3,
     open: features[p.key].filter((x) => x.open_since), next_ready: features[p.key].find((x) => x.status === "Ready"), waits_on_you: p.key === "helix" ? "Q-261" : null,
@@ -67,10 +73,11 @@ function fakeBroker(scene) {
     wait({ ref: "A-9", project: "bobnet", kind: "action", text: "Where do Vitals' restart checks run from? Say which when it is done.", since: iso(8 * H), asked_by: "Peach@mbp-1" }),
     wait({ ref: "Q-243", text: "Keep the recorded instrument's scan beside the change, or only its number?", since: iso(40 * H), needed_before: { item: "LAND-38" }, stale: { changed_at: iso(40 * H), owner: "Bill@mbp-1", flagged_at: null } }),
   ];
+  if (long) waits[0].edits.push({ seq: 4, at: iso(80), by: "Picard@mbp-1", reason: null, changes: [change("holds", "LAND-50-build-2-the-change-set-migration-and-its-audit-view", "LAND-50-build-3-the-change-set-migration-and-its-audit-view")] });
   const question = (ref) => {
     const w = waits.find((x) => x.ref === ref) ?? { text: ref, kind: "question", since: iso(60) };
     const options = {
-      "Q-261": [{ key: "one", text: "One change set, with each tract's part shown apart", recommended: true }, { key: "two", text: "One change set for each tract", recommended: false }],
+      "Q-261": [{ key: "one", text: "One change set, with each tract's part shown apart", recommended: true }, { key: "two", text: long ? `Let it call ${tool} for each tract` : "One change set for each tract", recommended: false }, ...(long ? [{ key: "three", text: url, recommended: false }] : [])],
       "A-9": [{ key: "cron", text: "A cron entry on mbp-1, outside the supervisor", recommended: false }, { key: "sup", text: "The supervisor's own check, every five minutes, with its result on the Laptops page", recommended: true }, { key: "none", text: "Leave it by hand for now", recommended: false }],
     }[ref] ?? null;
     return { ...w, options, state: "open", answer: null };
@@ -90,6 +97,7 @@ function fakeBroker(scene) {
       { question: "Is a second review needed before recording?", header: "Review", multi: false, options: [{ label: "Yes", description: "Picard reads it first." }, { label: "No", description: "Howard's tests are enough." }] },
     ],
   };
+  if (long) asks.questions[0].options[1] = { label: tool, description: url };
   const command = "pnpm exec playwright test e2e/land/change-sets.spec.ts --project=chromium --workers=2 --reporter=line \\\n  && git clean -n .cache/tiles/staging \\\n  && pnpm run tiles:build --only staging --zoom 8-14";
   const pending = [
     { id: "r_5", worker_id: "w_h", name: "Howard", kind: "approval", tool: "Bash", tier: "human", created_at: iso(14), preview: command.slice(0, 90), ask: { text: command, cut: false, questions: [] } },
@@ -107,10 +115,17 @@ function fakeBroker(scene) {
     worker("w_h", "Howard", "engineer", { state: "waiting-approval", task_refs: ["LAND-50.2"] }), worker("w_m", "Marvin", "engineer", { state: "waiting-approval", started_at: iso(31), checkpoint: "LAND-50.4 · migration written, two owners open", calls: 98, context: 91_000, remote_url: "https://claude.ai/code/x" }),
     worker("w_p", "Picard", "lead", { started_at: iso(300), session: "LAND-50 build 2", calls: 402, context: 210_000 }), worker("w_q", "Scotty", "engineer", { state: "queued", started_at: null })],
   pending: nothing ? [] : pending, decided: nothing ? [] : decided, cleanup }) };
+  // mbp-1's supervisor started again 5 minutes ago: Howard stopped, and his request is what is left of it.
+  if (scene === "orphan" || scene === "orphanolder") {
+    mbp.snapshot.supervisor.started_at = iso(5);
+    mbp.snapshot.workers = [worker("w_h", "Howard", "engineer", { state: "failed", ended_at: iso(5), task_refs: ["LAND-50.2"] }), worker("w_p", "Picard", "lead", { started_at: iso(4), calls: 12, context: 41_000 })];
+    mbp.snapshot.pending = pending.slice(0, 1);
+    if (scene === "orphanolder") delete mbp.snapshot.decided;
+  }
   if (scene === "older") { delete mbp.snapshot.decided; mbp.snapshot.pending = mbp.snapshot.pending.map(({ ask, ...p }) => p); }
   const ubu = { laptop: "ubu1", at: iso(quiet ? 9 : 0.6), snapshot: snapshot({ supervisor: { started_at: iso(20 * H), concurrency: 2, active: 1, queued: 0 }, workers: [worker("w_t", "Toad", "architect", { project: "bobnet", session: "BOB-121 review B", started_at: iso(22), calls: 61, context: 77_000, tokens: { input: 90_000, output: 60_000, cache_read: 3_900_000, cache_write: 210_000 } })],
     pending: quiet ? [{ id: "r_8", worker_id: "w_t", name: "Toad", kind: "approval", tool: "Bash", tier: "human", created_at: iso(20), preview: "node bench.mjs" }] : [], board_outbox: quiet ? { count: 14, oldest_at: iso(11), code: "unavailable" } : { count: 0, oldest_at: null, code: null } }) };
-  const peer = (name, laptop, online, over = {}) => ({ address: `${name}@${laptop}`, name, laptop, team: "bobnet", purpose: null, expertise: [], status: online ? "working" : null, online, last_seen: iso(online ? 0 : 200), connected_at: online ? iso(90) : null, client: { package: "@bobnet/supervisor", version: laptop === "ubu1" ? "2.0.0-rc.54" : "2.0.0-rc.55", protocol: 1 }, stats: { sent_24h: 12, received_24h: 31, inbox: 0 }, ...over });
+  const peer = (name, laptop, online, over = {}) => ({ address: `${name}@${laptop}`, name, laptop, team: "bobnet", purpose: null, expertise: [], status: online ? (long ? `waiting on ${tool}${tool}` : "working") : null, online, last_seen: iso(online ? 0 : 200), connected_at: online ? iso(90) : null, client: { package: "@bobnet/supervisor", version: laptop === "ubu1" ? "2.0.0-rc.54" : "2.0.0-rc.55", protocol: 1 }, stats: { sent_24h: 12, received_24h: 31, inbox: 0 }, ...over });
   const peers = [peer("Mario", "mbp-1", true), peer("Peach", "mbp-1", false), peer("Toad", "ubu1", true), peer("Picard", "mbp-1", true, { team: "helix" }), peer("Howard", "mbp-1", true, { team: "helix", stats: { sent_24h: 4, received_24h: 9, inbox: 1 } }), peer("poe", "mbp-1", true, { team: "ops", client: { package: "@bobnet/client", version: "2.0.0-rc.55", protocol: 1 } })];
   const traffic = [[4, "Picard@mbp-1", "Howard@mbp-1"], [6, "Marvin@mbp-1", "Picard@mbp-1"], [11, "poe@mbp-1", "Mario@mbp-1"], [14, "Toad@ubu1", "Daisy@mbp-1"]].map(([m, from, to], i) => ({ id: `m_${i}`, type: "message", from, to: [to], urgent: false, at: iso(m) }));
   const dashboard = { now: new Date(now).toISOString(), peers, laptops: [mbp, ubu], boards: [], updates: [], traffic };
@@ -191,6 +206,15 @@ const all = [
   ["bob121-needs-quiet", "quiet", "needs", "#needs-rest li", [], null, [390, 1440]],
   ["bob121-needs-down", "down", "needs", ".banner.down", [], null, [390, 1440]],
   ["bob121-needs-listdown", "listdown", "needs", ".banner.down", [], null, [390, 1440]],
+  ["bob121-needs-long", "long", "needs", "#needs-rest li", [answer("Q-261"), (p) => p.locator('li[data-ref="Q-261"] .edits summary').click()], '#needs-holding li[data-ref="Q-261"]'],
+  ["bob121-needs-many", "many", "needs", "#needs-rest li", [], "top"],
+  ["bob121-needs-orphan", "orphan", "needs", "#needs-rest li", [answer("r_5")]],
+  ["bob121-needs-orphan-older", "orphanolder", "needs", "#needs-rest li", [answer("r_5")], '[data-ref="r_5"]', [390, 1440]],
+  ["bob121-needs-orphan-toast", "orphan", "needs", "#needs-rest li", [answer("r_5"), (p) => p.fill("form.answer textarea", "Fine. Keep the stash."), (p) => p.getByRole("button", { name: "Allow", exact: true }).click(), (p) => p.waitForTimeout(200)], "#toast", [390, 1440]],
+  ["bob121-overview-orphan", "orphan", "overview", ".prow", [], null, [390, 1440]],
+  ["bob121-overview-long", "long", "overview", ".prow", [agent("Marvin"), (p) => p.locator(".ask-more").click()], ".ov-side"],
+  ["bob121-laptops-long", "long", "laptops", "#global-rules", [], "#agents"],
+  ["bob121-triage-many", "many", "triage/bobnet", ".totals", [], "top"],
   ["bob121-overview", "live", "overview", ".prow", []],
   ["bob121-overview-quiet", "quiet", "overview", ".prow", [], null, [390, 1440]],
   ["bob121-overview-nothing", "nothing", "overview", ".prow", [], null, [390, 1440]],
@@ -204,9 +228,11 @@ const all = [
   ["bob121-ci", "live", "overview", "#ci li", [], ".ov-ci"],
   ["bob121-ci-dark", "live", "overview", "#ci li", [], ".ov-ci", [390, 1440]],
   ["bob121-status-needs", "live", "status", "#status-needs li", [], "#status-needs", [390, 1440]],
+  ["bob121-status-tap", "live", "status", "#status-needs li", [tap("Q-261"), tap("DRAFT-119")], "#status-needs", [390, 1440]],
 ];
 
 const shots = all.filter(([name]) => name.startsWith(process.argv[2] ?? ""));
+const taps = new Map();
 const browser = await chromium.launch();
 try {
   for (const [name, scene, hash, wait, steps, el, only] of shots) {
@@ -222,8 +248,19 @@ try {
         await step(page);
         await page.waitForTimeout(400);
       }
-      const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-      if (over > 0) console.log(`${name}-${w}: ${over} px wider than its window`);
+      // The viewport's own width: on a phone (isMobile) innerWidth grows with a page that is too wide.
+      const over = (await page.evaluate(() => document.documentElement.scrollWidth)) - width;
+      if (over > 0) console.log(`${name}-${w}: ${over} px wider than its viewport`);
+      const overlaps = await page.evaluate(() => [...document.querySelectorAll(".ci-row")].flatMap((row) => {
+        const boxes = [...row.children].map((c) => { const r = document.createRange(); r.selectNodeContents(c); return { c, b: c.querySelector("i, a") || !c.textContent ? c.getBoundingClientRect() : r.getBoundingClientRect() }; }).filter((x) => x.b.width);
+        return boxes.flatMap((x, i) => boxes.slice(i + 1).filter((y) => x.b.right > y.b.left + 1 && y.b.right > x.b.left + 1 && x.b.bottom > y.b.top + 1 && y.b.bottom > x.b.top + 1).map((y) => `${x.c.className} over ${y.c.className}`));
+      }));
+      if (overlaps.length) console.log(`${name}-${w}: CI ${[...new Set(overlaps)].join(", ")}`);
+      if (w === "390") {
+        const small = await page.evaluate(() => [...document.querySelectorAll("a, button, summary, [role=button]")].filter((el) => { const b = el.getBoundingClientRect(); return b.height > 0 && b.height < 43.5; })
+          .map((el) => `${el.textContent.trim().slice(0, 28)} (${el.className || el.tagName.toLowerCase()} ${Math.round(el.getBoundingClientRect().height)})`));
+        for (const t of small) taps.set(t, [...(taps.get(t) ?? []), name]);
+      }
       // A full page reads top to bottom: the header not stuck mid-page, the toast left out.
       await page.addStyleTag({ content: `header { position: static !important; } ${name.includes("toast") ? "" : "#toast { display: none !important; }"}` });
       const path = join(out, `${name}-${w}.png`);
@@ -233,6 +270,7 @@ try {
       await page.close();
     }
   }
+  console.log(`Under 44 px at 390:\n${[...taps].map(([t, names]) => `  ${t}: ${names.length === 1 ? names[0] : `${names.length} scenes`}`).join("\n")}`);
 } finally {
   await browser.close();
   server.close();
