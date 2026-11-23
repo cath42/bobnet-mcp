@@ -196,6 +196,33 @@ describe("the Usage page (BOB-180)", () => {
     expect(sent("usage")).toHaveLength(5);
   });
 
+  it("takes the median day over the days with raw tokens: a young project's days before it, and days off, are no days to compare with; under three, none and no spike (review D M1; ADR 0014 §3a)", async () => {
+    const usual = { 0: 18, 1: 22, 2: 20, 3: 61, 4: 19, 7: 21 };
+    data = {
+      // Eight days old, two of them off: one spike, and not one per bar.
+      bobnet: { back: Object.fromEntries(Object.entries(usual).map(([b, m]) => [b, opus(m)])) },
+      // Two days: nothing to compare with, whatever their size.
+      helix: { back: { 1: opus(5), 2: opus(90) } },
+      // A day that weighs nothing still counts: raw picks the days.
+      vitals: { back: { 1: opus(3), 2: opus(5), 3: opus(1, { weighted: 0 }) } },
+    };
+    await open("#usage");
+    expect(figures("bobnet")).toMatchObject({ today: "today so far 18.0M · median day 20.5M", spikes: `1 spike over twice the median day: ${short(dayOf(3))} 61.0M` });
+    expect([...card("bobnet").querySelectorAll(".bar.spike")].map((b) => b.getAttribute("data-day"))).toEqual([dayOf(3)]);
+    expect(figures("helix")).toMatchObject({ total: "95.0M tokens, 30 days", today: "today so far 0 · median day –", spikes: null });
+    expect(card("helix").querySelector(".bar.spike, .spike-lab")).toBeNull();
+    expect(text(".u-today", card("vitals"))).toBe("today so far 0 · median day 3.0M");
+    await weigh("Sonnet-equivalent");
+    expect(text(".u-today", card("bobnet"))).toBe("today so far 36.0M · median day 41.0M");
+    expect(text(".u-today", card("helix"))).toBe("today so far 0 · median day –");
+    expect(text(".u-today", card("vitals"))).toBe("today so far 0 · median day 6.0M");
+    // Today's running workers make it a day with work.
+    await weigh("Raw tokens");
+    report("mbp-1", snapshot([worker({ id: "w_h", project: "helix", tokens: tok(2e6), started_at: iso(0) })]));
+    await settle();
+    expect(text(".u-today", card("helix"))).toBe("today so far 2.0M · median day 5.0M");
+  });
+
   it("keeps the hash's other filters when one is set, and takes both from a link (c7, 6)", async () => {
     await open("#usage?days=14&weigh=1");
     expect(card("bobnet").querySelectorAll(".bar")).toHaveLength(14);
@@ -320,6 +347,31 @@ describe("a day's detail (BOB-181)", () => {
     await settle();
     expect(points(".ud polyline.base")).toBe(0);
     expect(text(".ud-note")).toBe("No dashed line: fewer than 3 days in these 30 to compare with.");
+  });
+
+  it("no median day under three days with a call: no dashed calls line, and the key says –; a role only running now takes it from the days it made a call (ADR 0014 §3a, R1)", async () => {
+    detail["baseline"] = { total: { days: 2, calls: 0, p50: none }, roles: [] };
+    await open("#usage");
+    await click(bar("bobnet", 4));
+    await settle();
+    expect(text(".k-med")).toBe("median day –");
+    expect(card("bobnet").querySelector(".ud line.median")).toBeNull();
+    expect(card("bobnet").querySelectorAll(".ud figure > svg")[0]!.getAttribute("aria-label")).toBe(`calls per day, the last 30 days; ${word(dayOf(4))} 7 calls`);
+    // No run of it ended today, so the read has no baseline for it: the page's own, over its days.
+    const luigi = (calls: number) => opus(1, { calls, by_role: [{ role: "luigi", calls, raw: 1, weighted: 1 }] });
+    data["helix"] = { back: { 5: luigi(7), 9: luigi(11) } };
+    detail = { runs: [], baseline: { total: { days: 2, calls: 0, p50: none }, roles: [] } };
+    world.laptops = [{ laptop: "mbp-1", at: iso(0), snapshot: snapshot([worker({ id: "w_l", role: "luigi", project: "helix", started_at: iso(0), calls: 3, ctx: [1000, 2000, 3000], ctx_even: true })]) }];
+    await open("#usage");
+    await click(bar("helix", 0));
+    await settle();
+    await click(button("By agent", "helix"));
+    expect(text(".k-med", card("helix"))).toBe("median day · 7 calls");
+    expect(card("helix").querySelector(".ud line.median")).not.toBeNull();
+    delete data["helix"]!.back[9];
+    changed("helix");
+    await settle();
+    expect(text(".k-med", card("helix"))).toBe("median day –");
   });
 
   it("a call's tip: its context, and the median where the baseline reaches, by pointer and by keyboard (2.9)", async () => {

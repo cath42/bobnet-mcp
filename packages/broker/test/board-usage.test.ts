@@ -307,8 +307,8 @@ describe("the usage_day read (ADR 0014 §3a, BOB-170)", () => {
     expect(b[0]!.p50).toEqual({ calls: 6, pts: [30, 25, 25, 25, 20, 20] });
     expect(b[0]!.p25).toEqual({ calls: 6, pts: [20, 18, 18, 18, 15, 15] });
     expect(b[0]!.p75).toEqual({ calls: 6, pts: [40, 33, 33, 33, 25, 25] });
-    // The role's median day over the 30: most days it made no calls.
-    expect(b[0]!.calls).toBe(0);
+    // The role's median day over the five it made a call, not over the 30.
+    expect(b[0]!.calls).toBe(6);
   });
 
   it("takes the Total baseline over the period's days, each summed as it goes: with 10, 20 and 30 calls it stops after 10 (Toad, c_6590696d)", async () => {
@@ -318,7 +318,25 @@ describe("the usage_day read (ADR 0014 §3a, BOB-170)", () => {
     const d = await day({ day: "2026-11-21", days: 3 });
     // Call k: the days sum to k, 2k and 3k; the median is 2k. Call 11 is reached by two days only.
     expect(d.baseline.total).toEqual({ days: 3, calls: 20, p50: { calls: 10, pts: range(1, 10).map((k) => 2 * k) } });
-    expect((await day({ day: "2026-11-21", days: 5 })).baseline.total.calls).toBe(10);
+    // Two days before the project began count for nothing.
+    expect((await day({ day: "2026-11-21", days: 5 })).baseline.total.calls).toBe(20);
+  });
+
+  it("takes the median day's calls over the days with a call: days off and days before the project began left out, a role's over its own, 0 under three (ADR 0014 §3a, review D R1)", async () => {
+    await fixedClock();
+    await project("helix", "LAND");
+    // 4, 10, 40 and 12 calls with days off between; the reviewer on two of those days.
+    for (const [back, calls] of [[0, 4], [3, 10], [4, 40], [8, 12]] as const) await run({ role: "builder", start: NOW - back * DAY - 2 * H, end: NOW - back * DAY - H, calls });
+    for (const back of [0, 4]) await run({ role: "reviewer", start: NOW - back * DAY - 2 * H, end: NOW - back * DAY - H, calls: 2 });
+    const of = async (days: number) => {
+      const { total, roles } = (await day({ day: "2026-11-22", days })).baseline;
+      return [total.days, total.calls, ...roles.map((r) => `${r.role} ${r.calls}`)];
+    };
+    // Days of 6, 10, 42 and 12.
+    expect(await of(30)).toEqual([4, 11, "builder 11", "reviewer 0"]);
+    expect(await of(14)).toEqual(await of(30));
+    expect(await of(5)).toEqual([3, 10, "builder 10", "reviewer 0"]);
+    expect(await of(4)).toEqual([2, 0, "builder 0", "reviewer 0"]);
   });
 
   it("sends a run over 2000 calls as at most 2000 points with its true calls, and counts a lost run without drawing it", async () => {

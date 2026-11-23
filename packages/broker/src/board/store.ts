@@ -1316,6 +1316,8 @@ export class BoardStore {
         });
       });
     }
+    // Over the days with a call (ADR 0014 §3a); under three of them 0, which is none.
+    const medianDay = (calls: number[], worked = calls.filter((c) => c > 0)) => (worked.length < 3 ? 0 : Math.round(median(worked)));
     const dayRoles = [...new Set(out.map((r) => r.role))].sort((a, b) => roleCalls.get(b)![at]! - roleCalls.get(a)![at]! || a.localeCompare(b));
     return {
       project: p.key,
@@ -1323,11 +1325,11 @@ export class BoardStore {
       days: cal.days,
       runs: out,
       baseline: {
-        total: { days: dayCalls.filter((c) => c > 0).length, calls: Math.round(median(dayCalls)), p50: callLine(bands(totals.map(summed), [0.5])[0]!) },
+        total: { days: dayCalls.filter((c) => c > 0).length, calls: medianDay(dayCalls), p50: callLine(bands(totals.map(summed), [0.5])[0]!) },
         roles: dayRoles.map((role) => {
           const lines = roleRuns.get(role) ?? [];
           const [p25, p50, p75] = bands(lines, [0.25, 0.5, 0.75]);
-          return { role, runs: lines.length, calls: Math.round(median(roleCalls.get(role)!)), p25: callLine(p25!), p50: callLine(p50!), p75: callLine(p75!) };
+          return { role, runs: lines.length, calls: medianDay(roleCalls.get(role)!), p25: callLine(p25!), p50: callLine(p50!), p75: callLine(p75!) };
         }),
       },
       lost,

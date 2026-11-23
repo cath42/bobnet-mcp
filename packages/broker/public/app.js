@@ -3037,10 +3037,12 @@ const modelLabel = (id) => id.replace(/^claude-([a-z])([a-z]+)-(\d+)(?:-(\d+))?$
 const modelShort = (model, rows) => (model === "unknown" ? "unnamed model" : rows.find((r) => r.model === model)?.alias ?? model.replace(/^claude-/, ""));
 const tokensWord = () => (state.weigh ? "Sonnet-equivalent tokens" : "tokens");
 
-/** A series' figures as the switch shows them: each day's, their total, the median day, and the spikes (over twice it, and over 4M). */
+/** The median day of those with work (ADR 0014 §3a), null under three: a day with none isn't one to compare with. */
+const medianDay = (worked) => (worked.length < 3 ? null : quantile(worked, 0.5));
+/** A series' figures as the switch shows them: each day's, their total, the median day (of the days with raw tokens), and the spikes (over twice it, and over 4M). */
 function usageFigures(series, days) {
-  const vals = series.points.map(usageFigure), median = vals.length ? quantile(vals, 0.5) : 0;
-  return { vals, median, total: vals.reduce((a, b) => a + b, 0), spikes: days.map((d, i) => ({ day: d, v: vals[i] })).filter((x) => x.v > 2 * median && x.v > 4e6) };
+  const vals = series.points.map(usageFigure), median = medianDay(vals.filter((_, i) => totalTokens(series.points[i].raw) > 0));
+  return { vals, median, total: vals.reduce((a, b) => a + b, 0), spikes: median === null ? [] : days.map((d, i) => ({ day: d, v: vals[i] })).filter((x) => x.v > 2 * median && x.v > 4e6) };
 }
 
 /** What the figures are, in Toad's words (ADR 0014 §1); the ratios from the read's own table. */
@@ -3225,7 +3227,7 @@ const detailCall = new Map();
 /** A graph's y axis, three labels: 0, half and the top. */
 const threeTicks = (top, x1, x2, y) => s("g", null, ...[0, top / 2, top].flatMap((v) => [s("line", { class: "gl", x1, x2, y1: y(v), y2: y(v) }), s("text", { x: x1 - 6, y: y(v) + 4, "text-anchor": "end" }, fmtTokens(v))]));
 
-/** Calls per day over the period: the day's line, the median day across it, the tapped day's dot with its value, today's hollow. */
+/** Calls per day over the period: the day's line, the median day across it (0: none), the tapped day's dot with its value, today's hollow. */
 function callsGraph({ days, vals, median, day, W, H, said }) {
   const L = 38, R = 16, T = 18, B = 22, step = niceStep(Math.max(1, median, ...vals), 2), top = Math.max(2, Math.ceil(Math.max(1, median, ...vals) / step) * step);
   const x = (i) => L + (i / Math.max(1, days.length - 1)) * (W - L - R), y = (v) => T + (1 - v / top) * (H - T - B);
@@ -3234,7 +3236,7 @@ function callsGraph({ days, vals, median, day, W, H, said }) {
   return s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": said },
     threeTicks(top, L, W - R, y),
     s("g", { class: "axis" }, s("text", { x: L, y: H - 5, "text-anchor": "start" }, shortDay(days[0])), s("text", { x: W - R, y: H - 5, "text-anchor": "end" }, today ? "today" : shortDay(days[last]))),
-    s("line", { class: "median", x1: L, x2: W - R, y1: y(median), y2: y(median), stroke: "var(--muted)", "stroke-width": 2, "stroke-dasharray": "6 4" }),
+    ...(median ? [s("line", { class: "median", x1: L, x2: W - R, y1: y(median), y2: y(median), stroke: "var(--muted)", "stroke-width": 2, "stroke-dasharray": "6 4" })] : []),
     s("polyline", { class: "day", points: vals.map((v, k) => `${x(k).toFixed(1)},${y(v).toFixed(1)}`).join(" "), fill: "none", stroke: "var(--accent)", "stroke-width": 2, "stroke-linejoin": "round" }),
     ...(today && i !== last ? [dot(last, true)] : []),
     ...(i >= 0 ? [dot(i, today && i === last), s("text", { class: "val", x: Math.min(W - R, Math.max(L + 8, x(i))), y: y(vals[i]) - 8, "text-anchor": i === last ? "end" : "middle" }, fmtInt.format(vals[i]))] : []));
@@ -3272,7 +3274,7 @@ function dayDetail(key, series, days, W) {
   const roleOf = (pt) => pt.by_role.find((x) => x.role === one.role)?.calls ?? 0;
   const vals = series.points.map((pt) => (total ? pt.calls : roleOf(pt)));
   const empty = { calls: 0, pts: [] }, b = total ? r.baseline.total : r.baseline.roles.find((x) => x.role === one.role);
-  const median = b?.calls ?? Math.round(quantile(vals, 0.5)), base = b?.p50 ?? empty, band = !total && b?.p25.pts.length ? [b.p25, b.p50, b.p75] : null;
+  const median = Math.round(b ? b.calls : medianDay(vals.filter((v) => v > 0)) ?? 0), base = b?.p50 ?? empty, band = !total && b?.p25.pts.length ? [b.p25, b.p50, b.p75] : null;
   const calls = total ? callsOf(runs) : one.calls;
   let line, resets = [];
   if (total) line = totalLine(runs).map((p) => ({ call: p.call, v: p.sum }));
@@ -3297,10 +3299,10 @@ function dayDetail(key, series, days, W) {
     total ? null : h("div", { class: "seg ud-roles", role: "group", "aria-label": "Agent" }, roles.map((x) => h("button", { type: "button", "aria-pressed": String(x.role === one.role), "data-fk": `role/${key}/${x.role}`, onclick: () => set({ role: x.role }) }, `${x.role} · ${callsSaid(x.calls)}`))),
     h("div", { class: `ud-graphs${side ? " side" : ""}` },
       h("figure", null, h("figcaption", null, "Context per call"), callGraph({ fk: `ctx/${key}/${day}/${total ? "" : one.role}`, said: `${label}, ${whose}context per call, ${said}`, calls, line, resets, base, band, W: W1, H, summed: total })),
-      h("figure", null, h("figcaption", null, "Calls per day"), callsGraph({ days, vals, median, day, W: W2, H, said: `${whose}calls per day, the last ${n} days; ${label} ${said}, the median day ${fmtInt.format(median)}` }))),
+      h("figure", null, h("figcaption", null, "Calls per day"), callsGraph({ days, vals, median, day, W: W2, H, said: `${whose}calls per day, the last ${n} days; ${label} ${said}${median ? `, the median day ${fmtInt.format(median)}` : ""}` }))),
     h("div", { class: "key" },
       h("span", { class: "k-day" }, h("i", { style: "--k:var(--accent)" }), `${label} · ${said}`),
-      h("span", { class: "k-med" }, h("i", { class: "dash", style: "--k:var(--muted)" }), `median day · ${callsSaid(median)}`),
+      h("span", { class: "k-med" }, h("i", { class: "dash", style: "--k:var(--muted)" }), median ? `median day · ${callsSaid(median)}` : "median day –"),
       band ? h("span", { class: "k-band" }, h("i", { class: "band", style: "--k:var(--idle)" }), `${one.role}'s runs, middle half`) : null,
       resets.length ? h("span", null, h("i", { class: "dot", style: "--k:var(--accent)" }), "a new run starts") : null),
     h("p", { class: "note ud-note" }, note),
@@ -3318,7 +3320,7 @@ function usageCard(reply, p, W) {
   return h("section", { class: "card ucard", dataset: { project: p.project }, onkeydown: esc },
     h("div", { class: "u-h" }, h("a", { class: "u-name", href: projectHref(p.project) }, p.name),
       h("span", { class: "u-tot" }, h("b", null, fmtTokens(total)), h("span", { class: "muted" }, ` ${tokensWord()}, ${days.length} days`)),
-      h("span", { class: "muted u-today" }, runsToday ? `today so far ${fmtTokens(vals.at(-1))} · ` : null, `median day ${fmtTokens(median)}`)),
+      h("span", { class: "muted u-today" }, runsToday ? `today so far ${fmtTokens(vals.at(-1))} · ` : null, `median day ${median === null ? "–" : fmtTokens(median)}`)),
     usageBars(p.project, series, days, W),
     usageDayLine(p.project, series, days, reply.weights),
     dayDetail(p.project, series, days, W),
