@@ -33,7 +33,7 @@ const SAYS: Record<GrantField, string> = {
   criteria: "change criteria",
   triage: "triage",
   create: "create items",
-  release: "move features into or out of a release (the 'release' field)",
+  release: "organize releases (the 'release' field)",
 };
 
 const FLAGS = { sessions: "close sessions", questions: "ask Casper or record his answers", admin: "change the rules" } as const;

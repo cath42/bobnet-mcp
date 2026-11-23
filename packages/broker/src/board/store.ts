@@ -1399,6 +1399,10 @@ export class BoardStore {
         return this.orderReleases(tx, op);
       case "close_release":
         return this.closeRelease(tx, op);
+      case "update_release":
+        return this.updateRelease(tx, op);
+      case "reopen_release":
+        return this.reopenRelease(tx, op);
       case "grant":
         return this.grant(tx, op);
       case "revoke":
@@ -1475,7 +1479,8 @@ export class BoardStore {
 
   private createRelease(tx: Tx, op: Op<"create_release">): BoardWritten {
     const p = tx.project(this.project(op.project));
-    this.rules.require(tx.caller, p, "create", null, "releases");
+    // Every write to a release record is the 'release' grant's (ADR 0003, 2026-11-22).
+    this.rules.require(tx.caller, p, "release", null, "releases");
     const ref = `R${p.next_release}`;
     this.sql.exec("UPDATE projects SET next_release = next_release + 1 WHERE pk = ?", p.pk);
     const ord = this.nextOrd("SELECT max(ord) AS m FROM releases WHERE project = ?", p.pk);
@@ -1859,8 +1864,9 @@ export class BoardStore {
   }
 
   private orderReleases(tx: Tx, op: Op<"order_releases">): BoardWritten {
-    ownerOnly(tx.caller, "Ordering releases");
     const p = tx.project(this.project(op.project));
+    // A PO's, pending Casper's answer (Q-14): if the order stays his, this line is ownerOnly(tx.caller, "Ordering releases").
+    this.rules.require(tx.caller, p, "release", null, "releases");
     const all = this.sql.exec<ReleaseRow>("SELECT * FROM releases WHERE project = ?", p.pk).toArray();
     const byRef = new Map(all.map((r) => [r.ref, r]));
     if (new Set(op.refs).size !== op.refs.length || op.refs.length !== all.length || op.refs.some((r) => !byRef.has(r))) {
@@ -1878,13 +1884,15 @@ export class BoardStore {
   }
 
   /**
-   * Casper closes a release (§5): each feature in it that isn't Done or archived needs a destination,
-   * so nothing is closed with work silently left. The features' events come first and the release's
-   * last: its seq is the one undo takes, and the moves are the close events just before it.
+   * A release closes (§5): each feature in it that isn't Done or archived needs a destination, so
+   * nothing is closed with work silently left. The features' events come first and the release's
+   * last: its seq is the one undo takes, and the moves are the close events just before it. Each move
+   * needs 'release' on its feature too, as set_release does: an open feature isn't closed out from
+   * under its session.
    */
   private closeRelease(tx: Tx, op: Op<"close_release">): BoardWritten {
-    ownerOnly(tx.caller, "Closing a release");
     const p = tx.project(this.project(op.project));
+    this.rules.require(tx.caller, p, "release", null, "releases");
     const r = this.release(p, op.ref);
     if (r.status === "closed") throw new BoardError("conflict", `${r.ref} is closed already`);
     const moves = new Map<number, { row: ItemRow; ref: string; to: ReleaseRow | null }>();
@@ -1897,6 +1905,7 @@ export class BoardStore {
       const to = m.to === null ? null : this.release(p, m.to);
       if (to?.pk === r.pk) throw new BoardError("invalid", `${ref} can't go to ${r.ref}: it is the release being closed`);
       if (to) openRelease(to);
+      this.rules.require(tx.caller, p, "release", this.scope(row), ref);
       moves.set(row.pk, { row, ref, to });
     }
     const left = this.sql
@@ -1916,6 +1925,42 @@ export class BoardStore {
     this.sql.exec("UPDATE releases SET status = 'closed', closed_at = ?, closed_by = ? WHERE pk = ?", tx.at, tx.who, r.pk);
     const changes: Change[] = [["status", r.status, "closed"], ["closed_at", null, tx.at], ["closed_by", null, tx.who]];
     return { ref: r.ref, seq: tx.event("close_release", "releases", r.pk, r.ref, changes) };
+  }
+
+  /** A release's title, goal or spec_url, closed or not; one event with each field changed. */
+  private updateRelease(tx: Tx, op: Op<"update_release">): BoardWritten {
+    const p = tx.project(this.project(op.project));
+    this.rules.require(tx.caller, p, "release", null, "releases");
+    const r = this.release(p, op.ref);
+    const changes: Change[] = [];
+    for (const field of ["title", "goal", "spec_url"] as const) {
+      const now = op.set[field];
+      if (now === undefined || now === r[field]) continue;
+      this.sql.exec(`UPDATE releases SET ${field} = ? WHERE pk = ?`, now, r.pk);
+      changes.push([field, r[field], now]);
+    }
+    if (changes.length === 0) return { ref: r.ref, seq: 0 };
+    return { ref: r.ref, seq: tx.event("update_release", "releases", r.pk, r.ref, changes, op.reason) };
+  }
+
+  /**
+   * A closed release reopens to the status before its last close (as undo reads it; planned for one
+   * imported closed). Not an undo: the features the close moved stay where they went. The event keeps
+   * closed_at and closed_by as its old values.
+   */
+  private reopenRelease(tx: Tx, op: Op<"reopen_release">): BoardWritten {
+    const p = tx.project(this.project(op.project));
+    this.rules.require(tx.caller, p, "release", null, "releases");
+    const r = this.release(p, op.ref);
+    if (r.status !== "closed") throw new BoardError("conflict", `${r.ref} is ${r.status}, not closed: only a closed release reopens`);
+    const close = this.sql
+      .exec<{ seq: number }>("SELECT max(seq) AS seq FROM events WHERE project = ? AND op = 'close_release' AND tbl = 'releases' AND pk = ?", p.pk, r.pk)
+      .one().seq;
+    const before = close === null ? null : this.changesOf(close).get("status")?.old;
+    const status = before === "open" ? "open" : "planned";
+    this.sql.exec("UPDATE releases SET status = ?, closed_at = NULL, closed_by = NULL WHERE pk = ?", status, r.pk);
+    const changes: Change[] = [["status", "closed", status], ["closed_at", r.closed_at, null], ["closed_by", r.closed_by, null]];
+    return { ref: r.ref, seq: tx.event("reopen_release", "releases", r.pk, r.ref, changes, op.reason) };
   }
 
   private grant(tx: Tx, op: Op<"grant">): BoardWritten {

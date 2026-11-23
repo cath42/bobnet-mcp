@@ -550,19 +550,6 @@ describe("a feature's release is a grant, 'release' (BOB-122)", () => {
     expect((await item(f1)).history.at(-1)).toMatchObject({ op: "undo", undo_of: seq });
   });
 
-  it("AC3: a rule with 'release' still may not order releases or close one", async () => {
-    const { r1, r2, f1 } = await slotting();
-    expect(await refused(agent("Data"), { op: "order_releases", project: "helix", refs: [r2, r1] })).toMatchObject({ code: "forbidden", message: expect.stringContaining("Casper's gate") });
-    expect(await refused(agent("Data"), { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: r2 }] })).toMatchObject({
-      code: "forbidden",
-      message: expect.stringContaining("Casper's gate"),
-    });
-    expect(((await ok(owner, { op: "list", project: "helix", of: "releases" })).releases ?? []).map((r) => [r.ref, r.status])).toEqual([
-      [r1, "planned"],
-      [r2, "planned"],
-    ]);
-  });
-
   it("keeps 'release' through the rules: granted, read back, and in the store's check", async () => {
     await slotting();
     const { grants } = await ok(agent("Data"), { op: "grants", project: "helix" });
@@ -570,6 +557,156 @@ describe("a feature's release is a grant, 'release' (BOB-122)", () => {
     await runInDurableObject(board(), (_, state) => {
       expect(() => state.storage.sql.exec("INSERT INTO grant_fields (grant_pk, field) SELECT pk, 'slot' FROM grants LIMIT 1")).toThrow(/CHECK constraint failed/);
     });
+  });
+});
+
+describe("a 'release' rule organizes releases (BOB-189, ADR 0003 2026-11-22)", () => {
+  /** Helix's R1 holding f1, f2 in none; Data is a backlog PO with 'release' off the open feature. */
+  async function organizing() {
+    const ids = await helix();
+    await ok(owner, { op: "grant", project: "helix", agent: "Data", role: "backlog PO", read: true, items: "not_open_feature", fields: ["release"] });
+    return ids;
+  }
+  const data = agent("Data");
+  const releases = async () => ((await ok(owner, { op: "list", project: "helix", of: "releases" })).releases ?? []).map((r) => [r.ref, r.status]);
+  const release = async (ref: string) => {
+    const got = await ok(owner, { op: "get", project: "helix", ref, history: true });
+    return { ...got.release!, history: got.history! };
+  };
+  const byData = { kind: "agent", who: "Data@mbp-1" };
+
+  it("AC1, AC2: creates the next release, planned and last, and orders every release", async () => {
+    const { r1 } = await organizing();
+    const made = await ok(data, { op: "create_release", project: "helix", title: "Nightly", goal: "Every day starts green" });
+    expect(made.ref).toBe("R2");
+    expect(await releases()).toEqual([
+      [r1, "planned"],
+      ["R2", "planned"],
+    ]);
+    expect((await release("R2")).history[0]).toMatchObject({ op: "create_release", actor: byData });
+
+    await ok(data, { op: "order_releases", project: "helix", refs: ["R2", r1] });
+    expect((await releases()).map(([ref]) => ref)).toEqual(["R2", r1]);
+    expect((await release(r1)).history.at(-1)).toMatchObject({ op: "order_releases", actor: byData });
+  });
+
+  it("AC2: edits a release's title, goal and spec_url, each with old and new; a no-op writes nothing; a closed one is edited too", async () => {
+    const { r1, f1 } = await organizing();
+    await ok(data, { op: "update_release", project: "helix", ref: r1, set: { title: "Roadmap", goal: "See what's next", spec_url: "https://example.com/r1" }, reason: "README's outcome" });
+    const r = await release(r1);
+    expect(r).toMatchObject({ title: "Roadmap", goal: "See what's next", spec_url: "https://example.com/r1", status: "planned" });
+    expect(r.history.at(-1)).toMatchObject({
+      op: "update_release",
+      actor: byData,
+      reason: "README's outcome",
+      changes: [
+        { field: "title", old: "Release 1", new: "Roadmap" },
+        { field: "goal", old: null, new: "See what's next" },
+        { field: "spec_url", old: null, new: "https://example.com/r1" },
+      ],
+    });
+    await ok(data, { op: "update_release", project: "helix", ref: r1, set: { title: "Roadmap", goal: "See what's next" } });
+    expect((await release(r1)).history).toHaveLength(r.history.length);
+
+    await ok(data, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: null }] });
+    await ok(data, { op: "update_release", project: "helix", ref: r1, set: { goal: null } });
+    expect(await release(r1)).toMatchObject({ goal: null, status: "closed" });
+    expect(await refused(data, { op: "update_release", project: "helix", ref: "R9", set: { title: "x" } })).toMatchObject({ code: "invalid" });
+  });
+
+  it("AC3: closes a release with its moves and reopens it to the status before the close, naming the PO; the moves stay", async () => {
+    const { r1, f1, f2 } = await organizing();
+    await ok(data, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: null }] });
+    const closed = await release(r1);
+    expect(closed).toMatchObject({ status: "closed", closed_by: "Data@mbp-1", closed_at: expect.any(String) });
+    expect((await item(f1)).history.at(-1)).toMatchObject({ op: "close_release", actor: byData, changes: expect.arrayContaining([{ field: "release", old: r1, new: null }]) });
+
+    await ok(data, { op: "reopen_release", project: "helix", ref: r1, reason: "closed too soon" });
+    const reopened = await release(r1);
+    expect(reopened).toMatchObject({ status: "planned", closed_at: null, closed_by: null });
+    expect(reopened.history.map((e) => e.op)).toEqual(["create_release", "close_release", "reopen_release"]);
+    expect(reopened.history.at(-1)).toMatchObject({
+      actor: byData,
+      reason: "closed too soon",
+      changes: [
+        { field: "status", old: "closed", new: "planned" },
+        { field: "closed_at", old: closed.closed_at, new: null },
+        { field: "closed_by", old: "Data@mbp-1", new: null },
+      ],
+    });
+    expect((await item(f1)).release).toBeNull();
+    await ok(data, { op: "set_release", project: "helix", ref: f2, release: r1 });
+    expect((await item(f2)).release).toBe(r1);
+    expect(await refused(data, { op: "reopen_release", project: "helix", ref: r1 })).toMatchObject({ code: "conflict" });
+  });
+
+  it("AC3: an open release reopens open; one imported closed, with no close event, reopens planned", async () => {
+    const { r1, f1 } = await organizing();
+    await join(f1);
+    expect((await release(r1)).status).toBe("open");
+    await ok(owner, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: null }] });
+    await ok(data, { op: "reopen_release", project: "helix", ref: r1 });
+    expect((await release(r1)).status).toBe("open");
+    expect(await refused(data, { op: "reopen_release", project: "helix", ref: r1 })).toMatchObject({ code: "conflict", message: expect.stringContaining("open, not closed") });
+
+    const r2 = (await ok(owner, { op: "create_release", project: "helix", title: "Imported" })).ref!;
+    await runInDurableObject(board(), (_, state) => {
+      state.storage.sql.exec("UPDATE releases SET status = 'closed', closed_at = '2026-10-01T00:00:00.000Z', closed_by = 'import' WHERE ref = ?", r2);
+    });
+    await ok(data, { op: "reopen_release", project: "helix", ref: r2 });
+    expect(await release(r2)).toMatchObject({ status: "planned", closed_at: null, closed_by: null });
+  });
+
+  it("refuses a close that moves an open feature to a PO off the open feature, not to the owner", async () => {
+    const { r1, f1 } = await organizing();
+    await join(f1);
+    expect(await refused(data, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: null }] })).toMatchObject({
+      code: "forbidden",
+      message: expect.stringContaining(`(${f1} is open)`),
+    });
+    expect((await release(r1)).status).toBe("open");
+    await ok(owner, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: null }] });
+    expect((await release(r1)).status).toBe("closed");
+  });
+
+  it("refuses every release write to rules with only 'create', 'triage' or 'order', naming who holds 'release'; a PO's undo too", async () => {
+    const { r1, f1 } = await organizing();
+    const { seq } = await ok(data, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: null }] });
+    const writes = [
+      { op: "create_release", project: "helix", title: "Nightly" },
+      { op: "update_release", project: "helix", ref: r1, set: { title: "Roadmap" } },
+      { op: "order_releases", project: "helix", refs: [r1] },
+      { op: "close_release", project: "helix", ref: r1 },
+      { op: "reopen_release", project: "helix", ref: r1 },
+    ] as const satisfies BoardOpInput[];
+    for (const field of ["create", "triage", "order"] as const) {
+      const name = `Only${field}`;
+      await ok(owner, { op: "grant", project: "helix", agent: name, role: "PO", read: true, items: "all", fields: [field] });
+      for (const op of writes) {
+        expect(await refused(agent(name), op)).toMatchObject({
+          code: "forbidden",
+          message: expect.stringMatching(new RegExp(`^${name} may not organize releases \\(the 'release' field\\) on releases in helix; Data off the open feature may$`)),
+        });
+      }
+    }
+    expect(await releases()).toEqual([[r1, "closed"]]);
+    expect(await refused(data, { op: "undo", project: "helix", seq })).toMatchObject({ code: "forbidden", message: expect.stringContaining("Casper's gate") });
+  });
+
+  it("leaves the owner all of it", async () => {
+    const { r1, f1 } = await organizing();
+    const r2 = (await ok(owner, { op: "create_release", project: "helix", title: "Nightly" })).ref!;
+    await ok(owner, { op: "update_release", project: "helix", ref: r2, set: { goal: "Green" } });
+    await ok(owner, { op: "order_releases", project: "helix", refs: [r2, r1] });
+    const { seq } = await ok(owner, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: r2 }] });
+    await ok(owner, { op: "undo", project: "helix", seq });
+    expect((await item(f1)).release).toBe(r1);
+    await ok(owner, { op: "close_release", project: "helix", ref: r1, moves: [{ feature: f1, to: r2 }] });
+    await ok(owner, { op: "reopen_release", project: "helix", ref: r1 });
+    expect(await releases()).toEqual([
+      [r2, "planned"],
+      [r1, "planned"],
+    ]);
   });
 });
 
