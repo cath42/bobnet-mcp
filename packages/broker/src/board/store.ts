@@ -1348,7 +1348,7 @@ export class BoardStore {
   /** The per-model rows of a project's runs ended from `from` on, by run: one read for a list of runs. */
   private modelsEnded(p: ProjectRow, from: number): Map<number, RunModelRow[]> {
     const out = new Map<number, RunModelRow[]>();
-    for (const m of this.sql.exec<RunModelRow>("SELECT m.* FROM runs r JOIN run_models m ON m.run = r.pk WHERE r.project = ? AND r.ended_at >= ? ORDER BY m.run, m.model", p.pk, new Date(from - DAY_MS).toISOString())) {
+    for (const m of this.sql.exec<RunModelRow>("SELECT m.* FROM runs r JOIN run_models m ON m.run = r.pk WHERE r.project = ? AND r.ended_at >= ?", p.pk, new Date(from - DAY_MS).toISOString())) {
       const rows = out.get(m.run);
       rows ? rows.push(m) : out.set(m.run, [m]);
     }

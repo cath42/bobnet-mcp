@@ -147,8 +147,6 @@ nav { flex-wrap: wrap; }
 .badge[data-state="blocked"] { color: var(--bad); }
 tr.pick { cursor: pointer; }
 tr.pick:hover td { background: var(--bg); }
-tr.pick[aria-selected="true"] td { background: var(--bg); }
-tr.pick[aria-selected="true"] td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 td .sub { color: var(--muted); font-size: 13px; }
 td .sub a { color: var(--accent); }
 .ac { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 14px; }
@@ -180,8 +178,6 @@ th:nth-child(3), td:nth-child(3) { white-space: nowrap; }
   table.stack td.wide, table.stack td.full { grid-column: 1 / -1; min-width: 0; }
   table.stack td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
   table.stack td:empty { display: none; }
-  table.stack tr.pick[aria-selected="true"] td:first-child { box-shadow: none; }
-  table.stack tr.pick[aria-selected="true"] { box-shadow: inset 3px 0 0 var(--accent); }
   .bar-row select { max-width: 100%; width: 100%; min-width: 0; flex: 1 1 100%; }
   main > *, .board-list, .board-list > * { min-width: 0; }
   .kc .t, .lane-h { overflow-wrap: anywhere; }
@@ -916,3 +912,52 @@ form.rule-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; 
 form.rule-form label { font-size: 13px; color: var(--muted); }
 form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
 .note.bad { color: var(--bad); }
+
+/* Usage: a graph per project, each on its own scale (BOB-121 spec 2.9) */
+.u-bar { margin-bottom: 0; }
+.u-bar .u-lab { font-size: 13px; color: var(--muted); }
+.u-bar .seg { max-width: 100%; }
+.u-says { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; font-size: 13.5px; color: var(--muted); max-width: 90ch; }
+.u-says p { margin: 0; }
+.factored > summary { cursor: pointer; color: var(--accent); width: fit-content; }
+.factored .table-wrap { margin-top: 6px; }
+.factored table { font-size: 13px; }
+.factored td { padding-top: 6px; padding-bottom: 6px; }
+.factored .note { margin-top: 8px; }
+/* Cards keep their own height: one that opens a day grows alone. */
+.ugrid { display: grid; gap: 14px; align-items: start; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1200px) { .ugrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.u-h { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; }
+.u-name { font-size: 17px; font-weight: 600; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+.u-name:hover { text-decoration: underline; }
+.u-tot b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.u-today { flex-basis: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.ugraph svg { width: 100%; height: auto; display: block; }
+.ugraph .grid line { stroke: var(--line); }
+.ugraph text { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.ugraph .bar { cursor: pointer; outline: none; }
+.ugraph .bar .b { fill: var(--accent); fill-opacity: .85; }
+.ugraph .bar.spike .b { fill: var(--warn); fill-opacity: 1; }
+.ugraph .bar.today .b { fill-opacity: .45; }
+.ugraph .bar.sel .b { stroke: var(--text); stroke-width: 1.5; }
+.ugraph .bar .hit { fill: transparent; }
+.ugraph .bar:hover .b { fill-opacity: 1; }
+.ugraph .bar:focus-visible .hit { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); }
+.ugraph .bar.sel .hit { fill: color-mix(in srgb, var(--line) 55%, transparent); }
+.ugraph .spike-lab { fill: var(--warn); font-weight: 600; pointer-events: none; }
+.uday { display: grid; gap: 2px; font-size: 13px; border-left: 3px solid var(--accent); padding: 2px 10px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.uday .id { margin-right: 0; }
+.ugraph .axis { pointer-events: none; }
+.uday a:hover { text-decoration: underline; }
+.u-spike, .u-unk, .u-lost { margin: 0; font-size: 13px; }
+.u-spike b { color: var(--warn); }
+.u-spike .more-t { padding: 0 2px; min-height: 24px; }
+.u-spike .more-t[aria-pressed="true"] { font-weight: 600; text-decoration: underline; }
+@media (max-width: 600px) {
+  .u-spike .more-t, .factored > summary, .uday a { min-height: 44px; display: inline-flex; align-items: center; }
+  .u-name { padding: 12px 0; margin: -12px 0; }
+  .banner button { min-height: 44px; }
+  .biggest { display: flex; flex-wrap: wrap; gap: 0 6px; align-items: center; }
+  .big-s { white-space: pre-wrap; }
+  .factored th, .factored td { padding-left: 8px; padding-right: 8px; }
+}

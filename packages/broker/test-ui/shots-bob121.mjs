@@ -1,5 +1,6 @@
-// Screenshots of BOB-121's build C (design/BOB-121/spec.md) at phone, tablet and desktop widths, against a fake broker in
-// the page: the header and Triage (BOB-174), Laptops (BOB-175), Needs you (BOB-176), an agent's ask (BOB-177), CI (BOB-178).
+// Screenshots of BOB-121's builds C and D (design/BOB-121/spec.md) at phone, tablet and desktop widths, against a fake broker
+// in the page: the header and Triage (BOB-174), Laptops (BOB-175), Needs you (BOB-176), an agent's ask (BOB-177), CI (BOB-178),
+// Usage (BOB-180), a day's detail (BOB-181), a project's page (BOB-182), the Overview (BOB-179).
 //   node test-ui/shots-bob121.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob121-*.png)
 // Prints any page error, any page wider than its viewport, a CI row whose words run into what is beside them, and at 390
 // the tap targets under 44 px, by what they say (BOB-176 c12, c13).
@@ -136,8 +137,30 @@ function fakeBroker(scene) {
     done: { counts: { features: 1, sessions: 4, lands: 3, releases: 0 }, features: [], sessions: [], releases: [] }, backlog: { ready: [], sessions_estimate: null, no_criteria: [], triage: { count: 0, oldest: null }, release: null, thin: false },
     usage: { tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, by_agent: [], heavy: [], lost: 0 }, more: {} });
   const rule = (agent, over = {}) => ({ project: "*", agent, laptop: "mbp-1", role: "backup", read: true, items: "none", fields: [], sessions: false, questions: false, admin: false, ...over });
+  // Usage: each project's days, deterministic, the last one today's; a spike on two of them.
+  const two = (n) => String(n).padStart(2, "0");
+  const dayBack = (n) => { const d = new Date(now); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`; };
+  const row = (model, alias, input, cache_read) => ({ model, alias, input, output: input, cache_read, cache_write: input });
+  const weights = { read_at: "2026-11-22", rows: [row("claude-sonnet-5-5", "sonnet", 1, 1), row("claude-opus-5-5", "opus", 2, 2), row("claude-haiku-5-5", "haiku", 0.05, 0.1), row("claude-fable-5-1", "fable", 5, 2.5), row("claude-fable-5-2", null, 4, 2), row("claude-opus-5", null, 2.5, 5), row("claude-sonnet-4-6", null, 1.5, 3), row("claude-haiku-4-5", null, 0.5, 1)] };
+  const wave = (i, seed) => 0.55 + 0.45 * Math.abs(Math.sin(i * 1.7 + seed)) - (i % 7 < 2 ? 0.3 : 0);
+  const point = (key, back) => {
+    const spike = (key === "bobnet" && back === 1) || (key === "helix" && back === 10);
+    const base = { bobnet: 21e6, helix: 44e6 }[key] ?? 1.6e6, total = Math.round(base * (spike ? 3.1 : back === 0 ? 0.3 : wave(back, key.length)));
+    const opus = Math.round(total * 0.82), haiku = Math.round(total * 0.004), unknown = key === "bobnet" && back % 9 === 2 ? Math.round(total * 0.14) : 0, sonnet = total - opus - haiku - unknown;
+    const weighted = Math.round(2 * opus + sonnet + 0.1 * haiku + unknown), calls = Math.round(total / 90_000);
+    const [lead, eng, arch] = key === "helix" ? ["lead", "engineer", "fixer"] : ["lead", "luigi", "toad"];
+    const roles = [[eng, 0.52], [lead, 0.3], [arch, 0.18]].map(([role, f]) => ({ role, calls: Math.round(calls * f), raw: Math.round(total * f), weighted: Math.round(weighted * f) }));
+    const ss = (feature, kind, label) => ({ feature, kind, label });
+    const top = key === "helix" ? [[ss("LAND-49", "build", "2"), "Edit a recorded lease", 0.62], [ss("LAND-49", "review", "1"), "Edit a recorded lease", 0.2], [null, null, 0.11]] : [[ss("BOB-121", "build", "C"), "The dashboard, use case first", 0.55], [ss("BOB-121", "review", "C"), "The dashboard, use case first", 0.3], [ss("BOB-51", "build", "A"), "Permission messages whole", 0.1]];
+    const raw = { input: Math.round(total * 0.02), output: Math.round(total * 0.03), cache_write: Math.round(total * 0.09), cache_read: 0 };
+    raw.cache_read = total - raw.input - raw.output - raw.cache_write;
+    return { raw, weighted, unknown, calls, by_model: [["claude-opus-5-5", opus, 2 * opus], ["claude-sonnet-5-5", sonnet, sonnet], ["claude-haiku-5-5", haiku, Math.round(haiku * 0.1)], ["unknown", unknown, unknown]].filter(([, r]) => r > 0).map(([model, r, w]) => ({ model, raw: r, weighted: w })), by_role: roles, top: top.map(([session, feature_title, f]) => ({ session, feature_title, raw: Math.round(total * f), weighted: Math.round(weighted * f) })) };
+  };
+  const usageSeries = (p, n) => ({ project: p.key, name: p.name, lost: p.key === "bobnet" ? 1 : 0, points: Array.from({ length: n }, (_, i) => point(p.key, n - 1 - i)) });
+  const usageDays = (n) => Array.from({ length: n }, (_, i) => dayBack(n - 1 - i));
   const answer = (op) => {
     switch (op.op) {
+      case "usage": return { weights, tz: op.tz, days: usageDays(op.days), projects: projects.filter((p) => !op.project || p.key === op.project).map((p) => usageSeries(p, op.days)) };
       case "projects": return { projects };
       case "overview": return { projects: projects.filter((p) => !op.project || p.key === op.project).map(overview) };
       case "waits": return nothing ? { waits: [], answered: [] } : { waits, answered };
@@ -185,13 +208,16 @@ function fakeBroker(scene) {
 const widths = { 390: [390, 844], 1024: [1024, 768], 1440: [1440, 900] };
 const agent = (name) => (p) => p.locator("#working .a-line", { hasText: name }).first().locator(".a-btn").click();
 const tap = (ref) => (p) => p.locator(`li[data-ref="${ref}"] .l-t`).click();
+const back = (n) => { const d = new Date(), two = (x) => String(x).padStart(2, "0"); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`; };
+const bar = (key, n) => (p) => p.locator(`.ucard[data-project="${key}"] .bar[data-day="${back(n)}"]`).click();
+const weigh = (p) => p.getByRole("button", { name: "Sonnet-equivalent", exact: true }).click();
 const answer = (ref) => (p) => p.locator(`li[data-ref="${ref}"] .answer-btn`).click();
 // [name, scene, hash, selector to wait for, steps, element to shoot (none: the whole page; "top": the window), widths (none: all)]
 const all = [
   ["bob121-header", "live", "overview", ".prow", [], "header"],
   ["bob121-header-quiet", "quiet", "overview", ".prow", [], "header"],
   ["bob121-header-feature", "live", "feature/helix/LAND-50", "#feature-head", [], "top"],
-  ["bob121-header-usage", "live", "usage/bobnet", ".seg.projects", [], "top"],
+  ["bob121-header-usage", "live", "usage", ".ugrid", [], "top"],
   ["bob121-triage-bobnet", "live", "triage/bobnet", ".totals", []],
   ["bob121-triage-helix", "live", "triage/helix", ".totals", []],
   ["bob121-laptops", "live", "laptops", "#global-rules", []],
@@ -227,6 +253,11 @@ const all = [
   ["bob121-ask-older", "older", "overview", ".prow", [agent("Marvin")], ".ov-now", [390, 1440]],
   ["bob121-ci", "live", "overview", "#ci li", [], ".ov-ci"],
   ["bob121-ci-dark", "live", "overview", "#ci li", [], ".ov-ci", [390, 1440]],
+  ["bob121-usage-raw", "live", "usage", ".ugrid", []],
+  ["bob121-usage-weighted-day", "live", "usage", ".ugrid", [weigh, (p) => p.locator(".factored summary").click(), bar("helix", 10)]],
+  ["bob121-usage-dark", "live", "usage", ".ugrid", [bar("bobnet", 0)], null, [390, 1440]],
+  ["bob121-usage-many", "many", "usage", ".ugrid", [], null, [390, 1024]],
+  ["bob121-usage-down", "down", "usage", ".banner.down", [], null, [390]],
   ["bob121-status-needs", "live", "status", "#status-needs li", [], "#status-needs", [390, 1440]],
   ["bob121-status-tap", "live", "status", "#status-needs li", [tap("Q-261"), tap("DRAFT-119")], "#status-needs", [390, 1440]],
 ];

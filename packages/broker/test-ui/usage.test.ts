@@ -1,0 +1,251 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { $, changed, click, FakeSocket, go, iso, key, open, project, refuse, reply, report, sent, settle, snapshot, text, texts, tok, view, worker, world, type Op } from "./page.ts";
+
+// The Usage page (BOB-180) and a day's detail (BOB-181), on a fake broker's `usage` and `usage_day`.
+
+const BOBNET = project("bobnet", "BobNet", "BOB"), HELIX = project("helix", "Helix", "LAND"), VITALS = project("vitals", "Vitals", "VIT");
+const pad = (n: number) => String(n).padStart(2, "0");
+const dayOf = (back: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() - back);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+const span = (n: number) => Array.from({ length: n }, (_, i) => dayOf(n - 1 - i));
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const date = (d: string) => new Date(`${d}T00:00:00`);
+const short = (d: string) => `${date(d).getDate()} ${MON[date(d).getMonth()]}`;
+const word = (d: string) => `${WD[date(d).getDay()]} ${short(d)}`;
+
+const weights = {
+  read_at: "2026-11-22",
+  rows: [
+    { model: "claude-sonnet-5-5", alias: "sonnet", input: 1, output: 1, cache_read: 1, cache_write: 1 },
+    { model: "claude-opus-5-5", alias: "opus", input: 2, output: 2, cache_read: 2, cache_write: 2 },
+    { model: "claude-haiku-5-5", alias: "haiku", input: 0.05, output: 0.05, cache_read: 0.1, cache_write: 0.05 },
+    { model: "claude-fable-5-1", alias: "fable", input: 5, output: 5, cache_read: 2.5, cache_write: 5 },
+    { model: "claude-fable-5-2", alias: null, input: 4, output: 4, cache_read: 2, cache_write: 4 },
+  ],
+};
+type Pt = Record<string, unknown>;
+const zero = (): Pt => ({ raw: tok(0), weighted: 0, unknown: 0, calls: 0, by_model: [], by_role: [], top: [] });
+/** A day of `m` million tokens on Opus, so twice that weighed. */
+const opus = (m: number, over: Pt = {}): Pt => ({ raw: tok(m * 1e6), weighted: m * 2e6, unknown: 0, calls: 10, by_model: [{ model: "claude-opus-5-5", raw: m * 1e6, weighted: m * 2e6 }], by_role: [{ role: "luigi", calls: 10, raw: m * 1e6, weighted: m * 2e6 }], top: [], ...over });
+/** Each project's days back from today, as points; the rest zero. */
+let data: Record<string, { back: Record<number, Pt>; every?: () => Pt; lost?: number }>;
+const series = (p: { key: string; name: string }, n: number) => ({
+  project: p.key, name: p.name, lost: data[p.key]?.lost ?? 0,
+  points: Array.from({ length: n }, (_, i) => data[p.key]?.back[n - 1 - i] ?? data[p.key]?.every?.() ?? zero()),
+});
+const usage = (op: Op) => ({ weights, tz: op["tz"], days: span(op["days"] as number), projects: [BOBNET, HELIX, VITALS].filter((p) => !op["project"] || op["project"] === p.key).map((p) => series(p, op["days"] as number)) });
+const overviewRow = (p: unknown) => ({ project: p, release: null, release_number: null, open: [], next_ready: null, waits_on_you: null, backlog: { items: 0, bugs: 0, oldest: null }, no_release: null, ci: [] });
+
+const card = (k: string) => view().querySelector(`.ucard[data-project="${k}"]`)!;
+const bar = (k: string, back: number) => card(k).querySelector(`.bar[data-day="${dayOf(back)}"]`)!;
+const figures = (k: string) => ({ total: text(".u-tot", card(k)), today: text(".u-today", card(k)), bars: [...card(k).querySelectorAll(".bar")].map((b) => b.getAttribute("aria-label")), spikes: text(".u-spike", card(k)), day: text(".uday b", card(k)) });
+const weigh = (label: string) => click([...view().querySelectorAll(".seg.weigh button")].find((b) => b.textContent === label));
+const spanOf = (label: string) => click([...view().querySelectorAll(".u-bar .seg button")].find((b) => b.textContent === label));
+
+beforeAll(async () => {
+  Object.assign(world.reads, {
+    projects: () => ({ projects: [BOBNET, HELIX, VITALS] }),
+    overview: () => ({ projects: [BOBNET, HELIX, VITALS].map(overviewRow) }),
+    waits: () => ({ waits: [], answered: [] }),
+    status: (op: Op) => ({ at: iso(0), since: op["since"], projects: [] }),
+    usage,
+  });
+});
+beforeEach(() => {
+  localStorage.clear();
+  world.laptops = [];
+  world.reads["usage"] = usage;
+  data = {
+    // Median 20M; 13 days back is a spike of 84M, 5 days back one under twice it.
+    bobnet: { every: () => opus(20), back: { 0: opus(8), 5: opus(39), 13: opus(84.3) }, lost: 1 },
+    // Small: median 1M, a spike of 5M, and 3.9M over twice the median but not over 4M.
+    helix: { every: () => opus(1), back: { 3: opus(5), 8: opus(3.9) } },
+    vitals: { back: {} },
+  };
+});
+
+describe("the Usage page (BOB-180)", () => {
+  it("has one graph per project, all of them with none picked, each its own series and scale (c1; BOB-121 AC11)", async () => {
+    await open("#usage");
+    expect(texts(".ucard .u-name")).toEqual(["BobNet", "Helix", "Vitals"]);
+    expect(view().querySelector(".seg.projects")).toBeNull();
+    for (const k of ["bobnet", "helix", "vitals"]) expect(card(k).querySelectorAll(".bar")).toHaveLength(30);
+    expect(sent("usage").map((f) => f.op)).toEqual([{ op: "usage", days: 30, tz: Intl.DateTimeFormat().resolvedOptions().timeZone }]);
+    // Its own scale: Helix's 5M spike stands higher than BobNet's 20M days, on an axis of its own.
+    const axis = (k: string) => texts(".axis text", card(k)).filter((t) => /^[\d.]+(M|k)?$/.test(t));
+    expect(axis("bobnet").at(-1)).toBe("100.0M");
+    expect(axis("helix").at(-1)).toBe("6.0M");
+    const tall = (el: Element) => Number(el.querySelector(".b")!.getAttribute("height"));
+    expect(tall(bar("helix", 3))).toBeGreaterThan(3 * tall(bar("bobnet", 2)));
+    // A project with no runs has its graph, empty, and 0 for what is 0.
+    expect(text(".u-tot", card("vitals"))).toBe("0 tokens, 30 days");
+    expect(axis("vitals")).toEqual(["0"]);
+  });
+
+  it("switches every number between raw and Sonnet-equivalent; off equals the read's raw; says what is factored (c2; AC12)", async () => {
+    await open("#usage");
+    await click(bar("bobnet", 13));
+    const raw = figures("bobnet");
+    // 27 days of 20, then 8, 39 and 84.3.
+    expect(raw).toMatchObject({ total: "671.3M tokens, 30 days", today: "today so far 8.0M · median day 20.0M", spikes: `1 spike over twice the median day: ${short(dayOf(13))} 84.3M`, day: `${word(dayOf(13))}: 84.3M tokens` });
+    expect(text(".u-says p")).toBe("Raw tokens: input, output, cache reads and writes as reported, every model counted the same.");
+    await weigh("Sonnet-equivalent");
+    const on = figures("bobnet");
+    expect(on).toMatchObject({ total: "1.34B Sonnet-equivalent tokens, 30 days", today: "today so far 16.0M · median day 40.0M", spikes: `1 spike over twice the median day: ${short(dayOf(13))} 168.6M`, day: `${word(dayOf(13))}: 168.6M Sonnet-equivalent tokens` });
+    expect(raw.bars.every((b, i) => b !== on.bars[i])).toBe(true);
+    expect(on.bars.at(-1)).toBe(`${word(dayOf(0))}, so far: 16.0M Sonnet-equivalent tokens`);
+    expect(text(".u-says p")).toBe("Sonnet-equivalent: each model's tokens count at its list-price ratio to Sonnet 5.5 (Opus 5.5 ×2, Haiku 5.5 ×0.05, Fable 5.1 ×5). Effort isn't weighted: higher effort already shows as more tokens. Tokens only, nothing is priced.");
+    expect(texts(".factored tbody tr")).toEqual(["Sonnet 5.5 (sonnet)×1×1×1×1", "Opus 5.5 (opus)×2×2×2×2", "Haiku 5.5 (haiku)×0.05×0.05×0.05×0.1", "Fable 5.1 (fable)×5×5×5×2.5", "Fable 5.2×4×4×4×2"]);
+    expect(text(".factored .note")).toBe("Ratios of each model's list price to Sonnet 5.5's, per kind of token, read 2026-11-22. Effort is ×1 at every level. A model not in the table counts ×1 and is named under its graph.");
+    await weigh("Raw tokens");
+    expect(figures("bobnet")).toEqual(raw);
+    expect(sent("usage")).toHaveLength(1);
+  });
+
+  it("marks a day a spike over twice the median and over 4M, with its value; today lighter; the list's buttons pick the day (c3)", async () => {
+    await open("#usage");
+    const spikes = (k: string) => [...card(k).querySelectorAll(".bar.spike")].map((b) => b.getAttribute("data-day"));
+    expect(spikes("bobnet")).toEqual([dayOf(13)]);
+    // 3.9M is over twice Helix's median of 1M, and not over 4M.
+    expect(spikes("helix")).toEqual([dayOf(3)]);
+    expect(texts(".spike-lab", card("helix"))).toEqual(["5.0M"]);
+    expect(spikes("vitals")).toEqual([]);
+    expect(card("vitals").querySelector(".u-spike")).toBeNull();
+    expect([...card("helix").querySelectorAll(".bar.today")].map((b) => b.getAttribute("data-day"))).toEqual([dayOf(0)]);
+    await click(card("helix").querySelector(".u-spike button"));
+    expect(bar("helix", 3).classList.contains("sel")).toBe(true);
+    expect(text(".uday b", card("helix"))).toBe(`${word(dayOf(3))}: 5.0M tokens`);
+    expect(card("bobnet").querySelector(".uday")).toBeNull();
+  });
+
+  it("counts an unnamed model's tokens only when there are some; a lost run reads tokens unknown, never 0 (c4)", async () => {
+    data["helix"]!.back[2] = opus(1, { unknown: 98e6 });
+    await open("#usage");
+    expect(text(".u-unk", card("helix"))).toBe("98.0M tokens on an unnamed model, counted at ×1");
+    expect(card("bobnet").querySelector(".u-unk")).toBeNull();
+    expect(text(".u-lost", card("bobnet"))).toBe("1 run lost, tokens unknown: not counted");
+    expect(card("helix").querySelector(".u-lost")).toBeNull();
+  });
+
+  it("opens a day's line on a tap and on Enter: its total, its models, its biggest sessions by the switch, linked (c5)", async () => {
+    const ss = (feature: string, kind: string, label: string) => ({ feature, kind, label });
+    data["helix"]!.back[4] = opus(3, {
+      by_model: [{ model: "claude-opus-5-5", raw: 2.4e6, weighted: 4.8e6 }, { model: "claude-haiku-5-5", raw: 5e5, weighted: 25e3 }, { model: "unknown", raw: 1e5, weighted: 1e5 }],
+      top: [
+        { session: ss("LAND-49", "build", "2"), feature_title: "Audit", raw: 1.4e6, weighted: 7e4 },
+        { session: ss("LAND-49", "review", "1"), feature_title: "Audit", raw: 9e5, weighted: 1.8e6 },
+        { session: null, feature_title: null, raw: 4e5, weighted: 8e5 },
+        { session: ss("LAND-50", "design", "A"), feature_title: "Edit", raw: 1e5, weighted: 2e5 },
+      ],
+    });
+    await open("#usage");
+    await key(bar("helix", 4), "Enter");
+    expect(text(".uday b", card("helix"))).toBe(`${word(dayOf(4))}: 3.0M tokens`);
+    expect(text(".uday .muted", card("helix"))).toBe("opus 2.4M · haiku 500k · unnamed model 100k");
+    expect(text(".biggest", card("helix"))).toBe("Biggest: LAND-49 build 2 1.4M, LAND-49 review 1 900k, work outside any session 400k");
+    expect([...card("helix").querySelectorAll(".biggest a")].map((a) => a.getAttribute("href"))).toEqual(["#feature/helix/LAND-49", "#feature/helix/LAND-49"]);
+    await weigh("Sonnet-equivalent");
+    expect(text(".uday .muted", card("helix"))).toBe("opus 4.8M · unnamed model 100k · haiku 25k");
+    expect(text(".biggest", card("helix"))).toBe("Biggest: LAND-49 review 1 1.8M, work outside any session 800k, LAND-50 design A 200k");
+    // Again lets it go.
+    await click(bar("helix", 4));
+    expect(card("helix").querySelector(".uday")).toBeNull();
+  });
+
+  it("has today's running workers in today's bar, line and total, so far (c5, D5)", async () => {
+    world.laptops = [{ laptop: "mbp-1", at: iso(0), snapshot: snapshot([worker({ project: "bobnet", tokens: tok(2e6), started_at: iso(0) })]) }];
+    await open("#usage");
+    await click(bar("bobnet", 0));
+    expect(text(".u-today", card("bobnet"))).toBe("today so far 10.0M · median day 20.0M");
+    expect(text(".uday b", card("bobnet"))).toBe(`${word(dayOf(0))}, so far: 10.0M tokens`);
+    expect(figures("bobnet").total).toBe("673.3M tokens, 30 days");
+  });
+
+  it("reads usage again on board_changed, so today doesn't fall when a worker ends and its run is the board's (c7, 5)", async () => {
+    const running = worker({ id: "w_x", project: "bobnet", tokens: tok(2e6), started_at: iso(0) });
+    world.laptops = [{ laptop: "mbp-1", at: iso(0), snapshot: snapshot([running]) }];
+    await open("#usage");
+    expect(text(".u-today", card("bobnet"))).toContain("today so far 10.0M");
+    data["bobnet"]!.back[0] = opus(10);
+    changed("bobnet");
+    report("mbp-1", snapshot([{ ...running, state: "done", ended_at: iso(0) }]));
+    await settle();
+    expect(sent("usage")).toHaveLength(2);
+    expect(text(".u-today", card("bobnet"))).toContain("today so far 10.0M");
+    // One while it reads is read again when that ends; one while the page is away, when it is back.
+    delete world.reads["usage"];
+    changed("helix");
+    await settle();
+    changed("helix");
+    expect(sent("usage")).toHaveLength(3);
+    reply(sent("usage").at(-1)!, usage);
+    await settle();
+    expect(sent("usage")).toHaveLength(4);
+    reply(sent("usage").at(-1)!, usage);
+    world.reads["usage"] = usage;
+    await go("#status");
+    changed("bobnet");
+    await settle();
+    expect(sent("usage")).toHaveLength(4);
+    await go("#usage");
+    expect(sent("usage")).toHaveLength(5);
+  });
+
+  it("keeps the hash's other filters when one is set, and takes both from a link (c7, 6)", async () => {
+    await open("#usage?days=14&weigh=1");
+    expect(card("bobnet").querySelectorAll(".bar")).toHaveLength(14);
+    expect(text(".u-tot", card("helix"))).toContain("Sonnet-equivalent tokens, 14 days");
+    await weigh("Raw tokens");
+    expect(location.hash).toBe("#usage?days=14&weigh=0");
+    expect(localStorage.getItem("bobnet.weigh")).toBe("0");
+    await spanOf("30 days");
+    expect(location.hash).toBe("#usage?days=30&weigh=0");
+    await settle();
+    expect(card("bobnet").querySelectorAll(".bar")).toHaveLength(30);
+  });
+
+  it("says it is reading, and what failed, with Retry; a failed read again keeps what was read", async () => {
+    delete world.reads["usage"];
+    await open("#usage");
+    expect(text(".empty-card")).toBe("Reading usage…");
+    reply(sent("usage")[0]!, () => refuse("The board's database isn't answering."));
+    await settle();
+    expect(text(".banner.down")).toBe("Usage couldn't be readThe board's database isn't answering.Retry");
+    expect(view().querySelector(".ucard")).toBeNull();
+    await click(view().querySelector(".banner.down button"));
+    reply(sent("usage").at(-1)!, usage);
+    await settle();
+    expect(view().querySelector(".banner.down")).toBeNull();
+    expect(view().querySelectorAll(".ucard")).toHaveLength(3);
+    changed("bobnet");
+    reply(sent("usage").at(-1)!, () => refuse("Gone."));
+    await settle();
+    expect(text(".banner.down")).toMatch(/^Usage couldn't be readGone\. What shows is from .+\.Retry$/);
+    expect(view().querySelectorAll(".ucard")).toHaveLength(3);
+  });
+
+  it("keeps the keyboard on a bar over a live frame's redraw", async () => {
+    await open("#usage");
+    (bar("bobnet", 6) as unknown as HTMLElement).focus();
+    report("mbp-1", snapshot([]));
+    await settle();
+    expect(document.activeElement!.getAttribute("data-fk")).toBe(`bar/bobnet/${dayOf(6)}`);
+  });
+
+  it("links an agent on a Backlog.md task to its session's card, not to Usage", () => {
+    expect(readFileSync(join(import.meta.dirname, "../public/app.js"), "utf8")).not.toMatch(/location\.hash = .*usage/);
+  });
+
+  it("shows tokens only: no currency and no sum, only the two sentences Toad ruled (c6)", async () => {
+    const source = readFileSync(join(import.meta.dirname, "../public/app.js"), "utf8");
+    const said = source.split("\n").filter((l) => /\bcosts?\b|\bpric(e|es|ed|ing)\b|\bdollars?\b|€|£|\$\d/i.test(l.replace(/\$\{/g, "")));
+    expect(said.every((l) => /list-price ratio|list price to Sonnet 5\.5's/.test(l))).toBe(true);
+    await open("#usage");
+    expect(view().textContent!.replace(/\(.*list-price.*\)|list price/g, "")).not.toMatch(/[$€£]|\bcosts?\b/i);
+  });
+});

@@ -220,28 +220,6 @@ describe("Roadmap", () => {
   });
 });
 
-describe("Usage", () => {
-  it("charts context per call for the session, a role, and the sessions' tokens", async () => {
-    await go("#usage");
-    (view().querySelector(".seg button") as HTMLButtonElement).click(); // Whole session
-    await settle();
-    expect(view().querySelector(".key")!.textContent).toContain("LAND-41 build 3 so far · 7 calls");
-    expect(view().querySelector(".key")!.textContent).toContain("LAND-41 build 2 · 2 calls");
-    const roles = [...$("roles").querySelectorAll("tbody tr")].map((r) => r.querySelector("b")!.textContent);
-    expect(roles).toEqual(["changesets", "records"]);
-    expect($("roles").textContent).toContain("360k");
-
-    ($("roles").querySelectorAll("tbody tr")[1] as HTMLElement).click();
-    await settle();
-    expect(view().querySelector(".key")!.textContent).toContain("records, LAND-41 build 3 · 3 calls");
-    expect(view().querySelector(".key")!.textContent).toContain("records, LAND-41 build 2 · 2 calls");
-    expect(view().querySelector(".key")!.textContent).toContain("earlier runs, middle half and median");
-
-    const bars = view().querySelectorAll('svg[aria-label="Tokens per session"] path');
-    expect(bars).toHaveLength(3);
-  });
-});
-
 describe("Laptops (BOB-175)", () => {
   it("has the laptops, the agents, the rules and the message log folded; no session updates nor ended workers", async () => {
     await go("#laptops");
@@ -480,17 +458,12 @@ describe("laptops that stopped reporting, dead requests and a stuck board outbox
 });
 
 describe("a review session", () => {
-  it("becomes the session Usage shows, with no build lane marked now", async () => {
+  it("marks no build lane now", async () => {
     const ws = FakeSocket.last;
     const next = structuredClone(board);
     next.sessions.push({ name: "LAND-41 review", kind: "review", started_at: iso(30), ended_at: null, workers: 1, calls: 10, tokens: tokens(5_000_000) });
     next.runs.push({ id: "w_r", name: "Bill", role: "bill", session: "LAND-41 review", task_ref: "LAND-41.16", model: "opus", effort: "high", started_at: iso(30), ended_at: iso(10), resumed: false, tokens: 5_000_000, ctx: [30000, 70000] });
     ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board: next });
-    await go("#usage");
-    (view().querySelector(".seg button") as HTMLButtonElement).click();
-    await settle();
-    expect(view().querySelector(".key")!.textContent).toContain("LAND-41 review so far · 2 calls");
-    expect(view().querySelector(".key")!.textContent).not.toContain("build 3");
     await go("#feature");
     expect(view().querySelector(".lane-h .now")).toBeNull();
     ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board });
@@ -543,27 +516,6 @@ describe("build lanes", () => {
     const titles = [...view().querySelectorAll(".lane-h b")].map((x) => x.textContent).filter((t) => /^Build/.test(t!));
     // Build 4 is only a build:4 label, no session yet: after them.
     expect(titles).toEqual(["Build 3", "Build A", "Build B", "Build 4"]);
-    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board });
-    await settle();
-  });
-});
-
-describe("the orchestrator's usage", () => {
-  it("shows the orchestrator as a row beside its workers in the session", async () => {
-    const ws = FakeSocket.last;
-    const next = structuredClone(board) as typeof board & { sessions: Array<Record<string, unknown>> };
-    next.sessions[2]!.orchestrator = { name: "Bob", calls: 40, tokens: 7_000_000 };
-    next.sessions.unshift({ name: "Other work", kind: "other", started_at: iso(2000), ended_at: iso(1), workers: 0, calls: 9000, tokens: tokens(2_000_000_000), orchestrator: { name: "Bob", calls: 9000, tokens: 2_000_000_000 } });
-    next.runs.push({ id: "orchestrator:LAND-41 build 3", name: "Bob", role: "Bob", session: "LAND-41 build 3", task_ref: null, model: "claude-opus-5-5", effort: null as never, started_at: iso(200), ended_at: iso(1), resumed: false, tokens: 7_000_000, ctx: [40000, 90000] });
-    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board: next });
-    await go("#usage");
-    await settle();
-    const bob = [...$("roles").querySelectorAll("tbody tr")].find((r) => r.textContent!.includes("Bob"))!;
-    expect(bob.textContent).toContain("7.0M");
-    expect(bob.querySelector('[data-label="Calls"]')!.textContent).toBe("2");
-    // Other work sets no scale: it has no bar.
-    expect(view().querySelectorAll('svg[aria-label="Tokens per session"] path')).toHaveLength(3);
-    expect(view().querySelector('svg[aria-label="Tokens per session"]')!.textContent).not.toContain("other");
     ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board });
     await settle();
   });
@@ -2765,7 +2717,7 @@ describe("the laptop mark (BOB-44; design/BOB-44/laptop-mark.md)", () => {
   });
 });
 
-describe("usage data (BOB-172: no screen of its own yet)", () => {
+describe("usage data (BOB-172)", () => {
   /** The service's list, read again: a project the page doesn't know is asked for. */
   const projectsAre = async (list: Array<[string, string]>) => {
     FakeSocket.last.frame({ t: "board_changed", project: "not-known" });
@@ -2850,6 +2802,19 @@ describe("usage data (BOB-172: no screen of its own yet)", () => {
     });
     report(live({ id: "w_run", state: "done", ended_at: iso(0) }));
     expect(app.usageSoFar(reply([zero(), ended, ended]), "usage-x").points[2]).toEqual({ ...ended, so_far: true });
+  });
+
+  it("spreads a quiet laptop's workers to its last report, not to now: one asleep since yesterday puts nothing in today (BOB-180 c7)", () => {
+    const midnight = new Date(`${dayOf(0)}T00:00:00`).getTime();
+    const at = (ms: number) => new Date(midnight + ms).toISOString();
+    const snap = (started: string) => ({ supervisor: { started_at: iso(9), concurrency: 1, active: 0, queued: 0 }, workers: [live({ id: "w_asleep", started_at: started, calls: 100, ctx: [1] })], pending: [], usage: [] });
+    app.state.laptops.set("usage-1", { laptop: "usage-1", at: at(-3600_000), snapshot: snap(at(-7200_000)) });
+    expect(app.usageSoFar(reply([zero(), zero(), zero()]), "usage-x").points[2]).toEqual({ ...zero(), so_far: true });
+    expect(app.dayRuns({ project: "usage-x", day: days[2]!, days, runs: [], baseline: null, lost: 0 })).toEqual([]);
+    // Nor one that started, by its own clock, after the report's.
+    app.state.laptops.set("usage-1", { laptop: "usage-1", at: at(-3600_000), snapshot: snap(at(-3599_000)) });
+    expect(app.usageSoFar(reply([zero(), zero(), zero()]), "usage-x").points[2]).toEqual({ ...zero(), so_far: true });
+    report();
   });
 
   it("counts an undeclared model at ×1 as unknown, splits a worker that began before today, and adds nothing to a reply from before midnight", () => {
@@ -3046,27 +3011,26 @@ describe("usage data (BOB-172: no screen of its own yet)", () => {
     expect([...$("tabs").querySelectorAll("a")].some((a) => /Sessions|Waits/.test(a.textContent!))).toBe(false);
   });
 
-  it("reaches a second project on Roadmap, Triage, Usage and the feature view without the dropdown, and stays on the page (BOB-174 c6)", async () => {
+  it("reaches a second project on Roadmap, Triage and the feature view without the dropdown, and stays on the page (BOB-174 c6)", async () => {
     const pressed = () => view().querySelector('.seg.projects [aria-pressed="true"]')?.textContent;
     const to = async (name: string) => {
       ([...view().querySelectorAll<HTMLButtonElement>(".seg.projects button")].find((b) => b.textContent === name)!).click();
       window.dispatchEvent(new Event("hashchange"));
       await settle();
     };
-    for (const page of ["roadmap", "triage", "usage", "feature"]) {
+    for (const page of ["roadmap", "triage", "feature"]) {
       await go(`#${page}/bobnet`);
       expect([page, pressed()]).toEqual([page, "bobnet"]);
       await to("helix");
       expect([page, location.hash, pressed()]).toEqual([page, `#${page}/helix`, "helix"]);
     }
-    // Usage and the feature view show that project's: helix has a laptop's board, bobnet none here.
+    // The feature view shows that project's: helix has a laptop's board, bobnet none here.
     expect(view().querySelector("#inc-pick")).not.toBeNull();
     await to("bobnet");
     expect(view().querySelector("#inc-pick")).toBeNull();
-    await go("#usage/helix");
-    expect($("ctx")).not.toBeNull();
-    await to("bobnet");
-    expect($("ctx")).toBeNull();
+    // Usage has every project at once, no switch (BOB-180).
+    await go("#usage");
+    expect(view().querySelector(".seg.projects")).toBeNull();
   });
 
   it("opens a page whose link names no project on the one last picked, as the dropdown's was (BOB-174 c6)", async () => {
@@ -3089,7 +3053,7 @@ describe("usage data (BOB-172: no screen of its own yet)", () => {
     await go("#roadmap");
     expect(view().querySelectorAll(".seg.projects button")).toHaveLength(2);
     await projectsAre([["helix", "LAND"]]);
-    for (const page of ["#usage", "#feature", "#roadmap"]) {
+    for (const page of ["#feature", "#roadmap"]) {
       await go(page);
       expect(view().querySelector(".seg.projects")).toBeNull();
     }

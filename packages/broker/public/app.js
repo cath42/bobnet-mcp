@@ -16,7 +16,6 @@ const state = {
   openLanes: new Set(),
   openCards: new Set(),
   open: new Set(),
-  chart: { mode: "session", role: null, run: null },
   /** The steps view: folds Casper opened or shut, the agent line whose detail row is open, open context panels and history. */
   folds: new Map(),
   agentOpen: null,
@@ -31,11 +30,13 @@ const state = {
   whole: new Set(),
   /** Usage weighed by model (Sonnet-equivalent), or raw: the hash's, else this device's (ADR 0014; spec 2.9). */
   weigh: false,
+  /** Usage's span in days, and each project's day picked on its graph ("YYYY-MM-DD"). */
+  span: 30,
+  usageDay: new Map(),
   /** When the page last read the laptops whole (this device's clock), null before it has: what Needs you is up to date with. */
   refreshed: null,
   /** When this socket was welcomed (this device's clock): what was read before it may have changed while the page was cut off. */
   welcomed: 0,
-  last: 10,
 };
 /** Messages kept in the page, as many as the broker's snapshot has. */
 const TRAFFIC_MAX = 50;
@@ -314,15 +315,6 @@ function lanesOf(b, m, inc) {
   return lanes;
 }
 
-// ---------- Rendering: Now ----------
-
-/** Opens Usage with the context chart on one run (or, with no run, on a role). */
-function showRun(w) {
-  state.chart = { mode: "agent", role: w.role, run: w.id ?? null };
-  location.hash = w.project ? `usage/${w.project}` : "usage";
-}
-
-
 // ---------- Rendering: kanban ----------
 
 /** A worker with no activity this long is flagged, never interrupted (Casper, 2026-11-07): you decide. */
@@ -332,7 +324,10 @@ const quietMinutes = (w) => (w.last_event_at ? Math.floor((Date.now() - Date.par
 function agentTag(w, showTask, m) {
   const refs = refsOf(w), x = refs.length === 1 ? m.byId.get(refs[0]) : null;
   const head = headlineOf(w.task);
-  return h("div", { class: "agent", role: "button", tabindex: "0", title: "Show its context per call", style: "cursor:pointer", onclick: (e) => (e.stopPropagation(), showRun(w)), onkeydown: (e) => e.key === "Enter" && (e.stopPropagation(), showRun(w)) },
+  // Its context per call is on its session's card, where its project's features are in the service.
+  const ss = knownProjects().some((p) => p.key === w.project) ? sessionOf(w) : null;
+  const show = (e) => (e.stopPropagation(), openCtx(w.project, ss.feature, w.session, w.name));
+  return h("div", { class: "agent", ...(ss ? { role: "button", tabindex: "0", title: "Show its context per call", style: "cursor:pointer", onclick: show, onkeydown: (e) => e.key === "Enter" && show(e) } : {}) },
     h("b", null, w.name),
     showTask ? h("span", { class: "d" }, head ? `${head}${refs.length ? ` · ${refs.join(", ")}` : ""}` : `${refs.join(", ")} · ${x ? x.title.slice(0, 60) : w.task.slice(0, 60)}`)
       : w.checkpoint ? h("span", { class: "d" }, w.checkpoint.length > 90 ? `${w.checkpoint.slice(0, 90)}…` : w.checkpoint) : null,
@@ -437,7 +432,7 @@ function viewFeature() {
       inc.ac.length ? h("ol", { class: "ac", style: "font-size:13px" }, inc.ac.map(([on, t]) => h("li", null, on ? "✓ " : "", t))) : null),
     onFeature.length ? h("div", { class: "card" }, h("div", { class: "muted", style: "margin-bottom:6px" }, "On the feature as a whole"), onFeature.map((w) => agentTag(w, true, m))) : null,
     board(cols, lanes),
-    h("p", { class: "note" }, "Click a task to open it. Tasks with an agent on them stay open, and the agent links to its context per call. A task's build:<n> label puts it in a build; without one, the build whose workers had it as their task."),
+    h("p", { class: "note" }, "Click a task to open it. Tasks with an agent on them stay open, and an agent links to its session's context per call. A task's build:<n> label puts it in a build; without one, the build whose workers had it as their task."),
   ];
 }
 
@@ -1042,6 +1037,8 @@ async function loadProjects() {
   // What waits on Casper counts on the tab, on every view (waiting-on-casper 3).
   // A failed list doesn't hold back the overview and the waits, which are read on their own (BOB-176 m2).
   if (svc.projects?.length || ov.rows || svc.error) loadOverview();
+  // So does usage, read again where it shows: the page may have been cut off.
+  usageChanged();
   // The Status tab's dot and the Overview's line read from the start, on every view.
   loadStatus();
   scheduleRender();
@@ -2767,7 +2764,6 @@ const quantile = (xs, q) => { const v = [...xs].sort((a, c) => a - c); const i =
 function niceStep(max, n = 4) { const step0 = max / n, mag = 10 ** Math.floor(Math.log10(step0 || 1)); return [1, 2, 2.5, 5, 10].map((x) => x * mag).find((x) => x >= step0); }
 /** The chart's drawing width: the page's column less the card's padding, so its text stays at its set size. */
 function chartWidth() { const w = ($("view")?.clientWidth || 760) - (window.innerWidth <= 760 ? 24 : 32) - 30; return Math.max(280, Math.min(720, Math.round(w))); }
-const runName = (r) => r.name ?? r.role;
 
 /** A role's runs as one line: the call count carries on, and each new worker starts from a small context again. */
 function roleLine(runs) {
@@ -2776,64 +2772,8 @@ function roleLine(runs) {
   return { pts, resets };
 }
 
-function chartSeries(b) {
-  const { cur, prev, prev2 } = sessionsOf(b);
-  const curRuns = sessionRuns(b, cur?.name), prevRuns = sessionRuns(b, prev?.name);
-  const band = b.baseline.p50.map((_, i) => [b.baseline.p25[i], b.baseline.p50[i], b.baseline.p75[i]]);
-  const bandNote = `The grey band is the middle half of ${b.baseline.runs} earlier runs at the same call, the line in it their median.`;
-  const c = state.chart;
-  if (c.mode === "session") {
-    const cum = (runs) => { let t = 0; return runs.flatMap((r) => r.ctx ?? []).map((v) => (t += v)); };
-    return {
-      series: [
-        cur ? { name: `${cur.name} so far`, pts: cum(curRuns), color: "var(--accent)", style: "solid", w: 2.5 } : null,
-        prev ? { name: prev.name, pts: cum(prevRuns), color: "var(--muted)", style: "dash", w: 2 } : null,
-        prev2 ? { name: prev2.name, pts: cum(sessionRuns(b, prev2.name)), color: "var(--idle)", style: "dot", w: 2 } : null,
-      ].filter(Boolean),
-      band: null,
-      note: "Every call in the session, in order, across all agents, with its context summed. A steeper line means each call carries more context.",
-    };
-  }
-  if (!c.role) return { series: curRuns.filter((r) => r.ctx?.length).map((r) => ({ name: runName(r), pts: r.ctx, color: "var(--accent)", style: "solid", w: 1.5, op: 0.55 })), band, note: `Each line is one run in ${cur?.name ?? "the session"}, from its own first call. ${bandNote}` };
-  const one = c.run ? [...curRuns, ...prevRuns, ...b.runs].find((r) => r.id === c.run) : null;
-  if (one) {
-    const pr = roleLine(prevRuns.filter((r) => r.role === one.role));
-    return { series: [{ name: `${runName(one)}, this run`, pts: one.ctx ?? [], color: "var(--accent)", style: "solid", w: 2.5 }, pr.pts.length ? { name: `${one.role}, ${prev.name}`, pts: pr.pts, resets: pr.resets, color: "var(--muted)", style: "dash", w: 2 } : null].filter(Boolean), band, note: `This run alone, from its first call. ${bandNote}` };
-  }
-  const now = roleLine(curRuns.filter((r) => r.role === c.role)), pr = roleLine(prevRuns.filter((r) => r.role === c.role));
-  return {
-    series: [{ name: `${c.role}, ${cur?.name ?? ""}`, pts: now.pts, resets: now.resets, color: "var(--accent)", style: "solid", w: 2.5 }, pr.pts.length ? { name: `${c.role}, ${prev.name}`, pts: pr.pts, resets: pr.resets, color: "var(--muted)", style: "dash", w: 2 } : null].filter(Boolean),
-    band,
-    note: `All of the role's runs in the session, one after another. The count of calls carries on; a new worker starts again from a small context, so the line drops there (dotted). A resumed worker keeps its context. ${bandNote}`,
-  };
-}
-
 /** Pauses re-rendering while the pointer is over a chart, so its tooltip isn't rebuilt from under it. */
 let holdRender = false;
-
-function contextChart(b) {
-  const { cur } = sessionsOf(b);
-  const roles = [...new Set(sessionRuns(b, cur?.name).map((r) => r.role))];
-  const { series, band, note } = chartSeries(b);
-  const { svg, tip, wrap } = plotChart(series, band);
-  const c = state.chart;
-  const seg = (mode, label) => h("button", { type: "button", "aria-pressed": String(c.mode === mode && !c.role), onclick: () => { state.chart = { mode, role: null, run: null }; render(); } }, label);
-  const one = c.run && [...sessionRuns(b, cur?.name), ...b.runs].find((r) => r.id === c.run);
-  const key = c.mode === "session" || c.role
-    ? series.map((sr) => h("span", null, h("i", { class: sr.style === "solid" ? "" : sr.style, style: `--k:${sr.color}` }), `${sr.name} · ${sr.pts.length} calls`))
-    : [h("span", null, h("i", { style: "--k:var(--accent)" }), `every run in ${cur?.name ?? "the session"}`)];
-  if (band) key.push(h("span", null, h("i", { class: "band", style: "--k:var(--idle)" }), "earlier runs, middle half and median"));
-  if (series.some((sr) => sr.resets?.length)) key.push(h("span", null, h("i", { class: "dot", style: "--k:var(--muted)" }), "a new worker for the role starts"));
-  wrap.append(
-    h("div", { class: "bar-row", style: "margin:0" },
-      h("span", { class: "seg" }, seg("session", "Whole session"), seg("agent", "Every run")),
-      h("label", { for: "role-pick", class: "muted" }, "one role"),
-      h("select", { id: "role-pick", onchange: (e) => { state.chart = { mode: e.target.value ? "agent" : "session", role: e.target.value || null, run: null }; render(); } },
-        h("option", { value: "" }, "–"), roles.map((r) => h("option", { value: r, selected: c.role === r || null }, r))),
-      one ? h("span", { class: "muted" }, `showing ${runName(one)}'s run · `, h("button", { type: "button", class: "chip", onclick: () => { state.chart = { ...c, run: null }; render(); } }, `all ${one.role} runs`)) : null),
-    svg, h("div", { class: "key" }, key), h("div", { class: "note", style: "margin:0" }, note), tip);
-  return wrap;
-}
 
 /** The context-per-call chart itself: lines, the band, labels at line ends and a tooltip; the caller adds its controls and key. */
 function plotChart(series, band) {
@@ -2895,106 +2835,35 @@ function plotChart(series, band) {
   return { svg, tip, wrap };
 }
 
-const KIND = { build: "var(--k-build)", design: "var(--k-design)", review: "var(--k-review)", retro: "var(--k-retro)", other: "var(--idle)" };
-/** A session's name in a few letters, for narrow bars: "b3", "des", "other". */
-const shortSession = (ss) => (ss.kind === "build" ? `b${ss.name.split(" ").at(-1)}` : ss.kind === "other" ? "other" : ss.kind.slice(0, 3));
-
-function sessionBars(b) {
-  // Other work spans everything between sessions: as a bar it would set the scale for all the rest.
-  const sessions = b.sessions.filter((x) => x.kind !== "other");
-  const xs = sessions.slice(-state.last);
-  const max = Math.max(1, ...xs.map((ss) => totalTokens(ss.tokens)));
-  const step = niceStep(max), top = Math.ceil(max / step) * step;
-  const yt = Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step);
-  const W = chartWidth(), H = 220, L = 46, R = 8, T = 14, B = 44;
-  const gap = (W - L - R) / Math.max(1, xs.length), bw = Math.min(56, gap * 0.7);
-  const y = (v) => T + (1 - v / top) * (H - T - B);
-  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Tokens per session" });
-  svg.append(s("g", { class: "grid" }, ...yt.map((v) => s("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }))));
-  svg.append(s("g", { class: "axis" }, ...yt.map((v) => s("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, fmtTokens(v)))));
-  const tip = h("div", { class: "tip", hidden: true });
-  const wrap = h("div", { class: "chart" });
-  xs.forEach((ss, i) => {
-    const v = totalTokens(ss.tokens), cx = L + gap * i + gap / 2, x0 = cx - bw / 2, y0 = y(v), r = Math.min(4, bw / 2, y(0) - y0);
-    // A bar with a rounded top, square on the baseline.
-    const g = s("g", { tabindex: "0" },
-      s("rect", { x: cx - gap / 2, y: T, width: gap, height: H - T - B, fill: "transparent" }),
-      s("path", { d: `M${x0},${y(0)} V${y0 + r} Q${x0},${y0} ${x0 + r},${y0} H${x0 + bw - r} Q${x0 + bw},${y0} ${x0 + bw},${y0 + r} V${y(0)} Z`, fill: KIND[ss.kind] }),
-      s("text", { class: "lab m", x: cx, y: H - B + 14, "text-anchor": "middle" }, gap < 64 ? shortSession(ss) : ss.name.replace(/^[A-Z]+-\d+ /, "")),
-      gap >= 64 ? s("text", { class: "lab m", x: cx, y: H - B + 28, "text-anchor": "middle" }, ss.name.match(/^[A-Z]+-\d+/)?.[0] ?? "") : s("g"),
-      gap >= 40 ? s("text", { class: "lab", x: cx, y: y0 - 5, "text-anchor": "middle" }, fmtTokens(v)) : s("g"));
-    const show = () => {
-      holdRender = true;
-      tip.replaceChildren(h("b", null, ss.name), ...[["tokens", fmtTokens(v)], ...(ss.orchestrator ? [[`of which ${ss.orchestrator.name}`, fmtTokens(ss.orchestrator.tokens)]] : []), ["output", fmtTokens(ss.tokens.output)], ["workers", ss.workers], ["calls", ss.calls], ["started", `${ss.started_at.slice(5, 10)} ${clock(ss.started_at)}`]].map(([k, val]) => h("div", { class: "row" }, h("span", null, k), h("span", null, String(val)))));
-      tip.hidden = false;
-      const wr = wrap.getBoundingClientRect(), gr = g.getBoundingClientRect();
-      tip.style.left = `${Math.min(gr.left - wr.left + gr.width / 2, wr.width - 190)}px`;
-      tip.style.top = `${gr.top - wr.top + 10}px`;
-    };
-    const hide = () => { tip.hidden = true; holdRender = false; };
-    g.addEventListener("pointerenter", show); g.addEventListener("focus", show);
-    g.addEventListener("pointerleave", hide); g.addEventListener("blur", hide);
-    svg.append(g);
-  });
-  const kinds = new Set(sessions.map((x) => x.kind));
-  const pick = (n) => h("button", { type: "button", "aria-pressed": String(state.last === n), onclick: () => { state.last = n; render(); } }, `Last ${n}`);
-  wrap.append(h("div", { class: "bar-row", style: "margin:0" }, h("span", { class: "seg" }, pick(10), pick(20), pick(50)), h("span", { class: "muted" }, `${sessions.length} sessions on record`)),
-    svg,
-    h("div", { class: "key" }, ["build", "design", "review", "retro"].map((k) => h("span", { style: kinds.has(k) ? "" : "opacity:.55" }, h("i", { class: "band", style: `--k:${KIND[k]};opacity:1;width:10px;height:10px;border-radius:2px` }), k))),
-    h("div", { class: "note", style: "margin:0" }, "Each session's tokens, cache reads included. A worker belongs to the session its brief names, else to the one running when it started; work outside any session isn't shown."), tip);
-  return wrap;
-}
-
-function viewUsage() {
-  const key = pageProject(), bar = switchBar(key, (k) => `#usage/${k}`);
-  const b = key ? laptopBoard(key) : current();
-  if (!b) return [bar, empty(null)];
-  const { cur, prev } = sessionsOf(b);
-  const runs = sessionRuns(b, cur?.name), prevRuns = sessionRuns(b, prev?.name);
-  const roles = new Map();
-  for (const r of runs) {
-    const e = roles.get(r.role) ?? { rs: [], models: new Set(), machines: new Set() };
-    e.rs.push(r); e.models.add(fmtModel(r)); e.machines.add(r.laptop); roles.set(r.role, e);
-  }
-  const sum = (rs, f) => rs.reduce((n, r) => n + f(r), 0);
-  const rows = [...roles.entries()].sort((a, c) => sum(c[1].rs, workerTokens) - sum(a[1].rs, workerTokens));
-  const rmax = rows.length ? sum(rows[0][1].rs, workerTokens) : 1;
-  const pickRole = (role) => { state.chart = { mode: "agent", role, run: null }; render(); $("ctx")?.scrollIntoView({ block: "start" }); };
-  return [
-    bar,
-    h("section", { id: "ctx" }, h("h2", null, "Context size per call"), contextChart(b)),
-    h("section", null, h("h2", null, `Agents in ${cur?.name ?? "the session"} `, h("span", { class: "count" }, `${fmtTokens(sum(runs, workerTokens))} tokens so far${prev ? ` · ${prev.name} ${fmtTokens(sum(prevRuns, workerTokens))}` : ""}`)),
-      h("div", { class: "table-wrap" }, h("table", { class: "stack", id: "roles" },
-        h("thead", null, h("tr", null, h("th", null, "Role"), h("th", null, "Model"), h("th", { class: "num" }, "Runs"), h("th", { class: "num" }, "Calls"), h("th", { class: "num" }, "Peak context"), h("th", null, ""), h("th", { class: "num" }, "Tokens"), h("th", { class: "num" }, prev ? prev.name.replace(/^[A-Z]+-\d+ /, "") : "Before"))),
-        h("tbody", null, rows.map(([role, e]) => {
-          const before = sum(prevRuns.filter((r) => r.role === role), workerTokens);
-          return h("tr", { class: "pick", tabindex: "0", "aria-selected": String(state.chart.role === role), title: "Show its context per call", onclick: () => pickRole(role), onkeydown: (ev) => ev.key === "Enter" && pickRole(role) },
-            h("td", null, h("b", null, role), h("div", { class: "cp" }, [...e.machines].join(", "))),
-            h("td", { "data-label": "Model" }, [...e.models].join(", ")),
-            h("td", { class: "num", "data-label": "Runs" }, e.rs.length),
-            h("td", { class: "num", "data-label": "Calls" }, sum(e.rs, (r) => r.ctx?.length ?? 0)),
-            h("td", { class: "num", "data-label": "Peak context" }, fmtTokens(Math.max(0, ...e.rs.flatMap((r) => r.ctx ?? [])))),
-            h("td", { class: "full", style: "width:20%" }, h("div", { class: "meter" }, h("i", { style: `width:${(sum(e.rs, workerTokens) / rmax) * 100}%` }))),
-            h("td", { class: "num", "data-label": "Tokens" }, fmtTokens(sum(e.rs, workerTokens))),
-            h("td", { class: "num muted", "data-label": prev?.name ?? "Before" }, before ? fmtTokens(before) : "–"));
-        })))),
-      h("p", { class: "note" }, "Click a role to see its context per call above. Tokens count everything a run read and wrote, cache reads included. The orchestrator's row is its own session's calls while this session ran, its subagents' tokens included.")),
-    h("section", null, h("h2", null, "Tokens per session"), sessionBars(b)),
-  ];
-}
-
-// ---------- Usage data: weighed, what runs now, a day's detail (ADR 0014; BOB-172). Its views read these. ----------
+// ---------- Usage: a graph per project, weighed, what runs now, a day's detail (BOB-121 spec 2.9; ADR 0014) ----------
 
 const WEIGH = "bobnet.weigh";
-/** A link's setting holds for the page, and doesn't change the device's. */
-function hashWeigh() {
-  const of = hashFilter("weigh");
+const SPANS = [14, 30];
+/** A link's weighing and span hold for the page, and don't change the device's. */
+function hashFilters() {
+  const of = hashFilter("weigh"), span = Number(hashFilter("days"));
   if (of !== null) state.weigh = of === "1";
+  if (SPANS.includes(span)) state.span = span;
+}
+/** Sets one of the hash's filters, in place, and keeps the others and the path (or takes another path). */
+function setFilter(name, value, path = hashPath().join("/")) {
+  const q = new URLSearchParams(location.hash.split("?")[1] ?? "");
+  q.set(name, value);
+  history.replaceState(null, "", `#${path}?${q}`);
 }
 function setWeigh(on) {
   state.weigh = on;
   try { localStorage.setItem(WEIGH, on ? "1" : "0"); } catch {}
-  history.replaceState(null, "", `#${hashPath().join("/")}?weigh=${on ? 1 : 0}`);
+  setFilter("weigh", on ? 1 : 0);
+  render();
+}
+function setSpan(days) {
+  state.span = days;
+  // A day before the new period has nothing to show in it.
+  const first = new Date(brokerNow());
+  first.setDate(first.getDate() - days + 1);
+  for (const [key, day] of state.usageDay) if (day < localDay(first)) state.usageDay.delete(key);
+  setFilter("days", days);
   render();
 }
 /** A usage figure as the toggle shows it: a point, or a by_model, by_role or top row (whose `raw` is one number). */
@@ -3025,10 +2894,11 @@ function localDay(t) {
 
 /** A project's workers whose run the board doesn't have yet: the laptop reports' running, queued and waiting. */
 const liveWorkers = (key) => workers().filter((w) => w.project === key && [...ACTIVE, "queued"].includes(w.state));
-/** How much of a running worker came before today, 0 to 1, by wall time. */
+/** How much of a running worker came before today, 0 to 1, by wall time to its laptop's last report: what a quiet laptop last said is not today's (Toad, review B minor 5). */
 function beforeToday(w, today) {
-  const start = Date.parse(w.started_at), now = brokerNow();
-  return now > start ? Math.min(1, Math.max(0, (dayStart(today) - start) / (now - start))) : 0;
+  const start = Date.parse(w.started_at), midnight = dayStart(today);
+  const at = Math.min(brokerNow(), Date.parse(state.laptops.get(w.laptop)?.at ?? "") || Infinity);
+  return at > start ? Math.min(1, Math.max(0, (midnight - start) / (at - start))) : start < midnight ? 1 : 0;
 }
 
 /**
@@ -3064,6 +2934,184 @@ function usageSoFar(reply, key) {
   for (const x of [pt, ...pt.by_model, ...pt.by_role]) x.weighted = Math.round(x.weighted);
   for (const list of [pt.by_model, pt.by_role]) list.sort((a, b) => b.raw - a.raw || b.weighted - a.weighted);
   return { ...series, points: [...series.points.slice(0, -1), pt] };
+}
+
+/** "<project, or * for every one>|<days>|<tz>" → the `usage` read, kept: { reply, error, loading, old, at (asked), read }. */
+const usages = new Map();
+const USAGE_AGAIN_MS = 30_000;
+/** The usage read of every project (key null) or one, asked once and kept; `again` is Retry's. Read again once the board has changed, and when the day turns. */
+function usageRead(key, days, again = false) {
+  const tz = usageTz(), id = [key ?? "*", days, tz].join("|");
+  const e = usages.get(id) ?? { key, days, tz, reply: null, error: null, loading: false, old: true, at: 0, read: 0 };
+  usages.set(id, e);
+  const turned = e.reply && e.reply.days.at(-1) !== localDay(brokerNow()) && Date.now() - e.at > USAGE_AGAIN_MS;
+  if (!e.loading && (again || e.old || turned)) void readUsage(e);
+  return e;
+}
+async function readUsage(e) {
+  Object.assign(e, { loading: true, old: false, at: Date.now() });
+  try {
+    const reply = await boardOp({ op: "usage", ...(e.key ? { project: e.key } : {}), days: e.days, tz: e.tz });
+    Object.assign(e, { reply, error: null, read: Date.now() });
+  } catch (err) {
+    // What was read stays; with nothing read yet it is said, never drawn as none.
+    e.error = err.message;
+  } finally {
+    e.loading = false;
+  }
+  scheduleRender();
+  // A change while it read: read again, if a page still shows it.
+  if (e.old && usageShown(e)) await readUsage(e);
+}
+const usageShown = (e) => viewName() === "usage" && e.key === null && e.days === state.span;
+/** A run that ended leaves its laptop's report for the board: its project's reads are read again, the one that shows at once (Toad, review B minor 5). */
+function usageChanged(project = null) {
+  for (const e of usages.values()) {
+    if (project !== null && e.key !== null && e.key !== project) continue;
+    e.old = true;
+    if (usageShown(e) && !e.loading) void readUsage(e);
+  }
+}
+
+const dayDate = (d) => new Date(`${d}T00:00:00`);
+/** A usage day in words: "13 Nov", "Fri 13 Nov". */
+const shortDay = (d) => `${dayDate(d).getDate()} ${MON[dayDate(d).getMonth()]}`;
+const wordDay = (d) => `${WD[dayDate(d).getDay()]} ${shortDay(d)}`;
+/** "Opus 5.5" from the table's id; another name as it is. */
+const modelLabel = (id) => id.replace(/^claude-([a-z])([a-z]+)-(\d+)(?:-(\d+))?$/, (_, a, rest, n, m) => `${a.toUpperCase()}${rest} ${n}${m ? `.${m}` : ""}`);
+/** A model in a day's split: its alias ("opus"), else its id without "claude-"; the undeclared "unnamed model". */
+const modelShort = (model, rows) => (model === "unknown" ? "unnamed model" : rows.find((r) => r.model === model)?.alias ?? model.replace(/^claude-/, ""));
+const tokensWord = () => (state.weigh ? "Sonnet-equivalent tokens" : "tokens");
+
+/** A series' figures as the switch shows them: each day's, their total, the median day, and the spikes (over twice it, and over 4M). */
+function usageFigures(series, days) {
+  const vals = series.points.map(usageFigure), median = vals.length ? quantile(vals, 0.5) : 0;
+  return { vals, median, total: vals.reduce((a, b) => a + b, 0), spikes: days.map((d, i) => ({ day: d, v: vals[i] })).filter((x) => x.v > 2 * median && x.v > 4e6) };
+}
+
+/** What the figures are, in Toad's words (ADR 0014 §1); the ratios from the read's own table. */
+function weighSays(weights) {
+  const of = (alias) => weights.rows.find((r) => r.alias === alias);
+  if (!state.weigh) return "Raw tokens: input, output, cache reads and writes as reported, every model counted the same.";
+  const each = ["opus", "haiku", "fable"].map(of).filter(Boolean).map((r) => `${modelLabel(r.model)} ×${r.input}`).join(", ");
+  return `Sonnet-equivalent: each model's tokens count at its list-price ratio to ${modelLabel(of("sonnet")?.model ?? "Sonnet")} (${each}). Effort isn't weighted: higher effort already shows as more tokens. Tokens only, nothing is priced.`;
+}
+/** The table the figures are weighed with, drawn from the read, so the page and the board can't disagree. */
+function whatsFactored(weights) {
+  return details("factored", { class: "factored" }, h("summary", null, "What's factored"),
+    h("div", { class: "table-wrap" }, h("table", null,
+      h("thead", null, h("tr", null, ["Model", "Input", "Output", "Cache write", "Cache read"].map((t, i) => h("th", { class: i ? "num" : null }, t)))),
+      h("tbody", null, weights.rows.map((r) => h("tr", null, h("td", null, modelLabel(r.model), r.alias ? h("span", { class: "muted" }, ` (${r.alias})`) : null),
+        [r.input, r.output, r.cache_write, r.cache_read].map((v) => h("td", { class: "num" }, `×${v}`))))))),
+    h("p", { class: "note" }, `Ratios of each model's list price to Sonnet 5.5's, per kind of token, read ${weights.read_at}. Effort is ×1 at every level. A model not in the table counts ×1 and is named under its graph.`));
+}
+const weighSwitch = () => h("span", { class: "seg weigh", role: "group", "aria-label": "Weigh by model" },
+  [[false, "Raw tokens"], [true, "Sonnet-equivalent"]].map(([on, label]) => h("button", { type: "button", "aria-pressed": String(state.weigh === on), "data-fk": `weigh/${on}`, onclick: () => setWeigh(on) }, label)));
+
+/** The graph's drawing width in a column of the page (`cols` of them), or an aside's, so its text stays at its set size. */
+function usageWidth(cols, aside = null) {
+  const pad = window.innerWidth <= 760 ? 24 : 32;
+  const page = Math.min(1320, $("view")?.clientWidth || 760) - pad;
+  return Math.max(260, Math.round(aside ? Math.min(aside, page) : (page - 14 * (cols - 1)) / cols) - 30);
+}
+/** Picks a day on a project's graph, or lets it go: a tap or Enter on its bar, or its spike's button. */
+function pickDay(key, day) {
+  state.usageDay.get(key) === day ? state.usageDay.delete(key) : state.usageDay.set(key, day);
+  render();
+}
+
+/** One project's days as bars, on its own scale: a spike in warn with its value, today's lighter, the picked one outlined. */
+function usageBars(key, series, days, W, small = false) {
+  const { vals, spikes } = usageFigures(series, days);
+  const max = Math.max(1, ...vals) * 1.12, step = niceStep(max, small ? 3 : 4), top = Math.ceil(max / step) * step;
+  const H = small ? 130 : 160, L = 46, R = 8, B = 22, T = 18, bw = (W - L - R) / days.length;
+  const x = (i) => L + i * bw, y = (v) => T + (1 - v / top) * (H - T - B);
+  const any = vals.some((v) => v > 0), picked = state.usageDay.get(key), today = localDay(brokerNow());
+  const ticks = any ? Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step) : [0];
+  // A spike's value is on top of it; of two whose values would meet, the larger's shows.
+  const half = 21, labelled = [];
+  for (const sp of [...spikes].sort((a, b) => b.v - a.v)) {
+    const i = days.indexOf(sp.day), cx = Math.min(W - half, Math.max(L + half, x(i) + bw / 2));
+    if (!labelled.some((l) => Math.abs(l.cx - cx) < 2 * half && Math.abs(y(l.v) - y(sp.v)) < 14)) labelled.push({ i, cx, v: sp.v });
+  }
+  const bars = days.map((d, i) => {
+    const v = vals[i], spike = spikes.some((sp) => sp.day === d), so = d === today;
+    const said = `${wordDay(d)}${so ? ", so far" : ""}: ${fmtTokens(v)} ${tokensWord()}${spike ? ", a spike" : ""}`;
+    const g = s("g", { class: ["bar", spike && "spike", so && "today", picked === d && "sel"].filter(Boolean).join(" "), tabindex: "0", role: "button", "aria-label": said, "aria-pressed": String(picked === d), "data-day": d, "data-fk": `bar/${key}/${d}` },
+      s("title", null, said),
+      s("rect", { class: "hit", x: x(i), y: 0, width: bw, height: H }),
+      s("rect", { class: "b", x: x(i) + bw * 0.15, y: y(v), width: bw * 0.7, height: Math.max(v > 0 ? 1 : 0, y(0) - y(v)), rx: Math.min(2, bw * 0.2) }));
+    g.addEventListener("click", () => pickDay(key, d));
+    g.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      pickDay(key, d);
+    });
+    return g;
+  });
+  const every = Math.ceil(days.length / (W < 420 ? 4 : 6));
+  return h("div", { class: "ugraph" }, s("svg", { viewBox: `0 0 ${W} ${H}`, role: "group", "aria-label": `${series.name}: ${tokensWord()} per day, the last ${days.length} days` },
+    s("g", { class: "grid" }, ...ticks.map((v) => s("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }))),
+    ...bars,
+    s("g", { class: "axis" }, ...ticks.map((v) => s("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, fmtTokens(v))),
+      ...days.map((d, i) => ((days.length - 1 - i) % every ? "" : s("text", { x: Math.min(W - 18, x(i) + bw / 2), y: H - 5, "text-anchor": "middle" }, d === today ? "today" : shortDay(d))))),
+    ...(any ? labelled.map((l) => s("text", { class: "spike-lab", x: l.cx, y: y(l.v) - 4, "text-anchor": "middle" }, fmtTokens(l.v))) : [])));
+}
+
+/** Under a graph: the picked day's total, its split by model and its biggest sessions. */
+function usageDayLine(key, series, days, weights) {
+  const day = state.usageDay.get(key), pt = series.points[days.indexOf(day)];
+  if (!pt) return null;
+  const models = pt.by_model.map((m) => [modelShort(m.model, weights.rows), usageFigure(m)]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  const top = [...pt.top].sort((a, b) => usageFigure(b) - usageFigure(a)).slice(0, 3);
+  return h("div", { class: "uday" },
+    h("b", null, `${wordDay(day)}${pt.so_far ? ", so far" : ""}: ${fmtTokens(usageFigure(pt))} ${tokensWord()}`),
+    models.length ? h("span", { class: "muted" }, models.map(([m, v]) => `${m} ${fmtTokens(v)}`).join(" · ")) : null,
+    top.length ? h("span", { class: "biggest" }, pt.so_far ? "Biggest, of the runs that ended: " : "Biggest: ", top.map((t, i) => h("span", { class: "big-s" },
+      t.session ? h("a", { class: "id", href: featureHref(key, t.session.feature), title: t.feature_title, onclick: () => (scrollAfter = stepId(t.session)) }, sessName(t.session)) : "work outside any session",
+      ` ${fmtTokens(usageFigure(t))}${i < top.length - 1 ? ", " : ""}`))) : null);
+}
+/** Under a graph: its spikes, each a button that picks its day, and what isn't counted or is counted at ×1. */
+function usageNotes(key, series, days) {
+  const { spikes } = usageFigures(series, days);
+  const unknown = series.points.reduce((n, pt) => n + pt.unknown, 0);
+  return [
+    spikes.length ? h("p", { class: "u-spike" }, h("b", null, plural(spikes.length, "spike")), " over twice the median day: ", spikes.map((sp, i) => [i ? ", " : null,
+      h("button", { type: "button", class: "more-t", "data-fk": `spike/${key}/${sp.day}`, "aria-pressed": String(state.usageDay.get(key) === sp.day), onclick: () => pickDay(key, sp.day) }, `${shortDay(sp.day)} ${fmtTokens(sp.v)}`)])) : null,
+    unknown ? h("p", { class: "muted u-unk" }, `${fmtTokens(unknown)} tokens on an unnamed model, counted at ×1`) : null,
+    series.lost ? h("p", { class: "muted u-lost" }, `${plural(series.lost, "run")} lost, tokens unknown: not counted`) : null,
+  ];
+}
+/** Where a project's name goes. */
+const projectHref = (key) => `#roadmap/${key}`;
+/** A project's card on Usage: its total, its days, the picked day, its spikes. */
+function usageCard(reply, p, W) {
+  const series = usageSoFar(reply, p.project), days = reply.days, { vals, median, total } = usageFigures(series, days);
+  const runsToday = days.at(-1) === localDay(brokerNow());
+  return h("section", { class: "card ucard", dataset: { project: p.project } },
+    h("div", { class: "u-h" }, h("a", { class: "u-name", href: projectHref(p.project) }, p.name),
+      h("span", { class: "u-tot" }, h("b", null, fmtTokens(total)), h("span", { class: "muted" }, ` ${tokensWord()}, ${days.length} days`)),
+      h("span", { class: "muted u-today" }, runsToday ? `today so far ${fmtTokens(vals.at(-1))} · ` : null, `median day ${fmtTokens(median)}`)),
+    usageBars(p.project, series, days, W),
+    usageDayLine(p.project, series, days, reply.weights),
+    usageNotes(p.project, series, days));
+}
+
+function viewUsage() {
+  // A first read waits for the socket; a list that failed doesn't hold it back.
+  if (!svc.projects && !svc.error) return [unread()];
+  const r = usageRead(null, state.span), weights = r.reply?.weights;
+  const retry = () => button("Retry", "", () => { usageRead(null, state.span, true); render(); });
+  return [
+    svc.projects ? null : boardDown(svc.error),
+    h("div", { class: "bar-row u-bar" }, h("span", { class: "u-lab" }, "Weigh by model"), weighSwitch(),
+      h("span", { class: "seg", role: "group", "aria-label": "Span" }, SPANS.map((n) => h("button", { type: "button", "aria-pressed": String(state.span === n), "data-fk": `span/${n}`, onclick: () => setSpan(n) }, `${n} days`)))),
+    r.error ? h("div", { class: "banner down" }, h("b", null, "Usage couldn't be read"), h("span", null, r.reply ? `${r.error} What shows is from ${clock(new Date(r.read).toISOString())}.` : r.error), retry()) : null,
+    weights ? h("div", { class: "u-says" }, h("p", null, weighSays(weights)), whatsFactored(weights)) : null,
+    r.reply ? h("div", { class: "ugrid" }, r.reply.projects.map((p) => usageCard(r.reply, p, usageWidth(window.innerWidth >= 1200 ? 2 : 1)))) : r.error ? null : h("div", { class: "empty-card" }, "Reading usage…"),
+    r.reply && !r.reply.projects.length ? h("div", { class: "empty-card" }, "No project's board is in the service yet.") : null,
+    r.reply ? h("p", { class: "note" }, "Tap a day for what made it. A run's tokens are spread over the days it ran; today's include the workers running now, so far. A session's own context per call is on its card, on the feature's page.") : null,
+  ];
 }
 
 /** "<project>|<day>|<days>|<tz>" → { reply, error, loading, at, old }: a day's detail, read on the tap and kept. */
@@ -3270,10 +3318,12 @@ function render() {
   drawConn();
   // Capture always has a project (Casper, 2026-11-13): only once the service has one.
   $("capture-open").hidden = !svc.projects?.length;
-  $("view").classList.toggle("wide", v === "overview" || v === "feature" || v === "roadmap" || v === "status");
+  $("view").classList.toggle("wide", v === "overview" || v === "feature" || v === "roadmap" || v === "status" || v === "usage");
   // The answer box he is typing in keeps its focus and caret across a draw.
   const box = document.activeElement?.closest?.("form.answer") ? document.activeElement : null;
   const at = box?.selectionStart;
+  // So does a control that names itself (a graph's bar, its detail's buttons): a live frame must not take the keyboard's place.
+  const fk = document.activeElement?.getAttribute?.("data-fk");
   $("view").replaceChildren(...VIEWS[v]().filter(Boolean));
   measureAsks();
   statusScroll();
@@ -3281,7 +3331,11 @@ function render() {
     const again = $("view").querySelector("form.answer textarea");
     again?.focus();
     if (again && at !== undefined && at !== null) again.setSelectionRange(at, at);
-  }
+  } else if (fk) focusKey(fk);
+}
+/** Focuses the control a redraw made in the place of the one that had `fk`, where the page is scrolled. */
+function focusKey(fk) {
+  [...$("view").querySelectorAll("[data-fk]")].find((el) => el.getAttribute("data-fk") === fk)?.focus({ preventScroll: true });
 }
 
 /**
@@ -3329,7 +3383,7 @@ let lastView = viewName();
 window.addEventListener("hashchange", () => {
   holdRender = false;
   followOldLink();
-  hashWeigh();
+  hashFilters();
   // A toast that stays (I'm caught up's) goes with the tab it was made on.
   if (viewName() !== lastView && $("toast").dataset.keep === "true") $("toast").hidden = true;
   lastView = viewName();
@@ -3478,6 +3532,7 @@ function connect() {
           for (const id of feats.keys()) if (id.startsWith(`${f.project}/`)) loadFeature(f.project, id.slice(f.project.length + 1));
         }
         usageDayChanged(f.project);
+        usageChanged(f.project);
         // One during the first read too: it is read again when that ends (Toad, review C minor 5).
         if (ov.rows || ov.error || ov.loading) loadOverview();
         if (rules.rows) loadRules();
@@ -3510,7 +3565,7 @@ function connect() {
 
 try { state.weigh = localStorage.getItem(WEIGH) === "1"; } catch {}
 followOldLink();
-hashWeigh();
+hashFilters();
 render();
 connect();
 // Keepalive, and a full refresh every minute for the 24-hour counts.
@@ -3518,8 +3573,10 @@ setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send('{"t":"ping"}'), 
 setInterval(() => ws?.readyState === WebSocket.OPEN && (dashboardRid = request("dashboard")), 60_000);
 // The Status tab's dot, on any view (ADR 0005 §2: every 60 s when Status and the Overview aren't showing).
 setInterval(() => ws?.readyState === WebSocket.OPEN && (svc.projects ? (loadStatus(), ov.error ? loadOverview() : null) : loadProjects()), 60_000);
+// A usage read that failed is tried again while a page shows it.
+setInterval(() => { for (const e of usages.values()) if (e.error && usageShown(e) && !e.loading && ws?.readyState === WebSocket.OPEN) void readUsage(e); }, 60_000);
 // Waits, hourly: a row goes stale and is flagged with no change on the board to say so (ADR 0011 §2; review A m3).
 setInterval(() => ws?.readyState === WebSocket.OPEN && svc.projects && loadOverview(), 60 * 60_000);
 
 // For the tests: what the views read that has no screen of its own yet.
-export { state, usageFigure, setWeigh, weighTokens, usageSoFar, usageDay, dayRuns, callAt, totalLine, oldLink };
+export { state, usageFigure, setWeigh, usageRead, weighTokens, usageSoFar, usageDay, dayRuns, callAt, totalLine, oldLink };
