@@ -1298,15 +1298,17 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
   });
 
   it("lists who is working on what from their declared sessions, and others as Other work", () => {
-    const lines = [...$("working").querySelectorAll("li")];
-    expect(lines.map((l) => l.querySelector(".l-who b")!.textContent)).toEqual(["records-agent", "Luigi", "Mario"]);
+    const all = [...$("working").querySelectorAll("li")];
+    // A group per project, the service's first; helix isn't in it here.
+    expect(all.map((l) => [l.closest<HTMLElement>(".now-p")!.dataset["project"], l.querySelector(".l-who b")!.textContent])).toEqual([["bobnet", "Luigi"], ["bobnet", "Mario"], ["helix", "records-agent"]]);
+    const lines = [all[2], all[0], all[1]];
     expect(lines[0]!.querySelector(".dot")!.classList.contains("warn")).toBe(true);
     expect(lines[0]!.querySelector(".l-m")!.textContent).toBe("waiting on you · 1.5M tokens");
-    expect(lines[0]!.querySelector(".l-path")!.textContent).toBe("helix › LAND-41build 3 › LAND-41.18land: tracts take updates");
+    expect(lines[0]!.querySelector(".l-path")!.textContent).toBe("LAND-41build 3 › LAND-41.18land: tracts take updates");
     expect(lines[0]!.querySelector(".l-path a.id")!.getAttribute("href")).toBe("#feature/helix/LAND-41");
-    expect(lines[1]!.querySelector(".l-path")!.textContent).toBe("BobNet › BOB-3build A");
+    expect(lines[1]!.querySelector(".l-path")!.textContent).toBe("BOB-3build A");
     expect(lines[1]!.querySelector(".l-m")!.textContent).toBe("2.4M tokens");
-    expect(lines[2]!.querySelector(".l-path")!.textContent).toBe("BobNet › Other work (no session)");
+    expect(lines[2]!.querySelector(".l-path")!.textContent).toBe("Other work (no session)");
   });
 
   it("gives each project the overview has a row: release, open now and who is on it, next, backlog; none for a laptop's board alone", () => {
@@ -1314,10 +1316,10 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     expect(rows.map((r) => r.getAttribute("data-project"))).toEqual(["bobnet"]);
     const cells = [...rows[0]!.querySelectorAll(".pc")].map((c) => c.textContent);
     expect(cells).toEqual([
-      "BobNetmbp-1 · lead Mario · PO Peach",
-      "Release1 R1 Central backlog view2 of 10 features done",
-      "Open nowBOB-3The roadmap across projects0 of 8 criteria · Luigi on itand 1 more open",
-      "NextWaits on you: Q-4Then Ready: BOB-9Move Helix's board",
+      "BobNet ›mbp-1 · lead Mario · PO Peach2 running",
+      "ReleaseR1 Central backlog view2 of 10 features done",
+      "Open nowBOB-3The roadmap across projectsLuigi on itand 1 more open",
+      "NextWaits on you: Q-4, Q-5, BOB-31Then Ready: BOB-9Move Helix's board",
       "Backlog13 items2 bugs · oldest 4 days",
     ]);
     expect(rows[0]!.querySelector(".pname a")!.getAttribute("href")).toBe("#project/bobnet");
@@ -1341,7 +1343,8 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     expect($("needs-count").textContent).toBe("");
     // Nothing waits: the count leaves the tab.
     expect($("needs-n").textContent).toBe("");
-    expect(view().querySelector(".ov-now .empty-card")!.textContent).toBe("No agent is working.");
+    expect([...$("working").querySelectorAll(".a-line")]).toEqual([]);
+    expect($("working").textContent).toContain("Nobody is running.");
     const cells = [...view().querySelectorAll('.prow[data-project="bobnet"] .pc')].map((c) => c.textContent);
     expect(cells[2]).toBe("Open nowno feature open");
     expect(cells[3]).toBe("NextReady: BOB-9Move Helix's board");
@@ -1814,17 +1817,17 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
 
       it("says a row unchanged over a day, and whom the board asked to check it: flagged, within the hour, nobody (spec b)", () => {
         const stale = (ref: string) => item(ref).querySelector(".m-row .stale")!;
-        expect(stale("Q-14").textContent).toBe("Unchanged for 2d 3h, Mario asked to check it 40m ago");
+        expect(stale("Q-14").textContent).toBe("Unchanged for 2 days, Mario asked to check it 40m ago");
         // At the right of the meta row, before the button.
-        expect(meta("Q-14").textContent).toBe("BobNet › BOB-6 · holds up Luigi (build A) · from MarioUnchanged for 2d 3h, Mario asked to check it 40m agoAnswer");
+        expect(meta("Q-14").textContent).toBe("BobNet › BOB-6 · holds up Luigi (build A) · from MarioUnchanged for 2 days, Mario asked to check it 40m agoAnswer");
         expect(stale("Q-14").nextElementSibling!.classList.contains("acts")).toBe(true);
-        expect(stale("A-30").textContent).toBe("Unchanged for 24h 10m, Peach is asked within the hour");
-        expect(stale("BOB-6").textContent).toBe("Unchanged for 26h 0m, nobody to ask");
+        expect(stale("A-30").textContent).toBe("Unchanged for 1 day, Peach is asked within the hour");
+        expect(stale("BOB-6").textContent).toBe("Unchanged for 1 day, nobody to ask");
         // Both ages tick as every age on the page does.
-        expect([...stale("Q-14").querySelectorAll("[data-ago]")].map((x) => x.getAttribute("data-ago"))).toEqual([q14.stale.changed_at, q14.stale.flagged_at]);
+        expect([...stale("Q-14").querySelectorAll("[data-ago]")].map((x) => x.getAttribute("data-ago"))).toEqual([q14.stale.flagged_at]);
         // A fixed bug can be stale too: the fix line, then the stale span in the meta.
         expect(item("LAND-9").querySelector(".fix")).not.toBeNull();
-        expect(stale("LAND-9").textContent).toBe("Unchanged for 26h 0m, Peach asked to check it 10m ago");
+        expect(stale("LAND-9").textContent).toBe("Unchanged for 1 day, Peach asked to check it 10m ago");
         expect(item("LAND-9").querySelector(".kept")).toBeNull();
       });
 
@@ -1839,7 +1842,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
         const lines = [...$("needs").querySelectorAll("li")];
         expect(lines.map((l) => l.getAttribute("data-id"))).toEqual(["bobnet/Q-14", "bobnet/BOB-6"]);
         expect(lines[0]!.querySelector(".badge")!.textContent).toBe("question");
-        expect(lines[0]!.querySelector(".m-row")!.textContent).toBe("BobNet › BOB-6 · holds up Luigi (build A) · from MarioUnchanged for 2d 3h, Mario asked to check it 40m agoAnswer");
+        expect(lines[0]!.querySelector(".m-row")!.textContent).toBe("BobNet › BOB-6 · holds up Luigi (build A) · from MarioUnchanged for 2 days, Mario asked to check it 40m agoAnswer");
         expect([...lines[0]!.querySelectorAll("button:not([hidden])")].map((b) => b.textContent)).toEqual(["Answer"]);
         // Compact: the fix line stays, and how long it has been unchanged is short, in the meta.
         const rest = [...$("needs-rest").querySelectorAll("li")];
@@ -1851,7 +1854,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
         (rest[0]!.querySelector(".l-t") as HTMLElement).click();
         const q15open = $("needs-rest").querySelector('li[data-ref="Q-15"]')!;
         expect(q15open.querySelector(".whole .kept")!.textContent).toBe("Kept by Mario 1h 30m ago: “Still waits on the move, which is Friday”");
-        expect(q15open.querySelector(".whole a")!.textContent).toBe("Answer it on Needs you →");
+        expect(q15open.querySelector(".n-links a")!.textContent).toBe("Answer it on Needs you →");
         (q15open.querySelector(".l-t") as HTMLElement).click();
         expect(view().querySelector(".ov-needs .more")!.textContent).toBe("2 more when you have time, and today's answers, on Needs you →");
         expect($("needs-n").textContent).toBe("7");
@@ -1953,12 +1956,12 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect(text("bobnet/Q-1").textContent).toContain("\n");
       const whole = line("bobnet/Q-1").querySelector(".whole")!;
       expect(whole.querySelector(".rec")!.textContent).toBe("Recommended Accept the scale test now");
-      expect(whole.querySelector("a")!.textContent).toBe("Its context, on Needs you →");
-      expect(whole.querySelector("a")!.getAttribute("href")).toBe("#needs");
+      const its = line("bobnet/Q-1").querySelector(".n-links a")!;
+      expect([its.textContent, its.getAttribute("href")]).toEqual(["Its context, on Needs you →", "#needs"]);
       // The context itself stays off the Overview.
       expect(view().querySelector(".ov-needs")!.textContent).not.toContain("700 tasks");
-      // DOM order: badge and id, text, age, what opened, the meta row with its one button.
-      expect([...line("bobnet/Q-1").children].map((c) => c.className)).toEqual(["n-b", "l-h", "age", "whole", "m-row"]);
+      // DOM order: badge and id, text, age, what opened, the meta row, its links with its one button.
+      expect([...line("bobnet/Q-1").children].map((c) => c.className)).toEqual(["n-b", "l-h", "age", "whole", "m-row", "n-links"]);
       expect([...line("bobnet/Q-1").querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Answer"]);
       text("bobnet/Q-1").click();
       expect(line("bobnet/Q-1").classList.contains("open")).toBe(false);
@@ -2063,7 +2066,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       await go("#overview");
       text("bobnet/Q-1").click();
       const into = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
-      (line("bobnet/Q-1").querySelector(".whole a") as HTMLAnchorElement).click();
+      (line("bobnet/Q-1").querySelector(".n-links a") as HTMLAnchorElement).click();
       await go("#needs");
       const it = view().querySelector('li.need[data-ref="Q-1"]')!;
       expect(it.querySelector(".ctx")!.textContent).toBe(context);
@@ -2412,7 +2415,7 @@ describe("the steps view: a feature's sessions, outcomes and tasks (BOB-4)", () 
     // Two groups: Allow · Deny, then Stop · Reset, never Stop beside Deny (spec, BOB-4 as built).
     expect([...line("Daisy").querySelectorAll(".a-detail .grp")].map((g) => g.textContent)).toEqual(["AllowDeny", "StopReset"]);
     // Working now names the session by its step, and its tasks apart.
-    expect(line("Luigi").querySelector(".l-path")!.textContent).toBe("BobNet › BOB-4Fixes › BOB-42 · BOB-43");
+    expect(line("Luigi").querySelector(".l-path")!.textContent).toBe("BOB-4Fixes › BOB-42 · BOB-43");
     expect(view().querySelector(".more.queued")!.textContent).toBe("1 queued: Yoshi");
     // Context per call from the Overview goes to the feature, its session card's panel open on the agent.
     (line("Luigi").querySelector(".a-btn") as HTMLElement).click();
@@ -2499,8 +2502,8 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
     // The one item, compact: a tap opens it here, and it is answered on Needs you (BOB-176).
     expect(needs.querySelector("li")!.className).toBe("need compact");
     (needs.querySelector("li .l-t") as HTMLElement).click();
-    expect($("status-needs").querySelector("li .whole a.more-t:last-child")!.textContent).toBe("Answer it on Needs you →");
-    expect($("status-needs").querySelector("li .whole a.more-t:last-child")!.getAttribute("href")).toBe("#needs");
+    expect($("status-needs").querySelector("li .n-links a.more-t:last-child")!.textContent).toBe("Answer it on Needs you →");
+    expect($("status-needs").querySelector("li .n-links a.more-t:last-child")!.getAttribute("href")).toBe("#needs");
     ($("status-needs").querySelector("li .l-t") as HTMLElement).click();
     expect(needs.querySelector("li .l-m")!.textContent).toContain("BobNet › BOB-9 · holds up");
     expect(needs.querySelector("li .before")!.textContent).toMatch(/^from before /);
@@ -2616,7 +2619,7 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
     expect(line.getAttribute("href")).toBe("#status");
     expect(line.nextElementSibling!.classList.contains("ov-needs")).toBe(true);
     expect(line.dataset["tone"]).toBe("bad");
-    expect(line.textContent).toMatch(/^Since .+: 2 done, 2 stuckStatus ›$/);
+    expect(line.textContent).toMatch(/^Since .+: 2 done, 2 stuckStatus →$/);
     // A read the board refuses: no line on the Overview, the banner on Status with what it said last.
     await new Promise((r) => setTimeout(r, 5100));
     FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 300, refs: [] });
@@ -3608,7 +3611,7 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
       expect(foot()).toBe("Howard stopped when mbp-1 restarted. Deny starts it again, with your note. It can't be taken back.");
       shows([mbp()]);
       await go("#overview");
-      expect(view().querySelector("#working")).toBeNull();
+      expect(view().querySelector("#working .a-line")).toBeNull();
       expect(view().querySelector('.ov-needs [data-ref="r_o"]')).not.toBeNull();
       await go("#needs");
     });
@@ -3824,7 +3827,7 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
     expect(refs("needs-holding")).toEqual(["Q-1"]);
     expect(item("Q-1").querySelector(".l-m")!.textContent).toBe("BobNet › BOB-3 · holds up BOB-3 · from Mario");
     expect([...$("plist").querySelectorAll(".prow")].map((r) => r.getAttribute("data-project"))).toEqual(["bobnet", "helix"]);
-    expect($("working").querySelector(".l-path")!.textContent).toBe("Helix › LAND-50build 2");
+    expect($("working").querySelector(".l-path")!.textContent).toBe("LAND-50build 2");
     await go("#needs");
     expect(segs()).toEqual(["All projects 1", "BobNet 1", "Helix 0"]);
     down = [];

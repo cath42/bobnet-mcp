@@ -92,6 +92,21 @@ describe("the current release (ADR 0014 §4, BOB-163)", () => {
     expect([row.release?.ref, row.release_number, row.release?.features]).toEqual([r1, 1, { done: 1, total: 1 }]);
     expect((await statusRelease())?.ref).toBe(r1);
     expect((await ok(owner, { op: "project", project: "helix" })).done_unclosed).toEqual([]);
+    expect(row.done_unclosed).toEqual([]);
+  });
+
+  it("gives an earlier release that is all done and not closed as waiting for its close, on the Overview as on the project's page (BOB-179)", async () => {
+    await project();
+    const r1 = await release("Release 1");
+    const r2 = await release("Release 2");
+    await done(await feature("A", r1));
+    await feature("B", r2);
+    await setStatus(r1, "open");
+    const row = await overviewRow();
+    expect([row.release?.ref, row.release?.features, row.done_unclosed]).toEqual([r2, { done: 0, total: 1 }, [{ ref: r1, title: "Release 1" }]]);
+    expect((await ok(owner, { op: "project", project: "helix" })).done_unclosed).toEqual(row.done_unclosed);
+    await setStatus(r1, "closed");
+    expect((await overviewRow()).done_unclosed).toEqual([]);
   });
 
   it("is never a planned release that only holds Done features; with no open release it is none (BOB-192)", async () => {

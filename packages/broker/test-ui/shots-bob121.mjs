@@ -63,7 +63,7 @@ function fakeBroker(scene) {
   if (long) Object.assign(ci.helix[0], { name: "release_and_publish_every_package_to_the_registry" }, { runs: [{ ...ci.helix[0].runs[0], agent: "TheLandServiceEndToEndEngineerOnTheNightShift" }, ...ci.helix[0].runs.slice(1)] });
   const overview = (p) => ({
     project: p, release: p.key === "helix" ? release("R2", "R2 Edit and audit", 1, 6) : release("R3", "R3 Vitals", 2, 9), release_number: p.key === "helix" ? 2 : 3,
-    open: features[p.key].filter((x) => x.open_since), next_ready: features[p.key].find((x) => x.status === "Ready"), waits_on_you: p.key === "helix" ? "Q-261" : null,
+    open: features[p.key].filter((x) => x.open_since), next_ready: features[p.key].find((x) => x.status === "Ready"), waits_on_you: p.key === "helix" ? "Q-261" : null, done_unclosed: p.key === "bobnet" ? [{ ref: "R1", title: "R1 Central backlog view" }] : [],
     backlog: { items: p.key === "helix" ? 9 : 12, bugs: 3, oldest: iso(14 * D) }, no_release: { items: 4, bugs: 1, oldest: iso(9 * D) }, ci: scene === "oldboard" ? undefined : ci[p.key],
   });
   const wait = (over) => ({ project: "helix", kind: "question", feature: null, context: null, recommended: null, holds: { items: [], sessions: [] }, waiting_sessions: [], needed_before: null, asked_by: "Bill@mbp-1", blocking: false, edits: [], stale: null, kept: null, fix: null, ...over });
@@ -251,7 +251,8 @@ function fakeBroker(scene) {
   window.confirm = () => true;
 }
 
-const widths = { 390: [390, 844], 1024: [1024, 768], 1440: [1440, 900] };
+// 768, a tablet held upright, only for the scenes that name it.
+const widths = { 390: [390, 844], 768: [768, 1024], 1024: [1024, 768], 1440: [1440, 900] };
 const agent = (name) => (p) => p.locator("#working .a-line", { hasText: name }).first().locator(".a-btn").click();
 const tap = (ref) => (p) => p.locator(`li[data-ref="${ref}"] .l-t`).click();
 const back = (n) => { const d = new Date(), two = (x) => String(x).padStart(2, "0"); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`; };
@@ -289,6 +290,11 @@ const all = [
   ["bob121-laptops-long", "long", "laptops", "#global-rules", [], "#agents"],
   ["bob121-triage-many", "many", "triage/bobnet", ".totals", [], "top"],
   ["bob121-overview", "live", "overview", ".prow", []],
+  ["bob121-overview-tablet", "live", "overview", ".prow", [], "top", [768]],
+  ["bob121-header-tablet", "quiet", "needs", "#needs-rest li", [], "top", [768]],
+  ["bob121-overview-dark", "page", "overview", ".prow", [], null, [390, 1440]],
+  ["bob121-overview-nobody", "nobody", "overview", ".prow", [agent("Howard")], null, [390, 1024, 1440]],
+  ["bob121-overview-tap", "live", "overview", ".prow", [tap("Q-243")], ".ov-needs", [390, 1440]],
   ["bob121-overview-quiet", "quiet", "overview", ".prow", [], null, [390, 1440]],
   ["bob121-overview-nothing", "nothing", "overview", ".prow", [], null, [390, 1440]],
   ["bob121-overview-down", "down", "overview", ".banner.down", [], null, [390, 1440]],
@@ -330,7 +336,7 @@ const browser = await chromium.launch();
 try {
   for (const [name, scene, hash, wait, steps, el, only] of shots) {
     for (const [w, [width, height]] of Object.entries(widths)) {
-      if (only && !only.includes(Number(w))) continue;
+      if (only ? !only.includes(Number(w)) : w === "768") continue;
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1, colorScheme: name.includes("-dark") ? "dark" : "light", isMobile: width < 600, hasTouch: width < 600 });
       page.on("pageerror", (e) => console.log(`${name}-${w}: ${e.message}`));
       await page.addInitScript(fakeBroker, scene);

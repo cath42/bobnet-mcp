@@ -651,6 +651,8 @@ export interface OverviewRow {
   /** The current release (ADR 0014 §4: the first not closed with work in it), and its number in the board's order (1, 2, 3). */
   release: ReleaseRecord | null;
   release_number: number | null;
+  /** The releases before it that are all done and not closed, as the project page's (BOB-179): they wait for Casper's close; an older broker sends none. */
+  done_unclosed?: Array<{ ref: string; title: string }>;
   /** Its open features: `open_since` set and not Done (notes 15). */
   open: ItemSummary[];
   /** The next Ready feature that isn't open: by release order, then the board's order. */

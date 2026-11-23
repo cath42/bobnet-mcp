@@ -1463,12 +1463,25 @@ function viewOverview() {
       h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count", id: "needs-count" }, waitCount() || "")),
         h("div", { class: "card" }, needsBody(needsItems(), true))),
       h("div", { class: "ov-side" }, h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length || "")),
-        now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map((w) => nowLine(w))), queuedLine()) : h("div", { class: "empty-card" }, "No agent is working.", queuedLine())),
+        workingNow()),
         ciCard()),
       h("section", { class: "ov-proj" }, h("h2", null, "Projects"),
         h("div", { class: "plist", id: "plist" },
           ov.rows?.length ? ov.rows.map(projectRow) : h("div", { class: "empty-card" }, ov.rows && !down ? "No project's board yet." : down ? "The board's projects couldn't be read." : "Reading the board…")))),
   ];
+}
+
+/** Working now: a group per project, in project order, with nobody running too; then a group for agents of a project the service doesn't have. */
+function workingNow() {
+  const on = running(), queued = workers().filter((w) => w.state === "queued");
+  const keys = [...new Set([...knownProjects().map((p) => p.key), ...on.map((w) => w.project), ...queued.map((w) => w.project)])];
+  if (!keys.length) return h("div", { class: "empty-card" }, "No agent is working.");
+  return h("div", { class: "card", id: "working" }, keys.map((key) => {
+    const here = [...new Set(on.filter((w) => w.project === key).map((w) => w.laptop))];
+    return h("div", { class: "now-p", dataset: { project: key } },
+      h("div", { class: "grp-h" }, knownProjects().some((p) => p.key === key) ? h("a", { href: projectHref(key) }, projectName(key)) : h("span", null, key), h("span", { class: "muted" }, here.join(", "))),
+      runningOf(key));
+  }));
 }
 
 /** The laptops that stopped reporting within a day, oldest report first. */
@@ -1857,7 +1870,7 @@ function staleSpan(w) {
   const s = w.stale;
   if (s) {
     const tail = !s.owner ? ", nobody to ask" : s.flagged_at ? [`, ${askedBy(s.owner)} asked to check it `, ago(s.flagged_at), " ago"] : `, ${askedBy(s.owner)} is asked within the hour`;
-    return h("span", { class: "stale" }, "Unchanged for ", ago(s.changed_at), tail);
+    return h("span", { class: "stale" }, `Unchanged for ${waitAge(s.changed_at)}`, tail);
   }
   const k = w.kept;
   return k ? h("span", { class: "kept" }, `Kept by ${askedBy(k.by)} `, ago(k.at), ` ago: “${k.reason}”`) : null;
@@ -1889,7 +1902,8 @@ function needItem(x, { compact = false, page = false, project = true, before = n
     w?.asked_by ? `from ${askedBy(w.asked_by)}` : null,
     w ? neededBefore(w) : null,
     p ? `on ${p.laptop}` : null,
-    compact && w?.stale ? ["unchanged ", waitAge(w.stale.changed_at)] : null,
+    // Opened, it says it whole, once.
+    compact && !open && w?.stale ? ["unchanged ", waitAge(w.stale.changed_at)] : null,
     closed.length ? `${upTo2(closed)} closed on it (need: casper)` : null,
   ].filter(Boolean);
   const old = before && since < before ? h("span", { class: "before" }, `from before ${stClock(before)}`) : null;
@@ -1897,6 +1911,8 @@ function needItem(x, { compact = false, page = false, project = true, before = n
     p?.ask?.questions.length ? askBlock(p, true) : p?.ask?.cut ? h("span", { class: "cutnote" }, "Cut at the laptop: too long to send whole.") : null,
     w?.recommended ? h("div", { class: "rec" }, h("b", null, "Recommended "), w.recommended.text) : null,
     compact && w ? staleSpan(w) : null,
+  ].filter(Boolean) : [];
+  const links = open ? [
     // The context stays on the Needs you page, where it opens: it can be pages long (BOB-31).
     !page && w?.context ? h("a", { href: "#needs", class: "more-t", onclick: () => { state.whole.add(`ctx:${id}`); saveWhole(); scrollAfter = `c-${id}`; listed(); } }, "Its context, on Needs you →") : null,
     compact ? h("a", { href: "#needs", class: "more-t", onclick: () => { scrollAfter = `w-${id}`; listed(); } }, w?.kind === "bug" || w?.kind === "review_gate" ? "On Needs you →" : "Answer it on Needs you →") : null,
@@ -1916,6 +1932,7 @@ function needItem(x, { compact = false, page = false, project = true, before = n
     whole.length ? h("div", { class: "whole" }, whole) : null,
     h("div", { class: "m-row" }, h("span", { class: "l-m" }, meta.map((y, i) => [i ? " · " : null, y]), old),
       unchanged || act ? h("span", { class: "m-r" }, unchanged, act ? h("span", { class: "acts" }, act) : null) : null),
+    links.length ? h("div", { class: "n-links" }, links) : null,
     page && w ? contextRow(w, id) : null,
     answering ? (p ? permissionForm(p) : answerForm(w)) : null);
 }
@@ -2045,24 +2062,40 @@ function nowLine(w, named = true) {
 
 const cell = (label, ...kids) => h("div", { class: "pc" }, h("span", { class: "lab" }, label), ...kids);
 
-/** One project's row: five cells, the project, Release, Open now, Next and Backlog (notes 34). */
+/** A project's CI as one word: its worst workflow's, failed, then running or queued, then passed. A cancelled run ranks nothing; with only those it is idle. */
+function ciWorst(ci) {
+  const st = (ci ?? []).filter((wf) => wf.runs.length).map((wf) => wf.runs[0].status);
+  return ["failed", "running", "queued", "passed", "cancelled"].find((x) => st.includes(x)) ?? null;
+}
+/** What of a project's waits holds work up: the board's refs, then his permissions there, three at most. */
+function blockedBy(key, o) {
+  const refs = ov.waits ? ov.waits.filter((w) => w.project === key && w.blocking).sort((a, b) => a.since.localeCompare(b.since)).map((w) => w.ref) : o.waits_on_you ? [o.waits_on_you] : [];
+  const perms = humanPerms().filter((p) => permProject(p) === key).length;
+  const all = [...refs, ...(perms ? [plural(perms, "permission")] : [])];
+  return all.length > 3 ? `${all.slice(0, 3).join(", ")} +${all.length - 3} more` : all.join(", ");
+}
+/** One project's row: five cells, the project, Release, Open now, Next and Backlog; the whole row opens its page (notes 34; spec 2.1). */
 function projectRow(o) {
   const p = o.project, r = o.release, open = o.open[0], next = o.next_ready, b = o.backlog;
-  const on = open ? onFeature(p.key, open.ref) : [];
+  const on = open ? onFeature(p.key, open.ref) : [], here = running().filter((w) => w.project === p.key).length;
+  const ci = ciWorst(o.ci), blocked = blockedBy(p.key, o);
   const toTriage = () => (state.triage = { filter: "all", all: false });
-  return h("div", { class: "card prow", dataset: { project: p.key } },
-    h("div", { class: "pc pname" }, h("a", { href: projectHref(p.key) }, p.name),
-      h("span", { class: "muted" }, [...laptopsOf(p.key), p.lead ? `lead ${shortName(p.lead)}` : null, p.po ? `PO ${shortName(p.po)}` : null].filter(Boolean).join(" · "))),
+  // The name's link covers the row (style.css); a tap between the cells' own links opens it too.
+  return h("div", { class: "card prow", dataset: { project: p.key }, onclick: (e) => { if (!e.target.closest("a, button")) location.hash = projectHref(p.key); } },
+    h("div", { class: "pc pname" }, h("a", { href: projectHref(p.key) }, p.name, h("span", { class: "chev", "aria-hidden": "true" }, " ›")),
+      h("span", { class: "muted" }, [...laptopsOf(p.key), p.lead ? `lead ${shortName(p.lead)}` : null, p.po ? `PO ${shortName(p.po)}` : null].filter(Boolean).join(" · ")),
+      h("span", { class: "pmini" }, ci ? h("span", { class: "ci-pill", dataset: { tone: CI_MARK[ci][1], status: ci } }, `CI ${ci}`) : null, h("span", { class: "muted" }, here ? `${here} running` : "nobody running"))),
     cell("Release", r
-      ? [h("span", { class: "v" }, h("b", null, String(o.release_number)), " ", r.title), meterOf(r.features.done, r.features.total), h("span", { class: "muted" }, `${r.features.done} of ${plural(r.features.total, "feature")} done`)]
-      : h("span", { class: "muted" }, "no open release")),
+      ? [h("span", { class: "v" }, h("b", null, r.ref), " ", r.title.replace(new RegExp(`^${r.ref}\\s+`), "")), meterOf(r.features.done, r.features.total), h("span", { class: "muted" }, `${r.features.done} of ${plural(r.features.total, "feature")} done`)]
+      : h("span", { class: "muted" }, "no open release"),
+      (o.done_unclosed ?? []).map((x) => h("a", { href: `#roadmap/${p.key}`, class: "warn-t" }, `${x.ref} all done: waiting for your close`))),
     cell("Open now", open
       ? [h("a", { href: featureHref(p.key, open.ref), class: "v clamp" }, h("span", { class: "id" }, open.ref), open.title),
-         h("span", { class: "muted" }, `${open.progress.checked} of ${open.progress.total} criteria · `, on.length ? h("span", { style: "color:var(--ok)" }, whoNames(on), " on it") : "nobody on it"),
+         on.length ? h("span", { class: "on-t" }, whoNames(on), " on it") : h("span", { class: "muted" }, "nobody on it now"),
          o.open.length > 1 ? h("a", { href: `#roadmap/${p.key}`, class: "muted" }, `and ${o.open.length - 1} more open`) : null]
       : h("span", { class: "muted" }, "no feature open")),
-    cell("Next", o.waits_on_you ? h("span", { class: "v", style: "color:var(--warn)" }, `Waits on you: ${o.waits_on_you}`) : null,
-      next ? h("span", { class: "muted clamp" }, o.waits_on_you ? "Then Ready: " : "Ready: ", h("a", { class: "id", href: featureHref(p.key, next.ref) }, next.ref), next.title) : h("span", { class: "muted" }, "none Ready yet")),
+    cell("Next", blocked ? h("a", { href: "#needs", class: "v warn-t", onclick: () => (state.waitsProject = p.key) }, `Waits on you: ${blocked}`) : null,
+      next ? h("span", { class: "muted clamp" }, blocked ? "Then Ready: " : "Ready: ", h("a", { class: "id", href: featureHref(p.key, next.ref) }, next.ref), next.title) : h("span", { class: "muted" }, "none Ready yet")),
     cell("Backlog", b.items
       ? [h("a", { href: `#triage/${p.key}`, class: "v", onclick: toTriage }, plural(b.items, "item")), h("span", { class: "muted" }, `${plural(b.bugs, "bug")} · oldest ${age(b.oldest)}`)]
       : h("span", { class: "muted" }, "nothing to triage")));
@@ -2505,9 +2538,9 @@ function statusLine() {
   const mark = markOf();
   const v = verdict(r.projects);
   return h("a", { class: "st-line banner", href: "#status", dataset: { tone: v.tone } },
-    h("span", null, h("b", null, `Since ${stClock(mark ?? r.since)}`), mark ? ` (${stAgo(mark)})` : "", ": ",
+    h("span", null, h("b", null, mark ? "Since your last visit" : `Since ${stClock(r.since)}`), mark ? ` (${stAgo(mark)})` : "", ": ",
       `${v.done} done, ${v.stuck} stuck`, v.ci.length ? `, CI red on ${v.ci.join(", ")}` : ""),
-    h("span", { class: "go" }, "Status ›"));
+    h("span", { class: "go" }, "Status →"));
 }
 
 /** After a draw: #status/needs and #status/<project>/<section> land on what they name, once per route. */

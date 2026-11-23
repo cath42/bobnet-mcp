@@ -746,6 +746,7 @@ export class BoardStore {
           project: this.projectRecord(p),
           release: current.release,
           release_number: current.number,
+          done_unclosed: current.done_unclosed,
           open: open.map(summary),
           next_ready: ready ? summary(ready) : null,
           waits_on_you: this.waitsOf(p).find((w) => w.blocking)?.ref ?? null,
