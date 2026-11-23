@@ -3041,7 +3041,15 @@ describe("usage data (BOB-172: no screen of its own yet)", () => {
     expect($("ctx")).not.toBeNull();
     await to("bobnet");
     expect($("ctx")).toBeNull();
-    // The pick is what a page opens on when its link names no project, as the dropdown's was.
+  });
+
+  it("opens a page whose link names no project on the one last picked, as the dropdown's was (BOB-174 c6)", async () => {
+    const pressed = () => view().querySelector('.seg.projects [aria-pressed="true"]')?.textContent;
+    const to = async (name: string) => {
+      ([...view().querySelectorAll<HTMLButtonElement>(".seg.projects button")].find((b) => b.textContent === name)!).click();
+      window.dispatchEvent(new Event("hashchange"));
+      await settle();
+    };
     await go("#triage");
     expect(pressed()).toBe("bobnet");
     await go("#feature/bobnet/BOB-4");
@@ -3513,6 +3521,118 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
     down = [];
     await reread();
     expect(view().querySelector(".banner.down")).toBeNull();
+  });
+
+  describe("an agent's row: its detail, and a worker's question whole (BOB-177; BOB-121 AC14)", () => {
+    const opt = (label: string, description = "") => ({ label, description });
+    const four = [
+      { question: "Which account owns a shared lease?", header: "Account", multi: false, options: [opt("The first grantee", "As the recorder indexes it."), opt("Both", "With a join table.")] },
+      { question: "What does the partner see?", header: "Shown", multi: true, options: [opt("The line"), opt("The number", "Once recorded.")] },
+      { question: "What of the note?", header: "Note", multi: false, options: [opt("It stays"), opt("It goes")] },
+      { question: "A second review?", header: "", multi: false, options: [opt("Yes"), opt("No")] },
+    ];
+    const marvin = worker({ id: "w_m", name: "Marvin", project: "helix", role: "engineer", state: "waiting-answer", session: "LAND-50 build 2", task_ref: null, checkpoint: "migration written", remote_url: "https://claude.ai/code/x" });
+    const asked = (over: Record<string, unknown> = {}) => ask("r_q", 6, { worker_id: "w_m", name: "Marvin", kind: "question", tool: "AskUserQuestion", tier: "orchestrator", preview: "Which account owns", ask: { text: four[0]!.question, cut: false, questions: four }, ...over });
+    const human = ask("r_h", 14);
+    const line = (name: string) => [...$("working").querySelectorAll(".a-line")].find((l) => l.querySelector(".l-who")!.textContent!.startsWith(name))!;
+    const detail = (name: string) => line(name).querySelector(".a-detail")!;
+    const now2 = (pending: unknown[]) => report("mbp-1", 0, { workers: [howard, marvin], pending });
+
+    beforeAll(async () => {
+      waits = [];
+      await open([laptop("mbp-1", 0, { workers: [howard, marvin], pending: [asked(), human] })]);
+      await go("#overview");
+      await answer();
+    });
+
+    it("shows its detail on a tap: model, laptop, context, checkpoint, its links and buttons, and the question folded to its first", () => {
+      click(line("Marvin").querySelector(".a-btn"));
+      const d = detail("Marvin");
+      expect(d.querySelector(":scope > .muted")!.textContent).toMatch(/^opus · high · mbp-1 · worked 25m · context 61k · 3 calls$/);
+      expect(d.querySelector(".checkpoint")!.textContent).toBe("migration written");
+      expect(d.querySelector(".ask-h")!.textContent).toBe("Marvin asks · 6m · Helix's lead, Bob, answers");
+      expect(d.querySelector(".ask")!.classList.contains("folded")).toBe(true);
+      expect([...d.querySelectorAll(".qt")].map((x) => x.textContent)).toEqual([four[0]!.question]);
+      expect(d.querySelector(".hd")!.textContent).toBe("1 · Account");
+      expect(d.querySelectorAll(".opts, .pick")).toHaveLength(0);
+      const more = d.querySelector(".ask-more") as HTMLButtonElement;
+      expect([more.textContent, more.hidden, more.getAttribute("aria-expanded")]).toEqual(["Show all", false, "false"]);
+      expect([...d.querySelectorAll(".actions a")].map((a) => [a.textContent, a.getAttribute("href")])).toEqual([["Open in Claude ↗", "https://claude.ai/code/x"], ["Its session →", "#feature/helix/LAND-50"]]);
+      expect([...d.querySelectorAll(".grp")].map((g) => g.textContent)).toEqual(["AllowDeny", "StopReset"]);
+      // It lives here, not on Needs you: its lead answers it.
+      expect($("needs").textContent).not.toContain("Marvin");
+      expect($("needs-n").textContent).toBe("1");
+    });
+
+    it("opens every question on Show all, with its header, Pick one or Pick any and every option, to read and not to pick, and folds back", () => {
+      click(detail("Marvin").querySelector(".ask-more"));
+      const d = detail("Marvin");
+      expect([...d.querySelectorAll(".aq")].map((q) => [q.querySelector(".hd")?.textContent ?? null, q.querySelector(".qt")!.textContent, q.querySelector(".pick")!.textContent])).toEqual([
+        ["1 · Account", four[0]!.question, "Pick one"], ["2 · Shown", four[1]!.question, "Pick any"], ["3 · Note", four[2]!.question, "Pick one"], [null, four[3]!.question, "Pick one"],
+      ]);
+      expect([...d.querySelectorAll(".opts li")].map((li) => [...li.children].map((c) => c.textContent).join(": "))).toEqual([
+        "The first grantee: As the recorder indexes it.", "Both: With a join table.", "The line", "The number: Once recorded.", "It stays", "It goes", "Yes", "No",
+      ]);
+      // BOB-161 isn't built: nothing picks.
+      expect(d.querySelectorAll(".ask input, .ask button, .ask [role], .ask [tabindex]")).toHaveLength(0);
+      expect(d.querySelector(".later")!.textContent).toBe("Picking an option here is BOB-161, planned for later. Today Allow and Deny override the lead.");
+      expect(d.querySelector(".ask-more")!.textContent).toBe("Show less");
+      click(d.querySelector(".ask-more"));
+      expect(detail("Marvin").querySelectorAll(".aq")).toHaveLength(1);
+      expect(detail("Marvin").querySelector(".later")).toBeNull();
+    });
+
+    it("stays open across redraws, one detail row at a time", async () => {
+      click(detail("Marvin").querySelector(".ask-more"));
+      now2([asked(), human]);
+      await settle();
+      await reread();
+      expect(detail("Marvin").querySelectorAll(".aq")).toHaveLength(4);
+      click(line("Howard").querySelector(".a-btn"));
+      expect(view().querySelectorAll(".a-detail")).toHaveLength(1);
+      expect(detail("Howard")).not.toBeNull();
+      // Closed and opened again, the question is as he left it.
+      click(line("Marvin").querySelector(".a-btn"));
+      expect(view().querySelectorAll(".a-detail")).toHaveLength(1);
+      expect(detail("Marvin").querySelectorAll(".aq")).toHaveLength(4);
+    });
+
+    it("points to Needs you for his own request, with no Allow or Deny there", () => {
+      click(line("Howard").querySelector(".a-btn"));
+      const d = detail("Howard");
+      expect(d.querySelector(".ask-h")!.textContent).toBe("Howard wants Bash · 14m · on Needs you →");
+      expect(d.querySelector(".ask-h a")!.getAttribute("href")).toBe("#needs");
+      expect(d.querySelector(".ask")).toBeNull();
+      expect([...d.querySelectorAll(".grp")].map((g) => g.textContent)).toEqual(["StopReset"]);
+      click(line("Marvin").querySelector(".a-btn"));
+    });
+
+    it("says a clipped ask was cut, and shows only the preview when the laptop withheld it or is older", async () => {
+      now2([asked({ ask: { text: "Which…", cut: true, questions: [{ ...four[0]!, question: "Which account owns…" }] } })]);
+      await settle();
+      expect(detail("Marvin").querySelector(".qt")!.textContent).toBe("Which account owns…");
+      expect(detail("Marvin").querySelector(".cutnote")!.textContent).toBe("Cut at the laptop: too long to send whole.");
+      for (const older of [{ ask: null }, { ask: undefined }]) {
+        now2([asked(older)]);
+        await settle();
+        expect([...detail("Marvin").querySelector(".ask")!.children].map((c) => [c.className, c.textContent])).toEqual([["preview", "Which account owns"]]);
+        expect(detail("Marvin").querySelectorAll(".aq, .ask-more, .later")).toHaveLength(0);
+      }
+      // An approval its lead answers: the command, and who wants it.
+      now2([asked({ kind: "approval", tool: "Bash", ask: { text: "pnpm test", cut: false, questions: [] } })]);
+      await settle();
+      expect(detail("Marvin").querySelector(".ask-h b")!.textContent).toBe("Marvin wants Bash");
+      expect(detail("Marvin").querySelector(".ask .preview")!.textContent).toBe("pnpm test");
+      expect(detail("Marvin").querySelector(".later")).toBeNull();
+    });
+
+    it("shows a question of his own whole on Needs you too", async () => {
+      now2([asked({ tier: "human", id: "r_mine" })]);
+      await go("#needs");
+      click(item("r_mine").querySelector(".l-t"));
+      expect(item("r_mine").querySelector(".l-t")!.textContent).toBe(`Marvin asks: ${four[0]!.question}`);
+      expect(item("r_mine").querySelectorAll(".whole .aq")).toHaveLength(4);
+    });
   });
 });
 

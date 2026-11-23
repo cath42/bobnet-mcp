@@ -550,14 +550,20 @@ function agentLine(w, lead, rest, ctx, place = "") {
 }
 
 function agentDetail(w, ctx) {
-  const p = pendingAll().find((x) => x.worker_id === w.id && x.tier !== "human");
+  const asks = pendingAll().filter((x) => x.worker_id === w.id);
+  const p = asks.find((x) => x.tier !== "human"), mine = asks.find((x) => x.tier === "human");
   return h("div", { class: "a-detail" },
     h("span", { class: "muted" }, `${fmtModel(w)} · ${w.laptop} · worked ${since(w.started_at)} · context ${w.calls ? `${fmtTokens(w.context ?? 0)} · ${w.calls} calls` : "–"}`),
+    w.checkpoint ? h("div", { class: "checkpoint" }, w.checkpoint) : null,
     spawnedLine(w),
+    p ? askOf(w, p) : null,
+    // Casper's own is answered on Needs you.
+    mine ? h("div", { class: "ask-h" }, h("b", null, askTitle(mine)), h("span", { class: "muted" }, " · ", ago(mine.created_at), " · "),
+      h("a", { href: "#needs", onclick: () => (scrollAfter = `w-${permId(mine)}`) }, "on Needs you →")) : null,
     h("div", { class: "actions" },
       w.remote_url ? h("a", { href: w.remote_url, target: "_blank", rel: "noopener", title: "Follow it and type to it in Claude" }, "Open in Claude ↗") : null,
-      ctx ? h("button", { type: "button", class: "ctx-btn", onclick: ctx }, "Context per call") : null,
-      p ? h("span", { class: "muted" }, `${w.name} wants ${p.tool}: `, h("code", null, p.preview.slice(0, 80))) : null),
+      itsSession(w),
+      ctx ? h("button", { type: "button", class: "ctx-btn", onclick: ctx }, "Context per call") : null),
     // Two groups, never Stop beside Deny (spec, BOB-4 as built).
     h("div", { class: "actions groups" },
       p ? h("span", { class: "grp" },
@@ -566,6 +572,54 @@ function agentDetail(w, ctx) {
       h("span", { class: "grp" },
         button("Stop", "danger", (b) => act(w.laptop, { kind: "stop", worker: w.id }, b, `Stop ${w.name} (${w.id})? It is interrupted, then ended.`)),
         button("Reset", "", (b) => act(w.laptop, { kind: "reset", worker: w.id }, b, `Reset ${w.name} (${w.id})? It is stopped and a fresh worker starts the same task with no prior context.`)))));
+}
+/** "Marvin asks", "Howard wants Bash". */
+const askTitle = (p) => (p.kind === "question" ? `${p.name} asks` : `${p.name} wants ${p.tool}`);
+/** Who answers a worker's request: "Helix's lead, Picard, answers", or whoever spawned it from another laptop. */
+function whoAnswers(w) {
+  const lead = knownProjects().find((x) => x.key === w.project)?.lead;
+  return w.remote_by || !lead ? `${waitsOnName(w)} answers` : `${projectName(w.project)}'s lead, ${shortName(lead)}, answers`;
+}
+/** A worker's request that its lead answers, whole on the agent's row (BOB-51 AC1): folded to its first question until Show all. */
+function askOf(w, p) {
+  const id = permId(p), open = state.whole.has(id), qs = p.ask?.questions ?? [];
+  // An option or a second question is always more; a long text is measured (measureAsks).
+  const more = qs.length > 1 || qs.some((q) => q.options.length);
+  return [
+    h("div", { class: "ask-h" }, h("b", null, askTitle(p)), h("span", { class: "muted" }, " · ", ago(p.created_at), ` · ${whoAnswers(w)}`)),
+    askBlock(p, open),
+    p.ask ? h("button", { type: "button", class: "more-t ask-more", hidden: !(open || more) || null, "aria-expanded": String(open), onclick: (e) => { e.stopPropagation(); toggleWhole(id); } }, open ? "Show less" : "Show all") : null,
+    open && qs.length ? h("p", { class: "note later" }, "Picking an option here is BOB-161, planned for later. Today Allow and Deny override the lead.") : null,
+  ];
+}
+/** What a request asks, as its laptop sent it: a command, or each question with its header, how many to pick and the options. Read only. Without it, the preview. */
+function askBlock(p, open) {
+  const a = p.ask;
+  if (!a) return h("div", { class: "ask" }, h("code", { class: "preview" }, p.preview));
+  const many = a.questions.length > 1;
+  return h("div", { class: `ask${open ? "" : " folded"}` },
+    a.questions.length ? (open ? a.questions : a.questions.slice(0, 1)).map((q, i) => h("div", { class: "aq" },
+      q.header ? h("span", { class: "hd" }, many ? `${i + 1} · ${q.header}` : q.header) : null,
+      h("div", { class: "qt" }, q.question),
+      open && q.options.length ? [h("span", { class: "pick" }, q.multi ? "Pick any" : "Pick one"),
+        h("ul", { class: "opts" }, q.options.map((o) => h("li", null, h("span", { class: "lb" }, o.label), o.description ? h("span", { class: "ds" }, o.description) : null)))] : null))
+      : h("code", { class: "preview" }, a.text),
+    a.cut ? h("span", { class: "cutnote" }, "Cut at the laptop: too long to send whole.") : null);
+}
+/** After each draw and on resize: a folded ask whose text is clamped has more to show. */
+function measureAsks() {
+  for (const el of document.querySelectorAll(".ask.folded")) {
+    const t = el.querySelector(".qt, .preview"), more = el.parentElement.querySelector(".ask-more");
+    if (more?.hidden && t && t.scrollHeight > t.clientHeight + 1) more.hidden = false;
+  }
+}
+/** Its session's card, on its feature's page. */
+function itsSession(w) {
+  const ss = sessionOf(w);
+  if (!ss || !knownProjects().some((p) => p.key === w.project)) return null;
+  const [kind, ...label] = ss.label.split(" "), step = stepId({ kind, label: label.join(" ") }), href = featureHref(w.project, ss.feature);
+  // Already on that page, no page change will bring it into view.
+  return h("a", { href, onclick: () => { if (location.hash === href) $(step)?.scrollIntoView({ block: "start" }); else scrollAfter = step; } }, "Its session →");
 }
 /** "spawned by poe@mbp-1", for a worker spawned from another laptop (BOB-44): who answers its requests and gets its result. */
 function spawnedLine(w) {
@@ -1217,7 +1271,7 @@ function closeRelease(key, data, r) {
 const ov = { rows: null, waits: null, answered: [], error: null, at: null, loading: false, again: false };
 /** Ids no longer waiting leave what is open; a permission's only once a laptop has reported, so a reload keeps it. */
 function pruneWhole() {
-  const live = new Set([...(ov.waits ?? []).map(waitId), ...humanPerms().map(permId)]);
+  const live = new Set([...(ov.waits ?? []).map(waitId), ...pendingAll().map(permId)]);
   const reported = state.laptops.size > 0;
   const before = state.whole.size;
   for (const id of state.whole) {
@@ -1741,7 +1795,7 @@ function needItem(x, { compact = false, page = false, project = true, before = n
   ].filter(Boolean);
   const old = before && since < before ? h("span", { class: "before" }, `from before ${stClock(before)}`) : null;
   const whole = open ? [
-    p?.ask?.cut ? h("span", { class: "cutnote" }, "Cut at the laptop: too long to send whole.") : null,
+    p?.ask?.questions.length ? askBlock(p, true) : p?.ask?.cut ? h("span", { class: "cutnote" }, "Cut at the laptop: too long to send whole.") : null,
     w?.recommended ? h("div", { class: "rec" }, h("b", null, "Recommended "), w.recommended.text) : null,
     compact && w ? staleSpan(w) : null,
     // The context stays on the Needs you page, where it opens: it can be pages long (BOB-31).
@@ -3112,6 +3166,7 @@ function render() {
   const box = document.activeElement?.closest?.("form.answer") ? document.activeElement : null;
   const at = box?.selectionStart;
   $("view").replaceChildren(...VIEWS[v]().filter(Boolean));
+  measureAsks();
   statusScroll();
   if (box) {
     const again = $("view").querySelector("form.answer textarea");
@@ -3179,6 +3234,8 @@ window.addEventListener("hashchange", () => {
 });
 let lastWidth = window.innerWidth;
 window.addEventListener("resize", () => {
+  // A phone turning clamps or unclamps a folded ask: measured again at once.
+  measureAsks();
   if (Math.abs(window.innerWidth - lastWidth) < 20) return;
   lastWidth = window.innerWidth;
   scheduleRender();

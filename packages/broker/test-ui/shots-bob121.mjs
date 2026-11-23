@@ -167,6 +167,7 @@ function fakeBroker(scene) {
 }
 
 const widths = { 390: [390, 844], 1024: [1024, 768], 1440: [1440, 900] };
+const agent = (name) => (p) => p.locator("#working .a-line", { hasText: name }).first().locator(".a-btn").click();
 const tap = (ref) => (p) => p.locator(`li[data-ref="${ref}"] .l-t`).click();
 const answer = (ref) => (p) => p.locator(`li[data-ref="${ref}"] .answer-btn`).click();
 // [name, scene, hash, selector to wait for, steps, element to shoot (none: the whole page; "top": the window), widths (none: all)]
@@ -194,6 +195,11 @@ const all = [
   ["bob121-overview-nothing", "nothing", "overview", ".prow", [], null, [390, 1440]],
   ["bob121-overview-down", "down", "overview", ".banner.down", [], null, [390, 1440]],
   ["bob121-overview-listdown", "listdown", "overview", ".banner.down", [], null, [390, 1440]],
+  ["bob121-ask-folded", "live", "overview", ".prow", [agent("Marvin")], ".ov-now", [390, 1440]],
+  ["bob121-ask-open", "live", "overview", ".prow", [agent("Marvin"), (p) => p.locator(".ask-more").click()]],
+  ["bob121-ask-open-dark", "live", "overview", ".prow", [agent("Marvin"), (p) => p.locator(".ask-more").click()], ".ov-now", [390, 1440]],
+  ["bob121-ask-human", "live", "overview", ".prow", [agent("Howard")], ".ov-now", [390, 1440]],
+  ["bob121-ask-older", "older", "overview", ".prow", [agent("Marvin")], ".ov-now", [390, 1440]],
   ["bob121-status-needs", "live", "status", "#status-needs li", [], "#status-needs", [390, 1440]],
 ];
 
