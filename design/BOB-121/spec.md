@@ -6,6 +6,10 @@ self-contained; `index.html` at its root, deployable as an assets-only Worker, a
 `file://`). Shots: `shots/`, every view at 390, 1024 and 1440 (`node design/BOB-121/shots/take.mjs`).
 Today's views: `current/`.
 
+**Amended 2026-11-23**, before build C (Q-15; Toad c_e4382435): §2.0, §2.2 and §2.4. The prototype and
+the shots weren't redrawn (Casper). Where they differ from this text, the text wins: the CI failure's
+first line (shots 01, 07, 08) and "got your note" (shot 05) aren't built, because no data carries them.
+
 Data: ADR 0014 (`architecture/decisions/0014-usage-weighting-and-project-page.md`: weighting §1,
 the `usage` and `project` reads §3, the current release §4) and ADR 0013 (a request's ask,
 `decided`, `note_delivered`). Where a name differs there, Toad's files win and the screens stay.
@@ -63,10 +67,22 @@ per call, the quiet-laptop banner, the answer forms, the gates.
   Laptops. With a quiet laptop it reads `● 1 quiet` in warn.
 - **≤760 px**: the tabs wrap onto a second row (all seven visible; no sideways scroll), and
   "· 2 laptops" drops.
-- **Old links**: `#waits` → `#needs`. `#sessions` → `#project/<first>`, with the toast "Sessions
-  moved: who ran is on each project's page; laptops and agents are under Laptops."
-  `#feature/<ref>` → `#feature/<project>/<ref>`, and `#feature` alone → `#features`. AC13's test
-  covers `#sessions`.
+- **Old links**. A link always lands on a page that exists in the build that is live:
+
+  | Link | In build C | Later |
+  |---|---|---|
+  | `#waits` | `#needs` | same |
+  | `#sessions`, `#sessions/<x>` | `#laptops`, toast "Sessions moved: laptops and agents are under Laptops." | from BOB-182: `#project/<first>`, toast "Sessions moved: who ran is on each project's page; laptops and agents are under Laptops." |
+  | `#rules` | `#laptops` | same |
+  | `#feature/<ref>` | `#feature/<project>/<ref>` | same |
+  | `#feature` alone, the Features tab | today's feature view, Features highlighted | from BOB-185: `#features` |
+
+  Build B's resolver switches no page off: until C, `#sessions` and `#waits` open today's pages.
+  AC13's test covers `#sessions`, in C and again in BOB-182.
+- **A project switch on the page**, since the dropdown goes: Roadmap and Triage have theirs. In build C
+  **Usage** and the **feature view** get one at the top of the page, built as Roadmap's (the same
+  control, one project picked, it wraps on a phone). Picking a project stays on the page and shows that
+  project. Usage's goes with BOB-180, the feature view's with BOB-185 and 186.
 
 ### 2.1 Overview (`#overview`): Casper's start page (AC3, AC4, AC14)
 
@@ -124,13 +140,20 @@ on the right. Projects run full width under both.
 |---|---|---|
 | Badge | kind badge (question, action, bug · blocks use, review gate, permission), spanning two rows | its own row, the age at its right |
 | Text | bold, one line, cut with "…"; a tap or Enter opens it whole (`pre-line`) | full width, two lines |
+| Edited (BOB-119) | `edited ×2`, a small tag after the text, outside the "…" cut; a tap opens its edits under the text, newest first, as today | the tag on its own row after the text |
+| Fix landed (BOB-49) | a fixed bug's line, right under the text, as today: `Fix landed 57e7002, in v0.9 · waits on Peach to close it` | same, wrapping |
 | Age | right, muted: `14m`, `3h 10m` under a day, then `4 days`; the title has the stamp | right of the badge |
-| Meta | `Helix › LAND-50 · holds up ● Howard, ● Marvin (Fixes)`, each held agent with its live dot. A bug: `· blocks use`. When you have time: `· from Bill`, never "holds up". `· needed before R2` when set | under the text |
+| Meta | `Helix › LAND-50 · holds up ● Howard, ● Marvin (Fixes)`, each held agent with its live dot. A bug: `· blocks use`. When you have time: `· from Bill`, never "holds up". `· needed before R2` when set. `· BOB-49 review closed on it (need: casper)` last, as today | under the text |
+| Unchanged, kept (BOB-49) | in the meta row, at the right, before the button: `Unchanged for 2 days, Peach asked to check it 3h ago`, or `Kept by Peach 1h ago: “…”` | its own row under the meta |
 | Action | one button at the right of the meta row: Answer / Mark done / Allow or deny / Open in triage (a link) | right of the meta, 44 px |
 | Open | the recommendation under the text (`Recommended …`); a permission's command whole, as a code block | same |
+| Context (BOB-31) | **Show context** / **Hide context**, a text button and the item's last row, with the context under it. An open answer form comes after it | same, the button 44 px |
 
 A permission's text is `Howard wants Bash: ` and the command in monospace (`ask.text`, else
-`preview`). Compact items (Overview's later group, the project page, Status) have no button.
+`preview`). Compact items (Overview's later group, the project page, Status) have no button. Folded, they keep the
+Fix landed line and a short `· unchanged 2 days` in the meta; opened, they show the rest. Context opens
+in place on the Needs you page only, because it can be pages long. Anywhere else (full items too) its row
+is today's link, "Its context, on Needs you →". Nothing an item shows today is lost: a part not in the table stays where it is today.
 
 **The page**: a project switch (All projects `n` / BobNet `n` / Helix `n`), then one card with both
 groups, **oldest first in each**, as today: what has been held up longest leads. Every item is full, with its button, and the answer form opens under the
@@ -147,6 +170,23 @@ item (today's forms).
   and gets its banner at the top;
 - counts (tab, Overview, the project switch) count exactly what is shown.
 
+**An action's form (BOB-187).** An action is done or not done; it is never picked from. `board_ask`
+refuses `options` on an action and says to ask a question instead, so no new one has them. An open
+action that already has options (Vitals' A-9):
+
+- the form, opened by **Mark done**, lists them above its note as plain text, in their order, under the
+  muted heading "It was filed with these options:". The recommended one ends in "(recommended)".
+  No radios and no buttons: a list (`ul`), nothing in it takes focus.
+- the note's label is "Note (optional): if you chose one, say which". The form's button is Mark done,
+  and never waits for a note.
+- Phone: one option per row, wrapping at full width; the button 44 px.
+- The options come from the action's record, read when the form opens. Until it is read, and if the
+  read fails, the form is today's and Mark done works. A redraw when they arrive keeps his draft and
+  his focus, as a question's does.
+
+An action without options is today's form ("Note (optional)"). A question's options are unchanged:
+radios, then Send answer. "Question edited since you opened this" stays at the form's top (BOB-119).
+
 **Permission form (AC16)**, as BOB-51 spec §3:
 
 - Label "Note to Howard (optional)". Foot "Howard gets your decision, and your note as its next
@@ -162,8 +202,9 @@ item (today's forms).
 
 - A permission row: badge **allowed** or **denied** (a denied row's edge is `--bad`), the tool,
   the project, `today 13:06`.
-- Under it, "Bender wanted Bash: `pnpm …`", "You allowed it", the note as a quote if one went, then
-  "Bender got your note as its next message · on mbp-1". **No Undo.**
+- Under it, "Bender wanted Bash: `pnpm …`", "You allowed it · on mbp-1", then, if the row has a note,
+  `your note: “…”`, whole. **No Undo.** The row never says whether the note arrived: the report's
+  `decided` carries the note and no delivered flag. The toast says it, at the time (above).
 - A laptop that sends no `decided` adds no rows, and nothing is said about it.
 - A board answer keeps its Undo, as today.
 
@@ -215,22 +256,38 @@ Aside:
 
 ### 2.4 CI (Overview card, project page) (AC3)
 
-One line per workflow, from the laptop's board report (`ci`, as `ciLines` reads it), the projects
-in order:
+One line per workflow, from the board's `ci_runs` (`OverviewRow.ci`, ADR 0014 §3a: each workflow's
+latest run and at most 5 before it), not the laptop report's `ci`. The projects are in order:
 
 `Helix │ ◔ ci on main │ running 4m · usually 9 min · 7c1e2a9 · Howard's land │ ●●●●● │ Run ↗`
 
-- Project: on the first workflow of each project; later rows leave the cell blank.
-- Mark and words in tone: ✓ "passed 52m ago" (ok); ✕ "failed 2h 5m ago" (bad, bold); ◔ "running
-  4m" (accent, the mark turns unless reduced motion is set). Then the short sha and who landed it
-  when known. A failure adds its first line in `--bad` ("packages/broker: 2 tests failed").
-- History: the last five runs, newest first, as 8 px dots in their tone; each has a title (status
-  · sha · age).
-- "Run ↗" opens the run on GitHub.
+- Project: on the first workflow of each project; later rows leave the cell blank. A project with no
+  CI has no row.
+- The latest run, its mark and words in tone. The word is always there, so colour is never the only
+  sign:
+
+  | Status | Mark | Words | Tone |
+  |---|---|---|---|
+  | passed | ✓ | `passed 52m ago` | `--ok` |
+  | failed | ✕ | `failed 2h 5m ago` | `--bad`, bold |
+  | running | ◔, turning unless reduced motion is set | `running 4m` | `--accent` |
+  | queued | ○ | `queued`, and its age when it has a start | `--idle` |
+  | cancelled | ● | `cancelled 20m ago` | `--idle`, never red: nobody has to act on it |
+
+- `usually 9 min` follows `running 4m` only when the workflow has `usual_ms` (BOB-192); without it,
+  nothing stands in for it.
+- Then the short sha, and who landed it when the run has an `agent` ("Howard's land"); nothing when
+  it is null.
+- **No failure line.** The board has no failure text. A failed run's name and Run ↗ open it on GitHub.
+- History: the runs **before** the latest (at most 5), newest first, as 8 px dots in their tone
+  (cancelled filled, queued hollow, both `--idle`); each has a title (status · sha · age). Six runs
+  give five dots, three give two, one gives none.
+- The name and "Run ↗" open the run on GitHub; with no `url` the name is plain text and "Run ↗" isn't
+  drawn.
 - ≤1099 px: the status words take the row under the name, the dots stay right, and "Run ↗" drops
   (the name is the link).
-- Today a passed run isn't shown. **This needs the report's `ci` to keep the last five runs per
-  workflow, passed ones too.** That is a data question for Toad (§6).
+- In build C it is a card of its own right under Working now, and Working now's CI lines go. BOB-179
+  puts it in §2.1's place; the project page has it from BOB-182.
 
 ### 2.5 Status (`#status`, `#status/<key>`) (AC7)
 
