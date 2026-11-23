@@ -361,17 +361,16 @@ a.more-t { text-decoration: none; justify-self: start; padding: 0; min-height: 0
 .prow .pc { display: grid; gap: 4px; min-width: 0; font-size: 14px; align-content: start; }
 .prow .pc .lab { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 .prow .pname a { font-size: 17px; font-weight: 600; color: var(--text); text-decoration: none; }
-.prow .pc.legacy { grid-column: 2 / -1; align-self: center; }
 .prow .v { color: var(--text); text-decoration: none; }
 .prow a.v:hover { text-decoration: underline; }
 .prow .meter { max-width: 220px; }
 .clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-@media (max-width: 1099px) { .prow { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ov .prow { row-gap: 12px; } .prow .pname { grid-column: 1 / -1; grid-template-columns: auto 1fr; align-items: baseline; gap: 10px; } .prow .pc.legacy { grid-column: 1 / -1; } }
+@media (max-width: 1099px) { .prow { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ov .prow { row-gap: 12px; } .prow .pname { grid-column: 1 / -1; grid-template-columns: auto 1fr; align-items: baseline; gap: 10px; } }
 @media (max-width: 520px) {
   .prow { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .prow .pname { grid-template-columns: 1fr; gap: 0; }
-  .prow .pc:not(.pname):not(.legacy) { grid-template-columns: 5.5em minmax(0, 1fr); column-gap: 10px; }
-  .prow .pc:not(.pname):not(.legacy) > :not(.lab) { grid-column: 2; }
+  .prow .pc:not(.pname) { grid-template-columns: 5.5em minmax(0, 1fr); column-gap: 10px; }
+  .prow .pc:not(.pname) > :not(.lab) { grid-column: 2; }
   .prow .pc .lab { grid-row: 1; padding-top: 2px; }
   .now-list .l-path { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .ov-needs .l-t { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
@@ -799,7 +798,6 @@ main.wide .st { max-width: 1320px; }
 
 /* As built: the loading answers, a muted old-board card, a cut list's line, I'm caught up at the end only on a phone. */
 .ans[data-tone="none"] { border-left-color: var(--line); } .ans[data-tone="none"] b { color: var(--muted); }
-.pcard.old { border-left-color: var(--idle); }
 .note.cut { margin: 4px 0 0; font-size: 12.5px; }
 .rows > li.show-all { display: block; }
 .caught-foot { display: none; }

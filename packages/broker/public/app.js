@@ -202,10 +202,15 @@ const workers = () => [...state.laptops.values()].flatMap((l) => l.snapshot.work
 const running = () => workers().filter((w) => ACTIVE.includes(w.state));
 const workerTokens = (w) => (typeof w.tokens === "number" ? w.tokens : totalTokens(w.tokens));
 
-/** The projects with a board, the one shown first being the one with a backlog and the most recent work. */
+/**
+ * The service's projects with a laptop's board, the one shown first being the one with a backlog and the
+ * most recent work. A board of a project the service doesn't have is drawn nowhere (ADR 0012 §2), nor
+ * any before the list is read: its row stays in the broker until the sweep.
+ */
 function projects() {
-  const by = new Map();
+  const by = new Map(), listed = new Set((svc.projects ?? []).map((p) => p.key));
   for (const e of state.boards.values()) {
+    if (!listed.has(e.board.project)) continue;
     const prev = by.get(e.board.project);
     if (!prev || e.at > prev.at) by.set(e.board.project, e);
   }
@@ -356,7 +361,14 @@ function boardList(cols, lanes) {
   return out;
 }
 
-const empty = (b) => h("section", null, h("div", { class: "banner idle" }, h("span", null, b ? "This project has no backlog configured." : "No board yet."), h("span", { class: "muted" }, b ? "Set backlog: { dir } for it in supervisor.yaml." : "A supervisor sends its projects' boards within a minute of starting.")));
+const boardDown = (text) => h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, text));
+/** Why the Overview's reads failed, or the list of projects' with none read yet. */
+const boardError = () => ov.error ?? (svc.projects ? null : svc.error);
+/** Before the list of projects is read: that it is being read, or why it couldn't be. */
+const unread = () => (svc.error ? boardDown(svc.error) : h("div", { class: "empty-card" }, "Reading the board…"));
+/** No project to show: the list isn't read yet, or has none. */
+const noProjects = () => (svc.projects ? h("div", { class: "empty-card" }, "No project's board is in the service yet.") : unread());
+const empty = (b) => !svc.projects ? h("section", null, unread()) : h("section", null, h("div", { class: "banner idle" }, h("span", null, b ? "This project has no backlog configured." : "No board yet."), h("span", { class: "muted" }, b ? "Set backlog: { dir } for it in supervisor.yaml." : "A supervisor sends its projects' boards within a minute of starting.")));
 
 function viewFeature() {
   // `#feature/<project>/<id>`: a feature in the service opens on its steps; one on a Backlog.md board opens as before.
@@ -917,7 +929,8 @@ function viewBacklogRoadmap() {
  * their supervisor's Backlog.md board. Casper's gates (board-writes 4, 5; design/BOB-1/spec.md) are his
  * own writes: each saves at once, with Undo in its toast.
  */
-const svc = { projects: null, roadmaps: new Map(), loading: new Set(), again: new Set() };
+/** `projects`: the service's, null until read; `error`: why the last read of them failed. */
+const svc = { projects: null, error: null, roadmaps: new Map(), loading: new Set(), again: new Set() };
 /** Board operations sent and not yet answered, by rid; a write keeps its frame, to resend under its key. */
 const sentOps = new Map();
 
@@ -944,13 +957,15 @@ async function listAll(op, field) {
 async function loadProjects() {
   try {
     svc.projects = (await boardOp({ op: "projects" })).projects;
-  } catch {
-    svc.projects = [];
+    svc.error = null;
+  } catch (err) {
+    // Every view lists by it: a failed read keeps the last list, never an empty one (ADR 0012 §2).
+    svc.error = err.message;
   }
   for (const key of svc.roadmaps.keys()) loadRoadmap(key);
   for (const key of backlogs.keys()) loadBacklog(key);
   // What waits on Casper counts on the tab, on every view (waiting-on-casper 3).
-  if (svc.projects.length || ov.rows) loadOverview();
+  if (svc.projects?.length || ov.rows) loadOverview();
   // The Status tab's dot and the Overview's line read from the start, on every view.
   loadStatus();
   scheduleRender();
@@ -1325,10 +1340,9 @@ function viewOverview() {
   const holding = perms.length + blocking.length;
   const rest = waits.length - blocking.length;
   const now = running();
-  const svcKeys = new Set((ov.rows ?? []).map((o) => o.project.key));
-  const legacy = projects().map((e) => e.board.project).filter((k) => !svcKeys.has(k));
+  const down = boardError();
   return [
-    ov.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, ov.error)) : null,
+    down ? boardDown(down) : null,
     staleBanners(),
     h("div", { class: "ov" },
       statusLine(),
@@ -1342,8 +1356,7 @@ function viewOverview() {
         now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map(nowLine)), queuedLine(), ciLines()) : h("div", { class: "empty-card" }, "No agent is working.", queuedLine(), ciLines())),
       h("section", { class: "ov-proj" }, h("h2", null, "Projects"),
         h("div", { class: "plist", id: "plist" },
-          !ov.rows && !legacy.length ? h("div", { class: "empty-card" }, svc.projects ? "Reading the board…" : "No project's board yet.") : null,
-          (ov.rows ?? []).map(projectRow), legacy.map(legacyRow)))),
+          ov.rows?.length ? ov.rows.map(projectRow) : h("div", { class: "empty-card" }, ov.rows && !ov.error ? "No project's board yet." : down ? "The board's projects couldn't be read." : "Reading the board…")))),
   ];
 }
 
@@ -1791,7 +1804,7 @@ function viewWaits() {
   const item = (x) => (x.p ? permItem(x.p) : waitItem(x.w));
   const seg = (v, label) => h("button", { type: "button", "aria-pressed": String(pick === v), onclick: () => { state.waitsProject = v; render(); } }, label);
   return [
-    ov.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, ov.error)) : null,
+    boardError() ? boardDown(boardError()) : null,
     staleBanners(),
     h("div", { class: "bar-row" },
       keys.length > 1 ? h("span", { class: "seg filters" }, seg("all", `All projects ${all.length}`), keys.map((k) => seg(k, `${projectName(k)} ${all.filter((x) => x.project === k).length}`))) : null,
@@ -1848,13 +1861,6 @@ function projectRow(o) {
     cell("Backlog", b.items
       ? [h("a", { href: `#triage/${p.key}`, class: "v", onclick: toTriage }, plural(b.items, "item")), h("span", { class: "muted" }, `${plural(b.bugs, "bug")} · oldest ${age(b.oldest)}`)]
       : h("span", { class: "muted" }, "nothing to triage")));
-}
-
-/** A project whose board is still its supervisor's Backlog.md one: its name and laptop; its roadmap shows the rest. */
-function legacyRow(key) {
-  return h("div", { class: "card prow", dataset: { project: key } },
-    h("div", { class: "pc pname" }, h("a", { href: "#roadmap", onclick: () => (state.project = key) }, key), h("span", { class: "muted" }, laptopsOf(key).join(" · "))),
-    h("div", { class: "pc legacy" }, h("span", { class: "muted" }, "Its board is still on Backlog.md, not in the service yet: its roadmap shows where it stands.")));
 }
 
 // ---------- Status: catch up after hours away (BOB-33; design/BOB-33/spec.md, ADR 0005) ----------
@@ -2101,8 +2107,6 @@ function viewStatus() {
   const reply = stReply();
   if (k && k !== "needs") return statusProject(k, sec, reply);
   const rows = reply?.projects ?? null;
-  const keys = new Set((reply?.projects ?? []).map((r) => r.project));
-  const legacy = reply ? [...new Set(projects().map((e) => e.board.project))].filter((x) => !keys.has(x)) : [];
   const n = rows ? needsOf(rows, true) : null;
   return [
     statusBanners(reply),
@@ -2111,8 +2115,8 @@ function viewStatus() {
       answers(rows, "#status/needs", "#status", true),
       !rows ? h("div", { class: "empty-card" }, "Reading the board…")
         : [
-          h("section", null, h("h2", null, "Projects ", h("span", { class: "count" }, String(rows.length + legacy.length))),
-            rows.length || legacy.length ? h("div", { class: "pcards" }, rows.map(pcard), legacy.map(legacyCard)) : h("div", { class: "empty-card" }, "No project's board on BobNet yet.")),
+          h("section", null, h("h2", null, "Projects ", h("span", { class: "count" }, String(rows.length))),
+            rows.length ? h("div", { class: "pcards" }, rows.map(pcard)) : h("div", { class: "empty-card" }, "No project's board on BobNet yet.")),
           h("section", { id: "status-needs" }, h("h2", null, "Needs you ", h("span", { class: "count" }, String(n.count))),
             n.count ? h("div", { class: "card st-card" }, h("ul", { class: "lines ov-needs st-needs" }, n.list.map((x) => needLine(x, reply.since, true))),
               n.more ? cutLine(n.more, true, h("a", { href: "#waits" }, "on Waits on you")) : null,
@@ -2140,17 +2144,14 @@ function pcard(row) {
       b.thin ? badge("waiting", "backlog thin") : null,
       b.release && b.release.ready === 0 && b.release.todo > 0 ? badge("ready", `${b.release.ref} has nothing Ready`) : null));
 }
-const OLD_BOARD = "Its board is still on Backlog.md; Status starts when it moves to BobNet.";
-const legacyCard = (key) => h("div", { class: "pcard card old", dataset: { project: key } }, h("div", { class: "top" }, h("span", { class: "name" }, key)), h("p", { class: "muted", style: "margin:0" }, OLD_BOARD));
 
 const SECTIONS = ["needs", "done", "stuck", "recurring", "backlog", "usage"];
 function statusProject(k, focus, reply) {
   const back = h("a", { class: "back", href: "#status" }, "‹ All projects");
   const row = reply?.projects.find((r) => r.project === k);
   if (reply && !row) {
-    const old = projects().some((e) => e.board.project === k);
     return [statusBanners(reply), h("div", { class: "st" }, h("div", { class: "p-head" }, back, h("h2", { class: "p-name" }, k)),
-      h("div", { class: "empty-card" }, old ? OLD_BOARD : `No project ${k} on BobNet, or you can't read its board.`))];
+      h("div", { class: "empty-card" }, `No project ${k} on BobNet, or you can't read its board.`))];
   }
   const p = svc.projects?.find((x) => x.key === k);
   const who = [p?.lead ? `lead ${shortName(p.lead)}` : null, p?.po ? `PO ${shortName(p.po)}` : null].filter(Boolean).join(" · ");
@@ -2375,7 +2376,7 @@ const isBug = (d) => d.type === "bug";
 
 function viewTriage() {
   const route = triageRoute();
-  if (!route) return [h("div", { class: "empty-card" }, svc.projects ? "No project's board is in the service yet." : "Reading the board…")];
+  if (!route) return [noProjects()];
   const { key, edit } = route;
   const p = svc.projects.find((x) => x.key === key);
   const data = backlogs.get(key);
@@ -3046,7 +3047,7 @@ async function setGlobalAdmin(who, admin) {
 }
 
 function viewRules() {
-  if (!svc.projects?.length) return [h("div", { class: "empty-card" }, svc.projects ? "No project's board is in the service yet." : "Reading the board…")];
+  if (!svc.projects?.length) return [noProjects()];
   if (rules.rows === null && !rules.error) loadRules();
   const rows = rules.rows ?? [];
   const yes = (b) => (b ? "yes" : "no");
@@ -3315,7 +3316,7 @@ connect();
 setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send('{"t":"ping"}'), 30_000);
 setInterval(() => ws?.readyState === WebSocket.OPEN && (dashboardRid = request("dashboard")), 60_000);
 // The Status tab's dot, on any view (ADR 0005 §2: every 60 s when Status and the Overview aren't showing).
-setInterval(() => ws?.readyState === WebSocket.OPEN && svc.projects && loadStatus(), 60_000);
+setInterval(() => ws?.readyState === WebSocket.OPEN && (svc.projects ? loadStatus() : loadProjects()), 60_000);
 // Waits, hourly: a row goes stale and is flagged with no change on the board to say so (ADR 0011 §2; review A m3).
 setInterval(() => ws?.readyState === WebSocket.OPEN && svc.projects && loadOverview(), 60 * 60_000);
 

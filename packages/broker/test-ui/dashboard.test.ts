@@ -95,6 +95,8 @@ const dashboard = {
   traffic: [{ id: "m_1", type: "message", from: "supervisor@mbp-1", to: ["Bob@mbp-1"], urgent: false, at: iso(9) }],
 };
 
+const HELIX = { key: "helix", name: "helix", prefix: "LAND", draft_prefix: null, lead: "Bob@mbp-1", po: "Picard@mbp-1", repos: [] };
+
 const $ = (id: string) => document.getElementById(id)!;
 const view = () => $("view");
 const go = async (hash: string) => {
@@ -113,6 +115,9 @@ beforeAll(async () => {
   // As the broker answers from ADR 0012 on: no boards in the reply, then one frame each.
   ws.frame({ t: "ok", rid: req["rid"], result: { ...dashboard, boards: [] } });
   for (const b of dashboard.boards) ws.frame({ t: "board", ...b });
+  // The service's list, which every board drawn is of (ADR 0012 §2): helix is in it.
+  const projects = ws.sent.find((f) => (f["op"] as { op?: string } | undefined)?.op === "projects")!;
+  ws.frame({ t: "ok", rid: projects["rid"], result: { projects: [HELIX] } });
 });
 
 describe("Now's parts on the Overview (BOB-5 as built 3)", () => {
@@ -601,13 +606,16 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     await settle();
   };
 
-  it("reads the service's projects on connect, and shows a project still on Backlog.md as before", async () => {
-    const [projects] = pending("projects");
-    expect(projects).toBeDefined();
-    reply(projects!, { projects: [{ key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] }] });
+  it("reads the service's projects again when one it doesn't know changes, and draws a project that left nowhere, its board still here (ADR 0012 §2, BOB-193)", async () => {
+    // The first read's, answered as the page connected.
+    for (const f of pending("projects")) answered.add(f.rid);
     await go("#roadmap");
     expect(view().querySelector(".col-h")).not.toBeNull();
-    expect([...$("project").querySelectorAll("option")].map((o) => o.textContent)).toEqual(["helix", "bobnet"]);
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 1, refs: [] });
+    reply(pending("projects")[0]!, { projects: [{ key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] }] });
+    await settle();
+    expect(view().querySelector(".col-h")).toBeNull();
+    expect([...$("project").querySelectorAll("option")].map((o) => o.textContent)).toEqual(["bobnet"]);
   });
 
   it("numbers releases and features in their order, folds done ones and a closed release, and puts features in no release last", async () => {
@@ -1274,6 +1282,9 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     ] as never;
     snap.pending = [{ id: "r_7", worker_id: "w_1", name: "records-agent", kind: "approval", tool: "Bash", tier: "human", created_at: iso(1), preview: "git push" }] as never;
     FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
+    // helix is in the service again, so its board is drawn (ADR 0012 §2).
+    FakeSocket.last.frame({ t: "board_changed", project: "helix", seq: 1, refs: [] });
+    for (const f of pending("projects", true)) reply(f, { projects: [project, HELIX] });
     await go("#overview");
     expect(pending("overview", true).some((f) => !f.op["project"])).toBe(true);
     await answerOverview();
@@ -1308,15 +1319,15 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     expect(lines[0]!.querySelector(".dot")!.classList.contains("warn")).toBe(true);
     expect(lines[0]!.querySelector(".l-m")!.textContent).toBe("waiting on you · 1.5M tokens");
     expect(lines[0]!.querySelector(".l-path")!.textContent).toBe("helix › LAND-41build 3 › LAND-41.18land: tracts take updates");
-    expect(lines[0]!.querySelector(".l-path a.id")!.getAttribute("href")).toBe("#feature/LAND-41");
+    expect(lines[0]!.querySelector(".l-path a.id")!.getAttribute("href")).toBe("#feature/helix/LAND-41");
     expect(lines[1]!.querySelector(".l-path")!.textContent).toBe("BobNet › BOB-3build A");
     expect(lines[1]!.querySelector(".l-m")!.textContent).toBe("2.4M tokens");
     expect(lines[2]!.querySelector(".l-path")!.textContent).toBe("BobNet › Other work (no session)");
   });
 
-  it("gives each project a row: release, open now and who is on it, next, backlog; a Backlog.md one its name", () => {
+  it("gives each project the overview has a row: release, open now and who is on it, next, backlog; none for a laptop's board alone", () => {
     const rows = [...$("plist").querySelectorAll(".prow")];
-    expect(rows.map((r) => r.getAttribute("data-project"))).toEqual(["bobnet", "helix"]);
+    expect(rows.map((r) => r.getAttribute("data-project"))).toEqual(["bobnet"]);
     const cells = [...rows[0]!.querySelectorAll(".pc")].map((c) => c.textContent);
     expect(cells).toEqual([
       "BobNetmbp-1 · lead Mario · PO Peach",
@@ -1328,7 +1339,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     expect(rows[0]!.querySelector(".pname a")!.getAttribute("href")).toBe("#roadmap/bobnet");
     expect(rows[0]!.querySelector('a[href="#feature/bobnet/BOB-3"]')).not.toBeNull();
     expect(rows[0]!.querySelector('a[href="#triage/bobnet"]')).not.toBeNull();
-    expect(rows[1]!.textContent).toContain("Its board is still on Backlog.md");
+    expect(view().textContent).not.toContain("Backlog.md");
     expect(view().textContent).not.toMatch(/\$\d/);
   });
 
@@ -1388,7 +1399,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
 
     beforeAll(async () => {
       // Two projects' boards in the service, so the list is across projects and has a project filter.
-      FakeSocket.last.frame({ t: "board_changed", project: "helix", seq: 1, refs: [] });
+      FakeSocket.last.frame({ t: "board_changed", project: "not-known", seq: 1, refs: [] });
       for (const f of pending("projects", true)) reply(f, { projects: [project, helix] });
       const snap = structuredClone(dashboard.laptops[0]!.snapshot);
       snap.workers = [worker({ state: "waiting-approval" })] as never;
@@ -2465,7 +2476,7 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
     expect(ops.at(-1)!["op"]).not.toHaveProperty("project");
   });
 
-  it("answers on top: Needs you and Is it going OK?, then one card per project, an old board's muted, and Needs you across projects (c2, c3)", async () => {
+  it("answers on top: Needs you and Is it going OK?, then one card per project of the read, and Needs you across projects (c2, c3)", async () => {
     const answers = [...view().querySelectorAll(".answers .ans")];
     expect(answers.map((a) => a.querySelector("b")!.textContent)).toEqual(["1", "Needs a look"]);
     expect(answers[0]!.querySelector(".sub")!.textContent).toBe("1 holds work up · oldest 1\u00a0d");
@@ -2475,10 +2486,8 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
     expect(card.getAttribute("href")).toBe("#status/bobnet");
     expect([...card.querySelectorAll(".pstat")].map((s) => s.textContent)).toEqual(["Needs you1", "Done21 feature", "Stuck2", "Tokens8.3M+ 1 unknown"]);
     expect([...card.querySelectorAll(".pflags .badge")].map((b) => b.textContent)).toEqual(["Run failed", "backlog thin", "R2 has nothing Ready"]);
-    // helix is reported by a laptop and isn't on the service: its card says so and isn't a link.
-    const old = view().querySelector('.pcard.old[data-project="helix"]')!;
-    expect(old.tagName).toBe("DIV");
-    expect(old.textContent).toContain("Its board is still on Backlog.md; Status starts when it moves to BobNet.");
+    // helix's board is a laptop's: the read has no helix, so it has no card (ADR 0012 §2).
+    expect([...view().querySelectorAll(".pcard")].map((c) => c.getAttribute("data-project"))).toEqual(["bobnet"]);
     const needs = $("status-needs");
     expect(needs.querySelector("li .l-t")!.getAttribute("href")).toBe("#waits");
     expect(needs.querySelector("li .l-m")!.textContent).toContain("BobNet · BOB-9 · holds up");
@@ -2526,7 +2535,7 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
     await go("#status/nowhere");
     expect(view().textContent).toContain("No project nowhere on BobNet, or you can't read its board.");
     await go("#status/helix");
-    expect(view().textContent).toContain("Its board is still on Backlog.md; Status starts when it moves to BobNet.");
+    expect(view().textContent).toContain("No project helix on BobNet, or you can't read its board.");
     FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 99, refs: [] });
     await new Promise((r) => setTimeout(r, 5200));
     const hundred = Array.from({ length: 100 }, (_, i) => ({ ...statusRow().done.sessions[1]!, session: ss("BOB-30", "review", String(i + 1)), ended_at: iso(10 + i) }));
@@ -2909,6 +2918,137 @@ describe("usage data (BOB-172: no screen of its own yet)", () => {
     expect($("ended")).not.toBeNull();
     await go("#waits");
     expect($("tabs").querySelector("a[aria-current]")!.getAttribute("href")).toBe("#waits");
+  });
+});
+
+describe("a project the service doesn't have (ADR 0012 §2, BOB-193)", () => {
+  const answered = new Set<unknown>();
+  const service = (key: string, prefix: string) => ({ key, name: key, prefix, draft_prefix: null, lead: null, po: null, repos: [] });
+  const bobnet = service("bobnet", "BOB"), athletic = service("athletic", "ATH");
+  const row = (project: unknown) => ({ project, release: null, release_number: null, open: [], next_ready: null, waits_on_you: null, backlog: { items: 0, bugs: 0, oldest: null }, no_release: null });
+  const op = (f: Record<string, unknown>) => (f["op"] as { op?: string } | undefined)?.op;
+  const pending = (name: string) => FakeSocket.last.sent.filter((f) => f["t"] === "board_op" && !answered.has(f["rid"]) && op(f) === name);
+  const ok = (f: Record<string, unknown>, result: unknown) => {
+    answered.add(f["rid"]);
+    FakeSocket.last.frame({ t: "ok", rid: f["rid"], result });
+  };
+  const status = (key: string) => ({
+    project: key, name: key, waits: [], stuck: { runs: [], ci: [], idle_sessions: [], idle_features: [], answered_holding: [], settled: [] }, recurring: null,
+    done: { counts: { features: 0, sessions: 0, lands: 0, releases: 0 }, features: [], sessions: [], releases: [] },
+    backlog: { ready: [], sessions_estimate: null, no_criteria: [], triage: { count: 0, oldest: null }, release: null, thin: false },
+    usage: { tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, by_agent: [], heavy: [], lost: 0 }, more: {},
+  });
+  /** The board's answers as they come, its list of projects as told; a refused list when it is null. */
+  const answer = async (projects: Array<{ key: string }> | null) => {
+    do {
+      for (const f of pending("projects")) {
+        if (projects) ok(f, { projects });
+        else {
+          answered.add(f["rid"]);
+          FakeSocket.last.frame({ t: "error", rid: f["rid"], code: "internal", message: "The board is down" });
+        }
+      }
+      for (const f of pending("overview")) ok(f, { projects: (projects ?? []).map(row) });
+      for (const f of pending("waits")) ok(f, { waits: [], answered: [] });
+      for (const f of pending("status")) ok(f, { at: now.toISOString(), since: iso(1440), projects: (projects ?? []).map((p) => status(p.key)) });
+      await settle();
+    } while (["projects", "overview", "waits", "status"].some((name) => pending(name).length > 0));
+  };
+  /** A retired project's board, drawn anywhere a board is: its CI failed, its session and runs, its backlog. */
+  const retired = (key: string) => ({ ...board, project: key, sessions: board.sessions.map((x) => ({ ...x, name: `${key} session` })), ci: [{ ...board.ci[0]!, name: `${key}-ci` }] });
+  const frames = () => {
+    for (const key of ["alexa-mcp", "sandbox"]) FakeSocket.last.frame({ t: "board", laptop: "mbp-1", at: iso(1), board: retired(key) });
+  };
+  const read = async (project: string, projects: Array<{ key: string }> | null) => {
+    FakeSocket.last.frame({ t: "board_changed", project, seq: 1, refs: [] });
+    await answer(projects);
+  };
+  const picker = () => [...$("project").querySelectorAll("option")].map((o) => o.textContent);
+
+  beforeAll(async () => {
+    frames();
+    await read("not-known", [bobnet, athletic]);
+  });
+
+  it("is on no list and no page, the header's picker included; a listed one with no releases is", async () => {
+    await go("#overview");
+    await answer([bobnet, athletic]);
+    expect([...$("plist").querySelectorAll(".prow")].map((r) => r.getAttribute("data-project"))).toEqual(["bobnet", "athletic"]);
+    expect(picker()).toEqual(["bobnet", "athletic"]);
+    // Neither its CI nor its board's work, on any page that draws a laptop's board.
+    expect(view().textContent).not.toMatch(/alexa|sandbox/);
+    await go("#status");
+    expect([...view().querySelectorAll(".pcard")].map((c) => c.getAttribute("data-project"))).toEqual(["bobnet", "athletic"]);
+    await go("#status/sandbox");
+    expect(view().textContent).toContain("No project sandbox on BobNet");
+    await go("#usage");
+    expect(view().textContent).not.toMatch(/alexa|sandbox/);
+    await go("#sessions");
+    const sessions = [...view().querySelectorAll(".card, li")].map((x) => x.textContent!);
+    expect(sessions.some((t) => /alexa-mcp|sandbox session|sandbox-ci/.test(t))).toBe(false);
+    await go("#feature");
+    expect(view().textContent).not.toMatch(/alexa|sandbox/);
+  });
+
+  it("keeps a live worker and its request, whose project isn't in the service", async () => {
+    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
+    snap.workers = [worker({ id: "w_s", name: "Writer", project: "sandbox", role: "writer", state: "waiting-approval", session: null, task_ref: null })] as never;
+    snap.pending = [{ id: "r_s", worker_id: "w_s", name: "Writer", kind: "approval", tool: "Bash", tier: "human", created_at: iso(1), preview: "ls" }] as never;
+    FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: new Date().toISOString(), snapshot: snap });
+    await go("#overview");
+    expect($("working").textContent).toContain("Writer");
+    expect($("needs").textContent).toContain("Writer wants Bash");
+    FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: new Date().toISOString(), snapshot: { ...snap, workers: [], pending: [] } });
+    await settle();
+  });
+
+  it("is drawn once the service lists it, and leaves by itself when it doesn't", async () => {
+    await go("#overview");
+    await read("sandbox", [bobnet, athletic, service("sandbox", "SAN")]);
+    expect($("plist").textContent).toContain("sandbox");
+    expect(view().textContent).toContain("sandbox-ci");
+    expect(picker()).toContain("sandbox");
+    await read("not-known", [bobnet, athletic]);
+    expect(view().textContent).not.toMatch(/sandbox/);
+    expect(picker()).toEqual(["bobnet", "athletic"]);
+  });
+
+  it("keeps the last list when a read of it fails", async () => {
+    await go("#overview");
+    await read("not-known", null);
+    expect(picker()).toEqual(["bobnet", "athletic"]);
+    expect(view().textContent).not.toMatch(/alexa|sandbox/);
+  });
+
+  it("shows its reading state before the first read, and the error when that fails: never 'No project's board yet' nor a board (c2)", async () => {
+    await go("#overview");
+    vi.resetModules();
+    await import("../public/app.js");
+    const ws = FakeSocket.last;
+    // A fresh page numbers its requests from 1 again.
+    answered.clear();
+    ws.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
+    ws.frame({ t: "ok", rid: ws.sent.find((f) => f["t"] === "dashboard")!["rid"], result: { ...dashboard, boards: [] } });
+    frames();
+    await settle();
+    expect($("plist").textContent).toBe("Reading the board…");
+    expect(view().textContent).not.toMatch(/alexa|Board unavailable/);
+    await answer(null);
+    expect(view().querySelector(".banner.down")!.textContent).toBe("Board unavailableThe board is down");
+    expect(view().textContent).not.toContain("No project's board yet");
+    expect(view().textContent).not.toMatch(/alexa/);
+  });
+
+  it("says the error on every page that lists projects, until the list is read (c2)", async () => {
+    for (const hash of ["#waits", "#usage", "#triage", "#rules", "#roadmap"]) {
+      await go(hash);
+      expect(view().querySelector(".banner.down")!.textContent).toBe("Board unavailableThe board is down");
+    }
+    // Read once the board is back.
+    await go("#overview");
+    await read("bobnet", [bobnet, athletic]);
+    expect(view().querySelector(".banner.down")).toBeNull();
+    expect([...$("plist").querySelectorAll(".prow")].map((r) => r.getAttribute("data-project"))).toEqual(["bobnet", "athletic"]);
   });
 });
 
