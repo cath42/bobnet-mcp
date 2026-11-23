@@ -6,10 +6,30 @@ ADR 0014, `product/requirements/dashboard-redesign.md` (AC4's meaning). Every ta
 their section and name their tests. Labels on the board: `wave-A`, `wave-B`, `wave-C`, `broker-deploy`,
 `supervisor-rc`, `view`.
 
-**Landing order is the order below.** Data before the views that read it. A wave is a build session,
-or two if it runs long (cut points are named).
+**Builds (Q-15, 2026-11-23).** Build A, A1's data reads, is done and live since the BOB-189 deploy. What is left:
 
-## Wave A: broker data (8 tasks, all Ready)
+| Build | Tasks, in order | Ships |
+|---|---|---|
+| **B** | BOB-171 (D4), BOB-169 (D10), BOB-172 (D5), **BOB-192** (review minors), BOB-173 (D6), BOB-162 (D7) | one broker deploy, **then** the supervisor rc (D6, D7) and a restart of mbp-1 and ubu1 |
+| **C** | BOB-174, 175, 176, 177, 178 (wave B's views) | one broker deploy |
+| **D** | BOB-179, 180, 181, 182 (wave C, first half) | broker deploy |
+| **E** | BOB-183, 184, 185, 186 (wave C, second half) | broker deploy |
+
+Data before the views that read it. **BOB-192's m3 lands before BOB-180** (the Usage page calls `usage`).
+B and C are Ready. D's and E's criteria are checked against what landed after C.
+
+- Build B may be deployed before C, so no page goes dead in B: BOB-172 adds the old-link resolver, and
+  BOB-174/175 switch pages over.
+- In C, #sessions lands on #laptops (BOB-174) until BOB-182 turns it to the project page, and the
+  Features tab opens today's feature view until BOB-185.
+- Wave B's criteria were checked against the landed shapes (D1 82568b2, D2 57c4da4, D3 1622e33, D8
+  fb18a12, D9 56f1e94 + 71c2ea0): no failure line on the CI card and no delivered claim on a decided
+  permission, because no data carries them; `usual_ms` comes with BOB-192.
+- Folded: BOB-187 (BOB-176 criterion 7), BOB-164 (BOB-176 criterion 5), Daisy's BOB-189 m1-m3 (BOB-184).
+
+The wave tables below keep each task's one line; the order above wins.
+
+## Wave A: broker data (8 tasks; 5 Done in build A, BOB-171, 169, 172 in build B)
 
 One broker deploy at the end. No supervisor change. Cut after D9 if it runs long: **A1** = D1, D2, D3,
 D8, D9; **A2** = D4, D10, D5.
@@ -27,8 +47,7 @@ D8, D9; **A2** = D4, D10, D5.
 
 ## Wave B: the Overview's parts, Laptops, the header, and the supervisor rc (7 tasks)
 
-Views at Draft until wave A has landed, because I check their criteria against the shapes that landed;
-D6 and BOB-162 are Ready. One broker deploy for the views. **The supervisor rc is D6 and BOB-162
+All Ready (2026-11-23). D6 and BOB-162 are in build B, the views in build C. One broker deploy for the views. **The supervisor rc is D6 and BOB-162
 (D7); deploy the broker first, then roll the rc and restart mbp-1 and ubu1.** D6 may be cut to a
 follow-up without failing AC12 (the weighting falls back to each run's declared model).
 
@@ -63,7 +82,7 @@ page; **C2** = Status, Roadmap, Features, feature page.
 
 ## After the waves
 
-- Review (DoD 2) after B and after C: Daisy against the prototype at 390, 1024 and 1440; Toad for
+- Review (DoD 2) after builds B with C, and after E: Daisy against the prototype at 390, 1024 and 1440; Toad for
   D1-D10's shapes and the weighting.
 - DoD 3: Casper sees it live and says so on the board.
 - BOB-51's AC1-AC3 (dashboard half) are BOB-177, BOB-176 and BOB-176; BOB-33 closes against BOB-183.

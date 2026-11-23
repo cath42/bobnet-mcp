@@ -33,7 +33,8 @@ order, each with its features in their order and where each stands.
 
 ## Must not break
 
-- Order inside a release is the project's PO's. The order of releases is Casper's. The view shows
+- Order inside a release is the project's PO's. The order of releases is Casper's, and his PO's
+  with the `release` grant (Q-14, 2026-11-23; [board-writes.md](board-writes.md) 4). The view shows
   both. Changing them from the UI is [board-writes.md](board-writes.md).
 - Everything in [1](board-service.md).
 

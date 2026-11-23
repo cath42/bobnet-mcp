@@ -1,6 +1,9 @@
 # BobNet: releases and priorities, a proposal (Peach, 2026-11-23)
 
-**Status: a proposal for Casper's review. Nothing on the board moves until he answers** (his words,
+**Status: approved as proposed by Casper, 2026-11-23 (Q-15: "1. Approved", through poe's numbered
+list; no swap of R3 and R4), and applied to the board the same day.** BOB-82 was archived as moot and BOB-77
+is a task of BOB-158 (poe m_17371a58); R7's leftovers are BOB-191; R3's minors task is BOB-192. Below is
+the proposal as he approved it. **Until then nothing on the board was to move** (his words,
 2026-11-22: "organize the backlog in to proper releases and prioritize the features please? ... i want
 to review before we do anything"). The question is on the board (see the end).
 

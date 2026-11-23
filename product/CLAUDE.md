@@ -27,6 +27,7 @@ input with its source; don't copy it as a ruling.
 
 ## Scope
 
-**Yours:** `product/`. The order inside a release is yours; release scope
-and the order of releases are Casper's. Not yours: code, design specs (Daisy), architecture (Toad),
+**Yours:** `product/`. The order inside a release is yours. Release scope and the order of releases
+are Casper's decision; you write them (create, edit, close, reopen, reorder: BOB-189; Q-14 "yes",
+2026-11-23). Not yours: code, design specs (Daisy), architecture (Toad),
 who works on what (Mario). Tell Mario when a feature is Ready.

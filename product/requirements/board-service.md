@@ -56,7 +56,8 @@ layer. Nothing about the board lives in the project's repo. It replaces Backlog.
   ([board-writes.md](board-writes.md)).
 - Status moves only when the PO moves it, at session boundaries, never from builders' activity.
   Live state comes from sessions (Picard input).
-- Release scope, the order of releases and closing a release are Casper's.
+- Release scope, the order of releases and closing a release are Casper's, and written by the project's PO
+  with the `release` grant (BOB-189; Q-14, 2026-11-23).
 - Usage shows as tokens, never money.
 
 ## Superseded

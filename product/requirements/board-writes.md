@@ -21,6 +21,10 @@ rather than by convention.
    PO's ("You are the primary PO … moving a feature into a release is your responsibility"). It is
    no longer Casper's gate; Casper may still do it on the dashboard. Reordering releases and closing
    a release stay his. The broker change is BOB-122.
+   **Changed by Casper, 2026-11-22 and 2026-11-23 (BOB-189, Q-14 "yes"):** a PO with the `release`
+   grant (Picard on Helix, Peach on BobNet) creates, edits, closes, reopens and **reorders** releases.
+   Casper keeps all of it on the dashboard, and each write is in the history under its writer's name.
+   What a PO orders is the order Casper agreed (for BobNet, Q-15), until he changes it.
 5. Closing a release that still has features not Done is allowed only after a confirmation that
    names each open feature and where it goes (another release, or out of any release). Nothing is
    closed with work silently left in it. *Evidence: test.*
