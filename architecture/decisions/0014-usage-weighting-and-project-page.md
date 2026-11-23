@@ -116,7 +116,7 @@ Both are board reads (`BOARD_READS`, `protocol/src/board.ts:486`), derived on re
 for any caller that reads the project. The dashboard calls them through `boardOp`, as it calls
 `overview` and `status`. They are not added to the agents' `board_*` MCP tools.
 
-**`{ op: "usage", project?, days = 30 (1..90), tz = "UTC" }`** → `{ weights, days: string[], projects:
+**`{ op: "usage", project?, days = 30 (1..90), tz = "UTC" }`** → `{ weights, tz, days: string[], projects:
 UsageSeries[] }`. There is one series per readable project, including a project with no runs (all
 zeros), so each project has its own graph (AC11).
 

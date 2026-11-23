@@ -176,7 +176,7 @@ per call, Total and By agent (role), and the period's median as the baseline (sp
     way, and `first` on the second day is the next call;
   - the role baseline at call 5 is the median of the role's runs that reach call 5, and stops where only
     two do;
-  - `baseline.total` over days with 10, 20 and 30 calls has its median at each call and stops after 20;
+  - `baseline.total` over days with 10, 20 and 30 calls has its median at each call and stops after 10 (from call 11 only two days reach it);
   - `calls` in each baseline is the median day's calls;
   - a run over 2000 calls comes back as ≤ 2000 points with its true `calls`;
   - a lost run counts in `lost` and draws nothing;
