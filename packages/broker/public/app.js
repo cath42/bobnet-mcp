@@ -1341,13 +1341,18 @@ const REQUEST_MAX_AGE_MS = 24 * 3600_000;
 /**
  * The worker of an orphaned request: one of Casper's own, asked before its laptop's supervisor last started, its
  * worker stopped by that restart and its role not run again since, on any laptop. Answering it starts the worker
- * again (BOB-176 c14). Null for any other request.
+ * again (BOB-176 c14). A quiet laptop's last report counts only if it was made after the worker ended: one from before
+ * can't show its replacement (c16). Null for any other request.
  */
 function orphanOf(l, p) {
   if (p.tier !== "human" || Date.parse(p.created_at) >= Date.parse(l.snapshot.supervisor.started_at)) return null;
   const w = l.snapshot.workers.find((y) => y.id === p.worker_id);
   if (w?.state !== "failed" || !w.ended_at) return null;
-  const again = workers().some((y) => y.id !== w.id && y.project === w.project && y.role === w.role
+  const tells = (name) => {
+    const r = state.laptops.get(name);
+    return !staleReport(r) || Date.parse(r.at) > Date.parse(w.ended_at);
+  };
+  const again = workers().some((y) => y.id !== w.id && tells(y.laptop) && y.project === w.project && y.role === w.role
     && (y.state === "queued" || ACTIVE.includes(y.state) || (y.started_at && Date.parse(y.started_at) > Date.parse(w.ended_at))));
   return again ? null : w;
 }

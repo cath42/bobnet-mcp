@@ -3579,6 +3579,19 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
       shows([mbp()]);
     });
 
+    it("counts a quiet laptop's last report as its role running only when made after its worker ended (c16)", () => {
+      const ubu = (w: Record<string, unknown>, at: number) => laptop("ubu1", at, { workers: [role({ started_at: iso(50), ...w })] });
+      for (const w of [{ state: "running" }, { state: "queued", started_at: null }]) {
+        // Made before it ended, minutes or days: it can't show a replacement.
+        for (const at of [START + 1, 3 * DAY]) expect([w.state, at, ...shows([mbp(), ubu(w, at)])]).toEqual([w.state, at, true, "2"]);
+        // Made after it ended, though quiet since.
+        expect([w.state, ...shows([mbp(), ubu(w, START - 2)])]).toEqual([w.state, false, "1"]);
+        // A laptop that reports now counts.
+        expect([w.state, ...shows([mbp(), ubu(w, 0)])]).toEqual([w.state, false, "1"]);
+      }
+      shows([mbp()]);
+    });
+
     it("says its worker stopped, and that answering starts it again; Working now has no row for it (c15)", async () => {
       const li = () => item("r_o");
       expect(li().querySelector(".l-m")!.textContent).toBe("Helix › LAND-50 · stopped by a restart 10m ago · on mbp-1");
