@@ -123,6 +123,7 @@ button:disabled { opacity: 0.5; cursor: default; }
   background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--ok); font-size: 14px;
 }
 .toast[data-ok="false"] { border-left-color: var(--bad); }
+.toast[data-ok="warn"] { border-left-color: var(--warn); }
 
 summary { cursor: pointer; color: var(--muted); font-size: 14px; margin: 12px 0 8px; }
 
@@ -333,23 +334,47 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
 .lines li { display: grid; gap: 2px 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; min-width: 0; }
 .lines li:first-child { border-top: 0; }
 .lines .l-m { font-size: 12.5px; color: var(--muted); }
-.ov-needs li.hold { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; }
-.ov-needs li.hold .badge { grid-row: span 2; }
-/* Every Needs you line has the acts column: Show all and the answer button at the end of the line (BOB-31) */
-.ov-needs li.hold { grid-template-columns: auto minmax(0, 1fr) auto; }
-.ov-needs li.hold .acts { grid-row: 1; grid-column: 3; }
-.ov-needs li.hold .l-m, .ov-needs li.hold .whole { grid-column: 2 / -1; }
-.ov-needs .acts:not(:has(> :not([hidden]))) { display: none; }
-.ov-needs .l-t { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ov-needs .l-m { color: var(--bad); }
-.ov-needs .acts { display: flex; gap: 6px; align-items: center; }
-.ov-needs .acts .hint { font-size: 12.5px; }
-.ov-needs .acts button { min-height: 32px; padding: 2px 10px; }
-/* A cut line opens from its text too; open, the whole text with its own line breaks, the acts under it at the line's end */
-.ov-needs .l-t[data-cut] { cursor: pointer; }
-.ov-needs li.open .l-t { white-space: pre-line; display: block; overflow: visible; -webkit-line-clamp: unset; overflow-wrap: anywhere; }
-.ov-needs li.hold.open .l-t { grid-column: 2 / -1; }
-.ov-needs li.hold.open .acts { grid-row: auto; grid-column: 2 / -1; justify-self: end; }
+/* Needs you (BOB-121 spec 2.2): two groups, each named for what it means; an item is the same wherever it is listed */
+.ngrp { display: grid; padding-top: 10px; }
+.ngrp + .ngrp { border-top: 1px solid var(--line); margin-top: 6px; }
+.ngrp h3 { margin: 0 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; color: var(--muted); }
+.ngrp[data-tone="bad"] h3 { color: var(--bad); }
+.card.needs-page { padding: 0 14px 12px; gap: 0; }
+.lines li.need { grid-template-columns: 8.5em minmax(0, 1fr) auto; gap: 3px 10px; align-items: baseline; scroll-margin-top: 72px; }
+li.need .n-b { grid-row: span 2; align-self: start; display: grid; gap: 3px; justify-items: start; }
+li.need .n-b .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--muted); padding-left: 2px; font-weight: 400; }
+li.need .l-h { display: flex; gap: 2px 8px; align-items: baseline; min-width: 0; }
+li.need .l-h:has(.edits[open]) { flex-wrap: wrap; }
+li.need .l-t { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; min-width: 0; border-radius: 4px; }
+li.need .l-t:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+li.need .l-t code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; font-weight: 400; }
+li.need.open .l-t { white-space: pre-line; overflow: visible; overflow-wrap: anywhere; }
+li.need.open .l-t code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border-radius: 6px; padding: 6px 8px; margin-top: 4px; }
+li.need.compact .l-t { font-weight: 500; }
+li.need .edits { flex: none; }
+li.need .edits > summary { margin: 0; font-size: 12.5px; }
+li.need .edits[open] { flex: 1 1 100%; }
+li.need .age { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+li.need > .fix, li.need > .whole, li.need > .m-row, li.need > .ctx-row, li.need > form.answer { grid-column: 2 / -1; min-width: 0; }
+li.need .m-row { display: flex; flex-wrap: wrap; gap: 3px 12px; align-items: center; }
+li.need .l-m { flex: 1 1 14em; min-width: 0; overflow-wrap: anywhere; }
+li.need .l-m a { color: var(--accent); }
+li.need .l-m a.id { margin-right: 0; }
+li.need .holds { color: var(--bad); }
+li.need .fix { font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+li.need .fix .sha { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+li.need .stale, li.need .kept { font-size: 12.5px; overflow-wrap: anywhere; }
+li.need .m-r { display: flex; gap: 12px; align-items: center; margin-left: auto; min-width: 0; text-align: right; }
+li.need .stale { color: var(--warn); }
+li.need .kept { color: var(--muted); }
+li.need .acts { display: flex; flex: none; }
+.who-live { white-space: nowrap; }
+.who-live .dot { margin-right: 3px; vertical-align: 1px; }
+a.answer-btn { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); text-decoration: none; }
+a.answer-btn:hover { border-color: var(--accent); }
+.cutnote { font-size: 12.5px; color: var(--muted); font-style: italic; }
+.fresh { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.fresh.late { color: var(--warn); }
 /* Show all / Show less, Show context: a text button in the accent colour */
 .more-t { border: 0; background: transparent; color: var(--accent); padding: 2px 6px; min-height: 32px; font-size: 13px; white-space: nowrap; }
 .more-t:hover { text-decoration: underline; }
@@ -384,44 +409,42 @@ a.more-t { text-decoration: none; justify-self: start; padding: 0; min-height: 0
   .prow .pc:not(.pname) > :not(.lab) { grid-column: 2; }
   .prow .pc .lab { grid-row: 1; padding-top: 2px; }
   .now-list .l-path { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .ov-needs .l-t { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .ov-needs li.hold { grid-template-columns: auto minmax(0, 1fr); }
-  .ov-needs li.hold .acts, .ov-needs li.hold.open .acts { grid-row: auto; grid-column: 1 / -1; justify-self: stretch; }
-  .ov-needs li.hold .acts button { flex: 1; min-height: 44px; }
-  .ov-needs li.hold .acts button.more-t { border: 1px solid var(--line); background: var(--surface); font-size: 14px; }
+  .lines li.need { grid-template-columns: minmax(0, 1fr) auto; }
+  li.need .n-b { grid-row: auto; grid-column: 1; display: flex; gap: 8px; align-items: baseline; }
+  li.need .age { grid-column: 2; grid-row: 1; }
+  li.need .l-h { grid-column: 1 / -1; flex-wrap: wrap; }
+  li.need .l-t { flex: 1 1 100%; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  li.need.open .l-t { display: block; }
+  li.need > .fix, li.need > .whole, li.need > .m-row, li.need > .ctx-row, li.need > form.answer { grid-column: 1 / -1; }
+  li.need .m-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  li.need .m-row > .l-m:last-child { grid-column: 1 / -1; }
+  li.need .m-r { display: contents; }
+  li.need .m-r > .stale, li.need .m-r > .kept { grid-column: 1 / -1; grid-row: 2; text-align: left; }
+  li.need .acts { grid-column: 2; grid-row: 1; align-self: end; }
+  li.need .acts .answer-btn { min-height: 44px; }
 }
-/* Waits on you: two groups, oldest first; answering inside an item (spec: Waits on you; notes 22, 35, 40-43) */
 .ov a.more { display: block; color: var(--accent); text-decoration: none; }
 .ov a.more:hover { text-decoration: underline; }
+/* Answering inside an item, and what was answered from here today (notes 40-43) */
 .waits li { display: grid; gap: 4px; }
-.waits li[data-blocking="true"] { border-left-color: var(--bad); }
-.waits li[data-blocking="false"] { border-left-color: var(--line); }
 .waits li .top { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
 .waits li .top .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .waits li .age { margin-left: auto; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.waits li .q { font-weight: 600; }
-.waits li .rec { font-size: 13px; }
-/* The asker's line breaks are kept; the context opens under the recommendation (BOB-31) */
-.waits li .q, .waits li .rec { white-space: pre-line; overflow-wrap: anywhere; }
-.waits li .ctx-row { display: grid; gap: 6px; justify-items: start; }
-.waits li .ctx-row button.more-t { padding-left: 0; }
-.waits li .ctx { white-space: pre-line; overflow-wrap: anywhere; border-left: 3px solid var(--line); padding: 2px 10px; color: var(--text); font-size: 13.5px; }
-.waits > li { scroll-margin-top: 72px; }
+.waits li .q { white-space: pre-line; overflow-wrap: anywhere; }
+.waits li .q code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.ctx-row { display: grid; gap: 6px; justify-items: start; }
+.ctx-row button.more-t { padding-left: 0; }
+.ctx-row .ctx { white-space: pre-line; overflow-wrap: anywhere; border-left: 3px solid var(--line); padding: 2px 10px; color: var(--text); font-size: 13.5px; }
 .waits li .meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 14px; align-items: center; }
-.waits li .meta a, .waits li .top a { color: var(--accent); }
-.waits li .holds { color: var(--bad); }
-/* A fixed bug's line, and a row unchanged over a day or kept (BOB-49 spec) */
-.waits li .fix { font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
-.waits li .fix .sha { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
-.waits li .stale { color: var(--warn); }
-.waits li .kept { overflow-wrap: anywhere; }
 .answer-btn { min-height: 32px; padding: 2px 12px; font-size: 13px; }
 .waits li .meta .answer-btn { margin-left: auto; }
-.ov-needs li.hold > form.answer { grid-column: 1 / -1; }
 form.answer { display: grid; gap: 10px; margin-top: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 14px; }
 form.answer fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 6px; min-width: 0; }
 form.answer legend { font-size: 12px; color: var(--muted); padding: 0; margin-bottom: 4px; }
-form.answer .preview { margin: 0; }
+form.answer .filed { display: grid; gap: 4px; }
+form.answer .filed p { margin: 0; font-size: 12px; }
+form.answer .filed ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; overflow-wrap: anywhere; }
+form.answer .filed li { display: list-item; border: 0; padding: 0; }
 .opt-row { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: start; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); cursor: pointer; }
 .opt-row input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--accent); }
 .opt-row:has(input:checked) { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
@@ -442,15 +465,15 @@ form.answer .who-gets { margin-right: auto; font-size: 12.5px; color: var(--mute
 .edited-note { margin: 0; color: var(--warn); font-size: 13px; font-weight: 600; }
 @media (pointer: coarse), (max-width: 600px) { .edits > summary { min-height: 44px; } }
 .waits li.answered { border-left-color: var(--ok); }
-.waits li.answered .q { font-weight: 400; color: var(--muted); }
+.waits li.answered .q { color: var(--muted); }
+.waits li.answered[data-decision="deny"] { border-left-color: var(--bad); }
 .said { display: grid; gap: 4px; font-size: 14px; }
 .said blockquote { margin: 0; padding: 4px 10px; border-left: 3px solid var(--ok); font-style: italic; overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   form.answer .foot button { flex: 1; min-height: 44px; }
   form.answer .who-gets { flex-basis: 100%; }
   .waits li .meta .answer-btn { width: 100%; min-height: 44px; margin: 4px 0 0; }
-  .ov-needs .acts .answer-btn { min-height: 44px; }
-  .waits li .ctx-row button.more-t { min-height: 44px; }
+  .ctx-row button.more-t { min-height: 44px; }
 }
 /* A feature in the service: its head card */
 .feature-head h2 { margin: 0; font-size: 18px; text-transform: none; letter-spacing: 0; color: var(--text); }
@@ -666,14 +689,8 @@ main.wide .st { max-width: 1320px; }
 .pflags { display: flex; flex-wrap: wrap; gap: 6px; }
 .pflags:empty { display: none; }
 
-/* Needs you lines: as the Overview's, the whole line opens the item on Waits on you. */
+/* Needs you lines: as the Overview's, compact. */
 .st-card { padding: 4px 14px 10px; }
-.st-needs li.need { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; }
-.st-needs li.need .badge { grid-row: span 2; }
-.st-needs a.l-t { text-decoration: none; }
-.st-needs a.l-t:hover { text-decoration: underline; }
-.st-needs li[data-blocking="false"] .l-m { color: var(--muted); }
-.st-needs .age { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .before { margin-left: 8px; font-size: 11.5px; color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
 .caught-foot { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: 13px; color: var(--muted); padding-top: 4px; }
 
@@ -807,7 +824,7 @@ main.wide .st { max-width: 1320px; }
   .lead-note .ln-more { display: inline; }
 }
 
-/* As built: the loading answers, a muted old-board card, a cut list's line, I'm caught up at the end only on a phone. */
+/* As built: the loading answers, a cut list's line, I'm caught up at the end only on a phone. */
 .ans[data-tone="none"] { border-left-color: var(--line); } .ans[data-tone="none"] b { color: var(--muted); }
 .note.cut { margin: 4px 0 0; font-size: 12.5px; }
 .rows > li.show-all { display: block; }

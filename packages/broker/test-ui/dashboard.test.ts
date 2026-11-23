@@ -105,10 +105,29 @@ const go = async (hash: string) => {
   await settle();
 };
 
+/** The page that is open: what it listens to and what ticks in it, let go when a fresh one opens. */
+const page = { timers: [] as ReturnType<typeof setInterval>[], listeners: [] as Array<[string, EventListener]> };
+/** The dashboard loaded again, over a new socket, as a reload does: the one before it stops. */
+const freshPage = async () => {
+  await settle();
+  for (const t of page.timers.splice(0)) clearInterval(t);
+  for (const [type, f] of page.listeners.splice(0)) window.removeEventListener(type, f);
+  vi.resetModules();
+  const every = globalThis.setInterval, listen = window.addEventListener.bind(window);
+  globalThis.setInterval = ((...a: Parameters<typeof setInterval>) => { const t = every(...a); page.timers.push(t); return t; }) as typeof setInterval;
+  window.addEventListener = ((type: string, f: EventListener) => { page.listeners.push([type, f]); listen(type, f); }) as typeof window.addEventListener;
+  try {
+    return await import("../public/app.js");
+  } finally {
+    globalThis.setInterval = every;
+    window.addEventListener = listen;
+  }
+};
+
 beforeAll(async () => {
   document.documentElement.innerHTML = html.replace(/<script[\s\S]*?<\/script>|<link[^>]*>/g, "");
   (globalThis as unknown as { WebSocket: typeof FakeSocket }).WebSocket = FakeSocket;
-  await import("../public/app.js");
+  await freshPage();
   const ws = FakeSocket.last;
   ws.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
   const req = ws.sent.find((f) => f["t"] === "dashboard")!;
@@ -295,7 +314,7 @@ describe("Laptops (BOB-175)", () => {
     const old = { id: "r_old", worker_id: "w_gone", name: "Luigi", kind: "approval", tool: "Bash", tier: "human", created_at: iso(600), preview: "rm -rf dist" };
     // Its last report came 10 min ago, by the broker's clock: mbp-1's heartbeat since says what time it is now.
     const heartbeat = () => ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
-    ws.frame({ t: "report", laptop: "mbp-2", at: iso(10), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [old], usage: [] } });
+    ws.frame({ t: "report", laptop: "mbp-2", at: iso(10), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [worker({ id: "w_gone", name: "Luigi", project: "bobnet" })], pending: [old], usage: [] } });
     heartbeat();
     await settle();
     const card = [...$("laptops").children].find((c) => c.textContent!.includes("mbp-2"))!;
@@ -308,7 +327,7 @@ describe("Laptops (BOB-175)", () => {
     // Not dropped silently: a banner names the laptop (design/BOB-48/spec.md §1).
     expect(view().querySelector(".stale-banners .banner")!.textContent).toBe("mbp-2 stopped reportinglast report 10m ago1 request for you from it waits until it reports againLaptops →");
     // Reporting again makes it live: its requests are offered.
-    ws.frame({ t: "report", laptop: "mbp-2", at: iso(0), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [old], usage: [] } });
+    ws.frame({ t: "report", laptop: "mbp-2", at: iso(0), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [worker({ id: "w_gone", name: "Luigi", project: "bobnet" })], pending: [old], usage: [] } });
     await settle();
     await go("#needs");
     expect(view().querySelector('[data-ref="r_old"]')).not.toBeNull();
@@ -366,7 +385,7 @@ describe("Laptops (BOB-175)", () => {
 });
 
 describe("laptops that stopped reporting, dead requests and a stuck board outbox (BOB-48; design/BOB-48/spec.md)", () => {
-  const snap = (pending: unknown[] = []) => ({ supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending, usage: [] });
+  const snap = (pending: unknown[] = []) => ({ supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: pending.length ? [worker({})] : [], pending, usage: [] });
   const ask = (id: string, minAgo: number, tier = "human") => ({ id, worker_id: "w_1", name: "records-agent", kind: "approval", tool: "Bash", tier, created_at: iso(minAgo), preview: `${id} preview` });
   /** Each laptop's report, then mbp-1's, last: the latest report sets the broker's clock. */
   const reports = async (rs: Array<[string, number, unknown]>, mbp: Record<string, unknown> = {}) => {
@@ -1324,18 +1343,21 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     expect(lines.map((l) => l.querySelector(".badge")!.textContent)).toEqual(["question", "question", "bug · blocks use", "permission"]);
     expect(lines[3]!.textContent).toContain("records-agent wants Bash");
     // Each answerable line has its one button; the form opens in place (notes 40).
-    // A line that fits shows no Show all (BOB-31).
     expect([...lines[3]!.querySelectorAll("button:not([hidden])")].map((b) => b.textContent)).toEqual(["Allow or deny"]);
     expect([...lines[0]!.querySelectorAll("button:not([hidden])")].map((b) => b.textContent)).toEqual(["Answer"]);
     expect(lines[2]!.querySelector("button:not([hidden])")).toBeNull();
     expect(lines[0]!.querySelector(".l-t")!.textContent).toBe("Which roadmap order wins?");
     // Holds-up wording (spec, BOB-3 gap 5): its own feature's session by who is in it, another's with its feature,
     // BOB-3 counted once with its session, two named then "+N more"; a session with nobody in it by kind and label.
-    expect(lines[3]!.querySelector(".l-m")!.textContent).toBe("helix · LAND-41 · holds up records-agent (build 3)");
-    expect(lines[0]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up Luigi (build A), BOB-9 build B +1 more");
-    expect(lines[1]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up Fixes, review 2");
-    expect(lines[2]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · blocks use");
-    expect(view().querySelector(".ov-needs .more")!.textContent).toBe("4 hold work up · 1 more when you have time →");
+    expect(lines[3]!.querySelector(".l-m")!.textContent).toBe("helix › LAND-41 · holds up records-agent (build 3) · on mbp-1");
+    expect(lines[0]!.querySelector(".l-m")!.textContent).toBe("BobNet › BOB-3 · holds up Luigi (build A), BOB-9 build B +1 more · from Mario · build A closed on it (need: casper)");
+    expect(lines[1]!.querySelector(".l-m")!.textContent).toBe("BobNet › BOB-3 · holds up Fixes, review 2 · from Mario · Fixes, review 2 closed on it (need: casper)");
+    expect(lines[2]!.querySelector(".l-m")!.textContent).toBe("BobNet › BOB-3 · blocks use · from Mario");
+    // Each agent it holds up with its live dot: Luigi works, records-agent waits.
+    expect([lines[0]!, lines[3]!].map((l) => l.querySelector(".who-live .dot")!.className)).toEqual(["dot on", "dot warn"]);
+    // What can wait: three at most, compact, with no button (BOB-176).
+    expect([...$("needs-rest").querySelectorAll("li")].map((l) => [l.className, l.getAttribute("data-ref"), l.querySelectorAll("button").length])).toEqual([["need compact", "A-2", 0]]);
+    expect(view().querySelector(".ov-needs .more")!.textContent).toBe("Needs you, with today's answers →");
     expect(view().querySelector(".ov-needs .more")!.getAttribute("href")).toBe("#needs");
     // The count shows on the tab too (waiting-on-casper 3).
     expect($("needs-n").textContent).toBe("5");
@@ -1381,7 +1403,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     snap.pending = [];
     FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
     await settle();
-    expect(view().querySelector(".ov-needs .card")!.textContent).toBe("Nothing is held up by you.");
+    expect(view().querySelector(".ov-needs .card .st-empty.ok")!.textContent).toBe("Nothing needs you. Anything new shows here within a minute.");
     expect($("needs-count").textContent).toBe("");
     // Nothing waits: the count leaves the tab.
     expect($("needs-n").textContent).toBe("");
@@ -1405,7 +1427,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     (line().querySelector(".answer-btn") as HTMLButtonElement).click();
   });
 
-  describe("Waits on you (BOB-5)", () => {
+  describe("Needs you, the page (BOB-5; BOB-176)", () => {
     const helix = { key: "helix", name: "Helix", prefix: "LAND", draft_prefix: "DRAFT", lead: "Bob@mbp-1", po: "Peach@mbp-1", repos: [] };
     const fixes = { feature: "LAND-49", kind: "build", label: "Fixes" };
     // As in the prototype (notes 22, 35): A-15 and Q-259 wait for a later milestone; Q-258 holds LAND-49's fixes up.
@@ -1421,8 +1443,8 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       for (const f of pending("waits", true)) reply(f, { waits: ws, answered });
       await settle();
     };
-    const item = (ref: string) => view().querySelector(`.waits li[data-ref="${ref}"]`)!;
-    const refs = (id: string) => [...$(id).querySelectorAll(".waits > li")].map((li) => li.getAttribute("data-ref"));
+    const item = (ref: string) => view().querySelector(`li.need[data-ref="${ref}"]`)!;
+    const refs = (id: string) => [...$(id).querySelectorAll("li.need")].map((li) => li.getAttribute("data-ref"));
     const frameOf = (rid: string) => FakeSocket.last.sent.find((f) => f["rid"] === rid)!;
 
     beforeAll(async () => {
@@ -1441,45 +1463,49 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect([...document.querySelectorAll("#tabs a")].map((a) => a.getAttribute("href")).slice(0, 2)).toEqual(["#overview", "#needs"]);
       expect(document.querySelector('#tabs a[aria-current]')!.getAttribute("href")).toBe("#needs");
       expect($("needs-n").textContent).toBe("6");
-      expect(refs("waits-holding")).toEqual(["BOB-12", "Q-258", "BOB-31", "r_9"]);
-      expect(refs("waits-rest")).toEqual(["A-15", "Q-259"]);
-      expect([...$("waits-holding").querySelectorAll(".badge")].map((b) => b.textContent)).toEqual(["review gate", "question", "bug · blocks use", "permission"]);
+      expect(refs("needs-holding")).toEqual(["BOB-12", "Q-258", "BOB-31", "r_9"]);
+      expect(refs("needs-rest")).toEqual(["A-15", "Q-259"]);
+      expect([...$("needs-holding").querySelectorAll(".badge")].map((b) => b.textContent)).toEqual(["review gate", "question", "bug · blocks use", "permission"]);
       // The permission is records-agent's, a Helix agent's.
       expect(view().querySelector(".bar-row")!.textContent).toBe("All projects 6BobNet 2Helix 46 items, oldest first");
     });
 
-    it("gives each item its project, feature, age, question, recommendation, who asked, what it holds up or what it is needed before, and a link (#1, #2)", () => {
+    it("gives each item its badge, id, text, age, where it is, what it holds up or is needed before, who asked, and one action (#1, #2; BOB-176 c4)", () => {
       const q = item("Q-258");
-      expect(q.querySelector(".top")!.textContent).toBe("questionQ-258Helix · LAND-491 day");
-      expect(q.querySelector(".top a")!.getAttribute("href")).toBe("#feature/helix/LAND-49");
-      expect(q.querySelector(".q")!.textContent).toBe("Ship rehearsal 1 with the known gap?");
-      // The session closed on it shows on the question, not as an item of its own (notes 23).
-      // The recommendation on its own line, then the meta line with the button at its right (BOB-5 as built).
-      expect(q.querySelector(".rec")!.textContent).toBe("Recommended: Ship it, note the gap");
-      expect(q.querySelector(".meta")!.textContent).toBe("Holds up FixesfromBobFixes closed on it (need: casper)Open LAND-49Answer".replace("fromBob", "from Bob"));
-      expect(item("Q-259").querySelector(".rec")!.nextElementSibling!.classList.contains("meta")).toBe(true);
-      expect(q.querySelector(".holds")!.textContent).toBe("Holds up Fixes");
-      // Needed before, muted, and no Holds up, on what waits for a later milestone (notes 35).
-      expect(item("A-15").querySelector(".before")!.textContent).toBe("Needed before the demo");
-      expect(item("Q-259").querySelector(".before")!.textContent).toBe("Needed before rehearsal 2 (49.13)");
+      expect(q.querySelector(".n-b")!.textContent).toBe("questionQ-258");
+      expect(q.querySelector(".l-t")!.textContent).toBe("Ship rehearsal 1 with the known gap?");
+      expect(q.querySelector(".age")!.textContent).toBe("1 day");
+      expect(q.querySelector(".age")!.getAttribute("title")).toMatch(/^since \d+ \w{3} /);
+      expect(q.querySelector(".l-m a")!.getAttribute("href")).toBe("#feature/helix/LAND-49");
+      // The session closed on it shows on the question, last, not as an item of its own (notes 23).
+      expect(q.querySelector(".l-m")!.textContent).toBe("Helix › LAND-49 · holds up Fixes · from Bob · Fixes closed on it (need: casper)");
+      expect(q.querySelector(".holds")!.textContent).toBe("holds up Fixes");
+      expect([...q.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Answer"]);
+      // The recommendation opens under the text (spec 2.2).
+      expect(q.querySelector(".rec")).toBeNull();
+      // Needed before and who asked, and never holds up, on what waits for a later milestone (notes 35).
+      expect(item("A-15").querySelector(".l-m")!.textContent).toBe("Helix · from Peach · needed before the demo");
+      expect(item("Q-259").querySelector(".needed")!.textContent).toBe("needed before rehearsal 2 (49.13)");
       expect(item("A-15").querySelector(".holds")).toBeNull();
       expect(item("Q-259").querySelector(".holds")).toBeNull();
-      expect(item("A-15").querySelector(".top .age")!.textContent).toBe("3 days");
+      expect(item("A-15").querySelector(".age")!.textContent).toBe("3 days");
       // A review gate and a bug stay links (notes 43); the permission holds up its agent.
       expect(item("BOB-12").querySelector("button")).toBeNull();
-      expect(item("BOB-12").querySelector('a[href="#feature/bobnet/BOB-12"]')!.textContent).toBe("Open BOB-12");
-      expect(item("BOB-31").querySelector('a[href="#triage/bobnet"]')!.textContent).toBe("Open in triage");
-      expect(item("BOB-31").querySelector(".holds")!.textContent).toBe("Blocks use");
-      expect(item("r_9").querySelector(".q")!.textContent).toBe("records-agent wants Bash");
-      expect(item("r_9").querySelector(".holds")!.textContent).toBe("Holds up records-agent (build 3)");
+      expect(item("BOB-12").querySelector('a.answer-btn[href="#feature/bobnet/BOB-12"]')!.textContent).toBe("Open BOB-12");
+      expect(item("BOB-31").querySelector('a.answer-btn[href="#triage/bobnet"]')!.textContent).toBe("Open in triage");
+      expect(item("BOB-31").querySelector(".holds")!.textContent).toBe("blocks use");
+      // An older supervisor's preview stands for the ask it doesn't send.
+      expect(item("r_9").querySelector(".l-t")!.textContent).toBe("records-agent wants Bash: git push origin HEAD");
+      expect(item("r_9").querySelector(".l-t code")!.textContent).toBe("git push origin HEAD");
+      expect(item("r_9").querySelector(".holds")!.textContent).toBe("holds up records-agent (build 3)");
     });
 
     it("filters by project, with counts", async () => {
       ([...view().querySelectorAll(".bar-row .seg button")].find((b) => b.textContent!.startsWith("Helix")) as HTMLButtonElement).click();
-      expect(refs("waits-holding")).toEqual(["Q-258", "r_9"]);
-      expect(refs("waits-rest")).toEqual(["A-15", "Q-259"]);
+      expect(refs("needs-holding")).toEqual(["Q-258", "r_9"]);
+      expect(refs("needs-rest")).toEqual(["A-15", "Q-259"]);
       ([...view().querySelectorAll(".bar-row .seg button")].find((b) => b.textContent!.startsWith("All")) as HTMLButtonElement).click();
-      expect(refs("waits-holding")).toHaveLength(4);
+      expect(refs("needs-holding")).toHaveLength(4);
     });
 
     it("answers a question from here: options recommended first, his words verbatim, one write under one key, Undo (#4)", async () => {
@@ -1512,12 +1538,12 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       await settle();
       expect($("toast").textContent).toBe("Answered Q-258. Recorded as your words; sent to Bob.Undo");
       // It leaves its group at once, and the counts drop.
-      expect(refs("waits-holding")).toEqual(["BOB-12", "BOB-31", "r_9"]);
+      expect(refs("needs-holding")).toEqual(["BOB-12", "BOB-31", "r_9"]);
       expect($("needs-n").textContent).toBe("5");
       await answerWith([a15, gate, bug, q259], [{ project: "helix", ref: "Q-258", kind: "question", text: q258.text, key: "b", words: words.trim(), at: iso(0) }]);
-      const done = $("waits-answered").querySelector("li")!;
+      const done = $("needs-answered").querySelector("li")!;
       expect(done.querySelector(".said")!.textContent).toBe(`You picked Ship it, note the gap“${words.trim()}”`);
-      expect(done.querySelector(".meta")!.textContent).toBe("Bob, Helix's lead, got a messagefrom the dashboard");
+      expect(done.querySelector(".meta")!.textContent).toBe("Bob, Helix's lead, got a messagefrom the dashboardUndo");
       // Undo, within two minutes: the board takes back his own event.
       ($("toast").querySelector("button") as HTMLButtonElement).click();
       const [undo] = pending("undo");
@@ -1526,8 +1552,8 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       await settle();
       expect($("toast").textContent).toBe("Undone: Q-258 waits on you again; sent to Bob.");
       await answerWith([a15, gate, q258, bug, q259]);
-      expect(refs("waits-holding")).toContain("Q-258");
-      expect($("waits-answered")).toBeNull();
+      expect(refs("needs-holding")).toContain("Q-258");
+      expect($("needs-answered")).toBeNull();
     });
 
     it("says who was told, who it waits for to come online, and when no supervisor runs the project (ADR 0009 §5; BOB-111 AC4)", async () => {
@@ -1576,24 +1602,29 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect(view().querySelectorAll("form.answer")).toHaveLength(1);
       (item("A-15").querySelector(".answer-btn") as HTMLButtonElement).click();
       const form = item("A-15").querySelector("form.answer")!;
+      expect(form.querySelector(".filed")).toBeNull();
+      expect(form.querySelector(".words span")!.textContent).toBe("Note (optional)");
       const box = form.querySelector("textarea") as HTMLTextAreaElement;
       box.value = "Room 2, Thursday";
       box.dispatchEvent(new Event("input"));
       (form.querySelector('button[type="submit"]') as HTMLButtonElement).click();
       const [op] = pending("mark_done");
       expect(op!.op).toEqual({ op: "mark_done", project: "helix", ref: "A-15", note: "Room 2, Thursday" });
+      for (const f of pending("get").filter((x) => x.op["ref"] === "A-15")) reply(f, { question: { ref: "A-15", kind: "action", options: [] } });
       reply(op!, { ref: "A-15", seq: 80, told: ["Bob@mbp-1", "Peach@mbp-1"] });
       await settle();
       expect($("toast").textContent).toBe("Marked A-15 done. Recorded as your words; sent to Bob and Peach.Undo");
       await answerWith([gate, q258, bug, q259], [{ project: "helix", ref: "A-15", kind: "action", text: a15.text, key: null, words: "Room 2, Thursday", at: iso(0) }]);
-      expect($("waits-answered").querySelector(".badge")!.textContent).toBe("done");
-      expect($("waits-answered").querySelector("blockquote")!.textContent).toBe("“Room 2, Thursday”");
+      expect($("needs-answered").querySelector(".badge")!.textContent).toBe("done");
+      expect($("needs-answered").querySelector("blockquote")!.textContent).toBe("“Room 2, Thursday”");
     });
 
-    it("allows or denies a permission, the note only with Deny, confirming Allow as today, no Undo (#5; BOB-5 as built 1, 2)", async () => {
+    it("allows or denies an older supervisor's permission as before: the note only with Deny, confirming Allow, no Undo (#5; BOB-5 as built 1, 2; BOB-176 c5)", async () => {
       (item("r_9").querySelector(".answer-btn") as HTMLButtonElement).click();
       const form = () => item("r_9").querySelector("form.answer")!;
-      expect(form().querySelector(".preview")!.textContent).toBe("git push origin HEAD");
+      // The item is open above it, its command whole: the form doesn't say it again.
+      expect(item("r_9").classList.contains("open")).toBe(true);
+      expect(form().querySelector(".preview")).toBeNull();
       expect(form().querySelector(".words span")!.textContent).toBe("Note to records-agent, sent with Deny (optional)");
       expect(form().querySelector("textarea")!.getAttribute("placeholder")).toBe("e.g. not that process; use the pool's stop script");
       expect(form().querySelector(".who-gets")!.textContent).toBe("records-agent gets your decision; a note goes only with Deny. It can't be taken back.");
@@ -1640,20 +1671,20 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect($("toast").textContent).toBe("Denied records-agent's Bash.");
       FakeSocket.last.frame({ t: "action_result", id: "a_other", laptop: "mbp-1", ok: false, message: "r_9 isn't pending" });
       expect($("toast").textContent).toBe("r_9 isn't pending");
-      // No line under Answered from here today for a permission.
-      expect($("waits-answered")?.querySelector('[data-ref="r_9"]') ?? null).toBeNull();
+      // A laptop that sends no decided adds no row, and nothing is said about it (BOB-176 c6).
+      expect($("needs-answered")?.querySelector('[data-ref="r_9"]') ?? null).toBeNull();
     });
 
-    it("names a permission's session by its step on both lists: Holds up records-agent (Fixes) (BOB-5 as built)", async () => {
+    it("names a permission's session by its step on both lists: holds up records-agent (Fixes) (BOB-5 as built)", async () => {
       const snap = structuredClone(dashboard.laptops[0]!.snapshot);
       snap.workers = [worker({ state: "waiting-approval", session: "LAND-41 build Fixes" })] as never;
       snap.pending = [perm] as never;
       FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
       await settle();
-      expect(item("r_9").querySelector(".holds")!.textContent).toBe("Holds up records-agent (Fixes)");
+      expect(item("r_9").querySelector(".holds")!.textContent).toBe("holds up records-agent (Fixes)");
       await go("#overview");
       const line = [...$("needs").querySelectorAll("li")].find((l) => l.textContent!.includes("records-agent wants Bash"))!;
-      expect(line.querySelector(".l-m")!.textContent).toBe("Helix · LAND-41 · holds up records-agent (Fixes)");
+      expect(line.querySelector(".l-m")!.textContent).toBe("Helix › LAND-41 · holds up records-agent (Fixes) · on mbp-1");
       snap.workers = [worker({ state: "waiting-approval" })] as never;
       FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
       await go("#needs");
@@ -1675,12 +1706,12 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       await answerWith(ws);
     };
 
-    it("marks an edited question \"edited ×n\" on its meta row, its edits newest first, and moves the A-24 case to Holds work up once it holds (BOB-119 AC 4, AC 7)", async () => {
+    it("marks an edited question \"edited ×n\" after its text, its edits newest first, and moves the A-24 case to Holds work up once it holds (BOB-119 AC 4, AC 7)", async () => {
       await go("#needs");
       // As helix A-24 was asked: needed before the demo, holding nothing, so it waited as if nothing were held up.
       const a24 = wait("A-24", "action", "Book the demo room", false, { project: "helix", feature: null, since: iso(60 * 6), needed_before: { text: "the demo" }, asked_by: "Peach@mbp-1", edits: [] });
       await reread([a15, gate, q258, bug, q259, a24]);
-      expect(refs("waits-rest")).toContain("A-24");
+      expect(refs("needs-rest")).toContain("A-24");
       expect(item("A-24").querySelector(".edits")).toBeNull();
       // An older broker's waits carry no edits: nothing is marked.
       expect(item("Q-258").querySelector(".edits")).toBeNull();
@@ -1697,13 +1728,14 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       };
       await reread([a15, gate, q258, bug, q259, edited]);
       // Holding now, it is among what holds work up, with its current text.
-      expect(refs("waits-holding")).toContain("A-24");
-      expect(refs("waits-rest")).not.toContain("A-24");
+      expect(refs("needs-holding")).toContain("A-24");
+      expect(refs("needs-rest")).not.toContain("A-24");
       const a = item("A-24");
-      expect(a.querySelector(".q")!.textContent).toBe("Book the demo room for Friday");
-      expect(a.querySelector(".holds")!.textContent).toMatch(/^Holds up LAND-49/);
-      // Muted text on the meta row, not a badge; closed on Waits on you.
-      const d = a.querySelector(".meta > details.edits") as HTMLDetailsElement;
+      expect(a.querySelector(".l-t")!.textContent).toBe("Book the demo room for Friday");
+      expect(a.querySelector(".holds")!.textContent).toBe("holds up LAND-49 Fixes");
+      // A muted tag after the text, outside its cut, not a badge; closed (spec 2.2).
+      const d = a.querySelector(".l-h > details.edits") as HTMLDetailsElement;
+      expect(d.previousElementSibling!.classList.contains("l-t")).toBe(true);
       expect(d.querySelector("summary")!.textContent).toBe("edited ×2");
       expect(d.querySelector(".badge")).toBeNull();
       expect(d.open).toBe(false);
@@ -1746,7 +1778,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect((form().querySelector("textarea") as HTMLTextAreaElement).value).toBe("Tract 7, if it's dry");
       expect(form().querySelectorAll(".edited-note")).toHaveLength(1);
       expect((item("Q-259").querySelector("details.edits") as HTMLDetailsElement).open).toBe(true);
-      expect(item("Q-259").querySelector(".q")!.textContent).toBe("Which tract for rehearsal 2, given the rain?");
+      expect(item("Q-259").querySelector(".l-t")!.textContent).toBe("Which tract for rehearsal 2, given the rain?");
       // Its options are read again; the keys stand, so the answer still goes.
       const [again] = pending("get").filter((f) => f.op["ref"] === "Q-259");
       reply(again!, { question: { ref: "Q-259", options: [{ key: "a", text: "Tract 3 (covered)", recommended: false }, { key: "b", text: "Tract 7", recommended: true }] } });
@@ -1771,7 +1803,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect(item("Q-258").querySelector("form.answer")).not.toBeNull();
       expect(item("Q-258").querySelector(".edited-note")).toBeNull();
       expect((item("Q-258").querySelector("details.edits") as HTMLDetailsElement).open).toBe(false);
-      expect(item("Q-258").querySelector(".q")!.textContent).toBe("Ship rehearsal 1, gap noted?");
+      expect(item("Q-258").querySelector(".l-t")!.textContent).toBe("Ship rehearsal 1, gap noted?");
       (item("Q-258").querySelector(".answer-btn, form.answer button[type=button]") as HTMLButtonElement)?.click();
       for (const f of pending("get")) reply(f, { question: { ref: String(f.op["ref"]), options: [] } });
       await reread([a15, gate, q258, bug, q259]);
@@ -1791,7 +1823,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       const gate6 = wait("BOB-6", "review_gate", "Casper's look at Start", true, { feature: "BOB-6", since: iso(60 * 26), asked_by: null, holds: { items: ["BOB-6"], sessions: [] },
         stale: { changed_at: iso(60 * 26), owner: null, flagged_at: null } });
       const q15 = wait("Q-15", "question", "Keep the old tab?", false, { feature: "BOB-6", since: iso(60 * 30), kept: { by: "Mario@mbp-1", at: iso(90), reason: "Still waits on the move, which is Friday" } });
-      const meta = (ref: string) => item(ref).querySelector(".meta")!;
+      const meta = (ref: string) => item(ref).querySelector(".m-row")!;
 
       // Its rows' times are from when the file loaded, and the suite runs past a minute: the clock is held there.
       afterAll(() => {
@@ -1811,16 +1843,17 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       });
 
       it("moves a bug whose fix landed to When you have time, badged fix landed, with its commit, release and who closes it (spec a)", () => {
-        expect(refs("waits-holding")).toEqual(["Q-14", "BOB-6"]);
-        expect(refs("waits-rest")).toEqual(["Q-15", "A-30", "LAND-9", "BOB-28", "BOB-27"]);
+        expect(refs("needs-holding")).toEqual(["Q-14", "BOB-6"]);
+        expect(refs("needs-rest")).toEqual(["Q-15", "A-30", "LAND-9", "BOB-28", "BOB-27"]);
         expect(item("BOB-27").getAttribute("data-blocking")).toBe("false");
         const badge = item("BOB-27").querySelector(".badge")!;
         expect(badge.textContent).toBe("bug · fix landed");
         expect(badge.getAttribute("data-state")).toBe("fixed");
-        // The fix line sits between the text and the meta.
+        // The fix line sits right under the text, its age beside it, and above the meta.
         const line = item("BOB-27").querySelector(".fix")!;
-        expect(line.previousElementSibling!.classList.contains("q")).toBe(true);
-        expect(line.nextElementSibling!.classList.contains("meta")).toBe(true);
+        expect(line.previousElementSibling!.classList.contains("age")).toBe(true);
+        expect(line.previousElementSibling!.previousElementSibling!.classList.contains("l-h")).toBe(true);
+        expect(line.nextElementSibling!.classList.contains("m-row")).toBe(true);
         expect(line.textContent).toBe("Fix landed 5d4617f, in v2.0.0-rc.34 · waits on Peach to close it");
         expect(line.querySelector(".sha")!.getAttribute("title")).toBe(subject);
         expect(line.querySelector(".muted")!.textContent).toBe(" · waits on Peach to close it");
@@ -1828,16 +1861,17 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
         expect(item("LAND-9").querySelector(".fix")!.textContent).toBe("Fix landed 5d4617f · waits on Peach to close it");
         // No Blocks use; from and the triage link stay, and no button.
         expect(item("BOB-27").querySelector(".holds")).toBeNull();
-        expect(meta("BOB-27").textContent).toBe("from MarioOpen in triage");
+        expect(meta("BOB-27").textContent).toBe("BobNet › BOB-12 · from MarioOpen in triage");
         expect(item("BOB-27").querySelector("button")).toBeNull();
-        expect(item("BOB-27").querySelector(".top .age")!.textContent).toBe("3h 0m");
+        expect(item("BOB-27").querySelector(".age")!.textContent).toBe("3h 0m");
       });
 
       it("says a row unchanged over a day, and whom the board asked to check it: flagged, within the hour, nobody (spec b)", () => {
-        const stale = (ref: string) => item(ref).querySelector(".meta .stale")!;
+        const stale = (ref: string) => item(ref).querySelector(".m-row .stale")!;
         expect(stale("Q-14").textContent).toBe("Unchanged for 2d 3h, Mario asked to check it 40m ago");
-        // After from, before the link.
-        expect(meta("Q-14").textContent).toBe("Holds up Luigi (build A)from MarioUnchanged for 2d 3h, Mario asked to check it 40m agoOpen BOB-6Answer");
+        // At the right of the meta row, before the button.
+        expect(meta("Q-14").textContent).toBe("BobNet › BOB-6 · holds up Luigi (build A) · from MarioUnchanged for 2d 3h, Mario asked to check it 40m agoAnswer");
+        expect(stale("Q-14").nextElementSibling!.classList.contains("acts")).toBe(true);
         expect(stale("A-30").textContent).toBe("Unchanged for 24h 10m, Peach is asked within the hour");
         expect(stale("BOB-6").textContent).toBe("Unchanged for 26h 0m, nobody to ask");
         // Both ages tick as every age on the page does.
@@ -1859,9 +1893,21 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
         const lines = [...$("needs").querySelectorAll("li")];
         expect(lines.map((l) => l.getAttribute("data-id"))).toEqual(["bobnet/Q-14", "bobnet/BOB-6"]);
         expect(lines[0]!.querySelector(".badge")!.textContent).toBe("question");
-        expect(lines[0]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-6 · holds up Luigi (build A) · unchanged 2d 3h");
+        expect(lines[0]!.querySelector(".m-row")!.textContent).toBe("BobNet › BOB-6 · holds up Luigi (build A) · from MarioUnchanged for 2d 3h, Mario asked to check it 40m agoAnswer");
         expect([...lines[0]!.querySelectorAll("button:not([hidden])")].map((b) => b.textContent)).toEqual(["Answer"]);
-        expect(view().querySelector(".ov-needs .more")!.textContent).toBe("2 hold work up · 5 more when you have time →");
+        // Compact: the fix line stays, and how long it has been unchanged is short, in the meta.
+        const rest = [...$("needs-rest").querySelectorAll("li")];
+        expect(rest.map((l) => l.getAttribute("data-ref"))).toEqual(["Q-15", "A-30", "LAND-9"]);
+        expect(rest[1]!.querySelector(".l-m")!.textContent).toBe("BobNet · from Peach · unchanged 1 day");
+        expect(rest[2]!.querySelector(".fix")!.textContent).toBe("Fix landed 5d4617f · waits on Peach to close it");
+        expect(rest[0]!.querySelector(".kept")).toBeNull();
+        // Opened, it says the rest.
+        (rest[0]!.querySelector(".l-t") as HTMLElement).click();
+        const q15open = $("needs-rest").querySelector('li[data-ref="Q-15"]')!;
+        expect(q15open.querySelector(".whole .kept")!.textContent).toBe("Kept by Mario 1h 30m ago: “Still waits on the move, which is Friday”");
+        expect(q15open.querySelector(".whole a")!.textContent).toBe("Answer it on Needs you →");
+        (q15open.querySelector(".l-t") as HTMLElement).click();
+        expect(view().querySelector(".ov-needs .more")!.textContent).toBe("2 more when you have time, and today's answers, on Needs you →");
         expect($("needs-n").textContent).toBe("7");
         await go("#needs");
       });
@@ -1902,7 +1948,8 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       snap.pending = [];
       FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
       await settle();
-      expect($("waits-holding").textContent).toBe("Holds work up Nothing is held up by you.");
+      expect(view().querySelector(".needs-page .st-empty.ok")!.textContent).toBe("Nothing needs you. Anything new shows here within a minute.");
+      expect(view().querySelectorAll("li.need")).toHaveLength(0);
       expect($("needs-n").textContent).toBe("");
       // Back to one project in the service, as the tests after these expect.
       FakeSocket.last.frame({ t: "board_changed", project: "nowhere", seq: 100, refs: [] });
@@ -1928,92 +1975,74 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       await settle();
     };
     const line = (id: string) => $("needs").querySelector(`li[data-id="${id}"]`)!;
-    const more = (id: string) => line(id).querySelector(".acts .more-t") as HTMLButtonElement;
-    const shown = (id: string) => [...line(id).querySelectorAll("button:not([hidden])")].map((b) => b.textContent);
+    const text = (id: string) => line(id).querySelector(".l-t") as HTMLElement;
     const report = (pend: unknown[]) => {
       const snap = structuredClone(dashboard.laptops[0]!.snapshot);
       snap.workers = [worker({ state: "waiting-answer" })] as never;
       snap.pending = pend as never;
       FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
     };
-    // happy-dom lays nothing out: a line's text is as wide as its characters, 7 px each, in a 300 px column.
-    const lt = (el: Element) => el.classList.contains("l-t");
     beforeAll(async () => {
-      Object.defineProperty(HTMLElement.prototype, "scrollWidth", { configurable: true, get() { return lt(this) ? this.textContent!.length * 7 : 0; } });
-      Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get() { return lt(this) ? 300 : 0; } });
       sessionStorage.removeItem("bobnet.open");
       report([perm]);
       await go("#overview");
       await answerWith([q1, q7, gate, a12, old]);
     });
     afterAll(async () => {
-      delete (HTMLElement.prototype as { scrollWidth?: number }).scrollWidth;
-      delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
       report([]);
       sessionStorage.removeItem("bobnet.open");
       await answerWith([]);
     });
 
-    it("shows Show all on a cut line and none on one that fits", () => {
-      expect(shown("bobnet/Q-1")).toEqual(["Show all", "Answer"]);
-      expect(shown("perm/mbp-1/r_4")).toEqual(["Show all", "Allow or deny"]);
-      expect(shown("bobnet/Q-7")).toEqual(["Answer"]);
-      expect(shown("bobnet/BOB-5")).toEqual([]);
-      expect(line("bobnet/Q-1").querySelector(".l-t")!.hasAttribute("data-cut")).toBe(true);
-      expect(line("bobnet/Q-7").querySelector(".l-t")!.hasAttribute("data-cut")).toBe(false);
+    it("opens whole from a tap or Enter on its text, its line breaks kept, the recommendation and the context link; again folds it", async () => {
+      const t = text("bobnet/Q-1");
+      expect([t.getAttribute("role"), t.getAttribute("tabindex"), t.getAttribute("aria-expanded"), t.id]).toEqual(["button", "0", "false", "t-bobnet/Q-1"]);
       expect(line("bobnet/Q-1").querySelector(".whole")).toBeNull();
-    });
-
-    it("opens to the whole text, its line breaks kept, the recommendation and the context link; Show less folds it", async () => {
-      const b = more("bobnet/Q-1");
-      // A button the keyboard reaches; Enter on it is a click.
-      expect(b.tagName).toBe("BUTTON");
-      expect(b.getAttribute("type")).toBe("button");
-      expect(b.getAttribute("tabindex")).toBeNull();
-      expect([b.getAttribute("aria-expanded"), b.getAttribute("aria-controls"), b.getAttribute("aria-label")]).toEqual(["false", "t-bobnet/Q-1", "Show all of Q-1"]);
-      expect(line("bobnet/Q-1").querySelector(".l-t")!.getAttribute("title")).toBe(long);
-      b.focus();
-      b.click();
+      t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
       expect(line("bobnet/Q-1").classList.contains("open")).toBe(true);
-      const t = line("bobnet/Q-1").querySelector(".l-t")!;
-      expect(t.id).toBe("t-bobnet/Q-1");
-      expect(t.textContent).toBe(long);
-      expect(t.textContent).toContain("\n");
-      expect(t.hasAttribute("title")).toBe(false);
+      // The keyboard stays where it was, across the redraw.
+      expect(document.activeElement).toBe(text("bobnet/Q-1"));
+      expect(text("bobnet/Q-1").getAttribute("aria-expanded")).toBe("true");
+      expect(text("bobnet/Q-1").textContent).toBe(long);
+      expect(text("bobnet/Q-1").textContent).toContain("\n");
       const whole = line("bobnet/Q-1").querySelector(".whole")!;
       expect(whole.querySelector(".rec")!.textContent).toBe("Recommended Accept the scale test now");
       expect(whole.querySelector("a")!.textContent).toBe("Its context, on Needs you →");
       expect(whole.querySelector("a")!.getAttribute("href")).toBe("#needs");
       // The context itself stays off the Overview.
       expect(view().querySelector(".ov-needs")!.textContent).not.toContain("700 tasks");
-      expect(shown("bobnet/Q-1")).toEqual(["Show less", "Answer"]);
-      expect([more("bobnet/Q-1").getAttribute("aria-expanded"), more("bobnet/Q-1").getAttribute("aria-label")]).toEqual(["true", "Show less of Q-1"]);
-      // DOM order: badge, text, what opened, meta, acts.
-      expect([...line("bobnet/Q-1").children].map((c) => c.className)).toEqual(["badge", "l-t", "whole", "l-m", "acts"]);
-      // A short question with no recommendation or context opens to nothing more than its text.
-      more("bobnet/Q-1").click();
+      // DOM order: badge and id, text, age, what opened, the meta row with its one button.
+      expect([...line("bobnet/Q-1").children].map((c) => c.className)).toEqual(["n-b", "l-h", "age", "whole", "m-row"]);
+      expect([...line("bobnet/Q-1").querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Answer"]);
+      text("bobnet/Q-1").click();
       expect(line("bobnet/Q-1").classList.contains("open")).toBe(false);
       expect(line("bobnet/Q-1").querySelector(".whole")).toBeNull();
-      expect(shown("bobnet/Q-1")).toEqual(["Show all", "Answer"]);
     });
 
-    it("opens from a tap on the cut text, but not while text is selected, and not on a line that fits", () => {
+    it("opens a request's ask whole, as a code block for a command, and not while its text is selected", () => {
       const sel = vi.spyOn(globalThis, "getSelection").mockReturnValue({ toString: () => "map tiles" } as Selection);
-      (line("perm/mbp-1/r_4").querySelector(".l-t") as HTMLElement).click();
+      text("perm/mbp-1/r_4").click();
       expect(line("perm/mbp-1/r_4").classList.contains("open")).toBe(false);
       sel.mockRestore();
-      (line("perm/mbp-1/r_4").querySelector(".l-t") as HTMLElement).click();
+      text("perm/mbp-1/r_4").click();
       expect(line("perm/mbp-1/r_4").classList.contains("open")).toBe(true);
-      expect(line("perm/mbp-1/r_4").querySelector(".l-t")!.textContent).toBe(`records-agent asks: ${perm.preview}`);
-      expect(more("perm/mbp-1/r_4").getAttribute("aria-label")).toBe("Show less of records-agent's question");
-      (line("bobnet/Q-7").querySelector(".l-t") as HTMLElement).click();
-      expect(line("bobnet/Q-7").classList.contains("open")).toBe(false);
-      more("perm/mbp-1/r_4").click();
+      expect(text("perm/mbp-1/r_4").textContent).toBe(`records-agent asks: ${perm.preview}`);
+      text("perm/mbp-1/r_4").click();
+      const command = `pnpm exec playwright test ${"e2e/change-sets.spec.ts ".repeat(60)}`;
+      report([{ ...perm, id: "r_c", kind: "approval", tool: "Bash", preview: command.slice(0, 399) + "…", ask: { text: command, cut: true, questions: [] } }]);
+      return settle().then(() => {
+        text("perm/mbp-1/r_c").click();
+        expect(text("perm/mbp-1/r_c").querySelector("code")!.textContent).toBe(command);
+        expect(line("perm/mbp-1/r_c").querySelector(".whole .cutnote")!.textContent).toBe("Cut at the laptop: too long to send whole.");
+        text("perm/mbp-1/r_c").click();
+        report([perm]);
+        return settle();
+      });
     });
 
-    it("opens the line when Answer is pressed; a redraw and a Show less keep the pick, the words and the caret", async () => {
+    it("opens the line when Answer is pressed; a redraw and folding it keep the pick, the words and the caret", async () => {
       (line("bobnet/Q-1").querySelector(".answer-btn") as HTMLButtonElement).click();
-      reply(pending("get")[0]!, { question: { ref: "Q-1", options: [{ key: "fixture", text: "Accept the scale test now", recommended: true }, { key: "hold", text: "Hold AC 8", recommended: false }] } });
+      reply(pending("get").find((f) => f.op["ref"] === "Q-1")!, { question: { ref: "Q-1", options: [{ key: "fixture", text: "Accept the scale test now", recommended: true }, { key: "hold", text: "Hold AC 8", recommended: false }] } });
       await settle();
       expect(line("bobnet/Q-1").classList.contains("open")).toBe(true);
       const box = () => line("bobnet/Q-1").querySelector("form.answer textarea") as HTMLTextAreaElement;
@@ -2028,15 +2057,15 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       report([perm]);
       await settle();
       expect(box().value).toBe("Fixture is fine, and note it on BOB-9");
-      // Show less redraws at once: the line folds, the form, the pick, the words and the caret stay.
-      more("bobnet/Q-1").click();
+      // Folding it redraws at once: the form, the pick, the words and the caret stay.
+      text("bobnet/Q-1").click();
       expect(line("bobnet/Q-1").classList.contains("open")).toBe(false);
       expect(box().value).toBe("Fixture is fine, and note it on BOB-9");
       expect(document.activeElement).toBe(box());
       expect(box().selectionStart).toBe(8);
       expect((line("bobnet/Q-1").querySelector('input[value="hold"]') as HTMLInputElement).checked).toBe(true);
-      // Closing the form leaves the line as it is; Show all opens it again, the form untouched.
-      more("bobnet/Q-1").click();
+      // Closing the form leaves the line as it is; opened again, the form is untouched.
+      text("bobnet/Q-1").click();
       expect(box().value).toBe("Fixture is fine, and note it on BOB-9");
       (line("bobnet/Q-1").querySelector(".answer-btn") as HTMLButtonElement).click();
       expect(line("bobnet/Q-1").querySelector("form.answer")).toBeNull();
@@ -2060,11 +2089,11 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect(line("bobnet/Q-1").classList.contains("open")).toBe(false);
     });
 
-    it("on Waits on you keeps the line breaks and shows Show context / Hide context only where there is a context", async () => {
+    it("on the Needs you page keeps the line breaks and shows Show context / Hide context only where there is a context", async () => {
       await go("#needs");
-      const it = (ref: string) => view().querySelector(`.waits li[data-ref="${ref}"]`)!;
-      expect(it("Q-1").querySelector(".q")!.textContent).toBe(long);
-      expect(it("A-12").querySelector(".q")!.textContent).toBe("Sign the Mapbox terms.\nThe link is in lead/questions.md.");
+      const it = (ref: string) => view().querySelector(`li.need[data-ref="${ref}"]`)!;
+      expect(it("Q-1").querySelector(".l-t")!.textContent).toBe(long);
+      expect(it("A-12").querySelector(".l-t")!.textContent).toBe("Sign the Mapbox terms.\nThe link is in lead/questions.md.");
       for (const ref of ["Q-7", "BOB-5", "Q-8"]) expect(it(ref).querySelector(".ctx-row")).toBeNull();
       const b = () => it("A-12").querySelector(".ctx-row button") as HTMLButtonElement;
       expect([b().textContent, b().getAttribute("aria-expanded"), b().getAttribute("aria-controls")]).toEqual(["Show context", "false", "c-bobnet/A-12"]);
@@ -2073,20 +2102,24 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect([b().textContent, b().getAttribute("aria-expanded")]).toEqual(["Hide context", "true"]);
       expect(it("A-12").querySelector(".ctx")!.id).toBe("c-bobnet/A-12");
       expect(it("A-12").querySelector(".ctx")!.textContent).toBe("Free tier: 50,000 loads a month.");
-      // Above the meta line.
-      expect([...it("A-12").children].map((c) => c.className)).toEqual(["top", "q", "ctx-row", "meta"]);
+      // The item's last row, above an open answer form (spec 2.2).
+      expect([...it("A-12").children].map((c) => c.className)).toEqual(["n-b", "l-h", "age", "m-row", "ctx-row"]);
+      (it("A-12").querySelector(".answer-btn") as HTMLButtonElement).click();
+      expect([...it("A-12").children].slice(-2).map((c) => c.className)).toEqual(["ctx-row", "answer"]);
+      for (const f of pending("get").filter((x) => x.op["ref"] === "A-12")) reply(f, { question: { ref: "A-12", kind: "action", options: [] } });
+      (it("A-12").querySelector(".answer-btn") as HTMLButtonElement).click();
       b().click();
       expect(it("A-12").querySelector(".ctx")).toBeNull();
       expect(b().textContent).toBe("Show context");
     });
 
-    it("lands the Overview's context link on Waits on you with that context open and scrolled into view", async () => {
+    it("lands the Overview's context link on the Needs you page with that context open and scrolled into view", async () => {
       await go("#overview");
-      more("bobnet/Q-1").click();
+      text("bobnet/Q-1").click();
       const into = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
       (line("bobnet/Q-1").querySelector(".whole a") as HTMLAnchorElement).click();
       await go("#needs");
-      const it = view().querySelector('.waits li[data-ref="Q-1"]')!;
+      const it = view().querySelector('li.need[data-ref="Q-1"]')!;
       expect(it.querySelector(".ctx")!.textContent).toBe(context);
       expect(it.querySelector(".ctx-row button")!.textContent).toBe("Hide context");
       expect(into.mock.contexts.map((li) => (li as HTMLElement).dataset["ref"])).toEqual(["Q-1"]);
@@ -2517,8 +2550,13 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
     // helix's board is a laptop's: the read has no helix, so it has no card (ADR 0012 §2).
     expect([...view().querySelectorAll(".pcard")].map((c) => c.getAttribute("data-project"))).toEqual(["bobnet"]);
     const needs = $("status-needs");
-    expect(needs.querySelector("li .l-t")!.getAttribute("href")).toBe("#needs");
-    expect(needs.querySelector("li .l-m")!.textContent).toContain("BobNet · BOB-9 · holds up");
+    // The one item, compact: a tap opens it here, and it is answered on Needs you (BOB-176).
+    expect(needs.querySelector("li")!.className).toBe("need compact");
+    (needs.querySelector("li .l-t") as HTMLElement).click();
+    expect($("status-needs").querySelector("li .whole a.more-t:last-child")!.textContent).toBe("Answer it on Needs you →");
+    expect($("status-needs").querySelector("li .whole a.more-t:last-child")!.getAttribute("href")).toBe("#needs");
+    ($("status-needs").querySelector("li .l-t") as HTMLElement).click();
+    expect(needs.querySelector("li .l-m")!.textContent).toContain("BobNet › BOB-9 · holds up");
     expect(needs.querySelector("li .before")!.textContent).toMatch(/^from before /);
     // Read only: no answer button here.
     expect(needs.querySelector("button")).toBeNull();
@@ -3131,8 +3169,7 @@ describe("a project the service doesn't have (ADR 0012 §2, BOB-193)", () => {
 
   it("shows its reading state before the first read, and the error when that fails: never 'No project's board yet' nor a board (c2)", async () => {
     await go("#overview");
-    vi.resetModules();
-    await import("../public/app.js");
+    await freshPage();
     const ws = FakeSocket.last;
     // A fresh page numbers its requests from 1 again.
     answered.clear();
@@ -3161,13 +3198,330 @@ describe("a project the service doesn't have (ADR 0012 §2, BOB-193)", () => {
   });
 });
 
+describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
+  const H = 60, DAY = 24 * 60;
+  const bobnet = { key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] };
+  const helix = { ...HELIX, name: "Helix" };
+  const overviewRow = (project: unknown) => ({ project, release: null, release_number: null, open: [], next_ready: null, waits_on_you: null, backlog: { items: 0, bugs: 0, oldest: null }, no_release: null });
+  const wait = (ref: string, min: number, over: Record<string, unknown> = {}) => ({ project: "bobnet", kind: "question", ref, feature: "BOB-3", text: `${ref} text`, recommended: null, context: null, holds: { items: [], sessions: [] }, waiting_sessions: [],
+    needed_before: null, asked_by: "Mario@mbp-1", since: iso(min), blocking: true, edits: [], ...over });
+  const ask = (id: string, min: number, over: Record<string, unknown> = {}) => ({ id, worker_id: "w_h", name: "Howard", kind: "approval", tool: "Bash", tier: "human", created_at: iso(min), preview: `${id} preview`, ask: { text: `${id} command`, cut: false, questions: [] }, ...over });
+  const howard = worker({ id: "w_h", name: "Howard", project: "helix", role: "engineer", state: "waiting-approval", session: "LAND-50 build 2", task_ref: null });
+  const snap = (over: Record<string, unknown> = {}) => ({ supervisor: { started_at: iso(900), concurrency: 2, active: 1, queued: 0 }, workers: [howard], pending: [], usage: [], decided: [], ...over });
+  const report = (laptop: string, at: number, over: Record<string, unknown> = {}) => FakeSocket.last.frame({ t: "report", laptop, at: new Date(Date.now() - at * 60_000).toISOString(), snapshot: snap(over) });
+  const done = new Set<unknown>();
+  let waits: unknown[] = [], answered: unknown[] = [], question: Record<string, unknown> | null = null;
+  /** The operations the board refuses. */
+  let down: string[] = [];
+  const answer = async () => {
+    for (let i = 0; i < 4; i++) {
+      for (const f of FakeSocket.last.sent.filter((x) => x["t"] === "board_op" && !done.has(x["rid"]))) {
+        const op = f["op"] as { op: string };
+        if (["mark_done", "answer_question"].includes(op.op)) continue;
+        done.add(f["rid"]);
+        if (down.includes(op.op)) FakeSocket.last.frame({ t: "error", rid: f["rid"], code: "unavailable", message: "The board is down" });
+        else FakeSocket.last.frame({ t: "ok", rid: f["rid"], result: op.op === "projects" ? { projects: [bobnet, helix] } : op.op === "overview" ? { projects: [bobnet, helix].map(overviewRow) } : op.op === "waits" ? { waits, answered }
+          : op.op === "get" ? { question } : op.op === "status" ? { at: iso(0), since: iso(DAY), projects: [] } : {} });
+      }
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    await settle();
+  };
+  /** A fresh page on these laptops. */
+  const open = async (laptops: unknown[] = []) => {
+    sessionStorage.removeItem("bobnet.open");
+    await freshPage();
+    done.clear();
+    FakeSocket.last.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
+    refresh(laptops);
+    await answer();
+  };
+  const refresh = (laptops: unknown[]) => FakeSocket.last.frame({ t: "ok", rid: FakeSocket.last.sent.findLast((f) => f["t"] === "dashboard")!["rid"], result: { ...dashboard, now: new Date().toISOString(), laptops, boards: [] } });
+  const reread = async () => {
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 1, refs: [] });
+    await answer();
+  };
+  const laptop = (name: string, at: number, over: Record<string, unknown> = {}) => ({ laptop: name, at: iso(at), snapshot: snap(over) });
+  const item = (ref: string) => view().querySelector(`li.need[data-ref="${ref}"]`)!;
+  const refs = (id: string) => [...($(id)?.querySelectorAll("li.need") ?? [])].map((li) => li.getAttribute("data-ref"));
+  const segs = () => [...view().querySelectorAll(".bar-row .seg button")].map((b) => b.textContent);
+  const click = (el: Element | null | undefined) => (el as HTMLElement).click();
+
+  beforeAll(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+  });
+  afterAll(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows a live request only under a day old, from a laptop that reports, while its worker runs; every count is what is shown (c1)", async () => {
+    waits = [wait("Q-2", 30), wait("Q-1", 3 * H), wait("A-1", 5 * H, { kind: "action", blocking: false, project: "helix", feature: null }), wait("A-0", 9 * H, { kind: "action", blocking: false, project: "helix", feature: null })];
+    const ended = worker({ id: "w_e", name: "Scotty", project: "helix", state: "stopped", ended_at: iso(3) });
+    await open([laptop("mbp-1", 0, { workers: [howard, ended], pending: [ask("r_old", DAY + 1), ask("r_live", DAY - 1), ask("r_ended", 4, { worker_id: "w_e", name: "Scotty" }), ask("r_gone", 4, { worker_id: "w_none" }), ask("r_lead", 4, { tier: "orchestrator" })] }),
+      laptop("ubu1", 4, { pending: [ask("r_quiet", 10)] })]);
+    await go("#needs");
+    expect(refs("needs-holding")).toEqual(["r_live", "Q-1", "Q-2"]);
+    expect(refs("needs-rest")).toEqual(["A-0", "A-1"]);
+    expect(view().querySelector(".stale-banners .banner")!.textContent).toContain("ubu1 stopped reporting");
+    expect(segs()).toEqual(["All projects 5", "BobNet 2", "Helix 3"]);
+    expect(view().querySelectorAll("li.need")).toHaveLength(5);
+    expect($("needs-n").textContent).toBe("5");
+    // The Overview: the same items, the same count.
+    await go("#overview");
+    expect($("needs-count").textContent).toBe($("needs-n").textContent);
+    expect(view().querySelectorAll(".ov-needs li.need")).toHaveLength(5);
+    expect(view().querySelector(".stale-banners .banner")).not.toBeNull();
+    // Two minutes on, the one at 23 h 59 min is over a day old.
+    vi.setSystemTime(now.getTime() + 2 * 60_000);
+    report("mbp-1", 0, { pending: [ask("r_live", DAY - 1)] });
+    await settle();
+    expect(view().querySelector('[data-ref="r_live"]')).toBeNull();
+    expect([$("needs-count").textContent, $("needs-n").textContent]).toEqual(["4", "4"]);
+    // Its worker stops: the request leaves with it, the report listing it or not.
+    report("mbp-1", 0, { pending: [ask("r_new", 1)] });
+    await settle();
+    expect($("needs-n").textContent).toBe("5");
+    report("mbp-1", 0, { workers: [{ ...howard, state: "stopped", ended_at: iso(0) }], pending: [ask("r_new", 1)] });
+    await settle();
+    expect(view().querySelector('[data-ref="r_new"]')).toBeNull();
+    expect($("needs-n").textContent).toBe("4");
+    // Answered: it leaves.
+    waits = [wait("Q-2", 30)];
+    await reread();
+    expect([$("needs-n").textContent, refs("needs-holding")]).toEqual(["1", ["Q-2"]]);
+    vi.setSystemTime(now);
+  });
+
+  it("keeps a board question while it is open, with its age in days, until it is answered or withdrawn (c2)", async () => {
+    waits = [wait("Q-4", 4 * DAY + 30), wait("A-4", 4 * DAY, { kind: "action" })];
+    await open([laptop("mbp-1", 0)]);
+    await go("#needs");
+    expect(item("Q-4").querySelector(".age")!.textContent).toBe("4 days");
+    expect($("needs-n").textContent).toBe("2");
+    waits = [wait("A-4", 4 * DAY, { kind: "action" })];
+    await reread();
+    expect(refs("needs-holding")).toEqual(["A-4"]);
+    waits = [];
+    await reread();
+    expect(view().querySelector(".needs-page .st-empty.ok")!.textContent).toBe("Nothing needs you. Anything new shows here within a minute.");
+    expect($("needs-n").textContent).toBe("");
+  });
+
+  it("says what it is up to date with, a quiet laptop left out, and that the page itself is behind when it is (c3)", async () => {
+    waits = [wait("Q-1", H)];
+    await open([laptop("mbp-1", 0.3), laptop("ubu1", 0.6), laptop("mini", 9)]);
+    for (const page of ["#needs", "#overview"]) {
+      await go(page);
+      expect(view().querySelector(".fresh")!.textContent).toBe("Up to date: mbp-1 reported 18s ago, ubu1 reported 36s ago. An item leaves when it's answered or its worker stops.");
+      expect(view().querySelector(".fresh")!.classList.contains("late")).toBe(false);
+    }
+    // Four minutes with no refresh of its own: it says so instead, with no frame to tell it.
+    vi.setSystemTime(now.getTime() + 4 * 60_000);
+    await new Promise((r) => setTimeout(r, 1000));
+    await settle();
+    expect(view().querySelector(".fresh")!.textContent).toBe("Last updated 4m ago");
+    expect(view().querySelector(".fresh")!.classList.contains("late")).toBe(true);
+    refresh([laptop("mbp-1", -4)]);
+    await settle();
+    expect(view().querySelector(".fresh")!.textContent).toBe("Up to date: mbp-1 reported 0s ago. An item leaves when it's answered or its worker stops.");
+    // Its own read failed: the items stay, with when they were read.
+    down = ["waits"];
+    await reread();
+    expect(view().querySelector(".fresh")!.textContent).toBe("Last updated 4m ago");
+    expect(refs("needs-holding")).toEqual(["Q-1"]);
+    down = [];
+    await reread();
+    expect(view().querySelector(".fresh")!.textContent).toMatch(/^Up to date: /);
+  });
+
+  it("says so too when it is cut off (c3)", async () => {
+    vi.setSystemTime(now.getTime() + 4 * 60_000);
+    FakeSocket.last.dispatchEvent(new Event("close"));
+    await settle();
+    expect(view().querySelector(".fresh")!.classList.contains("late")).toBe(true);
+    vi.setSystemTime(now);
+    // It connects again, so no page left behind does under the next.
+    await new Promise((r) => setTimeout(r, 1100));
+  });
+
+  it("sends a note with Allow where the supervisor takes one, and says what became of it (c5)", async () => {
+    waits = [];
+    const asked: string[] = [];
+    globalThis.confirm = (q?: string) => (asked.push(String(q)), true);
+    const decide = async (label: string, note: string, result: Record<string, unknown> | null) => {
+      if (!item("r_1").querySelector("form.answer")) click(item("r_1").querySelector(".answer-btn"));
+      const box = item("r_1").querySelector("form.answer textarea") as HTMLTextAreaElement;
+      box.value = note;
+      box.dispatchEvent(new Event("input"));
+      click([...item("r_1").querySelectorAll("form.answer button")].find((b) => b.textContent === label));
+      const sent = FakeSocket.last.sent.at(-1)!;
+      FakeSocket.last.frame({ t: "ok", rid: sent["rid"], result: { id: `act-${sent["rid"]}` } });
+      FakeSocket.last.frame({ t: "action_result", id: `act-${sent["rid"]}`, laptop: "mbp-1", ok: true, message: "r_1 allowed", ...result });
+      return [$("toast").textContent, $("toast").dataset["ok"], (sent["action"] as Record<string, unknown>)["message"]];
+    };
+    await open([laptop("mbp-1", 0, { pending: [ask("r_1", 3)] })]);
+    await go("#needs");
+    click(item("r_1").querySelector(".answer-btn"));
+    expect(item("r_1").querySelector(".words span")!.textContent).toBe("Note to Howard (optional)");
+    expect(item("r_1").querySelector(".who-gets")!.textContent).toBe("Howard gets your decision, and your note as its next message. It can't be taken back.");
+    expect(item("r_1").querySelector(".l-t code")!.textContent).toBe("r_1 command");
+    const note = "Fine, keep the stash";
+    expect(await decide("Allow", note, { note_delivered: true })).toEqual(["Allowed Howard's Bash; your note went to Howard.", "true", note]);
+    expect(asked.at(-1)).toBe("Allow Howard to run Bash?\n\nr_1 preview\n\nYour note goes with it.");
+    expect(await decide("Allow", note, { note_delivered: false })).toEqual(["Allowed Howard's Bash, but your note didn't reach Howard (it had stopped).", "warn", note]);
+    expect(await decide("Allow", note, {})).toEqual(["Allowed Howard's Bash, but mbp-1's supervisor is older and dropped your note.", "warn", note]);
+    expect(await decide("Allow", " ", { note_delivered: true })).toEqual(["Allowed Howard's Bash.", "true", undefined]);
+    expect(await decide("Deny", note, {})).toEqual(["Denied Howard's Bash; your note went to Howard.", "true", note]);
+    expect(await decide("Allow", note, { ok: false, message: "r_1 isn't pending" })).toEqual(["r_1 isn't pending", "false", note]);
+    // An older supervisor's report has no decided: today's form, and Allow sends no note.
+    report("mbp-1", 0, { pending: [ask("r_1", 3)], decided: undefined });
+    await settle();
+    click(item("r_1").querySelector(".answer-btn"));
+    expect(item("r_1").querySelector(".words span")!.textContent).toBe("Note to Howard, sent with Deny (optional)");
+    expect(await decide("Allow", note, {})).toEqual(["Allowed Howard's Bash.", "true", undefined]);
+  });
+
+  it("lists what he decided from here today with the board's answers, newest first: no Undo on a permission, nothing from an older supervisor (c6)", async () => {
+    // Noon, so today and yesterday are what they say wherever this runs.
+    const noon = new Date(now);
+    noon.setHours(12, 0, 0, 0);
+    vi.setSystemTime(noon);
+    const at = (h: number) => new Date(noon.getTime() - h * 3600_000).toISOString();
+    const decided = (id: string, h: number, over: Record<string, unknown> = {}) => ({ id, worker_id: "w_h", name: "Howard", project: "helix", kind: "approval", tool: "Bash", created_at: at(h + 1), decided_at: at(h), decision: "allow", preview: "pnpm test", note: null, ...over });
+    waits = [];
+    answered = [{ project: "bobnet", ref: "Q-13", kind: "question", text: "Build it?", key: null, words: "yes", at: at(2) }];
+    const mbp = { laptop: "mbp-1", at: noon.toISOString(), snapshot: snap({ decided: [decided("r_1", 1, { note: "Only the tract-edit suite" }), decided("r_2", 3, { decision: "deny", tool: "WebFetch", name: "Bender", preview: "https://example.com" }), decided("r_y", 13)] }) };
+    const older = { laptop: "mini", at: noon.toISOString(), snapshot: snap({ decided: undefined }) };
+    // A quiet laptop's decided rows happened all the same.
+    const quiet = { laptop: "ubu1", at: at(1), snapshot: snap({ decided: [decided("r_1", 4, { project: "bobnet", kind: "question", tool: "AskUserQuestion", decision: "deny", preview: "Which one?" })] }) };
+    await open([mbp, older, quiet]);
+    await go("#needs");
+    const rows = () => [...$("needs-answered").querySelectorAll("li.answered")];
+    expect($("needs-answered").querySelector("h2 .count")!.textContent).toBe("4");
+    expect(rows().map((r) => [r.getAttribute("data-ref"), r.querySelector(".badge")!.textContent])).toEqual([["r_1", "allowed"], ["Q-13", "answered"], ["r_2", "denied"], ["r_1", "denied"]]);
+    expect(rows()[0]!.querySelector(".top")!.textContent).toMatch(/^allowedBashHelixtoday \d\d:\d\d/);
+    expect(rows()[0]!.querySelector(".q")!.textContent).toBe("Howard wanted Bash: pnpm test");
+    expect(rows()[0]!.querySelector(".said")!.textContent).toBe("You allowed it · on mbp-1your note: “Only the tract-edit suite”");
+    // Never a claim that it arrived: the report doesn't say.
+    expect($("needs-answered").textContent).not.toMatch(/got your note|got your decision/);
+    expect(rows()[2]!.querySelector(".said")!.textContent).toBe("You denied it · on mbp-1");
+    expect(rows()[2]!.getAttribute("data-decision")).toBe("deny");
+    expect(rows()[3]!.querySelector(".q")!.textContent).toBe("Howard asked: Which one?");
+    expect($("needs-answered").querySelector("button")).toBeNull();
+    // The project switch filters them too.
+    click([...view().querySelectorAll(".bar-row .seg button")].find((b) => b.textContent!.startsWith("BobNet")));
+    expect(rows().map((r) => r.getAttribute("data-ref"))).toEqual(["Q-13", "r_1"]);
+    click([...view().querySelectorAll(".bar-row .seg button")][0]);
+    answered = [];
+    vi.setSystemTime(now);
+  });
+
+  it("shows an action's options as text above Mark done, never to pick from, and marks it done whatever the read says (c7, BOB-187)", async () => {
+    waits = [wait("A-9", 8 * H, { kind: "action", blocking: false, text: "Where do the restart checks run from?" }), wait("A-10", 2 * H, { kind: "action", blocking: false })];
+    question = { ref: "A-9", kind: "action", options: [{ key: "a", text: "A cron entry", recommended: false }, { key: "b", text: "The supervisor's own check", recommended: true }, { key: "c", text: "By hand", recommended: false }] };
+    await open([laptop("mbp-1", 0)]);
+    await go("#needs");
+    const form = () => item("A-9").querySelector("form.answer")!;
+    click(item("A-9").querySelector(".answer-btn"));
+    // Until it is read, today's form.
+    expect(form().querySelector(".filed")).toBeNull();
+    const box = () => form().querySelector("textarea") as HTMLTextAreaElement;
+    box().value = "the second";
+    box().dispatchEvent(new Event("input"));
+    box().focus();
+    await answer();
+    expect(form().querySelector(".filed p")!.textContent).toBe("It was filed with these options:");
+    expect([...form().querySelectorAll(".filed li")].map((li) => li.textContent)).toEqual(["A cron entry", "The supervisor's own check (recommended)", "By hand"]);
+    expect(form().querySelectorAll("input, .filed button, .filed [tabindex]")).toHaveLength(0);
+    expect([...form().querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Cancel", "Mark done"]);
+    expect(form().querySelector(".words span")!.textContent).toBe("Note (optional): if you chose one, say which");
+    // His draft and his focus came through the redraw.
+    expect([box().value, document.activeElement === box()]).toEqual(["the second", true]);
+    click(form().querySelector('button[type="submit"]'));
+    expect(FakeSocket.last.sent.at(-1)!["op"]).toEqual({ op: "mark_done", project: "bobnet", ref: "A-9", note: "the second" });
+    FakeSocket.last.frame({ t: "ok", rid: FakeSocket.last.sent.at(-1)!["rid"], result: { ref: "A-9", seq: 5, told: [] } });
+    await settle();
+    // The read fails: today's form, and Mark done works.
+    down = ["get"];
+    click(item("A-10").querySelector(".answer-btn"));
+    await answer();
+    expect(item("A-10").querySelector(".filed")).toBeNull();
+    expect(item("A-10").querySelector(".words span")!.textContent).toBe("Note (optional)");
+    expect((item("A-10").querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(false);
+    click(item("A-10").querySelector("form.answer .foot button"));
+    down = [];
+    question = null;
+  });
+
+  it("keeps his Undo on the answer's row for the two minutes the board takes it back (c6)", async () => {
+    answered = [{ project: "bobnet", ref: "A-9", kind: "action", text: "Where?", key: null, words: "the second", at: new Date().toISOString() }];
+    waits = [];
+    await reread();
+    const undo = () => $("needs-answered")?.querySelector('li[data-ref="A-9"] button');
+    expect(undo()!.textContent).toBe("Undo");
+    vi.setSystemTime(now.getTime() + 121_000);
+    report("mbp-1", 0);
+    await settle();
+    expect(undo()).toBeNull();
+    vi.setSystemTime(now);
+    report("mbp-1", 0);
+    await settle();
+    click(undo());
+    expect(FakeSocket.last.sent.at(-1)!["op"]).toEqual({ op: "undo", project: "bobnet", seq: 5 });
+    answered = [];
+  });
+
+  it("says what couldn't be read when every read fails, and never '0 items' nor 'Reading' (c8, m1)", async () => {
+    down = ["projects", "overview", "waits", "status"];
+    waits = [];
+    await open([laptop("mbp-1", 0, { workers: [], pending: [] })]);
+    for (const page of ["#needs", "#overview"]) {
+      await go(page);
+      await answer();
+      expect(view().querySelector(".banner.down")!.textContent).toBe("Board unavailableThe board is down");
+      expect(view().textContent).toContain("What waits on you couldn't be read.");
+      expect(view().textContent).not.toMatch(/Reading the board|0 items|Nothing needs you|Nothing is held up|Up to date/);
+    }
+    // A live request still shows: it comes from the laptop's report.
+    report("mbp-1", 0, { pending: [ask("r_1", 3)] });
+    await go("#needs");
+    expect(refs("needs-holding")).toEqual(["r_1"]);
+    expect(view().textContent).toContain("What waits on you couldn't be read.");
+    expect(view().querySelector(".bar-row .muted")).toBeNull();
+    // Read once the board is back.
+    down = [];
+    waits = [wait("Q-1", H)];
+    await reread();
+    expect(view().querySelector(".banner.down")).toBeNull();
+    expect(refs("needs-holding")).toEqual(["Q-1", "r_1"]);
+  });
+
+  it("reads the overview and the waits when only the projects' list fails, and names the projects from them (c8, m2, m3)", async () => {
+    down = ["projects"];
+    waits = [wait("Q-1", H)];
+    await open([laptop("mbp-1", 0)]);
+    await go("#overview");
+    await answer();
+    expect(view().querySelector(".banner.down")!.textContent).toBe("Board unavailableThe board is down");
+    expect(refs("needs-holding")).toEqual(["Q-1"]);
+    expect(item("Q-1").querySelector(".l-m")!.textContent).toBe("BobNet › BOB-3 · holds up BOB-3 · from Mario");
+    expect([...$("plist").querySelectorAll(".prow")].map((r) => r.getAttribute("data-project"))).toEqual(["bobnet", "helix"]);
+    expect($("working").querySelector(".l-path")!.textContent).toBe("Helix › LAND-50build 2");
+    await go("#needs");
+    expect(segs()).toEqual(["All projects 1", "BobNet 1", "Helix 0"]);
+    down = [];
+    await reread();
+    expect(view().querySelector(".banner.down")).toBeNull();
+  });
+});
+
 describe("a reload (BOB-31)", () => {
   it("opens again what was open in this tab: the page reads it from sessionStorage", async () => {
     await go("#overview");
     sessionStorage.setItem("bobnet.open", JSON.stringify(["bobnet/Q-1", "ctx:bobnet/Q-1"]));
     // A fresh page: the dashboard loads again, over a new socket.
-    vi.resetModules();
-    await import("../public/app.js");
+    await freshPage();
     const ws = FakeSocket.last;
     ws.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
     const project = { key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] };
@@ -3188,7 +3542,7 @@ describe("a reload (BOB-31)", () => {
     }
     const li = $("needs").querySelector('li[data-id="bobnet/Q-1"]')!;
     expect(li.classList.contains("open")).toBe(true);
-    expect(li.querySelector(".acts .more-t")!.textContent).toBe("Show less");
+    expect(li.querySelector(".l-t")!.getAttribute("aria-expanded")).toBe("true");
     expect(JSON.parse(sessionStorage.getItem("bobnet.open")!)).toEqual(["bobnet/Q-1", "ctx:bobnet/Q-1"]);
   });
 });

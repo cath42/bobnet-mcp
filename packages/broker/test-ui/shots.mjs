@@ -384,18 +384,18 @@ const all = [
     (p) => p.locator('li[data-ref="Q-258"]').scrollIntoViewIfNeeded()], false],
   ["bob5-answered", "waits", [(p) => p.locator('li[data-ref="Q-258"]').getByRole("button", { name: "Answer" }).click(),
     (p) => p.locator('li[data-ref="Q-258"] .opt-row').first().click(), (p) => p.fill('li[data-ref="Q-258"] textarea', "Adding the second company now; rerun C11 in ten minutes."),
-    (p) => p.getByRole("button", { name: "Send answer" }).click(), (p) => p.locator("#waits-answered").scrollIntoViewIfNeeded()], false, "#waits-answered"],
+    (p) => p.getByRole("button", { name: "Send answer" }).click(), (p) => p.locator("#needs-answered").scrollIntoViewIfNeeded()], false, "#needs-answered"],
   ["bob5-answer-action", "waits", [(p) => p.locator('li[data-ref="A-17"]').getByRole("button", { name: "Mark done" }).click(), (p) => p.locator('li[data-ref="A-17"]').scrollIntoViewIfNeeded()], false],
   ["bob5-answer-permission", "waits", [(p) => p.locator('li[data-ref="r_5"]').getByRole("button", { name: "Allow or deny" }).click(), (p) => p.locator('li[data-ref="r_5"]').scrollIntoViewIfNeeded()], false],
   ["bob5-overview", "overview", [], true],
   ["bob5-overview-answer", "overview", [(p) => p.locator("#needs li", { hasText: "two companies" }).getByRole("button", { name: "Answer" }).click()], false],
   ["bob5-capture-blocks-use", "triage/bobnet", capture, false],
   ["bob5-ci-line", "overview", [(p) => p.locator(".ov-now").scrollIntoViewIfNeeded()], false],
-  // BOB-31 (design/BOB-31/spec.md): Needs you folded with Show all where cut; Q-1 open and the permission opened by a tap on its text;
+  // BOB-31 (design/BOB-31/spec.md): Needs you folded; Q-1 open and the permission opened by a tap on its text;
   // the same dark; answering Q-1 after redraws; Waits on you with Q-1's context open and A-12's line breaks.
   ["bob31-c1-needs-cut", "overview", [], false, null, ".ov-needs"],
-  ["bob31-c1-needs-open", "overview", [(p) => q1(p).getByRole("button", { name: "Show all of Q-1" }).click(), (p) => p.locator('#needs li[data-id^="perm/"] .l-t').click()], false, null, ".ov-needs"],
-  ["bob31-c1-needs-open-dark", "overview", [(p) => q1(p).getByRole("button", { name: "Show all of Q-1" }).click(), (p) => p.locator('#needs li[data-id^="perm/"] .l-t').click()], false, null, ".ov-needs", "dark"],
+  ["bob31-c1-needs-open", "overview", [(p) => q1(p).locator(".l-t").click(), (p) => p.locator('#needs li[data-id^="perm/"] .l-t').click()], false, null, ".ov-needs"],
+  ["bob31-c1-needs-open-dark", "overview", [(p) => q1(p).locator(".l-t").click(), (p) => p.locator('#needs li[data-id^="perm/"] .l-t').click()], false, null, ".ov-needs", "dark"],
   ["bob31-c2-needs-answering", "overview", [(p) => q1(p).getByRole("button", { name: "Answer" }).click(), (p) => q1(p).locator(".opt-row").first().click(),
     (p) => q1(p).locator("textarea").fill("Fixture is fine, and note it on BOB-9 so"), (p) => p.waitForTimeout(5500)], false, null, ".ov-needs"],
   ["bob31-c1-waits-context", "waits", [(p) => p.getByRole("button", { name: "Show context" }).first().click()], true],
@@ -406,7 +406,7 @@ const all = [
   ["bob44-overview-detail", "overview", [(p) => p.locator("#working .a-line", { hasText: "Daisy" }).locator(".a-btn").click()], false, null, ".ov-now"],
   ["bob44-overview-stale", "overview", [], false, null, ".ov-now"],
   // BOB-119: an edited action and question on Waits on you, A-24's edits open; the feature page's next step, its two edits open by default.
-  ["bob119-waits-edits", "waits", [(p) => p.locator('li[data-ref="A-24"] details.edits summary').click()], false, null, "#waits-holding"],
+  ["bob119-waits-edits", "waits", [(p) => p.locator('li[data-ref="A-24"] details.edits summary').click()], false, null, "#needs-holding"],
   ["bob119-feature-edits", "feature/bobnet/BOB-4", [(p) => p.locator("#next").scrollIntoViewIfNeeded()], false, null, "#next"],
   // BOB-111 (AC4): the toast after answering says who was told, the supervisor too, and whom it waits for; or that no supervisor runs the project.
   ["bob111-answer-toast", "waits", answerQ258, false, "#toast"],
@@ -448,7 +448,7 @@ try {
       }
       await page.addInitScript(fakeBroker);
       await page.goto(`${base}#${hash}`);
-      await page.waitForSelector(hash.startsWith("triage") ? ".totals" : hash.startsWith("waits") ? '#waits-holding li[data-kind="question"]' : hash.startsWith("overview") ? ".prow" : hash.startsWith("feature") ? "#feature-head" : hash.startsWith("laptops") ? "#laptops .card" : "section.release");
+      await page.waitForSelector(hash.startsWith("triage") ? ".totals" : hash.startsWith("waits") ? '#needs-holding li[data-kind="question"]' : hash.startsWith("overview") ? ".prow" : hash.startsWith("feature") ? "#feature-head" : hash.startsWith("laptops") ? "#laptops .card" : "section.release");
       for (const step of steps) {
         await step(page);
         await page.waitForTimeout(400);

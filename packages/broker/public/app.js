@@ -27,10 +27,12 @@ const state = {
   /** Needs you: the project picked, and the one answer form open with what Casper has put in it so far (notes 40). */
   waitsProject: "all",
   answering: null,
-  /** Needs you lines shown whole, and Waits items with their context open ("ctx:" + id): kept for the tab's life (BOB-31). */
+  /** Needs you items shown whole, and those with their context open ("ctx:" + id): kept for the tab's life (BOB-31). */
   whole: new Set(),
   /** Usage weighed by model (Sonnet-equivalent), or raw: the hash's, else this device's (ADR 0014; spec 2.9). */
   weigh: false,
+  /** When the page last read the laptops whole (this device's clock), null before it has: what Needs you is up to date with. */
+  refreshed: null,
   last: 10,
 };
 /** Messages kept in the page, as many as the broker's snapshot has. */
@@ -86,11 +88,11 @@ function s(tag, attrs, ...children) {
 
 /** Requests sent and not yet answered by the broker, by rid: the button, and the toast its result reads as, if not the supervisor's. */
 const sentActions = new Map();
-/** The toast a sent action's result reads as, by the broker's action id. */
+/** The toast a sent action's result reads as, by the broker's action id: a text, or what makes [text, tone] from the result. */
 const actionToasts = new Map();
 let toastTimer = null;
 
-/** A toast; with `undo`, an Undo button that takes the change back. */
+/** A toast (`ok`: true, false or "warn"); with `undo`, an Undo button that takes the change back. */
 function toast(text, ok = true, undo = null, keep = false) {
   const el = $("toast");
   // `keep`: it stays until closed or the next tab change (BOB-33: I'm caught up's Undo).
@@ -471,7 +473,7 @@ function featureRoute() {
   return p ? { p, ref: a } : null;
 }
 /** A feature's link: with its project when its board is in the service. */
-const featureHref = (key, ref) => (svc.projects?.some((p) => p.key === key) ? `#feature/${key}/${ref}` : `#feature/${ref}`);
+const featureHref = (key, ref) => (knownProjects().some((p) => p.key === key) ? `#feature/${key}/${ref}` : `#feature/${ref}`);
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const day = (iso) => { const d = new Date(iso); return `${d.getDate()} ${MON[d.getMonth()]}`; };
@@ -532,7 +534,7 @@ function agentState(w, run) {
   if (q >= QUIET_MIN) return { text: `quiet ${q} min`, cls: "warn", title: "No activity from it in that long. Nothing interrupts it: stop or reset it if it's stuck." };
   return { text: "working", cls: "" };
 }
-const leadName = (key) => { const l = svc.projects?.find((p) => p.key === key)?.lead; return l ? shortName(l) : "the orchestrator"; };
+const leadName = (key) => { const l = knownProjects().find((p) => p.key === key)?.lead; return l ? shortName(l) : "the orchestrator"; };
 
 /**
  * An agent's line that opens its detail row (spec, BOB-3 gap 2): one open at a time. `lead`: what
@@ -600,7 +602,7 @@ function viewServiceFeature(p, ref) {
   if (!data && !svc.loading.has(p.key)) loadRoadmap(p.key);
   const id = `${p.key}/${ref}`, fd = feats.get(id);
   if (!fd && !featLoading.has(id)) loadFeature(p.key, ref);
-  if (!ov.waits && !ov.loading) loadOverview();
+  if (!ov.waits && !ov.loading && !ov.error) loadOverview();
   if (!data || (!fd?.item && !fd?.error)) return [h("div", { class: "empty-card" }, "Reading the board…")];
   const f = data.features.find((x) => x.ref === ref || x.ref === fd?.item?.ref);
   if (!f) return [h("div", { class: "empty-card" }, `No feature ${ref} in ${p.name}.`)];
@@ -978,7 +980,8 @@ async function loadProjects() {
   for (const key of backlogs.keys()) loadBacklog(key);
   if (rules.rows || rules.error) loadRules();
   // What waits on Casper counts on the tab, on every view (waiting-on-casper 3).
-  if (svc.projects?.length || ov.rows) loadOverview();
+  // A failed list doesn't hold back the overview and the waits, which are read on their own (BOB-176 m2).
+  if (svc.projects?.length || ov.rows || svc.error) loadOverview();
   // The Status tab's dot and the Overview's line read from the start, on every view.
   loadStatus();
   scheduleRender();
@@ -1210,8 +1213,8 @@ function closeRelease(key, data, r) {
 
 // ---------- Overview: what needs Casper, who is working on what, where each project stands (spec: Overview; notes 31-34) ----------
 
-/** The service's overview rows and what waits on Casper: read on the Overview, refetched on board_changed. */
-const ov = { rows: null, waits: null, answered: [], error: null, loading: false, again: false };
+/** The service's overview rows and what waits on Casper, null until read; `at`: when they last were (this device's clock). Refetched on board_changed. */
+const ov = { rows: null, waits: null, answered: [], error: null, at: null, loading: false, again: false };
 /** Ids no longer waiting leave what is open; a permission's only once a laptop has reported, so a reload keeps it. */
 function pruneWhole() {
   const live = new Set([...(ov.waits ?? []).map(waitId), ...humanPerms().map(permId)]);
@@ -1231,12 +1234,13 @@ async function loadOverview() {
   ov.loading = true;
   try {
     const [o, w] = await Promise.all([boardOp({ op: "overview" }), boardOp({ op: "waits", since: midnight() })]);
-    Object.assign(ov, { rows: o.projects, waits: w.waits, answered: w.answered ?? [], error: null });
+    Object.assign(ov, { rows: o.projects, waits: w.waits, answered: w.answered ?? [], error: null, at: Date.now() });
     pruneWhole();
     noteEditedUnderForm();
     void closeWithdrawnForm();
   } catch (err) {
-    Object.assign(ov, { rows: ov.rows ?? [], waits: ov.waits ?? [], error: err.message });
+    // What was read before stays; with nothing read yet it stays unread, never "none".
+    ov.error = err.message;
   } finally {
     ov.loading = false;
   }
@@ -1274,11 +1278,14 @@ const brokerNow = () => Date.now() - skew;
 const staleReport = (l) => brokerNow() - Date.parse(l.at) > 3 * 60_000;
 /** A request lives a day wherever it is shown: the supervisor's ORPHAN_TTL_MS, applied here too for an older supervisor or a stale report (ADR 0012 §1). */
 const REQUEST_MAX_AGE_MS = 24 * 3600_000;
-/** A laptop's pending rows under a day old, by the broker's clock. */
-const livePending = (l) => l.snapshot.pending.filter((p) => brokerNow() - Date.parse(p.created_at) <= REQUEST_MAX_AGE_MS);
+/** A laptop's pending rows under a day old, by the broker's clock, whose worker runs: a stopped one's request is history too (spec 2.2). */
+const livePending = (l) => l.snapshot.pending.filter((p) => brokerNow() - Date.parse(p.created_at) <= REQUEST_MAX_AGE_MS
+  && l.snapshot.workers.some((w) => w.id === p.worker_id && ACTIVE.includes(w.state)));
 /** Requests a live supervisor can still act on: a stale laptop's last list is never offered (BOB-26). */
 const pendingAll = () => [...state.laptops.values()].filter((l) => !staleReport(l)).flatMap((l) => livePending(l).map((p) => ({ ...p, laptop: l.laptop })));
-const projectName = (key) => svc.projects?.find((p) => p.key === key)?.name ?? key;
+/** The service's projects, or while its list can't be read the overview's, which are the same. */
+const knownProjects = () => svc.projects ?? ov.rows?.map((r) => r.project) ?? [];
+const projectName = (key) => knownProjects().find((p) => p.key === key)?.name ?? key;
 /** The laptops a project runs on: its supervisor's board, and its agents'. */
 const laptopsOf = (key) => [...new Set([...projects().filter((e) => e.board.project === key).map((e) => e.laptop), ...workers().filter((w) => w.project === key).map((w) => w.laptop)])];
 
@@ -1327,31 +1334,30 @@ const waitKind = (w) => (w.kind === "bug" && w.fix ? ["fixed", "bug · fix lande
 const stepName = (ss) => (ss.label === "Fixes" || ss.label.toLowerCase().startsWith(`${ss.kind} `) ? ss.label : `${ss.kind} ${ss.label}`);
 /** The agents in a board session, from their declared sessions. */
 const inSession = (key, ss) => running().filter((w) => w.project === key && w.session === `${ss.feature} ${ss.kind} ${ss.label}`);
-/** Several names: at most two, then "+N more". */
-const upTo2 = (names) => (names.length > 2 ? `${names.slice(0, 2).join(", ")} +${names.length - 2} more` : names.join(", "));
+/** An agent a wait holds up, with its live dot. */
+const heldAgent = (w) => h("span", { class: "who-live" }, h("i", { class: `dot ${agentState(w).cls === "warn" ? "warn" : "on"}`, "aria-hidden": "true" }), whoName(w, false));
+/** Agents in a session, each with its dot, then the step: "● Howard, ● Marvin (Fixes)". */
+const heldIn = (ws, step) => [ws.map((w, i) => [i ? ", " : null, heldAgent(w)]), step ? ` (${step})` : null];
 
-/** What a wait holds up, in words (spec, BOB-3 gap 5): a session of its own feature by who is in it, another's with its feature, then items; a feature and its own session count once. */
-function heldNames(w) {
+/** What a wait holds up (spec, BOB-3 gap 5; BOB-121 spec 2.2): a session by who is in it, its own feature's first, then items; a feature and its own session count once; two, then "+N more". */
+function heldParts(w) {
   const sessions = [...new Map([...w.holds.sessions, ...w.waiting_sessions].map((ss) => [`${ss.feature} ${ss.kind} ${ss.label}`, ss])).values()]
     .sort((a, b) => (b.feature === w.feature) - (a.feature === w.feature));
   const items = w.holds.items.filter((ref) => !sessions.some((ss) => ss.feature === ref));
-  return upTo2([
+  const parts = [
     ...sessions.map((ss) => {
-      if (ss.feature !== w.feature) return `${ss.feature} ${stepName(ss)}`;
+      const step = ss.feature === w.feature ? stepName(ss) : `${ss.feature} ${stepName(ss)}`;
       const who = inSession(w.project, ss);
-      return who.length ? `${who.map((x) => x.name).join(" and ")} (${stepName(ss)})` : stepName(ss);
+      return who.length ? heldIn(who, step) : step;
     }),
     ...items,
-  ]);
+  ];
+  if (!parts.length) parts.push(w.feature ?? projectName(w.project));
+  return [parts.slice(0, 2).map((x, i) => [i ? ", " : null, x]), parts.length > 2 ? ` +${parts.length - 2} more` : null];
 }
 
 function viewOverview() {
-  if (svc.projects && !ov.rows && !ov.loading) loadOverview();
-  const perms = humanPerms();
-  const waits = ov.waits ?? [];
-  const blocking = waits.filter((w) => w.blocking);
-  const holding = perms.length + blocking.length;
-  const rest = waits.length - blocking.length;
+  if (svc.projects && !ov.rows && !ov.loading && !ov.error) loadOverview();
   const now = running();
   const down = boardError();
   return [
@@ -1360,16 +1366,12 @@ function viewOverview() {
     h("div", { class: "ov" },
       statusLine(),
       h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count", id: "needs-count" }, waitCount() || "")),
-        h("div", { class: "card" },
-          !ov.waits && !perms.length ? h("p", { class: "muted", style: "margin:0" }, "Reading the board…")
-            : holding ? h("ul", { class: "lines", id: "needs" }, oldestFirst(perms, blocking).map((x) => (x.p ? permissionLine(x.p) : waitLine(x.w))))
-            : h("p", { class: "muted", style: "margin:0" }, "Nothing is held up by you."),
-          holding || rest ? h("a", { class: "more", href: "#needs" }, rest ? `${holding} ${holding === 1 ? "holds" : "hold"} work up · ${rest} more when you have time →` : "Needs you →") : null)),
+        h("div", { class: "card" }, needsBody(needsItems(), true))),
       h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length || "")),
         now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map(nowLine)), queuedLine(), ciLines()) : h("div", { class: "empty-card" }, "No agent is working.", queuedLine(), ciLines())),
       h("section", { class: "ov-proj" }, h("h2", null, "Projects"),
         h("div", { class: "plist", id: "plist" },
-          ov.rows?.length ? ov.rows.map(projectRow) : h("div", { class: "empty-card" }, ov.rows && !ov.error ? "No project's board yet." : down ? "The board's projects couldn't be read." : "Reading the board…")))),
+          ov.rows?.length ? ov.rows.map(projectRow) : h("div", { class: "empty-card" }, ov.rows && !down ? "No project's board yet." : down ? "The board's projects couldn't be read." : "Reading the board…")))),
   ];
 }
 
@@ -1417,71 +1419,19 @@ function ciLines() {
 /** "2 queued: Luigi, Toad" (spec, BOB-3 gap 2). */
 const queuedLine = () => { const q = workers().filter((w) => w.state === "queued"); return q.length ? h("p", { class: "more queued" }, `${q.length} queued: `, whoNames(q)) : null; };
 
-function waitLine(w) {
-  const [st, label] = waitKind(w);
-  const id = waitId(w);
-  const whole = [
-    w.recommended ? h("div", { class: "rec" }, h("b", null, "Recommended "), w.recommended.text) : null,
-    // The context stays on Needs you, where it opens: it can be pages long (BOB-31 spec).
-    w.context ? h("a", { href: "#needs", class: "more-t", onclick: () => { state.whole.add(`ctx:${id}`); saveWhole(); scrollAfter = `c-${id}`; } }, "Its context, on Needs you →") : null,
-  ];
-  return needsLine(id, w.ref, badge(st, label), w.text, whole,
-    `${projectName(w.project)}${w.feature ? ` · ${w.feature}` : ""} · ${w.kind === "bug" ? "blocks use" : `holds up ${heldNames(w)}`}${w.stale ? ` · unchanged ${since(w.stale.changed_at)}` : ""}`,
-    ANSWER_VERB[w.kind], state.answering?.id === id ? answerForm(w) : null);
-}
-
-function permissionLine(p) {
-  const w = workers().find((x) => x.id === p.worker_id);
-  const ss = w && sessionOf(w);
-  const id = permId(p);
-  return needsLine(id, `${p.name}'s ${p.kind === "question" ? "question" : "request"}`, badge("permission"), permText(p), [],
-    [`${w ? projectName(w.project) : p.laptop}${ss ? ` · ${ss.feature}` : ""} · holds up `, w ? whoName(w, false) : p.name, ss ? ` (${declaredStep(w)})` : ""],
-    ANSWER_VERB.permission, state.answering?.id === id ? permissionForm(p) : null);
-}
-
-/**
- * A Needs you line (BOB-31): its text folded to one line (two on a phone), or open whole with what opens under it.
- * Show all is drawn hidden and shown only when the text is measured as cut (measureNeeds); an open line always has Show less.
- */
-function needsLine(id, name, badgeEl, text, whole, meta, verb, form) {
-  const open = state.whole.has(id);
-  whole = whole.filter(Boolean);
-  return h("li", { class: `hold${open ? " open" : ""}`, dataset: { id } }, badgeEl,
-    h("span", { class: "l-t", id: `t-${id}`, title: open ? null : text, onclick: (e) => {
-      // The cut text opens it too (the big target on a phone), but not while he is selecting it to copy.
-      if (open || !e.currentTarget.hasAttribute("data-cut") || String(getSelection() ?? "")) return;
-      toggleWhole(id);
-    } }, text),
-    open && whole.length ? h("div", { class: "whole" }, whole) : null,
-    h("span", { class: "l-m" }, meta),
-    h("span", { class: "acts" },
-      h("button", { type: "button", class: "more-t", hidden: !open || null, "aria-expanded": String(open), "aria-controls": `t-${id}`,
-        "aria-label": `${open ? "Show less" : "Show all"} of ${name}`, onclick: (e) => { e.stopPropagation(); toggleWhole(id); } }, open ? "Show less" : "Show all"),
-      verb ? answerToggle(id, verb) : null),
-    form);
-}
-
-/** After each draw and on resize: a folded line whose text overflows its one line (two on a phone) is cut, and gets Show all. */
-function measureNeeds() {
-  for (const li of document.querySelectorAll("#needs > li:not(.open)")) {
-    const t = li.querySelector(".l-t");
-    const cut = t.scrollWidth > t.clientWidth + 1 || t.scrollHeight > t.clientHeight + 1;
-    t.toggleAttribute("data-cut", cut);
-    li.querySelector(".acts .more-t").hidden = !cut;
-  }
-}
-
-// ---------- Waits on you: what waits on Casper, across projects, and his answers from here (spec: Waits on you; notes 22-24, 35, 40-43) ----------
+// ---------- Needs you: what waits on Casper, across projects, and his answers from here (BOB-121 spec 2.2; notes 22-24, 35, 40-43) ----------
 
 /** Casper's own permission requests, not the orchestrator's: a stale laptop's are never offered (BOB-26). */
 const humanPerms = () => pendingAll().filter((p) => p.tier === "human");
 /** What the tab and Needs you count: the board's waits and his permissions. */
 const waitCount = () => humanPerms().length + (ov.waits?.length ?? 0);
 const waitId = (w) => `${w.project}/${w.ref}`;
-/** Permissions and the board's waits in one list, oldest first, as { p } or { w }. */
-const oldestFirst = (perms, waits) => [...perms.map((p) => ({ p, since: p.created_at })), ...waits.map((w) => ({ w, since: w.since }))].sort((a, b) => a.since.localeCompare(b.since));
+/** Permissions and the board's waits in one list, oldest first in each group, as { p } or { w }. */
+const needsItems = () => [...humanPerms().map((p) => ({ p, project: permProject(p), since: p.created_at, blocking: true })), ...(ov.waits ?? []).map((w) => ({ w, project: w.project, since: w.since, blocking: w.blocking }))]
+  .sort((a, b) => a.since.localeCompare(b.since));
 const permId = (p) => `perm/${p.laptop}/${p.id}`;
-const permText = (p) => (p.kind === "question" ? `${p.name} asks: ${p.preview}` : `${p.name} wants ${p.tool}`);
+/** "Howard wants Bash: " and its command in monospace, or "Howard asks: " and its question. The whole ask when the laptop sends it, else its preview. */
+const permText = (p) => (p.kind === "question" ? [`${p.name} asks: `, p.ask?.text ?? p.preview] : [`${p.name} wants ${p.tool}: `, h("code", null, p.ask?.text ?? p.preview)]);
 const ANSWER_VERB = { question: "Answer", action: "Mark done", permission: "Allow or deny" };
 /** Under a day, how long; then days. */
 const waitAge = (iso) => (Date.now() - Date.parse(iso) < DAY ? since(iso) : age(iso));
@@ -1539,8 +1489,9 @@ function answerToggle(id, verb) {
 /** The form under a question or an action (notes 41, 42): his words go to the board verbatim; the lead gets a message. */
 function answerForm(w) {
   const a = state.answering, qid = waitId(w);
-  const q = w.kind === "question" ? questions.get(qid) : null;
-  if (w.kind === "question") loadQuestion(w.project, w.ref, w.edits?.length ?? 0);
+  const q = questions.get(qid) ?? null;
+  // An action's record too: one filed before BOB-187 may have options to show.
+  loadQuestion(w.project, w.ref, w.edits?.length ?? 0);
   const close = () => { state.answering = null; render(); };
   const form = h("form", { class: "answer", onsubmit: (e) => { e.preventDefault(); send(); } });
   const options = q?.options ? [...q.options].sort((x, y) => y.recommended - x.recommended) : [];
@@ -1562,6 +1513,10 @@ function answerForm(w) {
       state.answering = null;
       // It leaves its group at once, and the counts drop; the board's next read says the same.
       ov.waits = (ov.waits ?? []).filter((x) => waitId(x) !== qid);
+      if (res.seq) {
+        undoable.set(qid, { seq: res.seq, until: Date.now() + UNDO_MS });
+        setTimeout(scheduleRender, UNDO_MS);
+      }
       render();
       toast(`${w.kind === "question" ? `Answered ${w.ref}` : `Marked ${w.ref} done`}. Recorded as your words${sentTo(res, w.project)}.`, true,
         res.seq ? () => undoAnswer(w, res.seq) : null);
@@ -1575,7 +1530,11 @@ function answerForm(w) {
   // His draft stays; the note says the question moved under it (BOB-119). Its option keys are stable, so the answer still goes.
   const note = a.edited ? h("p", { class: "edited-note" }, "Question edited since you opened this") : null;
   if (w.kind === "action") {
-    form.append(note ?? "", words("Note (optional)", "Anything they should know"), foot(h("button", { type: "submit", class: "primary" }, "Mark done")));
+    // An action is done or not, never picked from (BOB-187): one that was filed with options shows them as text.
+    const filed = q?.options?.length ? q.options : null;
+    form.append(note ?? "",
+      filed ? h("div", { class: "filed" }, h("p", { class: "muted" }, "It was filed with these options:"), h("ul", null, filed.map((o) => h("li", null, o.text, o.recommended ? " (recommended)" : "")))) : "",
+      words(filed ? "Note (optional): if you chose one, say which" : "Note (optional)", "Anything they should know"), foot(h("button", { type: "submit", class: "primary" }, "Mark done")));
     return form;
   }
   form.append(
@@ -1592,8 +1551,12 @@ function answerForm(w) {
   return form;
 }
 
+/** His answers from this page that he can still take back, by item: the board takes one back for two minutes (§7). */
+const UNDO_MS = 120_000;
+const undoable = new Map();
 /** His answer or done mark, taken back within two minutes (§7): the question opens again, and the lead hears. */
 async function undoAnswer(w, seq) {
+  undoable.delete(waitId(w));
   try {
     const res = await boardOp({ op: "undo", project: w.project, seq }, true);
     toast(`Undone: ${w.ref} waits on you again${sentTo(res, w.project)}.`);
@@ -1603,47 +1566,54 @@ async function undoAnswer(w, seq) {
   await loadOverview();
 }
 
+/** Whether a laptop's supervisor sends a note with Allow (ADR 0013 §2): an older one, whose report has no `decided`, drops it. */
+const takesNotes = (laptop) => state.laptops.get(laptop)?.snapshot.decided !== undefined;
+
 /**
- * A permission's form (notes 42; BOB-5 as built 1, 2): a note that goes only with Deny (the SDK's allow carries none),
- * then Deny or Allow, with today's confirmation for Allow. The supervisor's answer can't be taken back: no Undo.
+ * A permission's form (notes 42; BOB-51): a note, then Deny or Allow, with a confirmation for Allow. On an older
+ * supervisor's laptop the note goes only with Deny. The supervisor's answer can't be taken back: no Undo.
  */
 function permissionForm(p) {
-  const a = state.answering;
+  const a = state.answering, asks = p.kind === "question", notes = takesNotes(p.laptop);
   const close = () => { state.answering = null; render(); };
-  const what = `${p.name}'s ${p.kind === "question" ? "question" : p.tool}`;
+  const what = `${p.name}'s ${asks ? "question" : p.tool}`;
   const decide = (decision, b) => {
-    const message = decision === "deny" ? a.words.trim() : "";
-    const done = decision === "allow" ? `Allowed ${what}.` : `Denied ${what}${message ? `; your note went to ${p.name}` : ""}.`;
+    const message = decision === "deny" || notes ? a.words.trim() : "";
+    const done = decision === "deny" ? `Denied ${what}${message ? `; your note went to ${p.name}` : ""}.`
+      : !message ? `Allowed ${what}.`
+      : (f) => f.note_delivered ? [`Allowed ${what}; your note went to ${p.name}.`]
+        : f.note_delivered === false ? [`Allowed ${what}, but your note didn't reach ${p.name} (it had stopped).`, "warn"]
+        : [`Allowed ${what}, but ${p.laptop}'s supervisor is older and dropped your note.`, "warn"];
     const sent = act(p.laptop, { kind: "answer", request: p.id, decision, ...(message ? { message } : {}) }, b,
-      decision === "allow" ? `Allow ${p.name} to run ${p.tool}?\n\n${p.preview}` : null, done);
+      decision === "allow" ? `Allow ${p.name} to run ${p.tool}?\n\n${p.preview}${message ? "\n\nYour note goes with it." : ""}` : null, done);
     if (sent) close();
   };
   return h("form", { class: "answer", onsubmit: (e) => e.preventDefault() },
-    p.preview ? h("code", { class: "preview" }, p.preview) : null,
-    h("label", { class: "words" }, h("span", null, `Note to ${p.name}, sent with Deny (optional)`),
-      h("textarea", { rows: 2, placeholder: "e.g. not that process; use the pool's stop script", oninput: (e) => (a.words = e.target.value) }, a.words)),
+    h("label", { class: "words" }, h("span", null, notes ? `Note to ${p.name} (optional)` : `Note to ${p.name}, sent with Deny (optional)`),
+      h("textarea", { rows: 2, placeholder: notes && !asks ? "e.g. fine, but use the pool's stop script next time" : "e.g. not that process; use the pool's stop script", oninput: (e) => (a.words = e.target.value) }, a.words)),
     h("div", { class: "foot" },
-      h("span", { class: "who-gets" }, p.kind === "question" ? `Answer it through the orchestrator, or deny it here; ${p.name} gets your note. It can't be taken back.` : `${p.name} gets your decision; a note goes only with Deny. It can't be taken back.`),
+      h("span", { class: "who-gets" }, asks ? `Answer it through the orchestrator, or deny it here; ${p.name} gets your note. It can't be taken back.`
+        : notes ? `${p.name} gets your decision, and your note as its next message. It can't be taken back.`
+        : `${p.name} gets your decision; a note goes only with Deny. It can't be taken back.`),
       h("button", { type: "button", onclick: close }, "Cancel"),
       button("Deny", "danger", (b) => decide("deny", b)),
-      p.kind === "question" ? null : button("Allow", "primary", (b) => decide("allow", b))));
+      asks ? null : button("Allow", "primary", (b) => decide("allow", b))));
 }
 
-/** "Needed before …": an item, a release or a few words (notes 35). */
+/** "needed before …": an item, a release or a few words (notes 35). */
 function neededBefore(w) {
   const nb = w.needed_before;
   if (!nb) return null;
   const what = "item" in nb ? h("a", { href: featureHref(w.project, nb.item) }, nb.item)
     : "release" in nb ? h("a", { href: `#roadmap/${w.project}` }, svc.roadmaps.get(w.project)?.releases.find((r) => r.ref === nb.release)?.title ?? nb.release)
     : nb.text;
-  return h("span", { class: "before" }, "Needed before ", what);
+  return h("span", { class: "needed" }, "needed before ", what);
 }
 
-/** Where an item is answered or looked at: a question or action on its feature, a review on its item, a bug in triage. */
+/** Where a bug or a review is looked at: its button is a link (notes 43). */
 function waitLink(w) {
-  if (w.kind === "bug") return h("a", { href: `#triage/${w.project}` }, "Open in triage");
-  if (w.kind === "review_gate") return h("a", { href: featureHref(w.project, w.feature ?? w.ref) }, `Open ${w.ref}`);
-  return w.feature ? h("a", { href: featureHref(w.project, w.feature) }, `Open ${w.feature}`) : null;
+  if (w.kind === "bug") return h("a", { class: "answer-btn", href: `#triage/${w.project}` }, "Open in triage");
+  return w.kind === "review_gate" ? h("a", { class: "answer-btn", href: featureHref(w.project, w.feature ?? w.ref) }, `Open ${w.ref}`) : null;
 }
 
 /**
@@ -1696,8 +1666,8 @@ const EDIT_FIELD = { text: "text", context: "context", needed_before: "needed be
 const editField = (f) => EDIT_FIELD[f.startsWith("option") ? "options" : f] ?? f.replace(/_/g, " ");
 
 /**
- * A question's or action's edits (BOB-119), one render for Needs you and the item page: "edited ×n", muted on
- * its meta row, opening its edits newest first: when, who and what, the reason on its own line, the old text struck
+ * A question's or action's edits (BOB-119), one render for Needs you and the item page: "edited ×n", muted after
+ * its text, opening its edits newest first: when, who and what, the reason on its own line, the old text struck
  * through. None when it was never edited, or on an older broker's waits. `opened` opens it whatever he left it as.
  */
 function editsOf(w, where, opened = false) {
@@ -1718,7 +1688,7 @@ function editsOf(w, where, opened = false) {
 
 /** Who closes a fixed bug: the project's PO, else its lead (BOB-49 spec a). */
 function closerOf(key) {
-  const p = svc.projects?.find((x) => x.key === key);
+  const p = knownProjects().find((x) => x.key === key);
   return p?.po ? shortName(p.po) : p?.lead ? shortName(p.lead) : "its PO";
 }
 
@@ -1742,29 +1712,95 @@ function staleSpan(w) {
   return k ? h("span", { class: "kept" }, `Kept by ${askedBy(k.by)} `, ago(k.at), ` ago: “${k.reason}”`) : null;
 }
 
-function waitItem(w) {
-  const [st, label] = waitKind(w);
-  const id = waitId(w), verb = ANSWER_VERB[w.kind], open = state.answering?.id === id;
-  const edited = editedUnderForm(w);
-  const closed = w.waiting_sessions.map((ss) => `${ss.feature === w.feature ? stepName(ss) : `${ss.feature} ${stepName(ss)}`}`);
-  return h("li", { id: `w-${id}`, dataset: { blocking: String(w.blocking), kind: w.kind, ref: w.ref } },
-    h("div", { class: "top" }, badge(st, label), h("span", { class: "id" }, w.ref),
-      h("span", { class: "muted" }, projectName(w.project), w.feature && w.feature !== w.ref ? [" · ", h("a", { href: featureHref(w.project, w.feature) }, w.feature)] : null),
-      h("span", { class: "age" }, waitAge(w.since))),
-    h("div", { class: "q" }, w.text),
-    w.recommended ? h("div", { class: "rec" }, "Recommended: ", w.recommended.text) : null,
-    contextRow(w, id),
-    fixLine(w),
-    h("div", { class: "meta" },
-      w.blocking ? h("span", { class: "holds" }, w.kind === "bug" ? "Blocks use" : `Holds up ${heldNames(w)}`) : null,
-      w.blocking ? null : neededBefore(w),
-      w.asked_by ? h("span", null, `from ${askedBy(w.asked_by)}`) : null,
-      staleSpan(w),
-      editsOf(w, "waits", edited),
-      closed.length ? h("span", null, `${upTo2(closed)} closed on it (need: casper)`) : null,
-      waitLink(w),
-      verb && !open ? answerToggle(id, verb) : null),
-    open ? answerForm(w) : null);
+/**
+ * One thing that needs him (spec 2.2), the same wherever it is listed: badge, text, age, where it is and what it holds
+ * up, and its one action. `compact`: no button, opened in place; `page`: the Needs you page, where its context opens
+ * too; `before`: the start of Status's span; `project` false leaves its name out.
+ */
+function needItem(x, { compact = false, page = false, project = true, before = null } = {}) {
+  const { p, w } = x;
+  const id = p ? permId(p) : waitId(w), since = p ? p.created_at : w.since;
+  const open = state.whole.has(id), answering = !compact && state.answering?.id === id;
+  const worker = p && workers().find((y) => y.id === p.worker_id), ss = worker && sessionOf(worker);
+  const key = p ? worker?.project : w.project, feature = p ? ss?.feature : w.feature;
+  const [st, label] = p ? ["permission", "permission"] : waitKind(w);
+  const edited = !!w && editedUnderForm(w);
+  const text = p ? permText(p) : w.text;
+  const toggle = () => toggleWhole(id);
+  const where = [project ? (key ? projectName(key) : p.laptop) : null, feature && feature !== w?.ref ? h("a", { class: "id", href: featureHref(key, feature) }, feature) : null].filter(Boolean);
+  const closed = w ? w.waiting_sessions.map((y) => `${y.feature === w.feature ? stepName(y) : `${y.feature} ${stepName(y)}`}`) : [];
+  const holds = p ? ["holds up ", worker ? heldIn([worker], ss ? declaredStep(worker) : null) : p.name] : w.kind === "bug" ? "blocks use" : ["holds up ", heldParts(w)];
+  const meta = [
+    where.length ? where.map((y, i) => [i ? " › " : null, y]) : null,
+    x.blocking ? h("span", { class: "holds" }, holds) : before ? "when you have time" : null,
+    w?.asked_by ? `from ${askedBy(w.asked_by)}` : null,
+    w ? neededBefore(w) : null,
+    p ? `on ${p.laptop}` : null,
+    compact && w?.stale ? ["unchanged ", waitAge(w.stale.changed_at)] : null,
+    closed.length ? `${upTo2(closed)} closed on it (need: casper)` : null,
+  ].filter(Boolean);
+  const old = before && since < before ? h("span", { class: "before" }, `from before ${stClock(before)}`) : null;
+  const whole = open ? [
+    p?.ask?.cut ? h("span", { class: "cutnote" }, "Cut at the laptop: too long to send whole.") : null,
+    w?.recommended ? h("div", { class: "rec" }, h("b", null, "Recommended "), w.recommended.text) : null,
+    compact && w ? staleSpan(w) : null,
+    // The context stays on the Needs you page, where it opens: it can be pages long (BOB-31).
+    !page && w?.context ? h("a", { href: "#needs", class: "more-t", onclick: () => { state.whole.add(`ctx:${id}`); saveWhole(); scrollAfter = `c-${id}`; } }, "Its context, on Needs you →") : null,
+    compact ? h("a", { href: "#needs", class: "more-t", onclick: () => (scrollAfter = `w-${id}`) }, w?.kind === "bug" || w?.kind === "review_gate" ? "On Needs you →" : "Answer it on Needs you →") : null,
+  ].filter(Boolean) : [];
+  const unchanged = !compact && w ? staleSpan(w) : null;
+  const act = compact ? null : p ? answerToggle(id, ANSWER_VERB.permission) : ANSWER_VERB[w.kind] ? answerToggle(id, ANSWER_VERB[w.kind]) : waitLink(w);
+  return h("li", { id: `w-${id}`, class: `need${open ? " open" : ""}${compact ? " compact" : ""}`, dataset: { id, ref: p ? p.id : w.ref, kind: p ? "permission" : w.kind, blocking: String(!!x.blocking) } },
+    h("span", { class: "n-b" }, badge(st, label), w ? h("span", { class: "id" }, w.ref) : null),
+    h("span", { class: "l-h" },
+      h("span", { class: "l-t", id: `t-${id}`, role: "button", tabindex: "0", "aria-expanded": String(open), title: open ? null : "Show all",
+        // Not while he is selecting the text to copy it.
+        onclick: () => { if (!String(getSelection() ?? "")) toggle(); },
+        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); $(`t-${id}`)?.focus(); } } }, text),
+      w && (!compact || open) ? editsOf(w, "waits", edited) : null),
+    h("span", { class: "age", title: `${p ? "asked" : "since"} ${stamp(since)}` }, waitAge(since)),
+    w ? fixLine(w) : null,
+    whole.length ? h("div", { class: "whole" }, whole) : null,
+    h("div", { class: "m-row" }, h("span", { class: "l-m" }, meta.map((y, i) => [i ? " · " : null, y]), old),
+      unchanged || act ? h("span", { class: "m-r" }, unchanged, act ? h("span", { class: "acts" }, act) : null) : null),
+    page && w ? contextRow(w, id) : null,
+    answering ? (p ? permissionForm(p) : answerForm(w)) : null);
+}
+/** Several names: at most two, then "+N more". */
+const upTo2 = (names) => (names.length > 2 ? `${names.slice(0, 2).join(", ")} +${names.length - 2} more` : names.join(", "));
+
+/** Needs you's two groups and what they are up to date with (spec 2.2). On the Overview what can wait is three, compact. */
+function needsBody(items, overview = false) {
+  const unreadWaits = !ov.waits;
+  const couldnt = "What waits on you couldn't be read.";
+  if (unreadWaits && !items.length) return [h("p", { class: "muted", style: "margin:8px 0" }, boardError() ? couldnt : "Reading the board…")];
+  const blocking = items.filter((x) => x.blocking), rest = items.filter((x) => !x.blocking);
+  if (!items.length) return [h("p", { class: "st-empty ok" }, "Nothing needs you. Anything new shows here within a minute."), freshLine()];
+  const shown = overview ? rest.slice(0, 3) : rest;
+  const group = (id, tone, name, list, n, opts, none) => h("div", { class: "ngrp", id: `needs-${id}`, dataset: { tone } }, h("h3", null, name, " ", h("span", { class: "count" }, n || "")),
+    list.length ? h("ul", { class: "lines", id: id === "holding" ? "needs" : null }, list.map((x) => needItem(x, opts))) : h("p", { class: "st-empty" }, none));
+  return [
+    group("holding", "bad", "Holds work up", blocking, blocking.length, { page: !overview }, "Nothing is held up by you."),
+    unreadWaits ? h("p", { class: "st-empty" }, boardError() ? couldnt : "Reading the board…")
+      : group("rest", "", "When you have time", shown, rest.length, { page: !overview, compact: overview }, "Nothing else waits on you."),
+    overview ? h("a", { class: "more", href: "#needs" }, rest.length > 3 ? `${rest.length - 3} more when you have time, and today's answers, on Needs you →` : "Needs you, with today's answers →") : null,
+    freshLine(),
+  ];
+}
+
+const FRESH_MS = 3 * 60_000;
+/** Whether what the page shows may be behind: cut off, a read that failed, or none for three minutes. */
+const pageLate = () => $("conn").dataset.state !== "live" || !!ov.error || Date.now() - (state.refreshed ?? 0) > FRESH_MS;
+/** What Needs you is up to date with: each laptop that reports, or in warn that the page itself isn't (spec 2.2). */
+function freshLine() {
+  if (!ov.waits) return null;
+  if (pageLate()) {
+    const at = ov.error ? ov.at : state.refreshed;
+    return h("p", { class: "fresh late", dataset: { late: "true" } }, "Last updated ", at ? [ago(new Date(at).toISOString()), " ago"] : "before this page opened");
+  }
+  const live = [...state.laptops.values()].filter((l) => !staleReport(l));
+  return h("p", { class: "fresh", dataset: { late: "false" } }, live.length ? ["Up to date: ", live.map((l, i) => [i ? ", " : null, `${l.laptop} reported `, ago(l.at), " ago"]), "."] : "Up to date. No laptop is reporting.",
+    " An item leaves when it's answered or its worker stops.");
 }
 
 /** Show context / Hide context, and the asker's context whole under it; none without one (BOB-31). An older broker sends no field. */
@@ -1777,26 +1813,11 @@ function contextRow(w, id) {
     open ? h("div", { class: "ctx", id: `c-${id}` }, context) : null);
 }
 
-function permItem(p) {
-  const w = workers().find((x) => x.id === p.worker_id);
-  const ss = w && sessionOf(w);
-  const id = permId(p), open = state.answering?.id === id;
-  return h("li", { id: `w-${id}`, dataset: { blocking: "true", kind: "permission", ref: p.id } },
-    h("div", { class: "top" }, badge("permission"),
-      h("span", { class: "muted" }, w ? projectName(w.project) : p.laptop, ss ? [" · ", h("a", { href: featureHref(w.project, ss.feature) }, ss.feature)] : null),
-      h("span", { class: "age" }, waitAge(p.created_at))),
-    h("div", { class: "q" }, permText(p)),
-    h("div", { class: "meta" },
-      h("span", { class: "holds" }, `Holds up ${p.name}${ss ? ` (${declaredStep(w)})` : ""}`),
-      h("span", null, `on ${p.laptop}`),
-      open ? null : answerToggle(id, ANSWER_VERB.permission)),
-    open ? permissionForm(p) : null);
-}
-
 /** One answer or done mark he sent from here today (notes 43): the question muted, the option he picked, his words exactly. */
 function answeredItem(x) {
   const q = questions.get(`${x.project}/${x.ref}`);
   if (x.key && !questions.has(`${x.project}/${x.ref}`)) loadQuestion(x.project, x.ref);
+  const undo = undoable.get(`${x.project}/${x.ref}`);
   const option = x.key ? (q?.options?.find((o) => o.key === x.key)?.text ?? x.key) : null;
   return h("li", { class: "answered", dataset: { ref: x.ref } },
     h("div", { class: "top" }, badge("done", x.kind === "action" ? "done" : "answered"), h("span", { class: "id" }, x.ref),
@@ -1804,34 +1825,48 @@ function answeredItem(x) {
     h("div", { class: "q" }, x.text),
     h("div", { class: "said" }, option ? h("div", null, h("span", { class: "muted" }, "You picked "), option) : null,
       x.words ? h("blockquote", null, `“${x.words}”`) : null),
-    h("div", { class: "meta" }, h("span", null, `${leadOf(x.project)} got a message`), h("span", null, "from the dashboard")));
+    h("div", { class: "meta" }, h("span", null, `${leadOf(x.project)} got a message`), h("span", null, "from the dashboard"),
+      undo && Date.now() < undo.until ? button("Undo", "answer-btn", (b) => { b.disabled = true; undoAnswer(x, undo.seq); }) : null));
+}
+
+/** The requests he decided from the dashboard since midnight, from every laptop's report; an older supervisor's adds none (ADR 0013 §2). */
+function decidedToday() {
+  const by = new Map(), from = Date.parse(midnight());
+  for (const l of state.laptops.values()) for (const d of l.snapshot.decided ?? []) if (Date.parse(d.decided_at) >= from) by.set(`${l.laptop}/${d.id}`, { ...d, laptop: l.laptop });
+  return [...by.values()];
+}
+/** One of them: what it wanted, what he decided, his note. Never whether the note arrived (the report doesn't say), and no Undo. */
+function decidedItem(d) {
+  const allowed = d.decision === "allow";
+  return h("li", { class: "answered", dataset: { ref: d.id, decision: d.decision } },
+    h("div", { class: "top" }, badge(allowed ? "done" : "failed", allowed ? "allowed" : "denied"), h("span", { class: "id" }, d.tool),
+      h("span", { class: "muted" }, projectName(d.project)), h("span", { class: "age" }, `today ${clock(d.decided_at)}`)),
+    h("div", { class: "q" }, d.kind === "question" ? `${d.name} asked: ${d.preview}` : [`${d.name} wanted ${d.tool}: `, h("code", null, d.preview)]),
+    h("div", { class: "said" }, h("div", null, `You ${allowed ? "allowed" : "denied"} it`, h("span", { class: "muted" }, ` · on ${d.laptop}`)), d.note ? h("blockquote", null, `your note: “${d.note}”`) : null));
 }
 
 function viewNeeds() {
-  if (svc.projects && !ov.waits && !ov.loading) loadOverview();
-  const keys = (svc.projects ?? []).map((p) => p.key);
-  const perms = humanPerms().map((p) => ({ p, project: workers().find((x) => x.id === p.worker_id)?.project ?? null, since: p.created_at }));
-  const all = [...perms, ...(ov.waits ?? []).map((w) => ({ w, project: w.project, since: w.since }))];
+  if (svc.projects && !ov.waits && !ov.loading && !ov.error) loadOverview();
+  const keys = knownProjects().map((p) => p.key);
+  const all = needsItems();
   const pick = state.waitsProject !== "all" && keys.includes(state.waitsProject) ? state.waitsProject : "all";
-  const shown = all.filter((x) => pick === "all" || x.project === pick).sort((a, b) => a.since.localeCompare(b.since));
-  const blocking = shown.filter((x) => x.p || x.w.blocking), rest = shown.filter((x) => x.w && !x.w.blocking);
-  const answered = (ov.answered ?? []).filter((x) => pick === "all" || x.project === pick);
-  const item = (x) => (x.p ? permItem(x.p) : waitItem(x.w));
-  const seg = (v, label) => h("button", { type: "button", "aria-pressed": String(pick === v), onclick: () => { state.waitsProject = v; render(); } }, label);
+  const of = (k) => all.filter((x) => k === "all" || x.project === k);
+  const shown = of(pick);
+  const today = [...(ov.answered ?? []).map((x) => ({ at: x.at, project: x.project, el: () => answeredItem(x) })), ...decidedToday().map((d) => ({ at: d.decided_at, project: d.project, el: () => decidedItem(d) }))]
+    .filter((x) => pick === "all" || x.project === pick).sort((a, b) => b.at.localeCompare(a.at));
+  // Not read: how many is not known, and is never said to be none (Daisy, review B m1).
+  const n = (k) => (ov.waits ? ` ${of(k).length}` : "");
+  const seg = (v, label) => h("button", { type: "button", "aria-pressed": String(pick === v), onclick: () => { state.waitsProject = v; render(); } }, label, n(v));
   return [
     boardError() ? boardDown(boardError()) : null,
     staleBanners(),
     h("div", { class: "bar-row" },
-      keys.length > 1 ? h("span", { class: "seg filters" }, seg("all", `All projects ${all.length}`), keys.map((k) => seg(k, `${projectName(k)} ${all.filter((x) => x.project === k).length}`))) : null,
-      h("span", { class: "muted" }, `${plural(shown.length, "item")}, oldest first`)),
-    ...(!ov.waits && !perms.length ? [h("div", { class: "empty-card" }, "Reading the board…")] : [
-      h("section", { id: "waits-holding" }, h("h2", null, "Holds work up ", h("span", { class: "count" }, blocking.length || "")),
-        blocking.length ? h("ul", { class: "list waits" }, blocking.map(item)) : h("div", { class: "empty-card" }, "Nothing is held up by you.")),
-      h("section", { id: "waits-rest" }, h("h2", null, "When you have time ", h("span", { class: "count" }, rest.length || "")),
-        rest.length ? h("ul", { class: "list waits" }, rest.map(item)) : h("div", { class: "empty-card" }, "Nothing else waits on you."))]),
-    answered.length ? h("section", { id: "waits-answered" }, h("h2", null, "Answered from here today ", h("span", { class: "count" }, answered.length)),
-      h("ul", { class: "list waits" }, answered.map(answeredItem))) : null,
-    h("p", { class: "note" }, "Answer a question, mark an action done or allow a permission right here; you can still answer in the project's conversation. Your answer is kept on the item word for word and the project's lead gets a message; the item leaves the list. A session that closed with need: casper shows on the question it waits for. A review and a bug open where they are looked at."),
+      keys.length > 1 ? h("span", { class: "seg filters" }, seg("all", "All projects"), keys.map((k) => seg(k, projectName(k)))) : null,
+      ov.waits ? h("span", { class: "muted" }, `${plural(shown.length, "item")}, oldest first`) : null),
+    h("section", { class: "card needs-page" }, needsBody(shown)),
+    today.length ? h("section", { id: "needs-answered" }, h("h2", null, "Answered from here today ", h("span", { class: "count" }, today.length)),
+      h("ul", { class: "list waits" }, today.map((x) => x.el()))) : null,
+    h("p", { class: "note" }, "Oldest first in each group. Answer here or in the project's conversation: your answer is kept on the item word for word, and the project's lead gets a message. A permission request shows for a day at most, and only while its worker runs; a quiet laptop's requests wait under its banner. A review and a bug open where they are looked at."),
   ];
 }
 
@@ -2084,28 +2119,6 @@ function answers(rows, needsHref, okHref, all) {
       h("span", { class: "sub" }, v.sub)));
 }
 
-/** A Needs you line, as the Overview's: it opens Needs you at the item, where he answers (choice 12). */
-function needLine(x, since, withProject) {
-  const id = x.p ? permId(x.p) : waitId(x.w);
-  const go = () => (scrollAfter = `w-${id}`);
-  let badgeEl, text, meta;
-  if (x.p) {
-    const w = workers().find((y) => y.id === x.p.worker_id);
-    const ss = w && sessionOf(w);
-    badgeEl = badge("permission");
-    text = permText(x.p);
-    meta = [withProject ? (w ? projectName(w.project) : x.p.laptop) : null, ss?.feature, `holds up ${x.p.name}${ss ? ` (${declaredStep(w)})` : ""}`];
-  } else {
-    const [st, label] = waitKind(x.w);
-    badgeEl = badge(st, label);
-    text = x.w.text;
-    meta = [withProject ? projectName(x.w.project) : null, x.w.feature, x.w.kind === "bug" && x.w.blocking ? "blocks use" : x.w.blocking ? `holds up ${heldNames(x.w)}` : "when you have time"];
-  }
-  return h("li", { class: "hold need", dataset: { blocking: String(x.blocking), id } }, badgeEl,
-    h("a", { class: "l-t", href: "#needs", onclick: go }, text),
-    h("span", { class: "l-m" }, meta.filter(Boolean).join(" · "), " · ", h("span", { class: "age" }, stAge(x.since)),
-      x.since < since ? h("span", { class: "before" }, `from before ${stClock(since)}`) : null));
-}
 const cutLine = (n, newer, link) => h("p", { class: "note cut" }, `and ${n} more, ${newer ? "newer" : "older"}. The board lists ${newer ? "the oldest" : "the newest"} 100.`, link ? [" ", link] : null);
 
 function statusBanners(reply) {
@@ -2133,7 +2146,7 @@ function viewStatus() {
           h("section", null, h("h2", null, "Projects ", h("span", { class: "count" }, String(rows.length))),
             rows.length ? h("div", { class: "pcards" }, rows.map(pcard)) : h("div", { class: "empty-card" }, "No project's board on BobNet yet.")),
           h("section", { id: "status-needs" }, h("h2", null, "Needs you ", h("span", { class: "count" }, String(n.count))),
-            n.count ? h("div", { class: "card st-card" }, h("ul", { class: "lines ov-needs st-needs" }, n.list.map((x) => needLine(x, reply.since, true))),
+            n.count ? h("div", { class: "card st-card" }, h("ul", { class: "lines st-needs" }, n.list.map((x) => needItem(x, { compact: true, before: reply.since }))),
               n.more ? cutLine(n.more, true, h("a", { href: "#needs" }, "on Needs you")) : null,
               h("a", { class: "more-t sec-link", href: "#needs" }, "Answer them on Needs you →"))
               : h("div", { class: "empty-card" }, "Nothing waits on you.")),
@@ -2209,7 +2222,7 @@ const SECTION = {
     return {
       title: "Needs you", count: String(n.count), scope: "open now", tone: n.blocking ? "bad" : n.count ? "warn" : "ok",
       headline: n.count ? `${n.blocking} hold${n.blocking === 1 ? "s" : ""} work up · oldest ${stAge(n.list[0].since)}` : "Nothing waits on you",
-      el: n.count ? [h("ul", { class: "lines ov-needs st-needs" }, n.list.map((x) => needLine(x, reply.since, false))),
+      el: n.count ? [h("ul", { class: "lines st-needs" }, n.list.map((x) => needItem(x, { compact: true, before: reply.since, project: false }))),
         n.more ? cutLine(n.more, true, h("a", { href: "#needs" }, "on Needs you")) : null,
         h("a", { class: "more-t sec-link", href: "#needs" }, "Answer on Needs you →")] : stEmpty("Nothing waits on you.", true),
     };
@@ -3099,7 +3112,6 @@ function render() {
   const box = document.activeElement?.closest?.("form.answer") ? document.activeElement : null;
   const at = box?.selectionStart;
   $("view").replaceChildren(...VIEWS[v]().filter(Boolean));
-  measureNeeds();
   statusScroll();
   if (box) {
     const again = $("view").querySelector("form.answer textarea");
@@ -3139,6 +3151,7 @@ let renderTimer = null;
 function scheduleRender() {
   clearTimeout(renderTimer);
   renderTimer = setTimeout(() => {
+    renderTimer = null;
     // Not while he writes an answer: a live frame would take the box from under his typing.
     if (holdRender || document.activeElement?.tagName === "SELECT" || document.activeElement?.closest?.("form.answer, form.rule-form")) return scheduleRender();
     render();
@@ -3166,8 +3179,6 @@ window.addEventListener("hashchange", () => {
 });
 let lastWidth = window.innerWidth;
 window.addEventListener("resize", () => {
-  // A phone turning cuts or uncuts a line: measured again at once.
-  measureNeeds();
   if (Math.abs(window.innerWidth - lastWidth) < 20) return;
   lastWidth = window.innerWidth;
   scheduleRender();
@@ -3176,6 +3187,9 @@ window.addEventListener("resize", () => {
 // Durations tick without a re-render.
 setInterval(() => {
   for (const el of document.querySelectorAll("[data-ago]")) el.textContent = since(el.dataset.ago);
+  // The page itself gone late, with no frame to say so (a phone that slept): Needs you says it.
+  const fresh = document.querySelector(".fresh");
+  if (fresh && renderTimer === null && fresh.dataset.late !== String(pageLate())) scheduleRender();
 }, 1000);
 
 // ---------- Socket ----------
@@ -3234,8 +3248,11 @@ function connect() {
         }
         break;
       case "action_result":
-        toast(f.ok && actionToasts.has(f.id) ? actionToasts.get(f.id) : f.message, f.ok);
-        actionToasts.delete(f.id);
+        {
+          const done = f.ok ? actionToasts.get(f.id) : null;
+          actionToasts.delete(f.id);
+          toast(...(typeof done === "function" ? done(f) : [done ?? f.message, f.ok]));
+        }
         break;
       case "ok":
         if (sentOps.has(f.rid)) {
@@ -3251,6 +3268,7 @@ function connect() {
           break;
         }
         if (f.rid === dashboardRid) {
+          state.refreshed = Date.now();
           if (f.result.now) skew = Date.now() - Date.parse(f.result.now);
           state.peers = f.result.peers;
           state.laptops = new Map(f.result.laptops.map((l) => [l.laptop, l]));
@@ -3287,7 +3305,7 @@ function connect() {
           for (const id of feats.keys()) if (id.startsWith(`${f.project}/`)) loadFeature(f.project, id.slice(f.project.length + 1));
         }
         usageDayChanged(f.project);
-        if (ov.rows) loadOverview();
+        if (ov.rows || ov.error) loadOverview();
         if (rules.rows) loadRules();
         statusChanged();
         break;
@@ -3318,7 +3336,7 @@ connect();
 setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send('{"t":"ping"}'), 30_000);
 setInterval(() => ws?.readyState === WebSocket.OPEN && (dashboardRid = request("dashboard")), 60_000);
 // The Status tab's dot, on any view (ADR 0005 §2: every 60 s when Status and the Overview aren't showing).
-setInterval(() => ws?.readyState === WebSocket.OPEN && (svc.projects ? loadStatus() : loadProjects()), 60_000);
+setInterval(() => ws?.readyState === WebSocket.OPEN && (svc.projects ? (loadStatus(), ov.error ? loadOverview() : null) : loadProjects()), 60_000);
 // Waits, hourly: a row goes stale and is flagged with no change on the board to say so (ADR 0011 §2; review A m3).
 setInterval(() => ws?.readyState === WebSocket.OPEN && svc.projects && loadOverview(), 60 * 60_000);
 

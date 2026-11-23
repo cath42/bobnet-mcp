@@ -1908,6 +1908,28 @@ describe("editing an open question or action (BOB-119)", () => {
     await ok(owner, { op: "answer_question", project: "helix", ref: "Q-1", key: "a" });
   });
 
+  it("refuses options on an action, asked or edited, and says to ask a question instead; one that has them keeps them (ADR 0001 §7, BOB-187)", async () => {
+    await asked();
+    const options = [{ key: "a", text: "A cron entry" }, { key: "b", text: "By hand" }];
+    const said = { ok: false, code: "invalid", message: expect.stringMatching(/^An action has no options.*Ask a question instead/) };
+    expect(await call(agent("Data"), { op: "ask", project: "helix", kind: "action", text: "Run the checks", options })).toMatchObject(said);
+    expect((await ok(agent("Data"), { op: "ask", project: "helix", kind: "action", text: "Run the checks", options: [] })).ref).toBe("A-1");
+    const before = await question("A-1");
+    expect(await edit(agent("Data"), "A-1", { text: "Run the checks by hand", options })).toMatchObject(said);
+    expect(await question("A-1")).toEqual(before);
+    // Without options the edit goes; a question's options are as they were.
+    expect(await edit(agent("Data"), "A-1", { text: "Run the checks by hand", options: [] })).toMatchObject({ ok: true });
+    expect(await edit(agent("Data"), "Q-1", { options: [{ key: "a", text: "Bars", recommended: true }, { key: "b", text: "Lines" }, { key: "c", text: "A table" }] })).toMatchObject({ ok: true });
+    // One filed with options before this: they stand, can't be changed, and it is marked done as any.
+    await runInDurableObject(board(), (_instance, ctx) => {
+      ctx.storage.sql.exec("INSERT INTO question_options (question, ord, key, text, recommended) SELECT pk, 1, 'a', 'A cron entry', 1 FROM questions WHERE ref = 'A-1'");
+    });
+    expect((await question("A-1")).question.options).toEqual([{ key: "a", text: "A cron entry", recommended: true }]);
+    expect(await edit(agent("Data"), "A-1", { options: [{ key: "a", text: "Cron" }] })).toMatchObject(said);
+    expect(await edit(agent("Data"), "A-1", { text: "Run them" })).toMatchObject({ ok: true });
+    expect(await call(owner, { op: "mark_done", project: "helix", ref: "A-1", note: "a" })).toMatchObject({ ok: true });
+  });
+
   it("checks new holds and needed-before as an ask does, and Waits follows: the A-24 case turns blocking (AC 4)", async () => {
     const { r1, f2, t1 } = await asked();
     await join(f2);

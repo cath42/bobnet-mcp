@@ -96,7 +96,7 @@ function fakeBroker() {
 const widths = { 390: [390, 844], 1440: [1440, 900] };
 // [name, hash, selector to wait for, full page]
 const all = [
-  ["waits", "waits", ".waits li", true],
+  ["waits", "waits", "li.need", true],
   ["overview-needs-you", "overview", "#needs li", false],
 ];
 

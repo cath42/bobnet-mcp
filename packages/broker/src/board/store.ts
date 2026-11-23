@@ -79,6 +79,8 @@ const SUBJECT_CLIP = 80;
 /** The status read (ADR 0005 §2): its longest span, its lists' cap, when quiet turns stuck (Peach's default). */
 const SPAN_MAX_MS = 31 * 24 * 60 * 60 * 1000;
 const STATUS_MAX = 100;
+/** Why an action's options are refused (ADR 0001 §7, BOB-187). */
+const ACTION_OPTIONS = "An action has no options: it is done or not done. Ask a question instead, with the options on it";
 const STUCK_MS = 2 * 60 * 60 * 1000;
 /** A heavy session: over twice its kind's median over the 30 days before it, with at least 5 to compare. */
 const HEAVY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
@@ -2335,6 +2337,7 @@ export class BoardStore {
     const nbItem = nb && "item" in nb ? this.item(p, nb.item) : null;
     const nbRelease = nb && "release" in nb ? this.release(p, nb.release) : null;
     const nbText = nb && "text" in nb ? nb.text : null;
+    if (op.kind === "action" && op.options.length) throw new BoardError("invalid", ACTION_OPTIONS);
     const keys = op.options.map((o) => o.key);
     if (new Set(keys).size !== keys.length) throw new BoardError("invalid", "Each option has its own key");
     const counter = op.kind === "question" ? "next_question" : "next_action";
@@ -2422,6 +2425,7 @@ export class BoardStore {
     if (sessions && sessions.was.join() !== sessions.now.join()) changes.push(["holds_sessions", heldSessions(sessions.was), heldSessions(sessions.now)]);
     let options = false;
     if (set.options !== undefined) {
+      if (q.kind === "action" && set.options.length) throw new BoardError("invalid", ACTION_OPTIONS);
       const keys = set.options.map((o) => o.key);
       if (new Set(keys).size !== keys.length) throw new BoardError("invalid", "Each option has its own key");
       const was = this.questionRecord(q.pk).options;

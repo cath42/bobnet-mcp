@@ -59,7 +59,8 @@ function fakeBroker(scene) {
     wait({ ref: "Q-261", feature: "LAND-50", text: "A lease change that touches two recorded tracts: one change set, or one for each tract? Howard's build needs it to write the migration.\nOne set keeps the audit trail whole; two can be taken back one by one.", recommended: { key: "one", text: "One change set, with each tract's part shown apart" }, context: "The recorder's office accepts a lease amendment as one instrument.\n\nTwo change sets would give two instrument numbers for one document, and the audit view would show half an amendment between them.", holds: { items: [], sessions: [howard] }, since: iso(3 * H + 10), blocking: true, asked_by: "Picard@mbp-1",
       edits: [{ seq: 2, at: iso(100), by: "Picard@mbp-1", reason: "Howard asked for the trade-off", changes: [change("text", "One change set or two?", "…")] }, { seq: 3, at: iso(90), by: "Picard@mbp-1", reason: null, changes: [change("options", "two", "one")] }] }),
     wait({ ref: "A-20", kind: "action", feature: "LAND-50", text: "Add the second company to the staging account in Clerk, so the e2e can switch between the two", holds: { items: ["LAND-50"], sessions: [] }, since: iso(4 * D + 30), blocking: true, asked_by: "Picard@mbp-1", stale: { changed_at: iso(2 * D + 60), owner: "Picard@mbp-1", flagged_at: iso(3 * H) }, needed_before: { release: "R2" } }),
-    wait({ ref: "DRAFT-118", kind: "bug", text: "The map drops a tract's east line when its lease is edited twice in a minute", since: iso(D + 200), blocking: true, asked_by: null, fix: { sha: "57e7002bfa01", subject: "land: keep both lines", release: "v0.9", tags_known: true } }),
+    wait({ ref: "DRAFT-118", kind: "bug", text: "The map drops a tract's east line when its lease is edited twice in a minute", since: iso(D + 200), asked_by: null, fix: { sha: "57e7002bfa01", subject: "land: keep both lines", release: "v0.9", tags_known: true } }),
+    wait({ ref: "DRAFT-119", kind: "bug", feature: "LAND-50", text: "Saving an edit on a phone loses the reason I typed when the keyboard closes", since: iso(20 * H), blocking: true, asked_by: null }),
     wait({ ref: "Q-14", project: "bobnet", feature: "BOB-121", text: "May a product owner create, edit, order, close and reopen its project's releases, with you keeping the same on the dashboard?", since: iso(26 * H), asked_by: "Peach@mbp-1", waiting_sessions: [{ feature: "BOB-121", kind: "review", label: "B" }] }),
     wait({ ref: "Q-240", text: "Does the partner demo show the audit trail, or only the proposed change?", recommended: { key: "both", text: "Both, the trail folded" }, since: iso(5 * H), kept: { at: iso(60), by: "Bill@mbp-1", reason: "still open until the demo's date is set" } }),
     wait({ ref: "A-9", project: "bobnet", kind: "action", text: "Where do Vitals' restart checks run from? Say which when it is done.", since: iso(8 * H), asked_by: "Peach@mbp-1" }),
@@ -166,6 +167,8 @@ function fakeBroker(scene) {
 }
 
 const widths = { 390: [390, 844], 1024: [1024, 768], 1440: [1440, 900] };
+const tap = (ref) => (p) => p.locator(`li[data-ref="${ref}"] .l-t`).click();
+const answer = (ref) => (p) => p.locator(`li[data-ref="${ref}"] .answer-btn`).click();
 // [name, scene, hash, selector to wait for, steps, element to shoot (none: the whole page; "top": the window), widths (none: all)]
 const all = [
   ["bob121-header", "live", "overview", ".prow", [], "header"],
@@ -176,6 +179,22 @@ const all = [
   ["bob121-triage-helix", "live", "triage/helix", ".totals", []],
   ["bob121-laptops", "live", "laptops", "#global-rules", []],
   ["bob121-laptops-quiet", "quiet", "laptops", "#global-rules", [(p) => p.locator("details.msgs summary").click()]],
+  ["bob121-needs", "live", "needs", "#needs-rest li", []],
+  ["bob121-needs-dark", "live", "needs", "#needs-rest li", [tap("Q-261"), tap("r_5")], null, [390, 1440]],
+  ["bob121-needs-open", "live", "needs", "#needs-rest li", [tap("Q-261"), (p) => p.locator('li[data-ref="Q-261"] .edits summary').click(), (p) => p.locator('li[data-ref="Q-261"] .ctx-row button').click(), tap("r_5")]],
+  ["bob121-needs-allow-note", "live", "needs", "#needs-rest li", [answer("r_5"), (p) => p.fill("form.answer textarea", "Fine. Keep the stash; clear only the tile cache.")]],
+  ["bob121-needs-allow-toast", "live", "needs", "#needs-rest li", [answer("r_5"), (p) => p.fill("form.answer textarea", "Fine. Keep the stash."), (p) => p.getByRole("button", { name: "Allow", exact: true }).click(), (p) => p.waitForTimeout(200)], "#toast", [390, 1440]],
+  ["bob121-needs-older", "older", "needs", "#needs-rest li", [answer("r_5")], null, [390, 1440]],
+  ["bob121-needs-action-options", "live", "needs", "#needs-rest li", [answer("A-9")], "#needs-rest"],
+  ["bob121-needs-quiet", "quiet", "needs", "#needs-rest li", [], null, [390, 1440]],
+  ["bob121-needs-down", "down", "needs", ".banner.down", [], null, [390, 1440]],
+  ["bob121-needs-listdown", "listdown", "needs", ".banner.down", [], null, [390, 1440]],
+  ["bob121-overview", "live", "overview", ".prow", []],
+  ["bob121-overview-quiet", "quiet", "overview", ".prow", [], null, [390, 1440]],
+  ["bob121-overview-nothing", "nothing", "overview", ".prow", [], null, [390, 1440]],
+  ["bob121-overview-down", "down", "overview", ".banner.down", [], null, [390, 1440]],
+  ["bob121-overview-listdown", "listdown", "overview", ".banner.down", [], null, [390, 1440]],
+  ["bob121-status-needs", "live", "status", "#status-needs li", [], "#status-needs", [390, 1440]],
 ];
 
 const shots = all.filter(([name]) => name.startsWith(process.argv[2] ?? ""));
