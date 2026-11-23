@@ -40,7 +40,8 @@ be seen without clicking (AC11), and for a baseline (Q-13); this shows neither, 
 
 Fix: the median is over the span's days with tokens; calls, over days with a call (the role's: days it made one). Under 3 such days:
 "median day –", no spike, no dashed calls line. `usageFigures` and `dayDetail`'s fallback in app.js; `store.ts:1326` and `:1330`. The context
-line already works this way. I asked Toad (c_4fa17383); no answer in ten minutes, so §2.9 says "Toad to confirm".
+line already works this way. Toad agrees (m_8c15b2b2; ADR 0014 §3a in Toad's review D): days are picked by raw tokens, today stays in, the
+broker's `calls` is 0 under 3 days, and there is no new field. §2.9 has it.
 
 ## Minors
 

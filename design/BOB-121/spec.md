@@ -387,8 +387,9 @@ Today's page, with these changes:
     "Sonnet-equivalent tokens"), then "today so far 27.6M · median day 40.4M".
   - The graph: a bar per day, with a y axis in tokens and dates under it. Each project has its own
     scale, so a small project's spike shows.
-  - **The median day** is over the span's days with tokens, not all of them; under 3 such days there is
-    none ("median day –") and no spike (review D, M1; Toad to confirm, see "Baseline").
+  - **The median day** is over the span's days with raw tokens, not all of them (raw, so the switch never
+    changes which days count), today's included; it is of the figure shown. Under 3 such days there
+    is none ("median day –") and no spike (review D, M1; Toad).
   - With no tokens in the span there is no graph: "No tokens in these 30 days."
   - A day over twice the span's median (and over 4M) is a **spike**: its bar in `--warn` with its
     value on top. Today's bar is lighter ("so far").
@@ -477,8 +478,9 @@ by call, of:
 - **By agent:** that role's runs in the period, each from its own first call. Their middle half stays
   the grey band of today's chart.
 - **Calls:** the median day's calls (the day's, or the role's), in the key beside the day's own: over
-  the days with a call (the role's: the days it made one), as Total's line already is (review D, M1;
-  Toad to confirm: asked, no answer yet).
+  the days with a call (the role's: the days it made one), as Total's line already is. Under 3 such
+  days the read's `calls` is 0: no dashed calls line, and the key reads "median day –". The context
+  line and band still need their 3 days or runs (review D, M1; Toad).
 
 Where fewer than 3 days (Total) or 3 runs (By agent) reach a call, the line stops: there is nothing to
 compare against. Under the graphs, the page says: "Dashed: the median over these 30 days. Total: a
