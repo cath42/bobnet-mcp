@@ -294,6 +294,29 @@ describe("the board tools in the channel client", () => {
     expect(broker.ops.at(-1)).toMatchObject({ op: { op: "set_release", ref: "LAND-1", release: null } });
   });
 
+  it("offers the release ops in board_write, checked before sending (BOB-189)", async () => {
+    const { client, broker, call } = await session(() => ({ ok: { ref: "R3", seq: 4 } }));
+    const write = (await client.listTools()).tools.find((t) => t.name === "board_write")!;
+    const ops = ["create_release", "update_release", "order_releases", "close_release", "reopen_release"];
+    expect((write.inputSchema.properties as Record<string, { enum?: string[] }>)["op"]!.enum).toEqual(expect.arrayContaining(ops));
+    for (const op of ops) expect(write.description).toContain(`${op} {`);
+    const sent = [
+      { op: "create_release", fields: { title: "Nightly", goal: "Every day starts green" } },
+      { op: "update_release", fields: { ref: "R3", set: { spec_url: "https://example.com/r3" } } },
+      { op: "order_releases", fields: { refs: ["R0", "R1", "R2", "R3"] } },
+      { op: "close_release", fields: { ref: "R0", moves: [{ feature: "LAND-12", to: "R3" }, { feature: "LAND-14", to: null }] } },
+      { op: "reopen_release", fields: { ref: "R0", reason: "closed too soon" } },
+    ];
+    for (const { op, fields } of sent) {
+      expect((await call("board_write", { project: "helix", op, fields })).isError).toBe(false);
+      expect(broker.ops.at(-1)).toMatchObject({ op: { ...fields, op, project: "helix" } });
+    }
+    const before = broker.ops.length;
+    const bad = await call("board_write", { project: "helix", op: "close_release", fields: { moves: [] } });
+    expect(bad).toMatchObject({ isError: true, text: expect.stringContaining("bad_arguments: ref") });
+    expect(broker.ops).toHaveLength(before);
+  });
+
   it("answers a refusal and a bad argument as errors naming why", async () => {
     const { call } = await session(() => ({ code: "forbidden", message: "Luigi may not change status on LAND-2 in helix; Picard may" }));
     expect(await call("board_write", { project: "helix", op: "update", fields: { ref: "LAND-2", set: { status: "Done" } } })).toEqual({

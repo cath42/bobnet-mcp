@@ -30,7 +30,24 @@ const projectArg = z.string().optional().describe("Project key, e.g. helix; defa
 /** Operation-specific fields, checked against the board's own schema when called. */
 const fields = z.record(z.string(), z.unknown());
 
-const WRITES = ["create", "update", "criteria", "slot", "promote", "archive", "restore", "order", "set_release", "keep", "withdraw"] as const;
+const WRITES = [
+  "create",
+  "update",
+  "criteria",
+  "slot",
+  "promote",
+  "archive",
+  "restore",
+  "order",
+  "set_release",
+  "create_release",
+  "update_release",
+  "order_releases",
+  "close_release",
+  "reopen_release",
+  "keep",
+  "withdraw",
+] as const;
 
 async function project(deps: BoardToolDeps, args: Record<string, unknown>): Promise<string> {
   return typeof args["project"] === "string" ? args["project"] : deps.project();
@@ -127,6 +144,8 @@ export const BOARD_TOOLS: BoardTool[] = [
       "create {kind feature|task|backlog, type, title, parent?, description?, criteria?: [{text, section?}], …}; update {ref, set: {status?, title?, description?, notes?, labels?, deps?, parent?, …}, reason?}; " +
       "criteria {ref, change: {action add|edit|check|uncheck, n?, text?, evidence?, reason?}}; slot {ref, feature}; promote {ref}; archive {ref, reason}; restore {ref}; " +
       "order {scope features|backlog, release?, refs}; set_release {ref, release (null: out of any), reason?}, a feature's release, last in it; " +
+      "create_release {title, goal?, spec_url?}, last in the order; update_release {ref, set: {title?, goal?, spec_url?}}; order_releases {refs}, every release once; " +
+      "close_release {ref, moves: [{feature, to (null: none)}]}, a destination for every feature not Done; reopen_release {ref, reason?}; " +
       "keep {ref, reason}, a row on Waits of yours is still current, when told it has waited a day unchanged; withdraw {ref, reason}, your open question or action is moot, and leaves Waits. A bug is Done once its fix has landed and its criteria (\"It no longer happens\") are checked, the landed commit as evidence; " +
       "a bug closed without a fix is archived with a reason.",
     shape: { project: projectArg, op: z.enum(WRITES), fields },
