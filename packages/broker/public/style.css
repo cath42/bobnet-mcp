@@ -238,7 +238,7 @@ main > .bar-row:has(+ .bar-row) { margin-bottom: -10px; }
 .tip .row i.dash { border-top-style: dashed; }
 .key { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--muted); }
 .key span i { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--k); margin-right: 6px; vertical-align: 3px; }
-.key span i.dash { border-top-style: dashed; } .key span i.dot { border-top-style: dotted; } .key span i.band { height: 8px; border: 0; background: var(--k); opacity: .35; vertical-align: 0; }
+.key span i.dash { border-top-style: dashed; } .key span i.dot { border-top-style: dotted; border-radius: 0; background: none; } .key span i.band { height: 8px; border: 0; background: var(--k); opacity: .35; vertical-align: 0; }
 
 /* Session kinds on the usage chart: a validated categorical set (build, design, review, retro). */
 :root { --k-build: #2a78d6; --k-design: #eb6834; --k-review: #1baf7a; --k-retro: #eda100; }
@@ -961,3 +961,28 @@ form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width
   .big-s { white-space: pre-wrap; }
   .factored th, .factored td { padding-left: 8px; padding-right: 8px; }
 }
+/* A day's detail under its line: two graphs against the period's median (Casper's Q-13) */
+.ud { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; margin-top: 4px; }
+.ud-h { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.ud-h h3 { margin: 0; font-size: 14px; font-weight: 600; flex: 1 1 auto; }
+.ud-x { border: 0; background: transparent; color: var(--muted); font-size: 20px; line-height: 1; min-width: 32px; min-height: 32px; padding: 0; }
+.ud-x:hover { color: var(--text); }
+.ud-roles { overflow-x: auto; max-width: 100%; width: fit-content; }
+.ud-roles button { white-space: nowrap; flex: none; }
+.ud-frame { display: grid; gap: 8px; align-content: center; justify-items: center; text-align: center; border: 1px dashed var(--line); border-radius: 8px; padding: 12px; }
+.ud-frame p { margin: 0; font-size: 13.5px; }
+.ud-graphs { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
+.ud-graphs.side { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; }
+.ud figure { margin: 0; min-width: 0; }
+.ud figcaption { font-size: 12.5px; color: var(--muted); margin-bottom: 2px; }
+.ud-plot { position: relative; }
+.ud svg { width: 100%; height: auto; display: block; touch-action: pan-y; outline: none; }
+.ud svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.ud svg text { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.ud svg .gl { stroke: var(--line); }
+.ud svg .val { fill: var(--text); font-weight: 600; }
+.ud svg .dot { fill: var(--accent); stroke: var(--accent); stroke-width: 2; }
+.ud svg .dot.hollow { fill: var(--surface); }
+.ud .tip { min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ud .note { margin: 0; }
+@media (max-width: 600px) { .ud-x { min-width: 44px; min-height: 44px; } .ud-frame button { min-height: 44px; } .ud-roles { width: 100%; } }

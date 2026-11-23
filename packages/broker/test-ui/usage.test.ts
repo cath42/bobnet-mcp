@@ -249,3 +249,199 @@ describe("the Usage page (BOB-180)", () => {
     expect(view().textContent!.replace(/\(.*list-price.*\)|list price/g, "")).not.toMatch(/[$€£]|\bcosts?\b/i);
   });
 });
+
+describe("a day's detail (BOB-181)", () => {
+  type Line = { calls: number; pts: number[] };
+  const line = (n: number, v: number): Line => ({ calls: n, pts: Array.from({ length: n }, () => v) });
+  const run = (id: string, role: string, pts: number[], over: Record<string, unknown> = {}) => ({ id, agent: role[0]!.toUpperCase() + role.slice(1), role, session: null, model: "opus", started_at: iso(600), ended_at: iso(500), resumed: false, first: 1, ctx: { calls: pts.length, pts }, ...over });
+  const none: Line = { calls: 0, pts: [] };
+  /** What `usage_day` has: toad's 2 calls, then luigi's two runs of 3 and 2. */
+  let detail: Record<string, unknown>;
+  const usageDay = (op: Op) => ({ project: op["project"], day: op["day"], days: span(op["days"] as number), lost: 0, ...detail });
+  const ud = (k = "bobnet") => card(k).querySelector(".ud");
+  const button = (label: string, k = "bobnet") => [...card(k).querySelectorAll(".ud button")].find((b) => b.textContent === label);
+  const points = (sel: string, k = "bobnet") => card(k).querySelector(sel)?.getAttribute("points")?.trim().split(" ").length ?? 0;
+  beforeEach(() => {
+    world.reads["usage_day"] = usageDay;
+    detail = {
+      runs: [run("r1", "toad", [10_000, 20_000]), run("r2", "luigi", [30_000, 40_000, 50_000]), run("r3", "luigi", [31_000, 41_000])],
+      baseline: {
+        total: { days: 25, calls: 286, p50: line(6, 100_000) },
+        roles: [{ role: "luigi", runs: 9, calls: 4, p25: line(4, 20_000), p50: line(4, 35_000), p75: line(4, 60_000) }, { role: "toad", runs: 2, calls: 2, p25: none, p50: none, p75: none }],
+      },
+    };
+    data["bobnet"]!.back[4] = opus(20, { calls: 7, by_role: [{ role: "luigi", calls: 5, raw: 1, weighted: 1 }, { role: "toad", calls: 2, raw: 1, weighted: 1 }] });
+  });
+
+  it("opens on a tap and on Enter with one usage_day call; Close, a second tap and Escape close it and focus the bar; one open day per card (c1)", async () => {
+    await open("#usage");
+    await click(bar("bobnet", 4));
+    expect(sent("usage_day").map((f) => f.op)).toEqual([{ op: "usage_day", project: "bobnet", day: dayOf(4), days: 30, tz: Intl.DateTimeFormat().resolvedOptions().timeZone }]);
+    await settle();
+    expect(text(".ud h3")).toBe(`${word(dayOf(4))} in detail`);
+    expect(location.hash).toBe(`#usage/bobnet/${dayOf(4)}`);
+    const focused = () => document.activeElement!.getAttribute("data-fk");
+    // A second tap.
+    await click(bar("bobnet", 4));
+    expect([ud(), focused(), location.hash]).toEqual([null, `bar/bobnet/${dayOf(4)}`, "#usage"]);
+    // Opened again, it is kept: no fetch.
+    await key(bar("bobnet", 4), "Enter");
+    expect(sent("usage_day")).toHaveLength(1);
+    expect(card("bobnet").querySelectorAll(".ud")).toHaveLength(1);
+    await click(ud()!.querySelector(`[aria-label="Close ${word(dayOf(4))}'s detail"]`));
+    expect([ud(), focused()]).toEqual([null, `bar/bobnet/${dayOf(4)}`]);
+    await key(bar("bobnet", 4), "Enter");
+    await key(ud()!.querySelector("svg"), "Escape");
+    expect([ud(), focused()]).toEqual([null, `bar/bobnet/${dayOf(4)}`]);
+    // Another day moves it; another card keeps its own.
+    await click(bar("bobnet", 4));
+    await click(bar("bobnet", 9));
+    await click(bar("helix", 3));
+    await settle();
+    expect(texts(".ud h3")).toEqual([`${word(dayOf(9))} in detail`, `${word(dayOf(3))} in detail`]);
+    expect(sent("usage_day")).toHaveLength(3);
+  });
+
+  it("Total: the day's calls and the median day's in the key, the dashed line as long as the baseline; none with too few days (c2)", async () => {
+    await open("#usage");
+    await click(bar("bobnet", 4));
+    await settle();
+    expect(text(".k-day")).toBe(`${word(dayOf(4))} · 7 calls`);
+    expect(text(".k-med")).toBe("median day · 286 calls");
+    expect([points(".ud polyline.day"), points(".ud polyline.base")]).toEqual([7, 6]);
+    expect(card("bobnet").querySelector(".ud .band")).toBeNull();
+    expect(text(".ud-note")).toBe("Dashed: the median over these 30 days. Total: a day's calls, call by call. By agent: a role's runs at the same call, the band their middle half. A line above it carried more context per call than usual.");
+    // The calls graph: the tapped day's dot with its value, today's hollow, the median across.
+    expect(texts(".ud .val")).toEqual(["7"]);
+    expect(card("bobnet").querySelectorAll(".ud .dot.picked:not(.hollow), .ud .dot.hollow")).toHaveLength(2);
+    expect(card("bobnet").querySelector(".ud line.median")).not.toBeNull();
+    detail["baseline"] = { total: { days: 2, calls: 7, p50: none }, roles: [] };
+    await click(bar("bobnet", 6));
+    await settle();
+    expect(points(".ud polyline.base")).toBe(0);
+    expect(text(".ud-note")).toBe("No dashed line: fewer than 3 days in these 30 to compare with.");
+  });
+
+  it("a call's tip: its context, and the median where the baseline reaches, by pointer and by keyboard (2.9)", async () => {
+    await open("#usage");
+    await click(bar("bobnet", 4));
+    await settle();
+    const svg = () => ud()!.querySelector("svg") as unknown as SVGElement & { focus(): void };
+    svg().focus();
+    // The last call, past the baseline's six.
+    expect(text(".ud .tip")).toBe("call 7 · 222k context summed");
+    await key(svg(), "Home");
+    expect(text(".ud .tip")).toBe("call 1 · 10k context summed · median 100k");
+    await click(button("By agent"));
+    svg().focus();
+    await key(svg(), "ArrowLeft");
+    expect(text(".ud .tip")).toBe("call 4 · 31k context · median 35k");
+    const at = (x: number) => ud()!.querySelector(".ud-plot rect.hit")!.dispatchEvent(Object.assign(new Event("pointermove"), { clientX: x }));
+    at(46);
+    expect(text(".ud .tip")).toBe("call 1 · 30k context · median 35k");
+    ud()!.querySelector(".ud-plot rect.hit")!.dispatchEvent(new Event("pointerleave"));
+    expect((ud()!.querySelector(".tip") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("By agent: the day's roles, most calls first; one's runs with a break between, its band and its median, named in the note; a role whose runs were all lost isn't there (c3)", async () => {
+    detail["lost"] = 2;
+    await open("#usage");
+    await click(bar("bobnet", 4));
+    await settle();
+    await click(button("By agent"));
+    expect(texts(".ud-roles button")).toEqual(["luigi · 5 calls", "toad · 2 calls"]);
+    expect(card("bobnet").querySelector('.ud-roles [aria-pressed="true"]')!.textContent).toBe("luigi · 5 calls");
+    expect(text(".k-day")).toBe(`${word(dayOf(4))} · 5 calls`);
+    expect(text(".k-med")).toBe("median day · 4 calls");
+    expect(text(".k-band")).toBe("luigi's runs, middle half");
+    expect([...card("bobnet").querySelectorAll(".ud polyline.day")].map((p) => p.getAttribute("points")!.split(" ").length).slice(0, 2)).toEqual([3, 2]);
+    expect(card("bobnet").querySelectorAll(".ud .reset")).toHaveLength(1);
+    expect([points(".ud polyline.base"), points(".ud polygon.band")]).toEqual([4, 8]);
+    expect(text(".ud-note")).toContain("By agent: luigi's runs at the same call, the band their middle half.");
+    expect(texts(".ud .val")).toEqual(["5"]);
+    expect(text(".ud .u-lost")).toBe("2 runs lost: no context recorded");
+    await click(button("toad · 2 calls"));
+    expect(text(".k-day")).toBe(`${word(dayOf(4))} · 2 calls`);
+    expect(points(".ud polyline.base")).toBe(0);
+    expect(card("bobnet").querySelector(".k-band")).toBeNull();
+    expect(text(".ud-note")).toBe("No dashed line: fewer than 3 toad runs in these 30 days.");
+    // A redraw keeps the switch and the role.
+    report("mbp-1", snapshot([]));
+    await settle();
+    expect(card("bobnet").querySelector('.ud-roles [aria-pressed="true"]')!.textContent).toBe("toad · 2 calls");
+  });
+
+  it("says it is loading with the day line already there, what failed with Retry, and a day with no calls and its lost runs (c4)", async () => {
+    delete world.reads["usage_day"];
+    await open("#usage");
+    await click(bar("bobnet", 4));
+    expect(text(".uday b", card("bobnet"))).toBe(`${word(dayOf(4))}: 20.0M tokens`);
+    expect(text(".ud-frame")).toBe(`Loading ${word(dayOf(4))}'s calls…`);
+    expect((ud()!.querySelector(".ud-frame") as HTMLElement).style.minHeight).toMatch(/^\d{3}px$/);
+    // The switch works while it loads.
+    await click(button("By agent"));
+    expect(button("By agent")!.getAttribute("aria-pressed")).toBe("true");
+    reply(sent("usage_day")[0]!, () => refuse("No"));
+    await settle();
+    expect(text(".ud-frame")).toBe(`Couldn't load ${word(dayOf(4))}'s calls.Retry`);
+    detail = { runs: [], baseline: { total: { days: 25, calls: 286, p50: none }, roles: [] }, lost: 1 };
+    world.reads["usage_day"] = usageDay;
+    await click(button("Retry"));
+    await settle();
+    expect(text(".ud-frame")).toBe(`No calls on ${word(dayOf(4))}.1 run lost: no context recorded`);
+    expect(ud()!.querySelector(".seg")).toBeNull();
+    expect(ud()!.querySelector("svg")).toBeNull();
+  });
+
+  it("stays through the weigh switch, no figure changed nor fetched; a span that leaves its day out closes it; its link opens it (c5)", async () => {
+    await open(`#usage/bobnet/${dayOf(20)}`);
+    await settle();
+    expect(text(".ud h3", card("bobnet"))).toBe(`${word(dayOf(20))} in detail`);
+    const before = ud()!.querySelector("svg")!.outerHTML;
+    await weigh("Sonnet-equivalent");
+    expect(ud()!.querySelector("svg")!.outerHTML).toBe(before);
+    expect(text(".ud-raw")).toBe("Context is raw tokens: weighing applies to the bars.");
+    expect(sent("usage_day")).toHaveLength(1);
+    expect(location.hash).toBe(`#usage/bobnet/${dayOf(20)}?weigh=1`);
+    await spanOf("14 days");
+    await settle();
+    expect([ud(), card("bobnet").querySelector(".uday"), location.hash]).toEqual([null, null, "#usage?weigh=1&days=14"]);
+    // A day still in it is read again for the new period.
+    await click(bar("bobnet", 4));
+    await spanOf("30 days");
+    await settle();
+    expect(sent("usage_day").map((f) => f.op!["days"])).toEqual([30, 14, 30]);
+    expect(text(".ud h3", card("bobnet"))).toBe(`${word(dayOf(4))} in detail`);
+  });
+
+  it("scrolls to the link's card", async () => {
+    const scrolled: number[] = [];
+    const by = vi.spyOn(window, "scrollBy").mockImplementation(((_x: number, y: number) => void scrolled.push(y)) as never);
+    await open(`#usage/helix/${dayOf(3)}`);
+    await settle();
+    expect(scrolled).toHaveLength(1);
+    expect(text(".ud h3", card("helix"))).toBe(`${word(dayOf(3))} in detail`);
+    by.mockRestore();
+  });
+
+  it("has a running worker's calls and context in today's detail, so far; an older supervisor's makes Total approximate (c6)", async () => {
+    detail["runs"] = [run("r1", "toad", [10_000, 20_000])];
+    data["bobnet"]!.back[0] = opus(8, { calls: 2, by_role: [{ role: "toad", calls: 2, raw: 1, weighted: 1 }] });
+    const live = worker({ id: "w_l", name: "Luigi", role: "luigi", project: "bobnet", started_at: iso(0), calls: 3, ctx: [30_000, 40_000, 50_000], ctx_even: true });
+    world.laptops = [{ laptop: "mbp-1", at: iso(0), snapshot: snapshot([live]) }];
+    await open("#usage");
+    await click(bar("bobnet", 0));
+    await settle();
+    expect(text(".k-day")).toBe(`${word(dayOf(0))} so far · 5 calls`);
+    expect(points(".ud polyline.day")).toBe(5);
+    expect(texts(".ud .val")).toEqual(["5"]);
+    expect(card("bobnet").querySelector(".ud .dot.picked.hollow")).not.toBeNull();
+    expect(card("bobnet").querySelector(".ud-approx")).toBeNull();
+    await click(button("By agent"));
+    expect(texts(".ud-roles button")).toEqual(["luigi · 3 calls", "toad · 2 calls"]);
+    await click(button("Total"));
+    report("mbp-1", snapshot([{ ...live, calls: 500, ctx: Array.from({ length: 400 }, () => 40_000), ctx_even: undefined }]));
+    await settle();
+    expect(text(".ud-approx")).toBe("Total is approximate while Luigi runs: its laptop's supervisor reports only the last 400 calls.");
+  });
+});

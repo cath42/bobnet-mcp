@@ -147,9 +147,9 @@ function fakeBroker(scene) {
     const spike = (key === "bobnet" && back === 1) || (key === "helix" && back === 10);
     const base = { bobnet: 21e6, helix: 44e6 }[key] ?? 1.6e6, total = Math.round(base * (spike ? 3.1 : back === 0 ? 0.3 : wave(back, key.length)));
     const opus = Math.round(total * 0.82), haiku = Math.round(total * 0.004), unknown = key === "bobnet" && back % 9 === 2 ? Math.round(total * 0.14) : 0, sonnet = total - opus - haiku - unknown;
-    const weighted = Math.round(2 * opus + sonnet + 0.1 * haiku + unknown), calls = Math.round(total / 90_000);
+    const weighted = Math.round(2 * opus + sonnet + 0.1 * haiku + unknown), calls = key === "helix" && back === 10 ? 412 : Math.round(total / 130_000);
     const [lead, eng, arch] = key === "helix" ? ["lead", "engineer", "fixer"] : ["lead", "luigi", "toad"];
-    const roles = [[eng, 0.52], [lead, 0.3], [arch, 0.18]].map(([role, f]) => ({ role, calls: Math.round(calls * f), raw: Math.round(total * f), weighted: Math.round(weighted * f) }));
+    const roles = [[eng, 212 / 412], [lead, 120 / 412], [arch, 80 / 412]].map(([role, f]) => ({ role, calls: Math.round(calls * f), raw: Math.round(total * f), weighted: Math.round(weighted * f) }));
     const ss = (feature, kind, label) => ({ feature, kind, label });
     const top = key === "helix" ? [[ss("LAND-49", "build", "2"), "Edit a recorded lease", 0.62], [ss("LAND-49", "review", "1"), "Edit a recorded lease", 0.2], [null, null, 0.11]] : [[ss("BOB-121", "build", "C"), "The dashboard, use case first", 0.55], [ss("BOB-121", "review", "C"), "The dashboard, use case first", 0.3], [ss("BOB-51", "build", "A"), "Permission messages whole", 0.1]];
     const raw = { input: Math.round(total * 0.02), output: Math.round(total * 0.03), cache_write: Math.round(total * 0.09), cache_read: 0 };
@@ -158,8 +158,21 @@ function fakeBroker(scene) {
   };
   const usageSeries = (p, n) => ({ project: p.key, name: p.name, lost: p.key === "bobnet" ? 1 : 0, points: Array.from({ length: n }, (_, i) => point(p.key, n - 1 - i)) });
   const usageDays = (n) => Array.from({ length: n }, (_, i) => dayBack(n - 1 - i));
+  // A day's detail: its runs by start, each from a small context up, and the period's medians.
+  const climb = (n, from, to, seed) => Array.from({ length: n }, (_, i) => Math.round(from + (to - from) * Math.sqrt(i / n) + 4000 * Math.sin(i / 3 + seed)));
+  const dayOfUsage = (op) => {
+    const roles = op.project === "helix" ? ["lead", "engineer", "fixer"] : ["lead", "luigi", "toad"];
+    const mk = (id, role, n, from, to, start) => ({ id, agent: role === "luigi" ? "Luigi" : role, role, session: null, model: "opus", started_at: `${op.day}T0${start}:00:00.000Z`, ended_at: `${op.day}T0${start + 1}:00:00.000Z`, resumed: false, first: 1, ctx: { calls: n, pts: climb(n, from, to, start) } });
+    const runs = [mk("d1", roles[0], 60, 30_000, 120_000, 1), mk("d2", roles[1], 150, 28_000, 190_000, 2), mk("d3", roles[1], 62, 30_000, 110_000, 4), mk("d4", roles[2], 80, 25_000, 90_000, 5), mk("d5", roles[0], 60, 32_000, 100_000, 7)];
+    let t = 0;
+    const line = (pts) => ({ calls: pts.length, pts });
+    const band = (n, k) => line(climb(n, 26_000 * k, 130_000 * k, 1));
+    return { project: op.project, day: op.day, days: usageDays(op.days), runs, lost: op.project === "bobnet" ? 1 : 0,
+      baseline: { total: { days: op.days - 3, calls: 286, p50: line(climb(286, 28_000, 110_000, 2).map((v) => (t += v))) }, roles: roles.map((role, i) => ({ role, runs: 20 - 9 * i, calls: [60, 120, 40][i], p25: i === 2 ? line([]) : band(120, 0.75), p50: i === 2 ? line([]) : band(120, 1), p75: i === 2 ? line([]) : band(120, 1.3) })) } };
+  };
   const answer = (op) => {
     switch (op.op) {
+      case "usage_day": return dayOfUsage(op);
       case "usage": return { weights, tz: op.tz, days: usageDays(op.days), projects: projects.filter((p) => !op.project || p.key === op.project).map((p) => usageSeries(p, op.days)) };
       case "projects": return { projects };
       case "overview": return { projects: projects.filter((p) => !op.project || p.key === op.project).map(overview) };
@@ -181,7 +194,7 @@ function fakeBroker(scene) {
     }
   };
 
-  const fails = (op) => (scene === "down" ? true : scene === "listdown" ? op.op === "projects" : false);
+  const fails = (op) => (scene === "down" ? true : scene === "listdown" ? op.op === "projects" : scene === "failday" ? op.op === "usage_day" : false);
   class FakeSocket extends EventTarget {
     static OPEN = 1;
     readyState = 1;
@@ -193,7 +206,7 @@ function fakeBroker(scene) {
     send(data) {
       const f = JSON.parse(data);
       if (f.t === "dashboard") setTimeout(() => this.frame({ t: "ok", rid: f.rid, result: dashboard }));
-      if (f.t === "board_op") setTimeout(() => this.frame(fails(f.op) ? { t: "error", rid: f.rid, code: "unavailable", message: "The board's database isn't answering." } : { t: "ok", rid: f.rid, result: answer(f.op) }), 30);
+      if (f.t === "board_op" && !(scene === "noday" && f.op.op === "usage_day")) setTimeout(() => this.frame(fails(f.op) ? { t: "error", rid: f.rid, code: "unavailable", message: "The board's database isn't answering." } : { t: "ok", rid: f.rid, result: answer(f.op) }), 30);
       if (f.t === "action") setTimeout(() => {
         this.frame({ t: "ok", rid: f.rid, result: { id: "act_1" } });
         setTimeout(() => this.frame({ t: "action_result", id: "act_1", laptop: f.laptop, ok: true, message: "Allowed.", ...(scene === "older" ? {} : { note_delivered: true }) }), 50);
@@ -210,6 +223,7 @@ const agent = (name) => (p) => p.locator("#working .a-line", { hasText: name }).
 const tap = (ref) => (p) => p.locator(`li[data-ref="${ref}"] .l-t`).click();
 const back = (n) => { const d = new Date(), two = (x) => String(x).padStart(2, "0"); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`; };
 const bar = (key, n) => (p) => p.locator(`.ucard[data-project="${key}"] .bar[data-day="${back(n)}"]`).click();
+const byAgent = (p) => p.getByRole("button", { name: "By agent", exact: true }).click();
 const weigh = (p) => p.getByRole("button", { name: "Sonnet-equivalent", exact: true }).click();
 const answer = (ref) => (p) => p.locator(`li[data-ref="${ref}"] .answer-btn`).click();
 // [name, scene, hash, selector to wait for, steps, element to shoot (none: the whole page; "top": the window), widths (none: all)]
@@ -255,6 +269,13 @@ const all = [
   ["bob121-ci-dark", "live", "overview", "#ci li", [], ".ov-ci", [390, 1440]],
   ["bob121-usage-raw", "live", "usage", ".ugrid", []],
   ["bob121-usage-weighted-day", "live", "usage", ".ugrid", [weigh, (p) => p.locator(".factored summary").click(), bar("helix", 10)]],
+  ["bob121-day-total", "live", "usage", ".ugrid", [bar("helix", 10)]],
+  ["bob121-day-agent", "live", "usage", ".ugrid", [bar("helix", 10), byAgent, (p) => p.locator(".ud-roles button").first().click(), (p) => p.locator(".ud svg").first().press("ArrowLeft")]],
+  ["bob121-day-agent-nobase", "live", "usage", ".ugrid", [bar("helix", 10), byAgent, (p) => p.locator(".ud-roles button").last().click()], ".ucard[data-project=helix]", [390, 1440]],
+  ["bob121-day-today-weighted", "live", "usage", ".ugrid", [weigh, bar("bobnet", 0)], ".ucard[data-project=bobnet]", [390, 1440]],
+  ["bob121-day-dark", "live", "usage", ".ugrid", [bar("helix", 10), byAgent], ".ucard[data-project=helix]", [390, 1440]],
+  ["bob121-day-loading", "noday", "usage", ".ugrid", [bar("helix", 10)], ".ucard[data-project=helix]", [390, 1024]],
+  ["bob121-day-failed", "failday", "usage", ".ugrid", [bar("helix", 10)], ".ucard[data-project=helix]", [390, 1440]],
   ["bob121-usage-dark", "live", "usage", ".ugrid", [bar("bobnet", 0)], null, [390, 1440]],
   ["bob121-usage-many", "many", "usage", ".ugrid", [], null, [390, 1024]],
   ["bob121-usage-down", "down", "usage", ".banner.down", [], null, [390]],

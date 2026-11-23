@@ -33,6 +33,9 @@ const state = {
   /** Usage's span in days, and each project's day picked on its graph ("YYYY-MM-DD"). */
   span: 30,
   usageDay: new Map(),
+  /** The opened days' details, by project: Total, or By agent and which role; and the card a link's day is scrolled to. */
+  detail: new Map(),
+  usageScroll: null,
   /** When the page last read the laptops whole (this device's clock), null before it has: what Needs you is up to date with. */
   refreshed: null,
   /** When this socket was welcomed (this device's clock): what was read before it may have changed while the page was cut off. */
@@ -2844,12 +2847,22 @@ function hashFilters() {
   const of = hashFilter("weigh"), span = Number(hashFilter("days"));
   if (of !== null) state.weigh = of === "1";
   if (SPANS.includes(span)) state.span = span;
+  // `#usage/<project>/<day>` opens that day's detail, and the card it is in is scrolled to.
+  const [v, key, d] = hashPath();
+  if (v !== "usage" || !key) return;
+  state.usageScroll = key;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d ?? "")) state.usageDay.set(key, d);
 }
-/** Sets one of the hash's filters, in place, and keeps the others and the path (or takes another path). */
-function setFilter(name, value, path = hashPath().join("/")) {
+/** Sets one of the hash's filters, in place, and keeps the others and the path. */
+function setFilter(name, value) {
   const q = new URLSearchParams(location.hash.split("?")[1] ?? "");
   q.set(name, value);
-  history.replaceState(null, "", `#${path}?${q}`);
+  history.replaceState(null, "", `#${hashPath().join("/")}?${q}`);
+}
+/** Takes another path in place, and keeps the filters. */
+function setPath(path) {
+  const q = location.hash.split("?")[1];
+  history.replaceState(null, "", `#${path}${q ? `?${q}` : ""}`);
 }
 function setWeigh(on) {
   state.weigh = on;
@@ -2862,7 +2875,11 @@ function setSpan(days) {
   // A day before the new period has nothing to show in it.
   const first = new Date(brokerNow());
   first.setDate(first.getDate() - days + 1);
-  for (const [key, day] of state.usageDay) if (day < localDay(first)) state.usageDay.delete(key);
+  for (const [key, day] of state.usageDay) {
+    if (day >= localDay(first)) continue;
+    state.usageDay.delete(key);
+    if (hashPath()[1] === key) setPath("usage");
+  }
   setFilter("days", days);
   render();
 }
@@ -3014,10 +3031,28 @@ function usageWidth(cols, aside = null) {
   const page = Math.min(1320, $("view")?.clientWidth || 760) - pad;
   return Math.max(260, Math.round(aside ? Math.min(aside, page) : (page - 14 * (cols - 1)) / cols) - 30);
 }
-/** Picks a day on a project's graph, or lets it go: a tap or Enter on its bar, or its spike's button. */
+/** Picks a day on a project's graph, or lets it go: a tap or Enter on its bar, or its spike's button. On Usage the day is in the link. */
 function pickDay(key, day) {
-  state.usageDay.get(key) === day ? state.usageDay.delete(key) : state.usageDay.set(key, day);
+  if (state.usageDay.get(key) === day) return letDayGo(key);
+  state.usageDay.set(key, day);
+  if (viewName() === "usage") setPath(`usage/${key}/${day}`);
   render();
+}
+/** Lets a project's picked day go, its detail with it; the keyboard goes back to its bar. */
+function letDayGo(key) {
+  const day = state.usageDay.get(key);
+  state.usageDay.delete(key);
+  if (viewName() === "usage" && hashPath()[1] === key) setPath("usage");
+  render();
+  focusKey(`bar/${key}/${day}`);
+}
+/** Brings a link's card into view, once it is drawn. */
+function usageScroll() {
+  if (!state.usageScroll || viewName() !== "usage") return;
+  const el = [...$("view").querySelectorAll(".ucard")].find((c) => c.dataset.project === state.usageScroll);
+  if (!el) return;
+  state.usageScroll = null;
+  underHeader(el);
 }
 
 /** One project's days as bars, on its own scale: a spike in warn with its value, today's lighter, the picked one outlined. */
@@ -3082,18 +3117,176 @@ function usageNotes(key, series, days) {
     series.lost ? h("p", { class: "muted u-lost" }, `${plural(series.lost, "run")} lost, tokens unknown: not counted`) : null,
   ];
 }
+/** At most 800 of a line's points, first and last kept: more than a graph has pixels, and it is drawn at each report. */
+const thin = (ps) => (ps.length <= 800 ? ps : Array.from({ length: 800 }, (_, i) => ps[Math.round((i * (ps.length - 1)) / 799)]));
+const callsSaid = (n) => `${fmtInt.format(n)} ${n === 1 ? "call" : "calls"}`;
+/** A day's lines drawn by call: the day's (broken where a new run starts), the baseline's dashed, the band. `x` is a call, 1-based. */
+function callGraph({ fk, said, calls, line, resets = [], base, band, W, H, unit, summed }) {
+  const L = 46, R = 10, T = 10, B = 22, xMax = Math.max(2, calls, base.calls, band?.[2].calls ?? 0);
+  const pts = (l) => l.pts.map((v, i) => [callAt(l, i), v]);
+  const basePts = pts(base), lo = band ? pts(band[0]) : [], hi = band ? pts(band[2]) : [];
+  const yMax0 = Math.max(1, ...line.map((p) => p.v), ...basePts.map((p) => p[1]), ...hi.map((p) => p[1]));
+  const step = niceStep(yMax0, 2), top = Math.ceil(yMax0 / step) * step;
+  const x = (c) => L + ((c - 1) / (xMax - 1)) * (W - L - R), y = (v) => T + (1 - v / top) * (H - T - B);
+  const at = (ps) => ps.map(([c, v]) => `${x(c).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": said, tabindex: "0", "data-fk": fk });
+  svg.append(threeTicks(top, L, W - R, y), s("g", { class: "axis" },
+    s("text", { x: L, y: H - 5, "text-anchor": "start" }, "1"), s("text", { x: W - R, y: H - 5, "text-anchor": "end" }, `${fmtInt.format(xMax)} calls`)));
+  if (hi.length) svg.append(s("polygon", { class: "band", points: `${at(hi)} ${at([...lo].reverse())}`, fill: "var(--idle)", "fill-opacity": 0.18 }));
+  // A role's line breaks at each new run, so the drop reads as a restart, not a fall.
+  const cuts = [1, ...resets, Infinity];
+  for (let k = 0; k < cuts.length - 1; k++) {
+    const part = line.filter((p) => p.call >= cuts[k] && p.call < cuts[k + 1]);
+    if (part.length) svg.append(s("polyline", { class: "day", points: at(thin(part.map((p) => [p.call, p.v]))), fill: "none", stroke: "var(--accent)", "stroke-width": 2.5, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  }
+  for (const r of resets) svg.append(s("line", { class: "reset", x1: x(r - 0.5), x2: x(r - 0.5), y1: T, y2: H - B, stroke: "var(--accent)", "stroke-dasharray": "2 3", "stroke-opacity": 0.6 }));
+  if (basePts.length) svg.append(s("polyline", { class: "base", points: at(basePts), fill: "none", stroke: "var(--muted)", "stroke-width": 2, "stroke-dasharray": "6 4" }));
+  const cross = s("line", { class: "cross", y1: T, y2: H - B, stroke: "var(--muted)", visibility: "hidden" });
+  const hit = s("rect", { class: "hit", x: L, y: 0, width: W - L - R, height: H, fill: "transparent" });
+  svg.append(cross, hit);
+  const tip = h("div", { class: "tip", role: "status", hidden: true });
+  const wrap = h("div", { class: "ud-plot" }, svg, tip);
+  // The nearest of the day's points, and the baseline's where it reaches.
+  const near = (ps, c) => ps.reduce((a, p) => (Math.abs(p[0] - c) < Math.abs(a[0] - c) ? p : a), ps[0]);
+  const show = (call) => {
+    const c = Math.round(Math.min(xMax, Math.max(1, call)));
+    const own = line.length && c <= line.at(-1).call ? near(line.map((p) => [p.call, p.v]), c) : null;
+    const med = basePts.length && c <= base.calls ? near(basePts, c) : null;
+    if (!own && !med) return hide();
+    tip.textContent = [`call ${fmtInt.format(c)}`, own ? `${fmtTokens(Math.round(own[1]))} context${summed ? " summed" : ""}` : null, med ? `median ${fmtTokens(Math.round(med[1]))}` : null].filter(Boolean).join(" · ");
+    cross.setAttribute("x1", x(c)); cross.setAttribute("x2", x(c)); cross.setAttribute("visibility", "visible");
+    tip.hidden = false;
+    const room = (wrap.clientWidth || W) - 210;
+    tip.style.left = `${Math.max(0, Math.min(room, (x(c) / W) * (wrap.clientWidth || W) + 10))}px`;
+    tip.style.top = `${T}px`;
+    svg.dataset.call = String(c);
+  };
+  const hide = () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); };
+  const move = (ev) => {
+    holdRender = true;
+    const r = svg.getBoundingClientRect();
+    show(1 + ((((ev.clientX - r.left) / (r.width || W)) * W - L) / (W - L - R)) * (xMax - 1));
+  };
+  hit.addEventListener("pointermove", move);
+  hit.addEventListener("pointerdown", move);
+  hit.addEventListener("pointerleave", () => { holdRender = false; hide(); });
+  // By keyboard: the arrows go along the calls, from the last.
+  svg.addEventListener("focus", () => show(Number(svg.dataset.call ?? detailCall.get(fk) ?? calls)));
+  svg.addEventListener("blur", hide);
+  svg.addEventListener("keydown", (e) => {
+    const c = Number(svg.dataset.call ?? calls), far = Math.max(1, Math.round(xMax / 40));
+    const to = { ArrowLeft: c - far, ArrowRight: c + far, Home: 1, End: xMax }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    show(to);
+    detailCall.set(fk, Number(svg.dataset.call));
+  });
+  return wrap;
+}
+/** Where the keyboard was on a detail's graph, so a redraw leaves it there. */
+const detailCall = new Map();
+/** A graph's y axis, three labels: 0, half and the top. */
+const threeTicks = (top, x1, x2, y) => s("g", null, ...[0, top / 2, top].flatMap((v) => [s("line", { class: "gl", x1, x2, y1: y(v), y2: y(v) }), s("text", { x: x1 - 6, y: y(v) + 4, "text-anchor": "end" }, fmtTokens(v))]));
+
+/** Calls per day over the period: the day's line, the median day across it, the tapped day's dot with its value, today's hollow. */
+function callsGraph({ days, vals, median, day, W, H, said }) {
+  const L = 38, R = 16, T = 18, B = 22, step = niceStep(Math.max(1, median, ...vals), 2), top = Math.max(2, Math.ceil(Math.max(1, median, ...vals) / step) * step);
+  const x = (i) => L + (i / Math.max(1, days.length - 1)) * (W - L - R), y = (v) => T + (1 - v / top) * (H - T - B);
+  const i = days.indexOf(day), last = days.length - 1, today = days[last] === localDay(brokerNow());
+  const dot = (k, hollow) => s("circle", { class: `dot${hollow ? " hollow" : ""}${k === i ? " picked" : ""}`, cx: x(k), cy: y(vals[k]), r: 4 });
+  return s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": said },
+    threeTicks(top, L, W - R, y),
+    s("g", { class: "axis" }, s("text", { x: L, y: H - 5, "text-anchor": "start" }, shortDay(days[0])), s("text", { x: W - R, y: H - 5, "text-anchor": "end" }, today ? "today" : shortDay(days[last]))),
+    s("line", { class: "median", x1: L, x2: W - R, y1: y(median), y2: y(median), stroke: "var(--muted)", "stroke-width": 2, "stroke-dasharray": "6 4" }),
+    s("polyline", { class: "day", points: vals.map((v, k) => `${x(k).toFixed(1)},${y(v).toFixed(1)}`).join(" "), fill: "none", stroke: "var(--accent)", "stroke-width": 2, "stroke-linejoin": "round" }),
+    ...(today && i !== last ? [dot(last, true)] : []),
+    ...(i >= 0 ? [dot(i, today && i === last), s("text", { class: "val", x: Math.min(W - R, Math.max(L + 8, x(i))), y: y(vals[i]) - 8, "text-anchor": i === last ? "end" : "middle" }, fmtInt.format(vals[i]))] : []));
+}
+
+/** A tapped day's context per call and calls per day, Total or By agent, against the period's median (spec 2.9, after Q-13). */
+function dayDetail(key, series, days, W) {
+  const day = state.usageDay.get(key);
+  if (!day || !days.includes(day)) return null;
+  const name = wordDay(day), n = days.length, e = usageDay(key, day, state.span), r = e.reply;
+  const d = state.detail.get(key) ?? { mode: "total", role: null };
+  const set = (over) => { state.detail.set(key, { ...d, ...over }); render(); };
+  const side = W >= 760, H = window.innerWidth <= 600 ? 180 : 220;
+  const W1 = side ? Math.floor((W - 16) * 0.6) : W, W2 = side ? W - 16 - W1 : W;
+  const runs = r ? dayRuns(r) : [], lost = r?.lost ?? 0, none = !!r && !runs.some((x) => x.ctx.calls > 0);
+  const lostNote = lost ? h("p", { class: "muted u-lost" }, `${plural(lost, "run")} lost: no context recorded`) : null;
+  // Drawn where the graphs will be, as tall, so nothing jumps when they come.
+  const frame = (...kids) => h("div", { class: "ud-frame", style: `min-height:${side ? H + 26 : 2 * (H + 26) + 12}px` }, ...kids);
+  const head = h("div", { class: "ud-h" }, h("h3", null, `${name} in detail`),
+    none ? null : h("span", { class: "seg", role: "group", "aria-label": "Total or By agent" }, [["total", "Total"], ["agent", "By agent"]].map(([m, label]) => h("button", { type: "button", "aria-pressed": String(d.mode === m), "data-fk": `mode/${key}/${m}`, onclick: () => set({ mode: m }) }, label))),
+    h("button", { type: "button", class: "ud-x", "aria-label": `Close ${name}'s detail`, "data-fk": `close/${key}`, onclick: () => letDayGo(key) }, "×"));
+  const box = (...kids) => h("div", { class: "ud", dataset: { day } }, head, ...kids);
+  if (!r) {
+    return box(e.error
+      ? frame(h("p", null, `Couldn't load ${name}'s calls.`), button("Retry", "", () => { usageDay(key, day, state.span, true); render(); }))
+      : frame(h("p", { class: "muted" }, `Loading ${name}'s calls…`)));
+  }
+  if (none) return box(frame(h("p", null, `No calls on ${name}.`), lostNote));
+
+  const byRole = new Map();
+  for (const x of runs) byRole.set(x.role, [...(byRole.get(x.role) ?? []), x]);
+  const callsOf = (xs) => xs.reduce((sum, x) => sum + x.ctx.calls, 0);
+  const roles = [...byRole].map(([role, xs]) => ({ role, runs: xs, calls: callsOf(xs) })).filter((x) => x.calls > 0).sort((a, b) => b.calls - a.calls || a.role.localeCompare(b.role));
+  const total = d.mode === "total", one = total ? null : roles.find((x) => x.role === d.role) ?? roles[0];
+  const roleOf = (pt) => pt.by_role.find((x) => x.role === one.role)?.calls ?? 0;
+  const vals = series.points.map((pt) => (total ? pt.calls : roleOf(pt)));
+  const empty = { calls: 0, pts: [] }, b = total ? r.baseline.total : r.baseline.roles.find((x) => x.role === one.role);
+  const median = b?.calls ?? Math.round(quantile(vals, 0.5)), base = b?.p50 ?? empty, band = !total && b?.p25.pts.length ? [b.p25, b.p50, b.p75] : null;
+  const calls = total ? callsOf(runs) : one.calls;
+  let line, resets = [];
+  if (total) line = totalLine(runs).map((p) => ({ call: p.call, v: p.sum }));
+  else {
+    // The role's runs one after another: the count of calls carries on, and a new run starts again from a small context.
+    line = [];
+    let done = 0;
+    for (const { ctx } of one.runs) {
+      if (done && ctx.pts.length) resets.push(done + 1);
+      ctx.pts.forEach((v, i) => line.push({ call: done + callAt(ctx, i), v }));
+      done += ctx.calls;
+    }
+  }
+  const so = day === localDay(brokerNow()), label = `${name}${so ? " so far" : ""}`, whose = total ? "" : `${one.role}'s `;
+  const said = callsSaid(calls);
+  const note = base.pts.length
+    ? `Dashed: the median over these ${n} days. Total: a day's calls, call by call. By agent: ${total ? "a role's" : `${one.role}'s`} runs at the same call, the band their middle half. A line above it carried more context per call than usual.`
+    : total ? `No dashed line: fewer than 3 days in these ${n} to compare with.` : `No dashed line: fewer than 3 ${one.role} runs in these ${n} days.`;
+  // A live worker's report from an older supervisor has its last 400 calls only (BOB-195): Total rises too steeply until it ends.
+  const cut = total ? runs.filter((x) => x.ctx.known) : [];
+  return box(
+    total ? null : h("div", { class: "seg ud-roles", role: "group", "aria-label": "Agent" }, roles.map((x) => h("button", { type: "button", "aria-pressed": String(x.role === one.role), "data-fk": `role/${key}/${x.role}`, onclick: () => set({ role: x.role }) }, `${x.role} · ${callsSaid(x.calls)}`))),
+    h("div", { class: `ud-graphs${side ? " side" : ""}` },
+      h("figure", null, h("figcaption", null, "Context per call"), callGraph({ fk: `ctx/${key}/${day}/${total ? "" : one.role}`, said: `${label}, ${whose}context per call, ${said}`, calls, line, resets, base, band, W: W1, H, summed: total })),
+      h("figure", null, h("figcaption", null, "Calls per day"), callsGraph({ days, vals, median, day, W: W2, H, said: `${whose}calls per day, the last ${n} days; ${label} ${said}, the median day ${fmtInt.format(median)}` }))),
+    h("div", { class: "key" },
+      h("span", { class: "k-day" }, h("i", { style: "--k:var(--accent)" }), `${label} · ${said}`),
+      h("span", { class: "k-med" }, h("i", { class: "dash", style: "--k:var(--muted)" }), `median day · ${callsSaid(median)}`),
+      band ? h("span", { class: "k-band" }, h("i", { class: "band", style: "--k:var(--idle)" }), `${one.role}'s runs, middle half`) : null,
+      resets.length ? h("span", null, h("i", { class: "dot", style: "--k:var(--accent)" }), "a new run starts") : null),
+    h("p", { class: "note ud-note" }, note),
+    state.weigh ? h("p", { class: "note ud-raw" }, "Context is raw tokens: weighing applies to the bars.") : null,
+    cut.length ? h("p", { class: "note ud-approx" }, `Total is approximate while ${andList(cut.map((x) => x.agent))} ${cut.length === 1 ? "runs" : "run"}: ${cut.length === 1 ? "its" : "their"} laptop's supervisor reports only the last 400 calls.`) : null,
+    lostNote);
+}
+
 /** Where a project's name goes. */
 const projectHref = (key) => `#roadmap/${key}`;
 /** A project's card on Usage: its total, its days, the picked day, its spikes. */
 function usageCard(reply, p, W) {
   const series = usageSoFar(reply, p.project), days = reply.days, { vals, median, total } = usageFigures(series, days);
   const runsToday = days.at(-1) === localDay(brokerNow());
-  return h("section", { class: "card ucard", dataset: { project: p.project } },
+  // Escape in the card closes the day that is open in it.
+  const esc = (e) => { if (e.key === "Escape" && state.usageDay.has(p.project)) letDayGo(p.project); };
+  return h("section", { class: "card ucard", dataset: { project: p.project }, onkeydown: esc },
     h("div", { class: "u-h" }, h("a", { class: "u-name", href: projectHref(p.project) }, p.name),
       h("span", { class: "u-tot" }, h("b", null, fmtTokens(total)), h("span", { class: "muted" }, ` ${tokensWord()}, ${days.length} days`)),
       h("span", { class: "muted u-today" }, runsToday ? `today so far ${fmtTokens(vals.at(-1))} · ` : null, `median day ${fmtTokens(median)}`)),
     usageBars(p.project, series, days, W),
     usageDayLine(p.project, series, days, reply.weights),
+    dayDetail(p.project, series, days, W),
     usageNotes(p.project, series, days));
 }
 
@@ -3110,7 +3303,7 @@ function viewUsage() {
     weights ? h("div", { class: "u-says" }, h("p", null, weighSays(weights)), whatsFactored(weights)) : null,
     r.reply ? h("div", { class: "ugrid" }, r.reply.projects.map((p) => usageCard(r.reply, p, usageWidth(window.innerWidth >= 1200 ? 2 : 1)))) : r.error ? null : h("div", { class: "empty-card" }, "Reading usage…"),
     r.reply && !r.reply.projects.length ? h("div", { class: "empty-card" }, "No project's board is in the service yet.") : null,
-    r.reply ? h("p", { class: "note" }, "Tap a day for what made it. A run's tokens are spread over the days it ran; today's include the workers running now, so far. A session's own context per call is on its card, on the feature's page.") : null,
+    r.reply ? h("p", { class: "note" }, "Tap a day for what made it and its context per call. A run's tokens are spread over the days it ran; today's include the workers running now, so far. A session's own context per call is on its card, on the feature's page.") : null,
   ];
 }
 
@@ -3327,6 +3520,7 @@ function render() {
   $("view").replaceChildren(...VIEWS[v]().filter(Boolean));
   measureAsks();
   statusScroll();
+  usageScroll();
   if (box) {
     const again = $("view").querySelector("form.answer textarea");
     again?.focus();
@@ -3392,6 +3586,8 @@ window.addEventListener("hashchange", () => {
   window.scrollTo(0, 0);
   stv.scrollFor = null;
   statusScroll();
+  if (viewName() === "usage" && hashPath()[1]) state.usageScroll = hashPath()[1];
+  usageScroll();
   if (scrollAfter) $(scrollAfter)?.closest("li")?.scrollIntoView({ block: "start" });
   scrollAfter = null;
 });
