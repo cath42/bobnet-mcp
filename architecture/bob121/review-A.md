@@ -76,6 +76,7 @@ A gate for BOB-189's broker deploy, which ships everything on v2. Checked agains
 ### Blocker
 
 **B1. D9's CI query scans every push for every CI run, on each Overview read.**
+**Closed (2026-11-22):** fixed in `71c2ea0` as written below, with a rows-read test; see `architecture/bob189/review-A.md`.
 `store.ts:721-728` at f7423a8.
 
 - **Where the cost is.** `LEFT JOIN pushes u ON … lower(u.repo) = lower(c.repo) AND u.sha = c.sha`
