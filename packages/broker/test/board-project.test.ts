@@ -1,4 +1,4 @@
-import type { BoardCaller, BoardOpInput, BoardReply, BoardResults } from "@bobnet/protocol";
+import type { BoardCaller, BoardOpInput, BoardReply, BoardResults, SessionRef } from "@bobnet/protocol";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
@@ -225,6 +225,171 @@ describe("CI history from the board (ADR 0014 §3a, BOB-168)", () => {
     expect(rows.map((r) => [r.project.key, r.ci?.length])).toEqual([
       ["bobnet", 0],
       ["helix", 1],
+    ]);
+  });
+});
+
+const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+const each = (n: number) => ({ input: n, output: n, cache_read: n, cache_write: n });
+const inSession = (worker: string, role: string, session: SessionRef | null): BoardCaller => ({
+  kind: "agent",
+  name: role[0]!.toUpperCase() + role.slice(1),
+  laptop: "mbp-1",
+  supervisor: true,
+  ctx: { worker, role, project: "helix", session, tasks: [] },
+});
+
+describe("the project read (ADR 0014 §3, BOB-171)", () => {
+  it("lists open sessions and those ended in the span with their runs by start, other work apart, and its close counted", async () => {
+    await project();
+    const r1 = await release("Release 1");
+    const f1 = await feature("Roadmap", r1);
+    const f2 = await feature("Steps", r1);
+    const task = (await ok(owner, { op: "create", project: "helix", kind: "task", type: "task", title: "Draw it", parent: f2 })).ref!;
+    const open: SessionRef = { feature: f1, kind: "build", label: "1" };
+    const shut: SessionRef = { feature: f2, kind: "review", label: "A" };
+    // A closed review: its builder failed, then its reviewer finished.
+    const rev = inSession("w_rev", "reviewer", shut);
+    await ok(rev, { op: "session_join", project: "helix", session: shut });
+    const bld = inSession("w_bld", "builder", shut);
+    await ok(bld, { op: "run_start", project: "helix", id: "w_bld", started_at: ago(60), session: shut, model: "opus", effort: "high" });
+    await ok(rev, { op: "run_start", project: "helix", id: "w_rev", started_at: ago(50), session: shut, model: "sonnet" });
+    await ok(bld, { op: "run_end", project: "helix", id: "w_bld", ended_at: ago(45), tokens: each(10), calls: 4, outcome: "failed", reason: "The build broke" });
+    await ok(rev, { op: "run_end", project: "helix", id: "w_rev", ended_at: ago(40), tokens: each(5), calls: 2, outcome: "done" });
+    const q = (await ok(owner, { op: "ask", project: "helix", text: "Ship with it?" })).ref!;
+    await ok(owner, { op: "close_session", project: "helix", session: shut, need: "casper", waits_on: [q], summary: "One blocker", blockers: [task], majors: [task], handoff: { path: "/h.md", text: "x" } });
+    // An open build with a run still going, after it.
+    const lead = inSession("w_lead", "builder", open);
+    await ok(lead, { op: "session_join", project: "helix", session: open });
+    await ok(lead, { op: "run_start", project: "helix", id: "w_lead", started_at: ago(30), session: open, model: "opus" });
+    // A consult outside any session; and an old session, ended before the span.
+    const consult = inSession("w_con", "architect", null);
+    await ok(consult, { op: "run_start", project: "helix", id: "w_con", started_at: ago(20), session: null });
+    await ok(consult, { op: "run_end", project: "helix", id: "w_con", ended_at: ago(19), tokens: each(3), calls: 1, outcome: "done" });
+    const old: SessionRef = { feature: f1, kind: "design", label: "0" };
+    await ok(inSession("w_old", "designer", old), { op: "session_join", project: "helix", session: old });
+    await sql((s) => {
+      s.exec("UPDATE sessions SET ended_at = ?, need = 'none', summary = 'Old', closed_by = 'x' WHERE label = '0'", ago(20 * 24 * 60));
+    });
+
+    const page = await ok(owner, { op: "project", project: "helix" });
+    expect(page.sessions.map((s) => s.session)).toEqual([open, shut]);
+    expect(page.sessions[0]).toEqual({
+      session: open,
+      feature_title: "Roadmap",
+      started_at: expect.any(String),
+      ended_at: null,
+      close: null,
+      tokens: each(0),
+      weighted: 0,
+      unknown: 0,
+      lost: 0,
+      runs: [
+        {
+          id: "w_lead",
+          agent: "Builder",
+          role: "builder",
+          laptop: "mbp-1",
+          model: "opus",
+          effort: null,
+          started_at: expect.any(String),
+          ended_at: null,
+          tokens: each(0),
+          weighted: 0,
+          calls: 0,
+          outcome: null,
+          outcome_reason: null,
+        },
+      ],
+    });
+    const s2 = page.sessions[1]!;
+    expect([s2.feature_title, s2.close, s2.tokens, s2.weighted, s2.unknown, s2.lost]).toEqual([
+      "Steps",
+      { need: "casper", summary: "One blocker", blockers: 1, majors: 1, sent_back: 0 },
+      each(15),
+      80 + 20,
+      0,
+      0,
+    ]);
+    expect(s2.runs.map((r) => [r.id, r.outcome, r.outcome_reason, r.weighted, r.calls])).toEqual([
+      ["w_bld", "failed", "The build broke", 80, 4],
+      ["w_rev", "done", null, 20, 2],
+    ]);
+    expect(page.other_runs.map((r) => [r.id, r.role, r.weighted])).toEqual([["w_con", "architect", 12]]);
+    expect(page.more).toEqual({});
+    expect(page.release).toMatchObject({ ref: r1, number: 1, features: { done: 0, total: 2 } });
+  });
+
+  it("gives the waits, backlog, usage and ci the waits, status, usage and overview reads give for it", async () => {
+    await project();
+    const r1 = await release("Release 1");
+    const r2 = await release("Release 2");
+    await done(await feature("Done", r1));
+    const f = await feature("Next", r2);
+    await ok(owner, { op: "criteria", project: "helix", ref: f, change: { action: "add", text: "It works" } });
+    await ok(owner, { op: "update", project: "helix", ref: f, set: { status: "Ready" } });
+    await ok(owner, { op: "ask", project: "helix", text: "Ship it?", holds: [f] });
+    await ok(owner, { op: "create", project: "helix", kind: "backlog", type: "bug", title: "Crash", blocks_use: true });
+    const con = inSession("w_con", "architect", null);
+    await ok(con, { op: "run_start", project: "helix", id: "w_con", started_at: ago(90), session: null, model: "haiku" });
+    await ok(con, { op: "run_end", project: "helix", id: "w_con", ended_at: ago(80), tokens: each(100), calls: 9, outcome: "done" });
+    await ok(owner, { op: "create_project", key: "bobnet", name: "BobNet", prefix: "BOB" });
+
+    const page = await ok(owner, { op: "project", project: "helix", days: 7, tz: "Europe/Copenhagen" });
+    expect(page.project.key).toBe("helix");
+    expect(page.release).toMatchObject({ ref: r2, number: 2 });
+    expect(page.done_unclosed).toEqual([{ ref: r1, title: "Release 1" }]);
+    expect(page.waits).toEqual((await ok(owner, { op: "waits", project: "helix" })).waits);
+    expect(page.waits).toHaveLength(2);
+    const status = (await ok(owner, { op: "status", project: "helix", since: ago(60) })).projects[0]!;
+    expect(page.backlog).toEqual(status.backlog);
+    expect(page.backlog.ready.map((r) => r.ref)).toEqual([f]);
+    const usage = await ok(owner, { op: "usage", project: "helix", days: 7, tz: "Europe/Copenhagen" });
+    expect(page.usage).toEqual(usage.projects[0]);
+    expect(page.usage.points).toHaveLength(7);
+    expect(page.ci).toEqual((await overviewRow()).ci);
+    expect(await call({ kind: "agent", name: "Nobody", laptop: "mbp-1", supervisor: false, ctx: null }, { op: "project", project: "helix" })).toMatchObject({ ok: false, code: "forbidden" });
+  });
+
+  it("cuts sessions and other runs at 50 and says how many more; the backlog's lists are the status read's", async () => {
+    await project();
+    const f = await feature("Roadmap", null);
+    for (let i = 0; i < 51; i++) await feature(`Thin ${i}`, null);
+    await sql((s) => {
+      const { project, pk } = s.exec<{ project: number; pk: number }>("SELECT i.project, i.pk FROM items i JOIN item_refs r ON r.item = i.pk WHERE r.ref = ?", f).one();
+      for (let i = 0; i < 52; i++) {
+        s.exec("INSERT INTO sessions (project, feature, kind, label, started_at) VALUES (?, ?, 'build', ?, ?)", project, pk, String(i), ago(200 - i));
+        s.exec(
+          "INSERT INTO runs (project, id, agent, role, laptop, started_at, ended_at, input, output, cache_read, cache_write, calls) VALUES (?, ?, 'A', 'architect', 'mbp-1', ?, ?, 1, 1, 1, 1, 1)",
+          project,
+          `w_${i}`,
+          ago(200 - i),
+          ago(190 - i),
+        );
+      }
+    });
+    const page = await ok(owner, { op: "project", project: "helix" });
+    expect([page.sessions.length, page.other_runs.length, page.more]).toEqual([50, 50, { sessions: 2, other_runs: 2 }]);
+    expect([page.sessions[0]!.session.label, page.other_runs[0]!.id]).toEqual(["51", "w_51"]);
+    expect(page.backlog).toEqual((await ok(owner, { op: "status", project: "helix", since: ago(60) })).projects[0]!.backlog);
+    expect(page.backlog.no_criteria).toHaveLength(52);
+  });
+
+  it("weighs a session and its runs on get, an undeclared model as unknown", async () => {
+    await project();
+    const s: SessionRef = { feature: await feature("Roadmap", null), kind: "build", label: "1" };
+    const a = inSession("w_a", "builder", s);
+    await ok(a, { op: "session_join", project: "helix", session: s });
+    await ok(a, { op: "run_start", project: "helix", id: "w_a", started_at: ago(10), session: s, model: "claude-opus-5-5" });
+    await ok(a, { op: "run_end", project: "helix", id: "w_a", ended_at: ago(5), tokens: each(10), calls: 1, outcome: "done" });
+    const b = inSession("w_b", "reviewer", s);
+    await ok(b, { op: "run_start", project: "helix", id: "w_b", started_at: ago(4), session: s, model: null });
+    await ok(b, { op: "run_end", project: "helix", id: "w_b", ended_at: ago(1), tokens: each(25), calls: 1, outcome: "done" });
+    const got = (await ok(owner, { op: "get", project: "helix", session: s })).session!;
+    expect([got.weighted, got.unknown]).toEqual([80 + 100, 100]);
+    expect(got.runs.map((r) => [r.id, r.weighted, r.unknown])).toEqual([
+      ["w_a", 80, 0],
+      ["w_b", 100, 100],
     ]);
   });
 });

@@ -223,6 +223,12 @@ export const BoardOp = z.discriminatedUnion("op", [
    */
   z.object({ op: z.literal("usage"), project: ProjectKey.optional(), days: usageDays.default(30), tz: timeZone.default("UTC") }),
   /**
+   * A project's page (ADR 0014 §3): its current release, waits, backlog health, CI, recent sessions
+   * with their runs, other work, and usage over the last `days` to today in `tz`. Derived on read; the
+   * dashboard's, not the agents' tools'.
+   */
+  z.object({ op: z.literal("project"), ...project, days: usageDays.default(14), tz: timeZone.default("UTC") }),
+  /**
    * One day of a project's usage in detail (ADR 0014 §3a): its runs' context per call, and the period's
    * median call by call as the baseline. The period is the usage read's (the last `days` to today in
    * `tz`), and `day` is in it. The dashboard's, on a tap; not the agents' tools'.
@@ -527,8 +533,8 @@ export type BoardOp = z.infer<typeof BoardOp>;
 export type BoardOpInput = z.input<typeof BoardOp>;
 export type BoardOpName = BoardOp["op"];
 
-export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview" | "status" | "usage" | "usage_day";
-export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview", "status", "usage", "usage_day"] satisfies BoardReadName[];
+export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview" | "status" | "usage" | "usage_day" | "project";
+export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview", "status", "usage", "usage_day", "project"] satisfies BoardReadName[];
 /** The supervisor's own operations, which only its connection makes (§8). */
 export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_remote", "run_end", "push", "slot_run", "ci_run", "release_tag"];
 
@@ -753,6 +759,9 @@ export interface RunRecord {
   /** How it ended (ADR 0005 §3); null while it runs, and for a run that ended before outcomes: unknown. */
   outcome?: RunOutcome | null;
   outcome_reason?: string | null;
+  /** Its tokens weighed by model (ADR 0014 §1), and those of a model the table doesn't know; an older broker sends neither. */
+  weighted?: number;
+  unknown?: number;
 }
 
 export interface SessionRecord extends SessionSummary {
@@ -774,6 +783,9 @@ export interface SessionRecord extends SessionSummary {
   tasks_moved: Array<{ task: string; status: ItemStatus }>;
   /** Summed from the session's runs, never declared. */
   tokens: TokenTotals;
+  /** Its runs' tokens weighed by model (ADR 0014 §1), and those of a model the table doesn't know; an older broker sends neither. */
+  weighted?: number;
+  unknown?: number;
   runs: RunRecord[];
   /** CI and run-slot runs tied to it through its workers' pushes or slots (§10), oldest first. */
   ci_runs: CiRunRecord[];
@@ -994,6 +1006,60 @@ export interface UsageDay {
   lost: number;
 }
 
+/** A run as a project's page lists it (ADR 0014 §3): still going, `ended_at` is null and its tokens zero; its live ones are the laptop report's. */
+export interface ProjectRun {
+  id: string;
+  agent: string;
+  role: string;
+  laptop: string;
+  model: string | null;
+  effort: string | null;
+  started_at: string;
+  ended_at: string | null;
+  tokens: TokenTotals;
+  weighted: number;
+  calls: number;
+  /** Null while it runs, and for a run from before outcomes: "ended". */
+  outcome: RunOutcome | null;
+  outcome_reason: string | null;
+}
+
+/** A session as a project's page lists it: its close counted, its runs by start. */
+export interface ProjectSession {
+  session: SessionRef;
+  feature_title: string;
+  started_at: string;
+  ended_at: string | null;
+  close: { need: "none" | "answer" | "casper"; summary: string; blockers: number; majors: number; sent_back: number } | null;
+  tokens: TokenTotals;
+  weighted: number;
+  unknown: number;
+  /** Its runs that ended `lost`: their tokens are unknown. */
+  lost: number;
+  runs: ProjectRun[];
+}
+
+/** A project's page (ADR 0014 §3, §3a, §4). Who runs now is the laptop reports'. */
+export interface ProjectPage {
+  project: ProjectRecord;
+  release: CurrentRelease | null;
+  /** Releases before it, not closed, with every feature Done: "R1 all done, waiting for your close". */
+  done_unclosed: Array<{ ref: string; title: string }>;
+  /** waitsOf(p): the list the waits read gives for it. */
+  waits: WaitRecord[];
+  /** The status read's backlog health for it, by the same code. */
+  backlog: StatusRow["backlog"];
+  ci: CiWorkflow[];
+  /** Open sessions and those ended in the span, newest activity first, ≤ 50. */
+  sessions: ProjectSession[];
+  /** Runs ended in the span outside any session (consults, ad-hoc work), newest first, ≤ 50. */
+  other_runs: ProjectRun[];
+  /** The usage read's series for it, over the same days. */
+  usage: UsageSeries;
+  /** How many more each cut list had, by its path ("sessions"), as StatusRow.more. */
+  more: Record<string, number>;
+}
+
 /** The weight table (§1) as the board weighs with it, so a page renders it and weighs a live run alike. */
 export interface UsageWeights {
   read_at: string;
@@ -1033,6 +1099,7 @@ export interface BoardResults {
   /** `days`: the read's days, oldest first, `YYYY-MM-DD` in `tz`; `projects` by key. */
   usage: { weights: UsageWeights; tz: string; days: string[]; projects: UsageSeries[] };
   usage_day: UsageDay;
+  project: ProjectPage;
   create_project: BoardWritten;
   create_release: BoardWritten;
   create: BoardWritten;

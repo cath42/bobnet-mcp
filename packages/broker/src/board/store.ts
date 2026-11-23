@@ -37,6 +37,9 @@ import {
   type CallLine,
   type CiHistoryRun,
   type CiWorkflow,
+  type ProjectPage,
+  type ProjectRun,
+  type ProjectSession,
   type UsageDay,
   type UsagePoint,
   type UsageSeries,
@@ -84,6 +87,8 @@ const HEAVY_MIN = 5;
 const USAGE_TOP = 3;
 const USAGE_MODELS_MAX = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** The project page's lists stop here (ADR 0014 §3); `more` says how many it left out. */
+const PROJECT_MAX = 50;
 /** A CI workflow's history: its latest run and the 5 before it (ADR 0014 §3a, spec §2.4). */
 const CI_HISTORY = 6;
 /**
@@ -339,6 +344,8 @@ export class BoardStore {
         return this.usage(caller, op);
       case "usage_day":
         return this.usageDay(caller, op);
+      case "project":
+        return this.projectPage(caller, op);
     }
   }
 
@@ -950,33 +957,6 @@ export class BoardStore {
     }
     settled.sort((a, b) => b.settled_at.localeCompare(a.settled_at));
 
-    // Backlog health: Ready features with criteria in next_ready's order, what has none, triage and the open release.
-    const ready = this.sql
-      .exec<SummaryRow>(
-        `${SUMMARY} LEFT JOIN releases rel ON rel.pk = i.release
-         WHERE i.project = ? AND i.kind = 'feature' AND i.status = 'Ready' AND i.open_since IS NULL AND i.archived_at IS NULL AND (rel.status IS NULL OR rel.status != 'closed')
-         ORDER BY rel.pk IS NULL, rel.ord IS NULL, rel.ord, rel.pk, i.ord IS NULL, i.ord, i.pk`,
-        p.pk,
-      )
-      .toArray()
-      .filter((f) => f.ac_total > 0);
-    const noCriteria = this.sql
-      .exec<SummaryRow>(
-        `${SUMMARY} LEFT JOIN releases rel ON rel.pk = i.release
-         WHERE i.project = ? AND i.kind = 'feature' AND i.status != 'Done' AND i.archived_at IS NULL
-         ORDER BY rel.pk IS NULL, rel.ord IS NULL, rel.ord, rel.pk, i.ord IS NULL, i.ord, i.pk`,
-        p.pk,
-      )
-      .toArray()
-      .filter((f) => f.ac_total === 0);
-    const current = this.currentRelease(p).release;
-    const release = current
-      ? { ref: current.ref, todo: current.features.total - current.features.done, ready: ready.filter((f) => f.release_ref === current.ref).length }
-      : null;
-    const triage = this.sql
-      .exec<{ pk: number; created_at: string }>("SELECT pk, created_at FROM items WHERE project = ? AND kind = 'backlog' AND archived_at IS NULL ORDER BY created_at, pk", p.pk)
-      .toArray();
-
     // Usage: runs that ended in the span, once each; a lost run's tokens are unknown, so counted apart, never as zero.
     const ended = this.sql
       .exec<RunRow>("SELECT * FROM runs WHERE project = ? AND ended_at >= ? ORDER BY ended_at, pk", p.pk, since)
@@ -1022,20 +1002,7 @@ export class BoardStore {
         settled: cap("stuck.settled", settled),
       },
       recurring: null,
-      backlog: {
-        ready: cap(
-          "backlog.ready",
-          ready.map((f) => ({ ref: f.ref, title: f.title, release: f.release_ref, criteria: f.ac_total })),
-        ),
-        sessions_estimate: this.sessionsEstimate(p, ready.length),
-        no_criteria: cap(
-          "backlog.no_criteria",
-          noCriteria.map((f) => ({ ref: f.ref, title: f.title })),
-        ),
-        triage: { count: triage.length, oldest: triage[0] ? { ref: this.refOf(triage[0].pk), at: triage[0].created_at } : null },
-        release,
-        thin: ready.length < THIN_READY && release !== null && release.todo > 0,
-      },
+      backlog: this.backlogHealth(p, cap),
       usage: {
         tokens: total,
         by_agent: cap(
@@ -1158,6 +1125,110 @@ export class BoardStore {
   }
 
   /**
+   * A project's page (ADR 0014 §3): what the Overview, Needs you, Status and Usage read for it, by the
+   * same code, and its sessions open or ended in the span with their runs, newest activity first.
+   */
+  private projectPage(caller: BoardCaller, op: Op<"project">): ProjectPage {
+    const p = this.readable(caller, op.project);
+    const cal = calendar(this.now(), op.days, op.tz);
+    const since = new Date(cal.edges[0]!).toISOString();
+    const more: Record<string, number> = {};
+    const cap =
+      (max: number) =>
+      <T>(key: string, list: T[]): T[] => {
+        if (list.length > max) more[key] = list.length - max;
+        return list.slice(0, max);
+      };
+    const list = cap(PROJECT_MAX);
+    const current = this.currentRelease(p);
+    const sessions = this.sql
+      .exec<SessionRow & { title: string; last: string }>(
+        `SELECT s.*, i.title,
+           max(s.started_at, coalesce(s.ended_at, ''), coalesce((SELECT max(max(r.started_at, coalesce(r.ended_at, ''))) FROM runs r WHERE r.session = s.pk), '')) AS last
+         FROM sessions s JOIN items i ON i.pk = s.feature
+         WHERE s.project = ? AND (s.ended_at IS NULL OR s.ended_at >= ?)
+         ORDER BY last DESC, s.pk DESC`,
+        p.pk,
+        since,
+      )
+      .toArray();
+    const others = this.runsEnded(p, cal.edges[0]!, cal.edges.at(-1)!)
+      .filter((r) => r.session === null)
+      .reverse();
+    return {
+      project: this.projectRecord(p),
+      release: current.release && { ...current.release, number: current.number! },
+      done_unclosed: current.done_unclosed,
+      waits: this.waitsOf(p),
+      backlog: this.backlogHealth(p, cap(STATUS_MAX)),
+      ci: this.ciOf(p),
+      sessions: list("sessions", sessions).map((s): ProjectSession => {
+        const runs = this.sql.exec<RunRow>("SELECT * FROM runs WHERE session = ? ORDER BY started_at, pk", s.pk).toArray();
+        const roles = new Map(
+          this.sql.exec<{ role: string; n: number }>("SELECT role, count(*) AS n FROM session_tasks WHERE session = ? GROUP BY role", s.pk).toArray().map((r) => [r.role, r.n]),
+        );
+        const tokens = zeroTokens();
+        let weighted = 0;
+        let unknown = 0;
+        for (const r of runs) {
+          const w = this.weighRun(r);
+          addTokens(tokens, r);
+          weighted += w.weighted;
+          unknown += w.unknown;
+        }
+        return {
+          session: { feature: this.refOf(s.feature), kind: s.kind, label: s.label },
+          feature_title: s.title,
+          started_at: s.started_at,
+          ended_at: s.ended_at,
+          close:
+            s.need === null
+              ? null
+              : { need: s.need, summary: s.summary ?? "", blockers: roles.get("blocker") ?? 0, majors: roles.get("major") ?? 0, sent_back: roles.get("sent_back") ?? 0 },
+          tokens,
+          weighted: Math.round(weighted),
+          unknown,
+          lost: runs.filter((r) => r.outcome === "lost").length,
+          runs: runs.map((r) => this.projectRun(r)),
+        };
+      }),
+      other_runs: list("other_runs", others).map((r) => this.projectRun(r)),
+      usage: this.usageOf(p, cal),
+      more,
+    };
+  }
+
+  private projectRun(r: RunRow): ProjectRun {
+    return {
+      id: r.id,
+      agent: r.agent,
+      role: r.role,
+      laptop: r.laptop,
+      model: r.model,
+      effort: r.effort,
+      started_at: r.started_at,
+      ended_at: r.ended_at,
+      tokens: tokensOf(r),
+      weighted: this.weighRun(r).weighted,
+      calls: r.calls,
+      outcome: r.outcome ?? null,
+      outcome_reason: r.outcome_reason ?? null,
+    };
+  }
+
+  /** A run's tokens weighed by model (ADR 0014 §1), rounded to whole tokens, and those of a model the table doesn't know. */
+  private weighRun(r: RunRow): { weighted: number; unknown: number } {
+    let weighted = 0;
+    let unknown = 0;
+    for (const part of this.runParts(r)) {
+      const w = weigh(part.tokens, part.model);
+      weighted += w.weighted;
+      unknown += w.unknown;
+    }
+    return { weighted: Math.round(weighted), unknown };
+  }
+
+  /**
    * A day's context per call (ADR 0014 §3a): its runs' share of their calls and points, split over the
    * days they ran by wall time as `usage` splits their tokens, and the period's medians to compare with:
    * Total, each day's runs summed as they go; By agent, each role's runs whole. A lost run draws nothing.
@@ -1239,6 +1310,53 @@ export class BoardStore {
   /** What a run's tokens are weighed as (§1, §2): its declared model, until per-model rows are reported. */
   private runParts(r: RunRow): Array<{ model: string | null; tokens: TokenTotals }> {
     return [{ model: r.model, tokens: tokensOf(r) }];
+  }
+
+  /**
+   * A project's backlog health (ADR 0005 §2): Ready features with criteria in next_ready's order, the
+   * features with none, triage, and the current release's work. The status read's and the project
+   * page's; `cap` cuts each list as its caller's `more` counts.
+   */
+  private backlogHealth(p: ProjectRow, cap: <T>(key: string, list: T[]) => T[]): StatusRow["backlog"] {
+    const ready = this.sql
+      .exec<SummaryRow>(
+        `${SUMMARY} LEFT JOIN releases rel ON rel.pk = i.release
+         WHERE i.project = ? AND i.kind = 'feature' AND i.status = 'Ready' AND i.open_since IS NULL AND i.archived_at IS NULL AND (rel.status IS NULL OR rel.status != 'closed')
+         ORDER BY rel.pk IS NULL, rel.ord IS NULL, rel.ord, rel.pk, i.ord IS NULL, i.ord, i.pk`,
+        p.pk,
+      )
+      .toArray()
+      .filter((f) => f.ac_total > 0);
+    const noCriteria = this.sql
+      .exec<SummaryRow>(
+        `${SUMMARY} LEFT JOIN releases rel ON rel.pk = i.release
+         WHERE i.project = ? AND i.kind = 'feature' AND i.status != 'Done' AND i.archived_at IS NULL
+         ORDER BY rel.pk IS NULL, rel.ord IS NULL, rel.ord, rel.pk, i.ord IS NULL, i.ord, i.pk`,
+        p.pk,
+      )
+      .toArray()
+      .filter((f) => f.ac_total === 0);
+    const current = this.currentRelease(p).release;
+    const release = current
+      ? { ref: current.ref, todo: current.features.total - current.features.done, ready: ready.filter((f) => f.release_ref === current.ref).length }
+      : null;
+    const triage = this.sql
+      .exec<{ pk: number; created_at: string }>("SELECT pk, created_at FROM items WHERE project = ? AND kind = 'backlog' AND archived_at IS NULL ORDER BY created_at, pk", p.pk)
+      .toArray();
+    return {
+      ready: cap(
+        "backlog.ready",
+        ready.map((f) => ({ ref: f.ref, title: f.title, release: f.release_ref, criteria: f.ac_total })),
+      ),
+      sessions_estimate: this.sessionsEstimate(p, ready.length),
+      no_criteria: cap(
+        "backlog.no_criteria",
+        noCriteria.map((f) => ({ ref: f.ref, title: f.title })),
+      ),
+      triage: { count: triage.length, oldest: triage[0] ? { ref: this.refOf(triage[0].pk), at: triage[0].created_at } : null },
+      release,
+      thin: ready.length < THIN_READY && release !== null && release.todo > 0,
+    };
   }
 
   /**
@@ -3073,6 +3191,10 @@ export class BoardStore {
             },
       tasks_moved: this.tasksMoved(s.pk),
       tokens: this.sessionTokens(s.pk),
+      ...runs.reduce((t, r) => {
+        const w = this.weighRun(r);
+        return { weighted: t.weighted + w.weighted, unknown: t.unknown + w.unknown };
+      }, { weighted: 0, unknown: 0 }),
       runs: runs.map((r) => this.runRecord(r, withCtx)),
       ci_runs: this.sql
         .exec<CiRunRow>("SELECT * FROM ci_runs WHERE session = ? ORDER BY coalesce(started_at, ended_at), pk", s.pk)
@@ -3141,6 +3263,7 @@ export class BoardStore {
       tasks: this.sql.exec<{ item: number }>("SELECT item FROM run_tasks WHERE run = ? ORDER BY item", r.pk).toArray().map((t) => this.refOf(t.item)),
       outcome: r.outcome ?? null,
       outcome_reason: r.outcome_reason ?? null,
+      ...this.weighRun(r),
     };
   }
 
