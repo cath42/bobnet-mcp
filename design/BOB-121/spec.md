@@ -261,6 +261,9 @@ As today (release heads, the order, Edit your gates, Close), with one change: th
 - A release whose features are all done and that isn't closed: "All done: waiting for your close"
   beside **Close R1**.
 - The current release has a small "CURRENT" tag.
+- From BOB-189 (keep them): a planned release has the badge "planned" (idle colour, dashed); its goal, if it
+  has one, is a muted line under the head, above the counts line; behind Edit your gates a closed release has
+  **Reopen** (plain, no confirm, no Undo) where Close was. CURRENT is never on a planned release.
 - Foot note: "…Where it stands: a feature not done says how many of its own criteria and tasks are
   left; a done one says when it was done. The feature's page lists any criteria it closed without."
 
