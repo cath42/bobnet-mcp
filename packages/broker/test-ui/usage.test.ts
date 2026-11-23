@@ -470,6 +470,21 @@ describe("a day's detail (BOB-181)", () => {
     expect(ud()!.querySelector("svg")).toBeNull();
   });
 
+  it("reads today's open detail again after a reconnect, and an earlier day's not (Toad, review D minor 1)", async () => {
+    data["bobnet"]!.back[0] = opus(8);
+    await open("#usage");
+    await click(bar("bobnet", 0));
+    await click(bar("helix", 4));
+    await settle();
+    expect(sent("usage_day")).toHaveLength(2);
+    // Past the half minute two reads of one day are apart.
+    const real = Date.now, ahead = vi.spyOn(Date, "now").mockImplementation(() => real.call(Date) + 31_000);
+    FakeSocket.last.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
+    await settle(800);
+    ahead.mockRestore();
+    expect(sent("usage_day").map((f) => [f.op!["project"], f.op!["day"]])).toEqual([["bobnet", dayOf(0)], ["helix", dayOf(4)], ["bobnet", dayOf(0)]]);
+  });
+
   it("stays through the weigh switch, no figure changed nor fetched; a span that leaves its day out closes it; its link opens it (c5)", async () => {
     await open(`#usage/bobnet/${dayOf(20)}`);
     await settle();

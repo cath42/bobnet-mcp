@@ -1040,7 +1040,8 @@ async function loadProjects() {
   // What waits on Casper counts on the tab, on every view (waiting-on-casper 3).
   // A failed list doesn't hold back the overview and the waits, which are read on their own (BOB-176 m2).
   if (svc.projects?.length || ov.rows || svc.error) loadOverview();
-  // So does usage, read again where it shows: the page may have been cut off.
+  // So does usage, and today's open detail, read again where it shows: the page may have been cut off.
+  usageDayChanged();
   readsChanged();
   // The Status tab's dot and the Overview's line read from the start, on every view.
   loadStatus();
@@ -3368,8 +3369,8 @@ function usageDay(key, day, days, again = false) {
     });
   return e;
 }
-function usageDayChanged(key) {
-  for (const [id, e] of usageDays) if (id.startsWith(`${key}|`)) e.old = true;
+function usageDayChanged(key = null) {
+  for (const [id, e] of usageDays) if (key === null || id.startsWith(`${key}|`)) e.old = true;
 }
 
 /** A context line's points as one per call, a call between two points taking the nearer (the board's `perCall`). */
