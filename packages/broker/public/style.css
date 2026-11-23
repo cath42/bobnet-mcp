@@ -243,12 +243,14 @@ main.wide { max-width: 1320px; }
 .badge[data-state="in review"] { color: var(--accent); border-style: dotted; }
 .badge[data-state="in progress"] { color: var(--accent); }
 .badge[data-state="closed"] { color: var(--muted); }
+.badge[data-state="planned"] { color: var(--idle); }
 .sub-note { font-size: 12px; color: var(--muted); font-style: italic; }
 .release { display: grid; gap: 8px; }
 .rel-h { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
 .rel-h .n { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted); min-width: 1.2em; }
 .rel-h b { font-size: 16px; }
 .rel-h .muted { font-size: 13px; }
+.rel-goal { margin: 0; font-size: 13px; color: var(--muted); }
 .rel-h .gate { margin-left: auto; display: flex; gap: 6px; }
 .rel-h .gate button { min-height: 32px; padding: 2px 10px; }
 .counts-line { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); }

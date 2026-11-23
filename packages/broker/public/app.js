@@ -1016,13 +1016,13 @@ function viewBoardRoadmap(key, edit) {
   if (data.error) out.push(h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, data.error)));
   if (edit) {
     out.push(h("div", { class: "banner editing" }, h("b", null, "Your gates"),
-      h("span", null, `Move a feature into or out of a release, change the order of releases, close a release. Changes save as you make them, each with Undo, and go in the board's history as yours. Anything else is a request to ${poOf(p)}.`)));
+      h("span", null, `Move a feature into or out of a release, change the order of releases, close or reopen a release: yours, and ${poOf(p)}'s. Changes save as you make them, each with Undo, and go in the board's history as yours. Anything else is a request to ${poOf(p)}.`)));
   }
   if (!rels.length) out.push(h("div", { class: "empty-card" }, `${p.name} has no releases yet. Its PO makes the first one.`));
   rels.forEach((r, i) => out.push(releaseSection(key, data, r, i, edit)));
   const none = data.features.filter((f) => f.release === null);
   if (none.length || data.none?.items) out.push(releaseSection(key, data, null, null, edit));
-  out.push(h("p", { class: "note" }, `Order inside a release is ${poOf(p)}'s; the order of releases is yours. A number in italics: the board has no order for it, so it follows the ordered ones by id. Criteria: acceptance criteria ticked, the feature's own and its tasks'.`));
+  out.push(h("p", { class: "note" }, `Order inside a release is ${poOf(p)}'s; the order of releases is yours, and ${poOf(p)}'s. A number in italics: the board has no order for it, so it follows the ordered ones by id. Criteria: acceptance criteria ticked, the feature's own and its tasks'.`));
   return out;
 }
 
@@ -1041,7 +1041,7 @@ function releaseSection(key, data, r, i, edit) {
       button(`${done.length} done (${ranges(fs.flatMap((f, j) => (f.status === "Done" ? [j + 1] : [])))}): show them`, "", () => { state.open.add(`done:${key}:${r?.ref ?? "-"}`); render(); }))));
   }
   fs.forEach((f, j) => { if (!(folded && f.status === "Done")) rows.push(featureRow(key, data, r, f, j + 1, edit)); });
-  const relState = !r ? null : closed ? "closed" : fs.length && done.length === fs.length ? "all done" : r.status === "open" ? "open" : null;
+  const relState = !r ? null : closed ? "closed" : fs.length && done.length === fs.length ? "all done" : r.status;
   const rels = data.releases;
   const b = r ? r.backlog : data.none;
   return h("section", { class: "release", id: r ? `rel-${r.ref}` : "rel-none" },
@@ -1053,7 +1053,8 @@ function releaseSection(key, data, r, i, edit) {
       edit && r ? h("span", { class: "gate" },
         h("button", { type: "button", disabled: i === 0 || null, "aria-label": `Move ${r.title} earlier`, onclick: () => moveRelease(key, rels, i, -1) }, "↑ Earlier"),
         h("button", { type: "button", disabled: i === rels.length - 1 || null, "aria-label": `Move ${r.title} later`, onclick: () => moveRelease(key, rels, i, 1) }, "↓ Later"),
-        closed ? null : button("Close release", "danger", () => closeRelease(key, data, r))) : null),
+        closed ? button("Reopen", "", () => reopenRelease(key, r)) : button("Close release", "danger", () => closeRelease(key, data, r))) : null),
+    r?.goal ? h("p", { class: "rel-goal" }, r.goal) : null,
     b ? countsLine(key, b, r?.ref ?? "none") : null,
     shut
       ? fs.length
@@ -1106,7 +1107,7 @@ async function gate(key, op, said, undoOp) {
   try {
     const res = await boardOp(op, true);
     // seq 0: the board wrote nothing (a stale view, a repeat), so there is nothing to undo.
-    toast(said, true, res.seq === 0 ? null : () => undoGate(key, typeof undoOp === "function" ? undoOp(res) : undoOp));
+    toast(said, true, res.seq === 0 || !undoOp ? null : () => undoGate(key, typeof undoOp === "function" ? undoOp(res) : undoOp));
   } catch (err) {
     toast(err.message, false);
   }
@@ -1139,6 +1140,11 @@ function moveRelease(key, rels, i, d) {
   const j = i + d;
   [after[i], after[j]] = [after[j], after[i]];
   gate(key, { op: "order_releases", project: key, refs: after }, `${rels[i].title} is now release ${j + 1}.`, { op: "order_releases", project: key, refs: before });
+}
+
+/** A reopen has no Undo: closing it again is the way back (Daisy, BOB-189). */
+function reopenRelease(key, r) {
+  gate(key, { op: "reopen_release", project: key, ref: r.ref }, `Reopened ${r.title}.`, null);
 }
 
 /** Closing names each feature not Done and where it goes (board-writes 5): by default the next open release (notes 20). */

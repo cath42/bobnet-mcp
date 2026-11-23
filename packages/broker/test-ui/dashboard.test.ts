@@ -820,6 +820,33 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     await lists();
   });
 
+  it("badges a planned release, shows a release's goal, and reopens a closed one without Undo; the PO's gates too (BOB-189 R6)", async () => {
+    const goal = "Start a session from the roadmap, the brief written for you";
+    const shown = [rel("R1", "R1 Central backlog view", "open", 5, 6), rel("R2", "R2 Start a session", "planned", 0, 1, { goal }), rel("R3", "R3 Old", "closed", 1, 1), rel("R4", "R4 Empty", "closed", 0, 0)];
+    FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 74, refs: [] });
+    await lists(shown, features);
+    expect(view().querySelector("#rel-R2 .rel-h .badge")!.textContent).toBe("planned");
+    expect(view().querySelector("#rel-R2 .rel-h .badge")!.getAttribute("data-state")).toBe("planned");
+    expect(view().querySelector("#rel-R2 .rel-goal")!.textContent).toBe(goal);
+    expect(view().querySelector("#rel-R1 .rel-goal")).toBeNull();
+    expect(view().querySelector("#rel-R4 .empty-card")!.textContent).toBe("Closed, with no features");
+    expect(view().querySelector(".banner.editing")!.textContent).toContain("close or reopen a release: yours, and Peach's.");
+    expect(view().querySelector(".note")!.textContent).toContain("the order of releases is yours, and Peach's.");
+
+    const gate = view().querySelector("#rel-R3 .rel-h .gate")!;
+    expect(gate.textContent).not.toContain("Close release");
+    expect(view().querySelector("#rel-R1 .rel-h .gate")!.textContent).not.toContain("Reopen");
+    const reopen = [...gate.querySelectorAll("button")].find((b) => b.textContent === "Reopen")!;
+    expect(reopen.classList.contains("danger")).toBe(false);
+    reopen.click();
+    expect(pending("reopen_release")[0]!.op).toEqual({ op: "reopen_release", project: "bobnet", ref: "R3" });
+    reply(pending("reopen_release")[0]!, { ref: "R3", seq: 75 });
+    await settle();
+    expect(toastEl().textContent).toContain("Reopened R3 Old.");
+    expect(toastEl().querySelector("button.undo")).toBeNull();
+    await lists();
+  });
+
   it("toasts a move the board didn't need to write without Undo (Toad, BOB-7 1)", async () => {
     const select = view().querySelector('select[aria-label="Release of BOB-8"]') as HTMLSelectElement;
     select.value = "R1";
