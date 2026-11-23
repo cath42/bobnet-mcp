@@ -112,3 +112,86 @@ describe("the current release (ADR 0014 §4, BOB-163)", () => {
     expect([row.release?.ref, row.release_number]).toEqual([r2, 1]);
   });
 });
+
+const SHA = (n: number) => n.toString(16).padStart(40, "a");
+const supervisor = (worker: string, name = "Bill"): BoardCaller => ({
+  kind: "agent",
+  name,
+  laptop: "mbp-1",
+  supervisor: true,
+  ctx: { worker, role: name.toLowerCase(), project: "helix", session: null, tasks: [] },
+});
+async function ci(n: number, o: { name?: string; status?: "queued" | "running" | "passed" | "failed"; sha?: string; start?: string | null }) {
+  const at = o.start === undefined ? new Date(Date.parse("2026-11-20T10:00:00Z") + n * 60_000).toISOString() : o.start;
+  const reply = (await board().reportCi("github-actions", {
+    external_id: `run-${n}`,
+    name: o.name ?? "ci",
+    url: `https://github.com/cath42/helix/actions/runs/${n}`,
+    repo: "cath42/helix",
+    branch: "main",
+    sha: o.sha ?? SHA(n),
+    status: o.status ?? "passed",
+    started_at: at,
+    ended_at: at && (o.status ?? "passed") !== "running" ? at : null,
+  })) as unknown as BoardReply;
+  if (!reply.ok) throw new Error(`ci_run refused: ${reply.message}`);
+}
+
+describe("CI history from the board (ADR 0014 §3a, BOB-168)", () => {
+  it("gives each workflow its latest run and the 5 before it, newest first, passed ones too; a slot run is no workflow", async () => {
+    await ok(owner, { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", repos: ["cath42/helix"] });
+    for (let n = 1; n <= 8; n++) await ci(n, { status: n === 7 ? "failed" : "passed" });
+    await ci(9, { name: "deploy", status: "running" });
+    await ci(10, { name: "deploy", status: "queued", start: null });
+    const bill = supervisor("w_bill");
+    await ok(bill, { op: "run_start", project: "helix", id: "w_bill", started_at: new Date().toISOString(), session: null });
+    await ok(bill, { op: "slot_run", project: "helix", external_id: "s_1", name: "land", status: "passed", started_at: new Date().toISOString() });
+    const flows = (await overviewRow()).ci!;
+    expect(flows.map((f) => [f.name, f.runs.length])).toEqual([
+      ["ci", 6],
+      ["deploy", 2],
+    ]);
+    expect(flows[0]!.runs.map((r) => [r.sha, r.status])).toEqual([8, 7, 6, 5, 4, 3].map((n) => [SHA(n), n === 7 ? "failed" : "passed"]));
+    expect(flows[0]!.runs[0]).toEqual({
+      name: "ci",
+      branch: "main",
+      status: "passed",
+      sha: SHA(8),
+      url: "https://github.com/cath42/helix/actions/runs/8",
+      started_at: "2026-11-20T10:08:00.000Z",
+      ended_at: "2026-11-20T10:08:00.000Z",
+      agent: null,
+    });
+    // A run not started yet is the newest.
+    expect(flows[1]!.runs.map((r) => r.status)).toEqual(["queued", "running"]);
+  });
+
+  it("names the agent whose land pushed the sha a run ran on, and none without a push", async () => {
+    await ok(owner, { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", repos: ["cath42/helix"] });
+    const toad = supervisor("w_toad", "Toad");
+    await ok(toad, { op: "run_start", project: "helix", id: "w_toad", started_at: new Date().toISOString(), session: null });
+    await ok(toad, { op: "push", project: "helix", repo: "Cath42/Helix", branch: "v2", sha: SHA(1) });
+    await ci(1, {});
+    await ci(2, {});
+    // A push after its run's report ties it too.
+    await ci(3, {});
+    await ok(toad, { op: "push", project: "helix", repo: "cath42/helix", branch: "v2", sha: SHA(3) });
+    const runs = (await overviewRow()).ci![0]!.runs;
+    expect(runs.map((r) => [r.sha, r.agent])).toEqual([
+      [SHA(3), "Toad"],
+      [SHA(2), null],
+      [SHA(1), "Toad"],
+    ]);
+  });
+
+  it("gives every project on the Overview its ci, none as an empty list", async () => {
+    await ok(owner, { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", repos: ["cath42/helix"] });
+    await ok(owner, { op: "create_project", key: "bobnet", name: "BobNet", prefix: "BOB" });
+    await ci(1, {});
+    const rows = (await ok(owner, { op: "overview" })).projects;
+    expect(rows.map((r) => [r.project.key, r.ci?.length])).toEqual([
+      ["bobnet", 0],
+      ["helix", 1],
+    ]);
+  });
+});

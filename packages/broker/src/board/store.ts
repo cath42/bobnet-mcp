@@ -35,6 +35,8 @@ import {
   type WaitRecord,
   type TokenTotals,
   type CallLine,
+  type CiHistoryRun,
+  type CiWorkflow,
   type UsageDay,
   type UsagePoint,
   type UsageSeries,
@@ -82,6 +84,8 @@ const HEAVY_MIN = 5;
 const USAGE_TOP = 3;
 const USAGE_MODELS_MAX = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** A CI workflow's history: its latest run and the 5 before it (ADR 0014 §3a, spec §2.4). */
+const CI_HISTORY = 6;
 /** Backlog is thin below this many Ready features with criteria while the open release has work to do. */
 const THIN_READY = 2;
 
@@ -701,9 +705,34 @@ export class BoardStore {
           waits_on_you: this.waitsOf(p).find((w) => w.blocking)?.ref ?? null,
           backlog: this.backlogCounts("project = ?", p.pk),
           no_release: this.backlogCounts("project = ? AND release IS NULL", p.pk),
+          ci: this.ciOf(p),
         };
       }),
     };
+  }
+
+  /**
+   * A project's CI history (ADR 0014 §3a): per workflow, by name, its latest run and the 5 before it,
+   * newest first (a run not started yet first), passed ones too. Who landed the commit a run ran on is
+   * the agent of the run whose push it was. Slot runs are no workflow.
+   */
+  private ciOf(p: ProjectRow): CiWorkflow[] {
+    const rows = this.sql
+      .exec<CiHistoryRun & Record<string, SqlStorageValue>>(
+        `SELECT name, branch, status, sha, url, started_at, ended_at, agent FROM (
+           SELECT c.name, c.branch, c.status, c.sha, c.url, c.started_at, c.ended_at, r.agent,
+             row_number() OVER (PARTITION BY c.name ORDER BY coalesce(c.started_at, c.ended_at) DESC NULLS FIRST, c.pk DESC) AS n
+           FROM ci_runs c
+           LEFT JOIN pushes u ON u.project = c.project AND lower(u.repo) = lower(c.repo) AND u.sha = c.sha
+           LEFT JOIN runs r ON r.pk = u.run
+           WHERE c.project = ? AND c.source != 'slot')
+         WHERE n <= ${CI_HISTORY} ORDER BY name, n`,
+        p.pk,
+      )
+      .toArray();
+    const flows = new Map<string, CiHistoryRun[]>();
+    for (const r of rows) flows.set(r.name, [...(flows.get(r.name) ?? []), { name: r.name, branch: r.branch, status: r.status, sha: r.sha, url: r.url, started_at: r.started_at, ended_at: r.ended_at, agent: r.agent }]);
+    return [...flows].map(([name, runs]) => ({ name, runs }));
   }
 
   /**

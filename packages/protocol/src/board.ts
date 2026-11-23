@@ -631,6 +631,26 @@ export interface OverviewRow {
   backlog: BacklogCounts;
   /** Backlog items in no release (the roadmap's "Not in a release" counts line). */
   no_release?: BacklogCounts;
+  /** Its CI history from the board (ADR 0014 §3a); an older broker sends none. */
+  ci?: CiWorkflow[];
+}
+
+/** A CI workflow's latest run and the 5 before it, newest first, passed ones too (ADR 0014 §3a). Slot runs are no workflow. */
+export interface CiWorkflow {
+  name: string;
+  runs: CiHistoryRun[];
+}
+
+/** `agent`: who landed the commit it ran on, through that land's push; null when no push tied it. */
+export interface CiHistoryRun {
+  name: string;
+  branch: string | null;
+  status: CiStatus;
+  sha: string | null;
+  url: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  agent: string | null;
 }
 
 export interface ItemSummary {
