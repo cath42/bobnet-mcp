@@ -45,6 +45,7 @@ function fakeBroker(scene) {
       { name: "ci", usual_ms: 9 * 60_000, runs: [run("running", 4, null, "7c1e2a9d01", "Howard"), ...passed(5, 70)] },
       { name: "e2e", usual_ms: 14 * 60_000, runs: [run("passed", 66, 14, "57e7002bfa"), run("passed", 5 * H, 13, "a39bd05c11"), run("failed", 8 * H, 12, "99ac01dd20")] },
       { name: "nightly", runs: [run("cancelled", 7 * H, 3, "57e7002bfa")] },
+      { name: "pages", runs: [run("queued", 0, null, "7c1e2a9d01", null, { started_at: null, url: null }), run("queued", 30, null, "57e7002bfa"), run("passed", 90, 2, "a39bd05c11")] },
     ],
   };
   const overview = (p) => ({
@@ -200,6 +201,8 @@ const all = [
   ["bob121-ask-open-dark", "live", "overview", ".prow", [agent("Marvin"), (p) => p.locator(".ask-more").click()], ".ov-now", [390, 1440]],
   ["bob121-ask-human", "live", "overview", ".prow", [agent("Howard")], ".ov-now", [390, 1440]],
   ["bob121-ask-older", "older", "overview", ".prow", [agent("Marvin")], ".ov-now", [390, 1440]],
+  ["bob121-ci", "live", "overview", "#ci li", [], ".ov-ci"],
+  ["bob121-ci-dark", "live", "overview", "#ci li", [], ".ov-ci", [390, 1440]],
   ["bob121-status-needs", "live", "status", "#status-needs li", [], "#status-needs", [390, 1440]],
 ];
 

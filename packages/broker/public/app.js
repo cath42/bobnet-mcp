@@ -1421,8 +1421,9 @@ function viewOverview() {
       statusLine(),
       h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count", id: "needs-count" }, waitCount() || "")),
         h("div", { class: "card" }, needsBody(needsItems(), true))),
-      h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length || "")),
-        now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map(nowLine)), queuedLine(), ciLines()) : h("div", { class: "empty-card" }, "No agent is working.", queuedLine(), ciLines())),
+      h("div", { class: "ov-side" }, h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length || "")),
+        now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map(nowLine)), queuedLine()) : h("div", { class: "empty-card" }, "No agent is working.", queuedLine())),
+        ciCard()),
       h("section", { class: "ov-proj" }, h("h2", null, "Projects"),
         h("div", { class: "plist", id: "plist" },
           ov.rows?.length ? ov.rows.map(projectRow) : h("div", { class: "empty-card" }, ov.rows && !down ? "No project's board yet." : down ? "The board's projects couldn't be read." : "Reading the board…")))),
@@ -1453,21 +1454,37 @@ function staleBanners() {
   return h("div", { class: "stale-banners" }, banners);
 }
 
-const CI_FAILED = new Set(["failure", "timed_out", "startup_failure"]);
-/**
- * One muted line per CI run in progress, a failed one in red (BOB-5 as built 3): "CI running: BobNet · test on 1a2b3c4d · started 4 min ago".
- * A run failed shows until its workflow runs again. A stopgap for Now's banner; it goes when the per-agent run line lands (BOB-4 gap 4).
- */
-function ciLines() {
-  return projects().flatMap((e) => {
-    const latest = new Map();
-    for (const r of [...(e.board.ci ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at))) if (!latest.has(r.name)) latest.set(r.name, r);
-    return [...latest.values()].filter((r) => r.status !== "completed" || CI_FAILED.has(r.conclusion)).reverse().map((r) => {
-      const failed = r.status === "completed";
-      return h("p", { class: "more ci-line", dataset: failed ? { failed: "" } : {} },
-        `CI ${failed ? "failed" : "running"}: ${projectName(e.board.project)} · ${r.name} on ${r.sha.slice(0, 8)} · started `, ago(r.created_at), " ago");
-    });
-  });
+/** A CI run's mark and tone by its status (BOB-121 spec 2.4); the word is always beside it. A cancelled run is nobody's to act on, so never red. */
+const CI_MARK = { passed: ["✓", "ok"], failed: ["✕", "bad"], running: ["◔", "run"], queued: ["○", "idle"], cancelled: ["●", "idle"] };
+/** When a CI run was, for its age: its end once it has one, else its start; null before it has started. */
+const ciAt = (r) => r.ended_at ?? r.started_at;
+/** A workflow's latest run in words: "passed 52m ago", "running 4m · usually 9 min". */
+function ciWords(wf) {
+  const r = wf.runs[0], at = ciAt(r);
+  if (r.status === "running") return [at ? ["running ", ago(r.started_at ?? at)] : "running", wf.usual_ms ? ` · usually ${Math.max(1, Math.round(wf.usual_ms / 60_000))} min` : null];
+  if (r.status === "queued") return at ? ["queued ", ago(at)] : "queued";
+  return at ? [`${r.status} `, ago(at), " ago"] : r.status;
+}
+/** One workflow: its latest run, then the runs before it as dots, newest first. `project`: its name, "" for a later row of the same one, null to leave the cell out. */
+function ciRow(wf, project) {
+  const r = wf.runs[0], [mark, tone] = CI_MARK[r.status];
+  const name = h("b", null, wf.name);
+  const link = (cls, ...kids) => h("a", { class: cls, href: r.url, target: "_blank", rel: "noopener" }, ...kids);
+  return h("li", { class: "ci-row", dataset: { tone, status: r.status } },
+    project === null ? null : h("span", { class: "ci-p" }, project),
+    h("span", { class: "ci-wf" }, h("span", { class: `ci-mark${r.status === "running" ? " spin" : ""}`, "aria-hidden": "true" }, mark), r.url ? link("ci-name", name) : name, r.branch ? h("span", { class: "muted" }, ` on ${r.branch}`) : null),
+    h("span", { class: "ci-st" }, h("span", { class: "ci-word" }, ciWords(wf)),
+      h("span", { class: "muted" }, r.sha ? ` · ${r.sha.slice(0, 7)}` : "", r.agent ? ` · ${shortName(r.agent)}'s land` : "")),
+    h("span", { class: "ci-hist" }, wf.runs.slice(1, 6).map((x) => {
+      const said = [x.status, x.sha?.slice(0, 7), ciAt(x) ? `${since(ciAt(x))} ago` : null].filter(Boolean).join(" · ");
+      return h("i", { class: `ci-dot ${CI_MARK[x.status][1]}${x.status === "queued" ? " hollow" : ""}`, role: "img", title: said, "aria-label": said });
+    })),
+    r.url ? link("ci-link", "Run ↗") : null);
+}
+/** Every project's workflows from the board (`OverviewRow.ci`); a project with none has no row, and with none at all there is no card. */
+function ciCard() {
+  const rows = (ov.rows ?? []).flatMap((o) => (o.ci ?? []).filter((wf) => wf.runs.length).map((wf, i) => ciRow(wf, i ? "" : o.project.name)));
+  return rows.length ? h("section", { class: "ov-ci" }, h("h2", null, "CI"), h("div", { class: "card" }, h("ul", { class: "ci-list", id: "ci" }, rows))) : null;
 }
 
 /** "2 queued: Luigi, Toad" (spec, BOB-3 gap 2). */
@@ -1567,10 +1584,7 @@ function answerForm(w) {
       state.answering = null;
       // It leaves its group at once, and the counts drop; the board's next read says the same.
       ov.waits = (ov.waits ?? []).filter((x) => waitId(x) !== qid);
-      if (res.seq) {
-        undoable.set(qid, { seq: res.seq, until: Date.now() + UNDO_MS });
-        setTimeout(scheduleRender, UNDO_MS);
-      }
+      if (res.seq) undoable.set(qid, { seq: res.seq, until: Date.now() + UNDO_MS });
       render();
       toast(`${w.kind === "question" ? `Answered ${w.ref}` : `Marked ${w.ref} done`}. Recorded as your words${sentTo(res, w.project)}.`, true,
         res.seq ? () => undoAnswer(w, res.seq) : null);
@@ -1880,7 +1894,7 @@ function answeredItem(x) {
     h("div", { class: "said" }, option ? h("div", null, h("span", { class: "muted" }, "You picked "), option) : null,
       x.words ? h("blockquote", null, `“${x.words}”`) : null),
     h("div", { class: "meta" }, h("span", null, `${leadOf(x.project)} got a message`), h("span", null, "from the dashboard"),
-      undo && Date.now() < undo.until ? button("Undo", "answer-btn", (b) => { b.disabled = true; undoAnswer(x, undo.seq); }) : null));
+      undo ? button("Undo", "answer-btn", (b) => { b.disabled = true; undoAnswer(x, undo.seq); }) : null));
 }
 
 /** The requests he decided from the dashboard since midnight, from every laptop's report; an older supervisor's adds none (ADR 0013 §2). */
@@ -3244,6 +3258,8 @@ window.addEventListener("resize", () => {
 // Durations tick without a re-render.
 setInterval(() => {
   for (const el of document.querySelectorAll("[data-ago]")) el.textContent = since(el.dataset.ago);
+  // An answer's Undo goes once the board no longer takes it back.
+  if ([...undoable].filter(([id, u]) => Date.now() >= u.until && undoable.delete(id)).length) scheduleRender();
   // The page itself gone late, with no frame to say so (a phone that slept): Needs you says it.
   const fresh = document.querySelector(".fresh");
   if (fresh && renderTimer === null && fresh.dataset.late !== String(pageLate())) scheduleRender();

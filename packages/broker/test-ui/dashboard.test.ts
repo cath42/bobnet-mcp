@@ -151,24 +151,6 @@ describe("Now's parts on the Overview (BOB-5 as built 3)", () => {
     expect(view().textContent).not.toMatch(/\$\d/);
   });
 
-  it("puts a muted line per CI run in progress under Working now, a failed one in red, and nothing once it passes", async () => {
-    const ws = FakeSocket.last;
-    const lines = () => [...view().querySelectorAll(".ov-now .ci-line")];
-    expect(lines().map((l) => l.textContent)).toEqual(["CI running: helix · ci on 437577e9 · started 5m ago"]);
-    expect(lines()[0]!.hasAttribute("data-failed")).toBe(false);
-    const ci = (runs: unknown[]) => ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board: { ...board, ci: runs } });
-    // A failed run shows until its workflow runs again; an older failure of the same workflow doesn't.
-    ci([{ name: "ci", status: "completed", conclusion: "failure", created_at: iso(5), sha: "437577e9aa00" }, { name: "ci", status: "completed", conclusion: "failure", created_at: iso(60), sha: "1111111100" }]);
-    await settle();
-    expect(lines().map((l) => l.textContent)).toEqual(["CI failed: helix · ci on 437577e9 · started 5m ago"]);
-    expect(lines()[0]!.hasAttribute("data-failed")).toBe(true);
-    ci([{ name: "ci", status: "completed", conclusion: "success", created_at: iso(2), sha: "2222222200" }, { name: "ci", status: "completed", conclusion: "failure", created_at: iso(5), sha: "437577e9aa00" }]);
-    await settle();
-    expect(lines()).toHaveLength(0);
-    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board });
-    await settle();
-  });
-
   it("shows a refused action and re-enables its button", async () => {
     const ws = FakeSocket.last;
     const snap = structuredClone(dashboard.laptops[0]!.snapshot);
@@ -1407,7 +1389,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     expect($("needs-count").textContent).toBe("");
     // Nothing waits: the count leaves the tab.
     expect($("needs-n").textContent).toBe("");
-    expect(view().querySelector(".ov-now .empty-card")!.textContent).toBe("No agent is working.CI running: helix · ci on 437577e9 · started 5m ago");
+    expect(view().querySelector(".ov-now .empty-card")!.textContent).toBe("No agent is working.");
     const cells = [...view().querySelectorAll('.prow[data-project="bobnet"] .pc')].map((c) => c.textContent);
     expect(cells[2]).toBe("Open nowno feature open");
     expect(cells[3]).toBe("NextReady: BOB-9Move Helix's board");
@@ -3161,7 +3143,8 @@ describe("a project the service doesn't have (ADR 0012 §2, BOB-193)", () => {
     await go("#overview");
     await read("sandbox", [bobnet, athletic, service("sandbox", "SAN")]);
     expect($("plist").textContent).toContain("sandbox");
-    expect(view().textContent).toContain("sandbox-ci");
+    // Its laptop's board is drawn with it: which laptop it runs on is that board's.
+    expect(view().querySelector('.prow[data-project="sandbox"] .pname')!.textContent).toContain("mbp-1");
     expect(await picker()).toContain("sandbox");
     await read("not-known", [bobnet, athletic]);
     expect(view().textContent).not.toMatch(/sandbox/);
@@ -3210,7 +3193,8 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
   const H = 60, DAY = 24 * 60;
   const bobnet = { key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] };
   const helix = { ...HELIX, name: "Helix" };
-  const overviewRow = (project: unknown) => ({ project, release: null, release_number: null, open: [], next_ready: null, waits_on_you: null, backlog: { items: 0, bugs: 0, oldest: null }, no_release: null });
+  let ci: Record<string, unknown[] | undefined> = {};
+  const overviewRow = (project: { key: string }) => ({ project, release: null, release_number: null, open: [], next_ready: null, waits_on_you: null, backlog: { items: 0, bugs: 0, oldest: null }, no_release: null, ci: ci[project.key] });
   const wait = (ref: string, min: number, over: Record<string, unknown> = {}) => ({ project: "bobnet", kind: "question", ref, feature: "BOB-3", text: `${ref} text`, recommended: null, context: null, holds: { items: [], sessions: [] }, waiting_sessions: [],
     needed_before: null, asked_by: "Mario@mbp-1", since: iso(min), blocking: true, edits: [], ...over });
   const ask = (id: string, min: number, over: Record<string, unknown> = {}) => ({ id, worker_id: "w_h", name: "Howard", kind: "approval", tool: "Bash", tier: "human", created_at: iso(min), preview: `${id} preview`, ask: { text: `${id} command`, cut: false, questions: [] }, ...over });
@@ -3468,15 +3452,29 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
     await reread();
     const undo = () => $("needs-answered")?.querySelector('li[data-ref="A-9"] button');
     expect(undo()!.textContent).toBe("Undo");
-    vi.setSystemTime(now.getTime() + 121_000);
-    report("mbp-1", 0);
-    await settle();
-    expect(undo()).toBeNull();
-    vi.setSystemTime(now);
-    report("mbp-1", 0);
-    await settle();
     click(undo());
     expect(FakeSocket.last.sent.at(-1)!["op"]).toEqual({ op: "undo", project: "bobnet", seq: 5 });
+    // Taken back, and refused or not, it isn't offered twice.
+    FakeSocket.last.frame({ t: "error", rid: FakeSocket.last.sent.at(-1)!["rid"], code: "conflict", message: "Too late" });
+    await answer();
+    expect(undo() ?? null).toBeNull();
+    // Another, left alone: it goes by itself when the two minutes are up.
+    waits = [wait("A-11", H, { kind: "action", blocking: false })];
+    answered = [];
+    await reread();
+    click(item("A-11").querySelector(".answer-btn"));
+    click(item("A-11").querySelector('button[type="submit"]'));
+    FakeSocket.last.frame({ t: "ok", rid: FakeSocket.last.sent.at(-1)!["rid"], result: { ref: "A-11", seq: 8, told: [] } });
+    waits = [];
+    answered = [{ project: "bobnet", ref: "A-11", kind: "action", text: "Where?", key: null, words: null, at: new Date().toISOString() }];
+    await answer();
+    const undo11 = () => $("needs-answered").querySelector('li[data-ref="A-11"] button');
+    expect(undo11()!.textContent).toBe("Undo");
+    vi.setSystemTime(now.getTime() + 121_000);
+    await new Promise((r) => setTimeout(r, 1000));
+    await settle();
+    expect(undo11()).toBeNull();
+    vi.setSystemTime(now);
     answered = [];
   });
 
@@ -3521,6 +3519,86 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
     down = [];
     await reread();
     expect(view().querySelector(".banner.down")).toBeNull();
+  });
+
+  describe("the CI card (BOB-178; BOB-121 AC3)", () => {
+    const run = (status: string, start: number | null, end: number | null, sha: string | null, over: Record<string, unknown> = {}) => ({ name: "ci", branch: "main", status, sha, url: sha ? `https://github.com/x/y/actions/runs/${sha}` : null, started_at: start === null ? null : iso(start), ended_at: end === null ? null : iso(end), agent: null, ...over });
+    const row = (name: string) => [...$("ci").querySelectorAll("li")].find((li) => li.querySelector(".ci-wf b")!.textContent === name)!;
+    const words = (name: string) => row(name).querySelector(".ci-word")!.textContent;
+    const dots = (name: string) => [...row(name).querySelectorAll(".ci-dot")].map((d) => d.className.replace("ci-dot ", ""));
+
+    beforeAll(async () => {
+      waits = [];
+      const before = (n: number) => Array.from({ length: n }, (_, i) => run("passed", 100 + i * 60, 90 + i * 60, `aaaaaaa${i}bb`));
+      ci = {
+        bobnet: [{ name: "test", usual_ms: 6 * 60_000, runs: [run("failed", 130, 125, "4be01c77aa", { agent: "Toad@mbp-1", branch: "v2" }), run("cancelled", 300, 290, "0c19dd27aa"), run("queued", null, null, "1111111222")] }],
+        helix: [
+          { name: "ci", usual_ms: 9 * 60_000, runs: [run("running", 4, null, "7c1e2a9d01", { agent: "Howard" }), ...before(5)] },
+          { name: "e2e", runs: [run("passed", 66, 52, "57e7002bfa"), ...before(2)] },
+          { name: "lint", runs: [run("running", 2, null, "7c1e2a9d01")] },
+          { name: "nightly", runs: [run("cancelled", 30, 20, "57e7002bfa")] },
+          { name: "pages", runs: [run("queued", null, null, "7c1e2a9d01", { url: null })] },
+          { name: "waiting", runs: [run("queued", 3, null, null)] },
+        ],
+      };
+      await open([laptop("mbp-1", 0, { workers: [howard] })]);
+      await go("#overview");
+      await answer();
+    });
+    afterAll(() => {
+      ci = {};
+    });
+
+    it("says each workflow's latest run in words, its mark and tone, a passed one too, from the board's CI and no laptop's", () => {
+      expect([...$("ci").querySelectorAll("li")].map((li) => [li.querySelector(".ci-p")!.textContent, li.querySelector(".ci-wf b")!.textContent, li.querySelector(".ci-mark")!.textContent, li.dataset["tone"]])).toEqual([
+        ["BobNet", "test", "✕", "bad"], ["Helix", "ci", "◔", "run"], ["", "e2e", "✓", "ok"], ["", "lint", "◔", "run"], ["", "nightly", "●", "idle"], ["", "pages", "○", "idle"], ["", "waiting", "○", "idle"],
+      ]);
+      expect(["test", "ci", "e2e", "lint", "nightly", "pages", "waiting"].map(words)).toEqual([
+        "failed 2h 5m ago", "running 4m · usually 9 min", "passed 52m ago", "running 2m", "cancelled 20m ago", "queued", "queued 3m",
+      ]);
+      expect(row("test").querySelector(".ci-wf")!.textContent).toBe("✕test on v2");
+      // A laptop's own report of CI is read nowhere on it.
+      FakeSocket.last.frame({ t: "board", laptop: "mbp-1", at: iso(0), board: { ...board, ci: [{ ...board.ci[0]!, name: "from-a-laptop" }] } });
+      expect(view().textContent).not.toContain("from-a-laptop");
+      expect(view().querySelectorAll(".ov-side > section.ov-ci")).toHaveLength(1);
+    });
+
+    it("draws the runs before it as dots, newest first, five at most, each with its title", () => {
+      expect(dots("ci")).toEqual(["ok", "ok", "ok", "ok", "ok"]);
+      expect(dots("e2e")).toEqual(["ok", "ok"]);
+      expect(dots("nightly")).toEqual([]);
+      // Cancelled filled, queued hollow, neither of them red.
+      expect(dots("test")).toEqual(["idle", "idle hollow"]);
+      expect([...row("test").querySelectorAll(".ci-dot")].map((d) => d.getAttribute("title"))).toEqual(["cancelled · 0c19dd2 · 4h 50m ago", "queued · 1111111"]);
+    });
+
+    it("says who landed it when the board knows, links the run when it has one, and has no failure line", () => {
+      expect(row("test").querySelector(".ci-st .muted")!.textContent).toBe(" · 4be01c7 · Toad's land");
+      expect(row("ci").querySelector(".ci-st .muted")!.textContent).toBe(" · 7c1e2a9 · Howard's land");
+      expect(row("e2e").querySelector(".ci-st .muted")!.textContent).toBe(" · 57e7002");
+      for (const a of row("test").querySelectorAll("a")) expect([a.getAttribute("href"), a.getAttribute("target")]).toEqual(["https://github.com/x/y/actions/runs/4be01c77aa", "_blank"]);
+      expect([...row("test").querySelectorAll("a")].map((a) => a.textContent)).toEqual(["test", "Run ↗"]);
+      expect(row("pages").querySelectorAll("a")).toHaveLength(0);
+      expect([...row("test").children].map((c) => c.className)).toEqual(["ci-p", "ci-wf", "ci-st", "ci-hist", "ci-link"]);
+      expect(view().textContent).not.toMatch(/\$\d/);
+    });
+
+    it("turns only a running run's mark, and not at all under reduced motion", () => {
+      expect([...$("ci").querySelectorAll(".ci-mark.spin")].map((m) => m.nextElementSibling!.textContent)).toEqual(["ci", "lint"]);
+      const css = readFileSync(join(import.meta.dirname, "../public/style.css"), "utf8");
+      const rules = css.split("\n").filter((l) => l.includes(".ci-mark.spin"));
+      expect(rules).toEqual(["@media (prefers-reduced-motion: no-preference) { .ci-mark.spin { animation: spin 1.6s linear infinite; } }"]);
+    });
+
+    it("has no row for a project with no CI, and no card with none at all or from an older broker", async () => {
+      ci = { bobnet: [], helix: ci["helix"] };
+      await reread();
+      expect([...$("ci").querySelectorAll("li")].map((li) => li.querySelector(".ci-p")!.textContent)).not.toContain("BobNet");
+      ci = {};
+      await reread();
+      expect($("ci")).toBeNull();
+      expect(view().querySelector(".ov-ci")).toBeNull();
+    });
   });
 
   describe("an agent's row: its detail, and a worker's question whole (BOB-177; BOB-121 AC14)", () => {

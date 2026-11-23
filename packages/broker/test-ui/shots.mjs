@@ -1,4 +1,4 @@
-// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5) and its follow-ups (the CI line under Working now), a cut question opened (BOB-31), a question's edits (BOB-119), a laptop's last cleanup (BOB-123), an answer's toast (BOB-111) at phone, tablet and desktop
+// Screenshots of the roadmap's gates (BOB-7), triage and capture (BOB-8), bugs (BOB-10), the overview and roadmap (BOB-3), Waits on you (BOB-5), a cut question opened (BOB-31), a question's edits (BOB-119), a laptop's last cleanup (BOB-123), an answer's toast (BOB-111) at phone, tablet and desktop
 // widths, against a fake broker in the page holding a copy of BobNet's board (2026-11-14; its backlog
 // 2026-11-15). The page is public/ as served.
 //   node test-ui/shots.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob7-*.png, bob8-*.png, bob10-*.png, bob3-*.png)
@@ -314,9 +314,6 @@ function fakeBroker() {
       { laptop: "ubu1", at: iso(0), snapshot: { supervisor: { started_at: iso(300), concurrency: 3, active: 0, queued: 0 }, workers: [], pending: [], usage: [] } },
     ];
   }
-  // Now's CI banner, now a line under Working now (BOB-5 as built 3): one run in progress, one failed.
-  if (window.CI) dashboard.boards.push({ laptop: "mbp-1", at: iso(0), board: { project: "bobnet", ref: "f90256f0", backlog: null, sessions: [], runs: [], baseline: null, commits: [],
-    ci: [{ name: "test", status: "in_progress", conclusion: null, created_at: iso(4), sha: "1a2b3c4d5e6f" }, { name: "e2e", status: "completed", conclusion: "failure", created_at: iso(12), sha: "9f8e7d6c5b4a" }] } });
 
   class FakeSocket extends EventTarget {
     static OPEN = 1;
@@ -390,7 +387,6 @@ const all = [
   ["bob5-overview", "overview", [], true],
   ["bob5-overview-answer", "overview", [(p) => p.locator("#needs li", { hasText: "two companies" }).getByRole("button", { name: "Answer" }).click()], false],
   ["bob5-capture-blocks-use", "triage/bobnet", capture, false],
-  ["bob5-ci-line", "overview", [(p) => p.locator(".ov-now").scrollIntoViewIfNeeded()], false],
   // BOB-31 (design/BOB-31/spec.md): Needs you folded; Q-1 open and the permission opened by a tap on its text;
   // the same dark; answering Q-1 after redraws; Waits on you with Q-1's context open and A-12's line breaks.
   ["bob31-c1-needs-cut", "overview", [], false, null, ".ov-needs"],
@@ -439,7 +435,6 @@ try {
       if (name.endsWith("-nosup")) await page.addInitScript(() => (window.NOSUP = true));
       if (name.startsWith("bob5") || name.startsWith("bob111")) {
         await page.addInitScript(() => (window.BOB5 = true));
-        if (name === "bob5-ci-line") await page.addInitScript(() => (window.CI = true));
         await page.addInitScript({ path: join(here, "../../../design/BOB-1/sample/records.js") });
       }
       if (name.startsWith("bob3acc") || name.startsWith("bob5") || name.startsWith("bob111") || name.startsWith("bob31") || name.startsWith("bob44")) {

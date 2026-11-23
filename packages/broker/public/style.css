@@ -327,7 +327,40 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
 /* Overview: needs you and working now side by side, then one full-width row per project (spec: Overview; notes 31-34) */
 .ov { display: grid; gap: 22px; }
 @media (min-width: 900px) { .ov { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .ov-proj { grid-column: 1 / -1; } }
+.ov-side { display: grid; gap: 22px; align-content: start; min-width: 0; }
 .ov h2 { margin-bottom: 8px; }
+/* CI: a line per workflow, its last run in words, the runs before it as dots (BOB-121 spec 2.4) */
+.ci-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.ci-row { display: grid; grid-template-columns: 5.5em minmax(9em, auto) minmax(0, 1fr) auto 3.1em; gap: 2px 12px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.ci-row:not(:has(.ci-p)) { grid-template-columns: minmax(9em, auto) minmax(0, 1fr) auto 3.1em; }
+.ci-list > .ci-row:first-child { border-top: 0; }
+.ci-p { font-weight: 600; overflow-wrap: anywhere; }
+.ci-wf { min-width: 0; overflow-wrap: anywhere; }
+.ci-wf b { font-weight: 600; }
+.ci-name { color: var(--text); text-decoration: none; }
+.ci-name:hover { text-decoration: underline; }
+.ci-mark { display: inline-block; width: 1.2em; font-weight: 700; text-align: center; margin-right: 3px; }
+.ci-row[data-tone="ok"] :is(.ci-mark, .ci-word) { color: var(--ok); }
+.ci-row[data-tone="bad"] :is(.ci-mark, .ci-word) { color: var(--bad); font-weight: 600; }
+.ci-row[data-tone="run"] :is(.ci-mark, .ci-word) { color: var(--accent); }
+.ci-row[data-tone="idle"] :is(.ci-mark, .ci-word) { color: var(--idle); }
+.ci-hist { display: inline-flex; gap: 3px; align-items: center; }
+.ci-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); display: inline-block; }
+.ci-dot.ok { background: var(--ok); }
+.ci-dot.bad { background: var(--bad); }
+.ci-dot.run { background: var(--accent); }
+.ci-dot.hollow { background: transparent; box-shadow: inset 0 0 0 1.5px var(--idle); }
+.ci-link { font-size: 13px; color: var(--accent); white-space: nowrap; }
+@media (prefers-reduced-motion: no-preference) { .ci-mark.spin { animation: spin 1.6s linear infinite; } }
+@media (max-width: 1099px) {
+  .ci-row { grid-template-columns: 5em minmax(0, 1fr) auto; }
+  .ci-row .ci-st { grid-column: 2 / -1; grid-row: 2; }
+  .ci-row .ci-hist { grid-row: 1; grid-column: 3; }
+  .ci-row:not(:has(.ci-p)) { grid-template-columns: minmax(0, 1fr) auto; }
+  .ci-row:not(:has(.ci-p)) .ci-st { grid-column: 1 / -1; }
+  .ci-row:not(:has(.ci-p)) .ci-hist { grid-column: 2; }
+  .ci-row .ci-link { display: none; }
+}
 .ov .card { gap: 0; padding: 4px 14px 10px; }
 .badge[data-state="question"], .badge[data-state="action"], .badge[data-state="review"], .badge[data-state="permission"] { color: var(--warn); }
 .lines { list-style: none; margin: 0; padding: 0; display: grid; }
@@ -619,8 +652,6 @@ pre.handoff { margin: 0; max-height: 360px; overflow: auto; white-space: pre-wra
 .stale-banners { display: grid; gap: 8px; }
 .stale-banners a { color: var(--accent); text-decoration: none; white-space: nowrap; }
 .stale-banners a:hover { text-decoration: underline; }
-.ov .ci-line { border-top: 0; padding-top: 4px; }
-.ov .ci-line[data-failed] { color: var(--bad); }
 .events details.chg .show { color: var(--accent); font-size: 12.5px; }
 .events details.chg del, .events details.chg .new { display: block; white-space: pre-wrap; font-size: 12.5px; margin-top: 4px; overflow-wrap: anywhere; }
 .more-btn { justify-self: start; }
