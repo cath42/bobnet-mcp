@@ -10,20 +10,18 @@
 </head>
 <body>
   <header>
-    <h1>BobNet</h1>
+    <h1><a href="#overview">BobNet</a></h1>
     <nav id="tabs">
       <a href="#overview">Overview</a>
-      <a href="#waits">Waits on you <span class="count" id="waits-count"></span></a>
+      <a href="#needs">Needs you <span class="count" id="needs-n"></span></a>
       <a href="#status">Status</a>
       <a href="#roadmap">Roadmap</a>
-      <a href="#feature">Feature</a>
+      <a href="#feature">Features</a>
       <a href="#triage">Triage</a>
       <a href="#usage">Usage</a>
-      <a href="#sessions">Sessions</a>
     </nav>
-    <select id="project" aria-label="Project" hidden></select>
     <button type="button" class="primary capture-btn" id="capture-open" aria-haspopup="dialog" hidden>+ Capture</button>
-    <span id="conn" class="conn" data-state="connecting">connecting</span>
+    <a id="conn" class="conn" href="#laptops" title="Laptops, agents and rules" data-state="connecting">connecting</a>
   </header>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <main id="view"></main>

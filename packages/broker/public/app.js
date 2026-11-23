@@ -26,7 +26,7 @@ const state = {
   hist: new Map(),
   /** Triage's filter (all, bugs, none or a release) and whether past 25 rows show. */
   triage: { filter: "all", all: false },
-  /** Waits on you: the project picked, and the one answer form open with what Casper has put in it so far (notes 40). */
+  /** Needs you: the project picked, and the one answer form open with what Casper has put in it so far (notes 40). */
   waitsProject: "all",
   answering: null,
   /** Needs you lines shown whole, and Waits items with their context open ("ctx:" + id): kept for the tab's life (BOB-31). */
@@ -221,6 +221,28 @@ function current() {
   const e = all.find((x) => x.board.project === state.project) ?? all[0];
   return e ? { ...e.board, laptop: e.laptop } : null;
 }
+/** The project a page shows: the hash's, else the one last picked on a page, else the first with a board; null before the list is read. */
+function pageProject() {
+  const keys = (svc.projects ?? []).map((p) => p.key);
+  return [hashPath()[1], state.project, current()?.project, keys[0]].find((k) => keys.includes(k)) ?? null;
+}
+/** A project's laptop board, none when no laptop has sent one. */
+function laptopBoard(key) {
+  const e = projects().find((x) => x.board.project === key);
+  return e ? { ...e.board, laptop: e.laptop } : null;
+}
+/**
+ * A page's project switch (spec 2.0): one picked, and picking another stays on the page. The pick is also
+ * what Roadmap, Triage, Usage, Features and Capture open on next, when their link names no project.
+ */
+function projectSwitch(key, to) {
+  return h("span", { class: "seg projects" }, svc.projects.map((q) => h("button", { type: "button", "aria-pressed": String(q.key === key), onclick: () => {
+    Object.assign(state, { project: q.key, inc: null, release: null });
+    location.hash = to(q.key);
+  } }, q.name)));
+}
+/** The switch at the top of a page that has no bar of its own; none with one project. */
+const switchBar = (key, to) => (key && svc.projects.length > 1 ? h("div", { class: "bar-row" }, projectSwitch(key, to)) : null);
 
 /** The latest session (a build, design, review or retro), and the two before it of the same kind, to compare with. */
 function sessionsOf(b) {
@@ -306,7 +328,7 @@ function lanesOf(b, m, inc) {
 /** Opens Usage with the context chart on one run (or, with no run, on a role). */
 function showRun(w) {
   state.chart = { mode: "agent", role: w.role, run: w.id ?? null };
-  location.hash = "usage";
+  location.hash = w.project ? `usage/${w.project}` : "usage";
 }
 
 
@@ -374,15 +396,18 @@ function viewFeature() {
   // `#feature/<project>/<id>`: a feature in the service opens on its steps; one on a Backlog.md board opens as before.
   const id = hashPath()[1];
   const route = featureRoute();
-  if (route) return viewServiceFeature(route.p, route.ref);
-  if (id) state.inc = id;
-  const b = current();
-  if (!b?.backlog) return [empty(b)];
+  const bar = (key) => switchBar(key, (k) => `#feature/${k}`);
+  if (route) return [bar(route.p.key), ...viewServiceFeature(route.p, route.ref)];
+  // `#feature/<project>`, where the switch goes, is that project's feature view.
+  const key = pageProject();
+  if (id && id !== key) state.inc = id;
+  const b = key ? laptopBoard(key) : current();
+  if (!b?.backlog) return [bar(key), empty(b)];
   const m = backlogModel(b);
   const open = m.items.filter((x) => x.type === "increment" && x.status !== "Done" && m.kids(x.id).length);
   const curInc = m.cur?.name.split(" ")[0];
   const inc = m.byId.get(state.inc) ?? m.byId.get(curInc) ?? open[0];
-  if (!inc) return [empty(b)];
+  if (!inc) return [bar(key), empty(b)];
   const ks = m.kids(inc.id);
   const cols = [{ key: "Draft", name: "Draft" }, { key: "Ready", name: "Ready" }, { key: "In Progress", name: "In progress", live: true }, { key: "In Review", name: "Built, awaiting review" }, { key: "Done", name: "Done" }];
   // An agent on it, or commits on main this session, put a task in progress before the board's own move.
@@ -411,6 +436,7 @@ function viewFeature() {
   });
   const ws = m.runningOnInc(inc.id), onFeature = ws.filter((w) => refsOf(w).includes(inc.id));
   return [
+    bar(key),
     h("div", { class: "bar-row" },
       h("label", { for: "inc-pick", class: "muted" }, "Feature"),
       h("select", { id: "inc-pick", onchange: (e) => { state.inc = e.target.value; render(); } }, (open.includes(inc) ? open : [inc, ...open]).map((x) => h("option", { value: x.id, selected: x.id === inc.id || null }, `${x.id} · ${x.title.slice(0, 70)}`))),
@@ -913,6 +939,7 @@ function viewBacklogRoadmap() {
   const pick = (v, label) => h("button", { type: "button", "aria-pressed": String(release === v), onclick: () => { state.release = v; render(); } }, label);
   const live = running().filter((w) => w.project === b.project);
   return [
+    switchBar(b.project, (k) => `#roadmap/${k}`),
     h("div", { class: "bar-row" }, h("span", { class: "seg" }, ...b.backlog.milestones.map((ms) => pick(ms.id, ms.title)), pick("none", "Not in a release"), pick("all", "All open")),
       h("span", { class: "muted" }, live.length ? `${live.length} agent${live.length > 1 ? "s" : ""} working, shown on their feature` : "No agents working right now")),
     board(cols, [{ cells }]),
@@ -958,12 +985,14 @@ async function loadProjects() {
   try {
     svc.projects = (await boardOp({ op: "projects" })).projects;
     svc.error = null;
+    followOldLink();
   } catch (err) {
     // Every view lists by it: a failed read keeps the last list, never an empty one (ADR 0012 §2).
     svc.error = err.message;
   }
   for (const key of svc.roadmaps.keys()) loadRoadmap(key);
   for (const key of backlogs.keys()) loadBacklog(key);
+  if (rules.rows || rules.error) loadRules();
   // What waits on Casper counts on the tab, on every view (waiting-on-casper 3).
   if (svc.projects?.length || ov.rows) loadOverview();
   // The Status tab's dot and the Overview's line read from the start, on every view.
@@ -988,7 +1017,7 @@ async function loadRoadmap(key) {
   if (svc.again.delete(key)) await loadRoadmap(key);
 }
 
-/** `#roadmap/<project>[/edit]`, or the project picked above, when its board is in the service; null for a Backlog.md one. */
+/** `#roadmap/<project>[/edit]`, or the project last picked on a page, when its board is in the service; null for a Backlog.md one. */
 function roadmapRoute() {
   const [, key, mode] = hashPath();
   const keys = (svc.projects ?? []).map((p) => p.key);
@@ -1029,7 +1058,7 @@ function viewBoardRoadmap(key, edit) {
   const to = (k, e) => `#roadmap/${k}${e ? "/edit" : ""}`;
   const rels = data?.releases ?? [];
   const bar = h("div", { class: "bar-row" },
-    svc.projects.length > 1 ? h("span", { class: "seg" }, svc.projects.map((q) => h("button", { type: "button", "aria-pressed": String(q.key === key), onclick: () => (location.hash = to(q.key, edit)) }, q.name))) : h("b", null, p.name),
+    svc.projects.length > 1 ? projectSwitch(key, (k) => to(k, edit)) : h("b", null, p.name),
     data ? h("span", { class: "muted" }, `${plural(rels.length, "release")} · ${plural(data.features.length, "feature")}`) : null,
     rels.length || data?.features.length ? h("button", { type: "button", class: `gates-btn${edit ? " primary" : ""}`, onclick: () => (location.hash = to(key, !edit)) }, edit ? "Done" : "Edit your gates") : null);
   if (!data) return [bar, h("div", { class: "empty-card" }, "Reading the board…")];
@@ -1351,7 +1380,7 @@ function viewOverview() {
           !ov.waits && !perms.length ? h("p", { class: "muted", style: "margin:0" }, "Reading the board…")
             : holding ? h("ul", { class: "lines", id: "needs" }, oldestFirst(perms, blocking).map((x) => (x.p ? permissionLine(x.p) : waitLine(x.w))))
             : h("p", { class: "muted", style: "margin:0" }, "Nothing is held up by you."),
-          holding || rest ? h("a", { class: "more", href: "#waits" }, rest ? `${holding} ${holding === 1 ? "holds" : "hold"} work up · ${rest} more when you have time →` : "Waits on you →") : null)),
+          holding || rest ? h("a", { class: "more", href: "#needs" }, rest ? `${holding} ${holding === 1 ? "holds" : "hold"} work up · ${rest} more when you have time →` : "Needs you →") : null)),
       h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length || "")),
         now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map(nowLine)), queuedLine(), ciLines()) : h("div", { class: "empty-card" }, "No agent is working.", queuedLine(), ciLines())),
       h("section", { class: "ov-proj" }, h("h2", null, "Projects"),
@@ -1360,17 +1389,19 @@ function viewOverview() {
   ];
 }
 
+/** The laptops that stopped reporting within a day, oldest report first. */
+const quietLaptops = () => [...state.laptops.values()].filter((l) => staleReport(l) && brokerNow() - Date.parse(l.at) < REQUEST_MAX_AGE_MS).sort((a, b) => a.at.localeCompare(b.at));
 /**
- * A laptop that stopped reporting, at the top of Overview and Waits (design/BOB-48/spec.md §1): one banner each, oldest
+ * A laptop that stopped reporting, at the top of Overview and Needs you (design/BOB-48/spec.md §1): one banner each, oldest
  * report first, or one for three or more. Only for a report under a day old, and never while this page itself is cut off.
  */
 function staleBanners() {
   if ($("conn").dataset.state !== "live") return null;
-  const quiet = [...state.laptops.values()].filter((l) => staleReport(l) && brokerNow() - Date.parse(l.at) < REQUEST_MAX_AGE_MS).sort((a, b) => a.at.localeCompare(b.at));
+  const quiet = quietLaptops();
   if (!quiet.length) return null;
   const forYou = (l) => livePending(l).filter((p) => p.tier === "human").length;
   const waits = (n, one) => (n ? h("span", null, `${plural(n, "request")} for you from ${one ? "it" : "them"} wait${n === 1 ? "s" : ""} until ${one ? "it reports" : "they report"} again`) : null);
-  const link = () => h("a", { href: "#sessions" }, "Laptops →");
+  const link = () => h("a", { href: "#laptops" }, "Laptops →");
   const when = (l) => new Date(l.at).toLocaleString();
   const banners = quiet.length < 3
     ? quiet.map((l) => h("div", { class: "banner", title: `No report from ${l.laptop}'s supervisor since ${when(l)}. Its requests are not offered here until it reports; nothing is lost.` },
@@ -1407,8 +1438,8 @@ function waitLine(w) {
   const id = waitId(w);
   const whole = [
     w.recommended ? h("div", { class: "rec" }, h("b", null, "Recommended "), w.recommended.text) : null,
-    // The context stays on Waits on you, where it opens: it can be pages long (BOB-31 spec).
-    w.context ? h("a", { href: "#waits", class: "more-t", onclick: () => { state.whole.add(`ctx:${id}`); saveWhole(); scrollAfter = `c-${id}`; } }, "Its context, on Waits on you →") : null,
+    // The context stays on Needs you, where it opens: it can be pages long (BOB-31 spec).
+    w.context ? h("a", { href: "#needs", class: "more-t", onclick: () => { state.whole.add(`ctx:${id}`); saveWhole(); scrollAfter = `c-${id}`; } }, "Its context, on Needs you →") : null,
   ];
   return needsLine(id, w.ref, badge(st, label), w.text, whole,
     `${projectName(w.project)}${w.feature ? ` · ${w.feature}` : ""} · ${w.kind === "bug" ? "blocks use" : `holds up ${heldNames(w)}`}${w.stale ? ` · unchanged ${since(w.stale.changed_at)}` : ""}`,
@@ -1681,7 +1712,7 @@ const EDIT_FIELD = { text: "text", context: "context", needed_before: "needed be
 const editField = (f) => EDIT_FIELD[f.startsWith("option") ? "options" : f] ?? f.replace(/_/g, " ");
 
 /**
- * A question's or action's edits (BOB-119), one render for Waits on you and the item page: "edited ×n", muted on
+ * A question's or action's edits (BOB-119), one render for Needs you and the item page: "edited ×n", muted on
  * its meta row, opening its edits newest first: when, who and what, the reason on its own line, the old text struck
  * through. None when it was never edited, or on an older broker's waits. `opened` opens it whatever he left it as.
  */
@@ -1792,7 +1823,7 @@ function answeredItem(x) {
     h("div", { class: "meta" }, h("span", null, `${leadOf(x.project)} got a message`), h("span", null, "from the dashboard")));
 }
 
-function viewWaits() {
+function viewNeeds() {
   if (svc.projects && !ov.waits && !ov.loading) loadOverview();
   const keys = (svc.projects ?? []).map((p) => p.key);
   const perms = humanPerms().map((p) => ({ p, project: workers().find((x) => x.id === p.worker_id)?.project ?? null, since: p.created_at }));
@@ -2069,7 +2100,7 @@ function answers(rows, needsHref, okHref, all) {
       h("span", { class: "sub" }, v.sub)));
 }
 
-/** A Needs you line, as the Overview's: it opens Waits on you at the item, where he answers (choice 12). */
+/** A Needs you line, as the Overview's: it opens Needs you at the item, where he answers (choice 12). */
 function needLine(x, since, withProject) {
   const id = x.p ? permId(x.p) : waitId(x.w);
   const go = () => (scrollAfter = `w-${id}`);
@@ -2087,7 +2118,7 @@ function needLine(x, since, withProject) {
     meta = [withProject ? projectName(x.w.project) : null, x.w.feature, x.w.kind === "bug" && x.w.blocking ? "blocks use" : x.w.blocking ? `holds up ${heldNames(x.w)}` : "when you have time"];
   }
   return h("li", { class: "hold need", dataset: { blocking: String(x.blocking), id } }, badgeEl,
-    h("a", { class: "l-t", href: "#waits", onclick: go }, text),
+    h("a", { class: "l-t", href: "#needs", onclick: go }, text),
     h("span", { class: "l-m" }, meta.filter(Boolean).join(" · "), " · ", h("span", { class: "age" }, stAge(x.since)),
       x.since < since ? h("span", { class: "before" }, `from before ${stClock(since)}`) : null));
 }
@@ -2119,8 +2150,8 @@ function viewStatus() {
             rows.length ? h("div", { class: "pcards" }, rows.map(pcard)) : h("div", { class: "empty-card" }, "No project's board on BobNet yet.")),
           h("section", { id: "status-needs" }, h("h2", null, "Needs you ", h("span", { class: "count" }, String(n.count))),
             n.count ? h("div", { class: "card st-card" }, h("ul", { class: "lines ov-needs st-needs" }, n.list.map((x) => needLine(x, reply.since, true))),
-              n.more ? cutLine(n.more, true, h("a", { href: "#waits" }, "on Waits on you")) : null,
-              h("a", { class: "more-t sec-link", href: "#waits" }, "Answer them on Waits on you →"))
+              n.more ? cutLine(n.more, true, h("a", { href: "#needs" }, "on Needs you")) : null,
+              h("a", { class: "more-t sec-link", href: "#needs" }, "Answer them on Needs you →"))
               : h("div", { class: "empty-card" }, "Nothing waits on you.")),
         ],
       h("div", { class: "caught-foot" },
@@ -2195,8 +2226,8 @@ const SECTION = {
       title: "Needs you", count: String(n.count), scope: "open now", tone: n.blocking ? "bad" : n.count ? "warn" : "ok",
       headline: n.count ? `${n.blocking} hold${n.blocking === 1 ? "s" : ""} work up · oldest ${stAge(n.list[0].since)}` : "Nothing waits on you",
       el: n.count ? [h("ul", { class: "lines ov-needs st-needs" }, n.list.map((x) => needLine(x, reply.since, false))),
-        n.more ? cutLine(n.more, true, h("a", { href: "#waits" }, "on Waits on you")) : null,
-        h("a", { class: "more-t sec-link", href: "#waits" }, "Answer on Waits on you →")] : stEmpty("Nothing waits on you.", true),
+        n.more ? cutLine(n.more, true, h("a", { href: "#needs" }, "on Needs you")) : null,
+        h("a", { class: "more-t sec-link", href: "#needs" }, "Answer on Needs you →")] : stEmpty("Nothing waits on you.", true),
     };
   },
   done(row, reply) {
@@ -2359,7 +2390,7 @@ async function loadBacklog(key) {
   if (svc.again.delete(busy)) await loadBacklog(key);
 }
 
-/** `#triage/<project>[/edit]`, or the project picked above, or the first in the service. */
+/** `#triage/<project>[/edit]`, or the project last picked on a page, or the first in the service. */
 function triageRoute() {
   const [, key, mode] = hashPath();
   const keys = (svc.projects ?? []).map((p) => p.key);
@@ -2388,7 +2419,7 @@ function viewTriage() {
   const f = rels.some((r) => r.ref === state.triage.filter) || ["all", "bugs", "none"].includes(state.triage.filter) ? state.triage.filter : "all";
   const pick = (v, label) => h("button", { type: "button", "aria-pressed": String(f === v), onclick: () => { state.triage = { filter: v, all: false }; render(); } }, label);
   const bar = h("div", { class: "bar-row" },
-    svc.projects.length > 1 ? h("span", { class: "seg" }, svc.projects.map((q) => h("button", { type: "button", "aria-pressed": String(q.key === key), onclick: () => (location.hash = to(q.key, edit)) }, q.name))) : h("b", null, p.name),
+    svc.projects.length > 1 ? projectSwitch(key, (k) => to(k, edit)) : h("b", null, p.name),
     all.length ? h("span", { class: "seg filters" }, pick("all", `All ${all.length}`), pick("bugs", `Bugs ${all.filter(isBug).length}`),
       rels.map((r) => pick(r.ref, `${r.ref} ${all.filter((d) => d.release === r.ref).length}`)), pick("none", `No release ${all.filter((d) => !d.release).length}`)) : null,
     all.length && rels.length ? h("button", { type: "button", class: `gates-btn${edit ? " primary" : ""}`, onclick: () => (location.hash = to(key, !edit)) }, edit ? "Done" : "Edit your gates") : null);
@@ -2468,12 +2499,12 @@ const refused = (err) => REFUSED.has(err.code);
 /** The first sentence, or line, is the title; the whole text is kept as Casper's words. */
 const titleOf = (text) => text.split(/(?<=[.!?])\s|\n/)[0].trim().slice(0, 300);
 
-/** The project on screen, else the one picked above, else the first. */
+/** The project on screen, else the one last picked on a page, else the first. */
 function captureProject() {
   const keys = (svc.projects ?? []).map((p) => p.key);
   const [v, key] = hashPath();
-  if ((v === "roadmap" || v === "triage") && keys.includes(key)) return key;
-  if (v === "feature" && featureRoute()) return featureRoute().p.key;
+  if (["roadmap", "triage", "usage"].includes(v) && keys.includes(key)) return key;
+  if (v === "feature") return featureRoute()?.p.key ?? pageProject() ?? keys[0];
   if (v === "triage") return triageRoute()?.key ?? keys[0];
   if (v === "roadmap") return roadmapRoute()?.key ?? keys[0];
   return keys.includes(state.project) ? state.project : keys[0];
@@ -2509,7 +2540,7 @@ function openCapture(back = null) {
     bug ? h("div", { class: "opt" }, h("span", null, "Where"), h("span", { class: "seg" }, ["staging", "production"].map((w) => h("button", { type: "button", "aria-pressed": String(where === w), onclick: () => keep(() => { where = w; draw(); }) }, w))),
       h("label", { class: "check" }, h("input", { type: "checkbox", id: "cap-blocks", checked: blocks || null, onchange: (e) => keep(() => { blocks = e.target.checked; draw(); }) }), "Blocks use")) : null,
     back ? h("p", { class: "note refused" }, `Not captured: ${back.message}`) : null,
-    h("p", { class: "note" }, bug && blocks ? "A bug that blocks use also goes on Waits on you until it is slotted or closed." : `It goes to ${nameOf(key)}'s triage list, with your words as you typed them. Release and feature are set at triage.`),
+    h("p", { class: "note" }, bug && blocks ? "A bug that blocks use also goes on Needs you until it is slotted or closed." : `It goes to ${nameOf(key)}'s triage list, with your words as you typed them. Release and feature are set at triage.`),
     h("div", { class: "foot" }, button("Cancel", "", () => dlg.close()), h("button", { type: "submit", class: "primary" }, "Capture"))));
   const submit = () => {
     const text = $("cap-text").value.trim();
@@ -2531,7 +2562,7 @@ function openCapture(back = null) {
 /** Never asks back: with the board away, it waits on this device and goes when the board is back. */
 async function capture(key, name, op) {
   // A bug that blocks use also waits on Casper (spec: Capture; BOB-8 as built, gap 3).
-  const also = op.blocks_use ? ", and on Waits on you" : "";
+  const also = op.blocks_use ? ", and on Needs you" : "";
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     setQueued([...queued(), op]);
     return toast(`Captured. It waits on this device and goes to ${name}'s triage list when the board is back.`);
@@ -2765,8 +2796,9 @@ function sessionBars(b) {
 }
 
 function viewUsage() {
-  const b = current();
-  if (!b) return [empty(null)];
+  const key = pageProject(), bar = switchBar(key, (k) => `#usage/${k}`);
+  const b = key ? laptopBoard(key) : current();
+  if (!b) return [bar, empty(null)];
   const { cur, prev } = sessionsOf(b);
   const runs = sessionRuns(b, cur?.name), prevRuns = sessionRuns(b, prev?.name);
   const roles = new Map();
@@ -2779,6 +2811,7 @@ function viewUsage() {
   const rmax = rows.length ? sum(rows[0][1].rs, workerTokens) : 1;
   const pickRole = (role) => { state.chart = { mode: "agent", role, run: null }; render(); $("ctx")?.scrollIntoView({ block: "start" }); };
   return [
+    bar,
     h("section", { id: "ctx" }, h("h2", null, "Context size per call"), contextChart(b)),
     h("section", null, h("h2", null, `Agents in ${cur?.name ?? "the session"} `, h("span", { class: "count" }, `${fmtTokens(sum(runs, workerTokens))} tokens so far${prev ? ` · ${prev.name} ${fmtTokens(sum(prevRuns, workerTokens))}` : ""}`)),
       h("div", { class: "table-wrap" }, h("table", { class: "stack", id: "roles" },
@@ -3078,20 +3111,16 @@ function viewRules() {
 // ---------- Views ----------
 
 // Now left the tabs (BOB-5 as built 3): "#now" opens the Overview, as any unknown view does.
-const VIEWS = { overview: viewOverview, waits: viewWaits, status: viewStatus, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions, rules: viewRules };
+const VIEWS = { overview: viewOverview, needs: viewNeeds, status: viewStatus, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, laptops: () => [...viewSessions(), ...viewRules()] };
 const viewName = () => (VIEWS[hashPath()[0]] ? hashPath()[0] : "overview");
 
 function render() {
   const v = viewName();
   for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${v}`);
   // Nothing waits: the count leaves the tab.
-  $("waits-count").textContent = waitCount() || "";
+  $("needs-n").textContent = waitCount() || "";
   $("tabs").querySelector('a[href="#status"]').dataset.new = String(statusNew());
-  const keys = [...new Set([...projects().map((e) => e.board.project), ...(svc.projects ?? []).map((p) => p.key)])];
-  const shown = v === "roadmap" ? (roadmapRoute()?.key ?? current()?.project) : v === "triage" ? triageRoute()?.key : current()?.project;
-  const pick = $("project");
-  pick.hidden = keys.length < 2;
-  pick.replaceChildren(...keys.map((k) => h("option", { value: k, selected: k === shown || null }, k)));
+  drawConn();
   // Capture always has a project (Casper, 2026-11-13): only once the service has one.
   $("capture-open").hidden = !svc.projects?.length;
   $("view").classList.toggle("wide", v === "overview" || v === "feature" || v === "roadmap" || v === "status");
@@ -3109,25 +3138,29 @@ function render() {
 }
 
 /**
- * Where a link from before the new pages goes (spec 2.0), or null for one that still stands. The pages
- * ask it as they switch over (BOB-174, 175): until then #sessions and #waits open what they did.
+ * Where a link from before the new pages goes (spec 2.0, build C), or null for one that still stands. #features
+ * and #project come with their pages (BOB-182, BOB-185). A `%` that decodes to nothing is taken as it is.
  */
 function oldLink(hash) {
-  const [path] = hash.replace(/^#/, "").split("?");
-  const [v, ...rest] = path.split("/");
-  const ps = svc.projects ?? [];
-  const pageOf = (p) => (p ? `#project/${p.key}` : "#overview");
-  const feature = (ref) => { const p = ps.find((x) => ref.startsWith(`${x.prefix}-`)) ?? ps.find((x) => x.draft_prefix && ref.startsWith(`${x.draft_prefix}-`)); return p ? `#feature/${p.key}/${ref}` : null; };
+  const [v, ...rest] = hash.replace(/^#/, "").split("?")[0].split("/");
   if (v === "waits") return { to: "#needs" };
-  if (v === "sessions") {
-    // A session's name starts with its feature ("LAND-41 build 3").
-    const x = decodeURIComponent(rest[0] ?? "");
-    const to = ps.some((p) => p.key === x) ? `#project/${x}` : (feature(x.split(" ")[0]) ?? pageOf(ps[0]));
-    return { to, toast: "Sessions moved: who ran is on each project's page; laptops and agents are under Laptops." };
+  if (v === "sessions") return { to: "#laptops", toast: "Sessions moved: laptops and agents are under Laptops." };
+  if (v === "rules") return { to: "#laptops" };
+  if (v === "feature" && rest.length === 1 && rest[0]) {
+    let ref = rest[0];
+    try { ref = decodeURIComponent(ref); } catch {}
+    const ps = svc.projects ?? [];
+    const p = ps.find((x) => ref.startsWith(`${x.prefix}-`)) ?? ps.find((x) => x.draft_prefix && ref.startsWith(`${x.draft_prefix}-`));
+    if (p) return { to: `#feature/${p.key}/${ref}` };
   }
-  if (v === "feature" && !rest[0]) return { to: "#features" };
-  if (v === "feature" && rest.length === 1) return { to: feature(rest[0]) ?? "#features" };
   return null;
+}
+/** Takes the page from an old link to where it goes, in the same history entry; a feature's once the projects are read. */
+function followOldLink() {
+  const old = oldLink(location.hash);
+  if (!old) return;
+  history.replaceState(null, "", old.to);
+  if (old.toast) toast(old.toast);
 }
 
 /** Live frames re-render at most a few times a second, and not while a chart is pointed at or a menu is open. */
@@ -3142,19 +3175,12 @@ function scheduleRender() {
 }
 
 $("capture-open").addEventListener("click", () => openCapture());
-$("project").addEventListener("change", (e) => {
-  state.project = e.target.value;
-  state.inc = null;
-  state.release = null;
-  if (viewName() === "roadmap" && location.hash.includes("/")) location.hash = "roadmap";
-  if (viewName() === "triage" && location.hash.includes("/")) location.hash = "triage";
-  render();
-});
 /** An element to bring into view after the next view change: the Overview's context link lands on it (BOB-31). */
 let scrollAfter = null;
 let lastView = viewName();
 window.addEventListener("hashchange", () => {
   holdRender = false;
+  followOldLink();
   hashWeigh();
   // A toast that stays (I'm caught up's) goes with the tab it was made on.
   if (viewName() !== lastView && $("toast").dataset.keep === "true") $("toast").hidden = true;
@@ -3188,7 +3214,16 @@ function setConn(st) {
   // Leaving live hides the stale banners (design/BOB-48/spec.md §1): every laptop looks stale to a page cut off.
   if ($("conn").dataset.state === "live" && st !== "live") scheduleRender();
   $("conn").dataset.state = st;
-  $("conn").textContent = st === "live" ? "live" : st === "down" ? "reconnecting" : "connecting";
+  drawConn();
+}
+/** The connection, a link to Laptops: "live · 2 laptops", or "1 quiet" in warn while one has stopped reporting (spec 2.0). */
+function drawConn() {
+  const el = $("conn"), st = el.dataset.state;
+  const quiet = st === "live" ? quietLaptops().length : 0;
+  const up = [...state.laptops.values()].filter((l) => !staleReport(l)).length;
+  el.toggleAttribute("data-quiet", quiet > 0);
+  el.replaceChildren(quiet ? `${quiet} quiet` : st === "live" ? "live" : st === "down" ? "reconnecting" : "connecting",
+    st === "live" && !quiet && up ? h("span", { class: "lap-n" }, ` · ${plural(up, "laptop")}`) : "");
 }
 
 function request(t) {
@@ -3262,7 +3297,7 @@ function connect() {
         const next = { ...prev, ...f.peer, connected_at: f.event === "joined" ? new Date().toISOString() : f.peer.online ? prev.connected_at : null };
         if (i === -1) state.peers.push(next);
         else state.peers[i] = next;
-        if (viewName() === "sessions") scheduleRender();
+        if (viewName() === "laptops") scheduleRender();
         break;
       }
       case "report":
@@ -3288,11 +3323,11 @@ function connect() {
         break;
       case "update":
         state.updates = [f.item, ...state.updates].slice(0, UPDATES_MAX);
-        if (viewName() === "sessions") scheduleRender();
+        if (viewName() === "laptops") scheduleRender();
         break;
       case "traffic":
         state.traffic = [f.item, ...state.traffic].slice(0, 50);
-        if (viewName() === "sessions") scheduleRender();
+        if (viewName() === "laptops") scheduleRender();
         break;
     }
   });
@@ -3309,6 +3344,7 @@ function connect() {
 }
 
 try { state.weigh = localStorage.getItem(WEIGH) === "1"; } catch {}
+followOldLink();
 hashWeigh();
 render();
 connect();

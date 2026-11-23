@@ -126,7 +126,7 @@ describe("Now's parts on the Overview (BOB-5 as built 3)", () => {
   it("connects to its own host, shows live once rendered, and opens the Overview on #now, Now gone from the tabs", () => {
     expect(FakeSocket.last.url).toMatch(/\/v1\/ws$/);
     expect($("conn").dataset["state"]).toBe("live");
-    expect([...$("tabs").querySelectorAll("a")].map((a) => a.textContent!.replace(/\d+$/, "").trim())).toEqual(["Overview", "Waits on you", "Status", "Roadmap", "Feature", "Triage", "Usage", "Sessions"]);
+    expect([...$("tabs").querySelectorAll("a")].map((a) => a.textContent!.replace(/\d+$/, "").trim())).toEqual(["Overview", "Needs you", "Status", "Roadmap", "Features", "Triage", "Usage"]);
     expect($("tabs").querySelector("[aria-current]")!.getAttribute("href")).toBe("#overview");
     expect($("working").textContent).toContain("records-agent");
     expect(view().textContent).not.toMatch(/\$\d/);
@@ -243,7 +243,7 @@ describe("Usage", () => {
 
 describe("Sessions", () => {
   it("keeps the feeds, ended workers, laptops and agents for debugging, agent text as text", async () => {
-    await go("#sessions");
+    await go("#laptops");
     expect($("updates").textContent).toContain("started");
     expect($("traffic").textContent).toContain("supervisor@mbp-1 → Bob@mbp-1");
     expect($("laptops").textContent).toContain("1 of 3 slots busy");
@@ -266,7 +266,7 @@ describe("Sessions", () => {
     const card = [...$("laptops").children].find((c) => c.textContent!.includes("mbp-2"))!;
     expect(card.textContent).toContain("no recent report");
     expect(card.textContent).toContain("1 request waits until it reports again");
-    await go("#waits");
+    await go("#needs");
     expect(view().querySelector('[data-ref="r_old"]')).toBeNull();
     await go("#overview");
     expect(view().textContent).not.toContain("rm -rf dist");
@@ -275,12 +275,12 @@ describe("Sessions", () => {
     // Reporting again makes it live: its requests are offered.
     ws.frame({ t: "report", laptop: "mbp-2", at: iso(0), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [old], usage: [] } });
     await settle();
-    await go("#waits");
+    await go("#needs");
     expect(view().querySelector('[data-ref="r_old"]')).not.toBeNull();
     ws.frame({ t: "report", laptop: "mbp-2", at: iso(10), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [], usage: [] } });
     heartbeat();
     await settle();
-    await go("#sessions");
+    await go("#laptops");
   });
 
   it("judges a report's age by the broker's clock, not this device's (Toad, BOB-26 minor 6)", async () => {
@@ -289,11 +289,11 @@ describe("Sessions", () => {
     // This device runs 10 min ahead: the report the broker stamps now reads 10 min old here, and is live.
     ws.frame({ t: "report", laptop: "mbp-1", at: iso(10), snapshot: { ...dashboard.laptops[0]!.snapshot, pending: [ask] } });
     await settle();
-    await go("#waits");
+    await go("#needs");
     expect(view().querySelector('[data-ref="r_skew"]')).not.toBeNull();
     ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
     await settle();
-    await go("#sessions");
+    await go("#laptops");
   });
 
   it("shows each laptop's last cleanup on its row: when, why, freed per project (unknown as such), failed and skipped steps; none yet (BOB-123 AC 6)", async () => {
@@ -355,7 +355,7 @@ describe("laptops that stopped reporting, dead requests and a stuck board outbox
 
   it("never shows, offers or counts a request over a day old, from a fresh laptop too (BOB-26; ADR 0012 §1)", async () => {
     await reports([], { pending: [ask("r_dead", DAY + 60), ask("r_live", 5)] });
-    await go("#waits");
+    await go("#needs");
     expect(view().querySelector('[data-ref="r_live"]')).not.toBeNull();
     expect(view().querySelector('[data-ref="r_dead"]')).toBeNull();
     await go("#overview");
@@ -366,13 +366,13 @@ describe("laptops that stopped reporting, dead requests and a stuck board outbox
 
   it("shows a stale laptop's banner on Overview and Waits, counting only its requests for you under a day old (BOB-23 AC 3)", async () => {
     await reports([["mbp-2", 12, snap([ask("r_h", 30), ask("r_o", 30, "orchestrator"), ask("r_old", DAY + 5)])]]);
-    for (const page of ["#overview", "#waits"]) {
+    for (const page of ["#overview", "#needs"]) {
       await go(page);
       expect(banners()).toHaveLength(1);
       const b = banners()[0]!;
       expect([...b.children].map((c) => c.textContent)).toEqual(["mbp-2 stopped reporting", "last report 12m ago", "1 request for you from it waits until it reports again", "Laptops →"]);
       expect(b.querySelector("b")).not.toBeNull();
-      expect(b.querySelector("a")!.getAttribute("href")).toBe("#sessions");
+      expect(b.querySelector("a")!.getAttribute("href")).toBe("#laptops");
       expect(b.querySelector("[data-ago]")!.getAttribute("data-ago")).toBe(iso(12));
       expect(b.getAttribute("title")).toMatch(/^No report from mbp-2's supervisor since .+\. Its requests are not offered here until it reports; nothing is lost\.$/);
     }
@@ -380,7 +380,7 @@ describe("laptops that stopped reporting, dead requests and a stuck board outbox
     await go("#overview");
     expect(view().firstElementChild!.classList.contains("stale-banners")).toBe(true);
     // Its card: all tiers under a day, marked, never offered.
-    await go("#sessions");
+    await go("#laptops");
     expect(card("mbp-2").querySelector(".meta")!.textContent).toContain("2 requests wait until it reports again");
     // With none for you: no count, never "0".
     await reports([["mbp-2", 12, snap([ask("r_o", 30, "orchestrator")])]]);
@@ -410,13 +410,13 @@ describe("laptops that stopped reporting, dead requests and a stuck board outbox
     await reports([["ubu1", DAY + 10, snap([ask("r_u", DAY + 60)])], ["mini", DAY + 10, snap()], ["mbp-2", DAY + 10, snap([ask("r_h", DAY + 30)])]]);
     await go("#overview");
     expect(view().querySelector(".stale-banners")).toBeNull();
-    await go("#sessions");
+    await go("#laptops");
     expect(card("mbp-2").querySelector(".badge")!.textContent).toBe("no recent report");
     expect(card("mbp-2").querySelector(".meta")!.textContent).not.toContain("wait");
   });
 
   it("shows a stuck board outbox on the Laptops card: at 6 min, not at 2, with its last error when there is one (BOB-28 AC 1)", async () => {
-    await go("#sessions");
+    await go("#laptops");
     const line = () => card("mbp-1").querySelector(".outbox");
     await reports([], { board_outbox: { count: 14, oldest_at: iso(2), code: "unavailable" } });
     expect(line()).toBeNull();
@@ -448,7 +448,7 @@ describe("laptops that stopped reporting, dead requests and a stuck board outbox
     reply({ ...dashboard, boards: [] });
     for (const b of dashboard.boards) FakeSocket.last.frame({ t: "board", ...b });
     await settle();
-    await go("#sessions");
+    await go("#laptops");
     expect($("laptops").querySelector(".empty")).toBeNull();
   });
 });
@@ -615,7 +615,7 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     reply(pending("projects")[0]!, { projects: [{ key: "bobnet", name: "BobNet", prefix: "BOB", draft_prefix: null, lead: "Mario@mbp-1", po: "Peach@mbp-1", repos: [] }] });
     await settle();
     expect(view().querySelector(".col-h")).toBeNull();
-    expect([...$("project").querySelectorAll("option")].map((o) => o.textContent)).toEqual(["bobnet"]);
+    expect([...view().querySelectorAll(".bar-row > b")].map((b) => b.textContent)).toEqual(["BobNet"]);
   });
 
   it("numbers releases and features in their order, folds done ones and a closed release, and puts features in no release last", async () => {
@@ -898,8 +898,11 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
 
   it("lists the rules for every project and makes an agent global admin, poe@mbp-1 by default (BOB-118)", async () => {
     const rule = (agent: string, over: Record<string, unknown> = {}) => ({ project: "*", agent, laptop: "mbp-1", role: "backup", read: true, items: "none", fields: [], sessions: false, questions: false, admin: false, ...over });
-    await go("#rules");
-    const [read] = pending("grants");
+    // Laptops has drawn them before: what it asked then is answered, and a change reads them again.
+    for (const f of FakeSocket.last.sent.filter((x) => (x["op"] as { op?: string } | undefined)?.op === "grants")) reply(f as never, { grants: [] });
+    await go("#laptops");
+    if (!pending("grants").length) FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 2, refs: [] });
+    const read = pending("grants").at(-1);
     expect(read!.op).toEqual({ op: "grants", project: "bobnet" });
     reply(read!, { grants: [rule("Mario"), { ...rule("Peach"), project: "bobnet", admin: true }] });
     await settle();
@@ -1057,8 +1060,8 @@ describe("triage and capture (BOB-8)", () => {
     const blocks = dlg.querySelector("#cap-blocks") as HTMLInputElement;
     blocks.checked = true;
     blocks.dispatchEvent(new Event("change"));
-    // With the Waits on you tab, the wording BOB-8 held back comes back (spec, BOB-8 as built, gap 3).
-    expect(dlg.textContent).toContain("A bug that blocks use also goes on Waits on you until it is slotted or closed.");
+    // With the tab of what waits on Casper, the wording BOB-8 held back comes back (spec, BOB-8 as built, gap 3).
+    expect(dlg.textContent).toContain("A bug that blocks use also goes on Needs you until it is slotted or closed.");
     expect((dlg.querySelector("textarea") as HTMLTextAreaElement).value).toContain("The roadmap jumps");
     dlg.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
     const cap = pending("capture").at(-1);
@@ -1068,7 +1071,7 @@ describe("triage and capture (BOB-8)", () => {
     });
     reply(cap!, { ref: "BOB-131", seq: 210, duplicate: false, dropped: [] });
     await settle();
-    expect($("toast").textContent).toBe("Captured as BOB-131 in BobNet's triage list, and on Waits on you.");
+    expect($("toast").textContent).toBe("Captured as BOB-131 in BobNet's triage list, and on Needs you.");
     await lists([backlogItem(31, { ref: "BOB-131", title: "The roadmap jumps on a phone.", type: "bug", blocks_use: true, created_at: new Date().toISOString(), casper_words: cap!.op["casper_words"] }), ...items]);
     // Bugs first, then oldest: the new bug comes after the two older ones.
     const fresh = rows()[2]!;
@@ -1308,9 +1311,9 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     expect(lines[1]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · holds up Fixes, review 2");
     expect(lines[2]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-3 · blocks use");
     expect(view().querySelector(".ov-needs .more")!.textContent).toBe("4 hold work up · 1 more when you have time →");
-    expect(view().querySelector(".ov-needs .more")!.getAttribute("href")).toBe("#waits");
+    expect(view().querySelector(".ov-needs .more")!.getAttribute("href")).toBe("#needs");
     // The count shows on the tab too (waiting-on-casper 3).
-    expect($("waits-count").textContent).toBe("5");
+    expect($("needs-n").textContent).toBe("5");
   });
 
   it("lists who is working on what from their declared sessions, and others as Other work", () => {
@@ -1356,7 +1359,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     expect(view().querySelector(".ov-needs .card")!.textContent).toBe("Nothing is held up by you.");
     expect($("needs-count").textContent).toBe("");
     // Nothing waits: the count leaves the tab.
-    expect($("waits-count").textContent).toBe("");
+    expect($("needs-n").textContent).toBe("");
     expect(view().querySelector(".ov-now .empty-card")!.textContent).toBe("No agent is working.CI running: helix · ci on 437577e9 · started 5m ago");
     const cells = [...view().querySelectorAll('.prow[data-project="bobnet"] .pc')].map((c) => c.textContent);
     expect(cells[2]).toBe("Open nowno feature open");
@@ -1405,14 +1408,14 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       snap.workers = [worker({ state: "waiting-approval" })] as never;
       snap.pending = [perm] as never;
       FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
-      await go("#waits");
+      await go("#needs");
       await answerWith([a15, gate, q258, bug, q259]);
     });
 
     it("is the second tab, with its count, and lists everything across projects in two groups, each oldest first (#1, #2, #6)", () => {
-      expect([...document.querySelectorAll("#tabs a")].map((a) => a.getAttribute("href")).slice(0, 2)).toEqual(["#overview", "#waits"]);
-      expect(document.querySelector('#tabs a[aria-current]')!.getAttribute("href")).toBe("#waits");
-      expect($("waits-count").textContent).toBe("6");
+      expect([...document.querySelectorAll("#tabs a")].map((a) => a.getAttribute("href")).slice(0, 2)).toEqual(["#overview", "#needs"]);
+      expect(document.querySelector('#tabs a[aria-current]')!.getAttribute("href")).toBe("#needs");
+      expect($("needs-n").textContent).toBe("6");
       expect(refs("waits-holding")).toEqual(["BOB-12", "Q-258", "BOB-31", "r_9"]);
       expect(refs("waits-rest")).toEqual(["A-15", "Q-259"]);
       expect([...$("waits-holding").querySelectorAll(".badge")].map((b) => b.textContent)).toEqual(["review gate", "question", "bug · blocks use", "permission"]);
@@ -1485,7 +1488,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect($("toast").textContent).toBe("Answered Q-258. Recorded as your words; sent to Bob.Undo");
       // It leaves its group at once, and the counts drop.
       expect(refs("waits-holding")).toEqual(["BOB-12", "BOB-31", "r_9"]);
-      expect($("waits-count").textContent).toBe("5");
+      expect($("needs-n").textContent).toBe("5");
       await answerWith([a15, gate, bug, q259], [{ project: "helix", ref: "Q-258", kind: "question", text: q258.text, key: "b", words: words.trim(), at: iso(0) }]);
       const done = $("waits-answered").querySelector("li")!;
       expect(done.querySelector(".said")!.textContent).toBe(`You picked Ship it, note the gap“${words.trim()}”`);
@@ -1628,7 +1631,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect(line.querySelector(".l-m")!.textContent).toBe("Helix · LAND-41 · holds up records-agent (Fixes)");
       snap.workers = [worker({ state: "waiting-approval" })] as never;
       FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
-      await go("#waits");
+      await go("#needs");
     });
 
     it("answers from the Overview's Needs you in place, with the same form (notes 40)", async () => {
@@ -1648,7 +1651,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     };
 
     it("marks an edited question \"edited ×n\" on its meta row, its edits newest first, and moves the A-24 case to Holds work up once it holds (BOB-119 AC 4, AC 7)", async () => {
-      await go("#waits");
+      await go("#needs");
       // As helix A-24 was asked: needed before the demo, holding nothing, so it waited as if nothing were held up.
       const a24 = wait("A-24", "action", "Book the demo room", false, { project: "helix", feature: null, since: iso(60 * 6), needed_before: { text: "the demo" }, asked_by: "Peach@mbp-1", edits: [] });
       await reread([a15, gate, q258, bug, q259, a24]);
@@ -1778,7 +1781,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
         snap.workers = [worker({ id: "w_6", name: "Luigi", project: "bobnet", role: "engineer", session: "BOB-6 build A", task_ref: null, task_refs: [] })] as never;
         snap.pending = [];
         FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
-        await go("#waits");
+        await go("#needs");
         await reread([bob27, bob28, land9, q14, a30, gate6, q15]);
       });
 
@@ -1834,8 +1837,8 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
         expect(lines[0]!.querySelector(".l-m")!.textContent).toBe("BobNet · BOB-6 · holds up Luigi (build A) · unchanged 2d 3h");
         expect([...lines[0]!.querySelectorAll("button:not([hidden])")].map((b) => b.textContent)).toEqual(["Answer"]);
         expect(view().querySelector(".ov-needs .more")!.textContent).toBe("2 hold work up · 5 more when you have time →");
-        expect($("waits-count").textContent).toBe("7");
-        await go("#waits");
+        expect($("needs-n").textContent).toBe("7");
+        await go("#needs");
       });
 
       it("closes his open form when its question is withdrawn, and keeps his draft in the toast (spec b, Withdrawn)", async () => {
@@ -1867,7 +1870,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     });
 
     it("drops an item once its source says it is answered, keeping nothing of its own (#3)", async () => {
-      await go("#waits");
+      await go("#needs");
       FakeSocket.last.frame({ t: "board_changed", project: "helix", seq: 99, refs: ["Q-258"] });
       await answerWith([]);
       const snap = structuredClone(dashboard.laptops[0]!.snapshot);
@@ -1875,7 +1878,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
       await settle();
       expect($("waits-holding").textContent).toBe("Holds work up Nothing is held up by you.");
-      expect($("waits-count").textContent).toBe("");
+      expect($("needs-n").textContent).toBe("");
       // Back to one project in the service, as the tests after these expect.
       FakeSocket.last.frame({ t: "board_changed", project: "nowhere", seq: 100, refs: [] });
       for (const f of pending("projects", true)) reply(f, { projects: [project] });
@@ -1954,8 +1957,8 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       expect(t.hasAttribute("title")).toBe(false);
       const whole = line("bobnet/Q-1").querySelector(".whole")!;
       expect(whole.querySelector(".rec")!.textContent).toBe("Recommended Accept the scale test now");
-      expect(whole.querySelector("a")!.textContent).toBe("Its context, on Waits on you →");
-      expect(whole.querySelector("a")!.getAttribute("href")).toBe("#waits");
+      expect(whole.querySelector("a")!.textContent).toBe("Its context, on Needs you →");
+      expect(whole.querySelector("a")!.getAttribute("href")).toBe("#needs");
       // The context itself stays off the Overview.
       expect(view().querySelector(".ov-needs")!.textContent).not.toContain("700 tasks");
       expect(shown("bobnet/Q-1")).toEqual(["Show less", "Answer"]);
@@ -2020,7 +2023,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 7, refs: [] });
       await answerWith([q1, q7, gate, a12, old]);
       expect(line("bobnet/Q-1").classList.contains("open")).toBe(true);
-      await go("#waits");
+      await go("#needs");
       await go("#overview");
       expect(line("bobnet/Q-1").classList.contains("open")).toBe(true);
       // Answered elsewhere: it leaves the waits, and what is open forgets it.
@@ -2033,7 +2036,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     });
 
     it("on Waits on you keeps the line breaks and shows Show context / Hide context only where there is a context", async () => {
-      await go("#waits");
+      await go("#needs");
       const it = (ref: string) => view().querySelector(`.waits li[data-ref="${ref}"]`)!;
       expect(it("Q-1").querySelector(".q")!.textContent).toBe(long);
       expect(it("A-12").querySelector(".q")!.textContent).toBe("Sign the Mapbox terms.\nThe link is in lead/questions.md.");
@@ -2057,7 +2060,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       more("bobnet/Q-1").click();
       const into = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
       (line("bobnet/Q-1").querySelector(".whole a") as HTMLAnchorElement).click();
-      await go("#waits");
+      await go("#needs");
       const it = view().querySelector('.waits li[data-ref="Q-1"]')!;
       expect(it.querySelector(".ctx")!.textContent).toBe(context);
       expect(it.querySelector(".ctx-row button")!.textContent).toBe("Hide context");
@@ -2489,7 +2492,7 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
     // helix's board is a laptop's: the read has no helix, so it has no card (ADR 0012 §2).
     expect([...view().querySelectorAll(".pcard")].map((c) => c.getAttribute("data-project"))).toEqual(["bobnet"]);
     const needs = $("status-needs");
-    expect(needs.querySelector("li .l-t")!.getAttribute("href")).toBe("#waits");
+    expect(needs.querySelector("li .l-t")!.getAttribute("href")).toBe("#needs");
     expect(needs.querySelector("li .l-m")!.textContent).toContain("BobNet · BOB-9 · holds up");
     expect(needs.querySelector("li .before")!.textContent).toMatch(/^from before /);
     // Read only: no answer button here.
@@ -2708,7 +2711,7 @@ describe("the laptop mark (BOB-44; design/BOB-44/laptop-mark.md)", () => {
     const snap = { supervisor: { started_at: iso(300), concurrency: 3, active: 0, queued: 0 }, pending: [], usage: [],
       workers: [worker({ id: "w_e", name: "Luigi", project: "bobnet", role: "luigi", state: "done", ended_at: iso(2), remote_from: "supervisor@mbp-1", remote_by: "poe" })] };
     FakeSocket.last.frame({ t: "report", laptop: "ubu1", at: iso(0), snapshot: snap });
-    await go("#sessions");
+    await go("#laptops");
     const card = [...$("ended").querySelectorAll(".card")].find((c) => c.textContent!.includes("w_e"))!;
     expect(card.querySelector(".sub")!.textContent).toMatch(/· ubu1 · .*· spawned by poe@mbp-1$/);
     FakeSocket.last.frame({ t: "report", laptop: "ubu1", at: iso(0), snapshot: { ...snap, workers: [] } });
@@ -2718,13 +2721,20 @@ describe("the laptop mark (BOB-44; design/BOB-44/laptop-mark.md)", () => {
 });
 
 describe("usage data (BOB-172: no screen of its own yet)", () => {
+  /** The service's list, read again: a project the page doesn't know is asked for. */
+  const projectsAre = async (list: Array<[string, string]>) => {
+    FakeSocket.last.frame({ t: "board_changed", project: "not-known" });
+    const projects = list.map(([key, prefix]) => ({ key, name: key, prefix, draft_prefix: null, lead: null, po: null, repos: [] }));
+    FakeSocket.last.frame({ t: "ok", rid: FakeSocket.last.sent.findLast((f) => (f["op"] as { op?: string } | undefined)?.op === "projects")!["rid"], result: { projects } });
+    await settle();
+  };
   type Tok = { input: number; output: number; cache_read: number; cache_write: number };
   type Pt = { raw: Tok; weighted: number; unknown: number; calls: number; so_far?: boolean; by_model: Array<Record<string, unknown>>; by_role: Array<Record<string, unknown>>; top: unknown[] };
   type Line = { calls: number; pts: number[]; known?: number };
   type Run = { id: string; started_at: string; ended_at: string | null; first: number; ctx: Line; live?: boolean };
   type Detail = { project: string; day: string; days: string[]; runs: Run[]; baseline: unknown; lost: number };
   let app: {
-    state: { weigh: boolean };
+    state: { weigh: boolean; project: string | null; laptops: Map<string, unknown> };
     usageFigure: (x: unknown) => number;
     setWeigh: (on: boolean) => void;
     usageSoFar: (reply: unknown, key: string) => { points: Pt[] };
@@ -2898,26 +2908,106 @@ describe("usage data (BOB-172: no screen of its own yet)", () => {
     expect([long!.ctx.calls, app.callAt(long!.ctx, 0), app.callAt(long!.ctx, 399)]).toEqual([500, 101, 500]);
   });
 
-  it("resolves the old links, and #sessions and #waits still open their pages until the new ones are in", async () => {
-    // A project the page doesn't know is asked for: the service's list is this test's.
-    FakeSocket.last.frame({ t: "board_changed", project: "not-known" });
-    const projects = [["bobnet", "BOB"], ["helix", "LAND"]].map(([key, prefix]) => ({ key, name: key, prefix, draft_prefix: null, lead: null, po: null, repos: [] }));
-    FakeSocket.last.frame({ t: "ok", rid: FakeSocket.last.sent.findLast((f) => (f["op"] as { op?: string } | undefined)?.op === "projects")!["rid"], result: { projects } });
-    await settle();
-    const toast = "Sessions moved: who ran is on each project's page; laptops and agents are under Laptops.";
-    expect(app.oldLink("#sessions")).toEqual({ to: "#project/bobnet", toast });
-    expect(app.oldLink("#sessions/helix")).toEqual({ to: "#project/helix", toast });
-    expect(app.oldLink("#sessions/BOB-4%20build%202")).toEqual({ to: "#feature/bobnet/BOB-4", toast });
-    expect(app.oldLink("#sessions/gone")).toEqual({ to: "#project/bobnet", toast });
+  it("resolves the old links to pages that exist in build C, a malformed % too (BOB-174 c2, c7)", async () => {
+    await projectsAre([["bobnet", "BOB"], ["helix", "LAND"]]);
+    const toast = "Sessions moved: laptops and agents are under Laptops.";
+    for (const hash of ["#sessions", "#sessions/helix", "#sessions/BOB-4%20build%202", "#sessions/gone", "#sessions/%E0%A4%A"]) expect(app.oldLink(hash)).toEqual({ to: "#laptops", toast });
+    expect(app.oldLink("#rules")).toEqual({ to: "#laptops" });
     expect(app.oldLink("#waits")).toEqual({ to: "#needs" });
     expect(app.oldLink("#feature/BOB-4")).toEqual({ to: "#feature/bobnet/BOB-4" });
-    expect(app.oldLink("#feature")).toEqual({ to: "#features" });
-    expect([app.oldLink("#feature/bobnet/BOB-4"), app.oldLink("#usage"), app.oldLink("")]).toEqual([null, null, null]);
-    await go("#sessions");
-    expect($("tabs").querySelector("a[aria-current]")!.getAttribute("href")).toBe("#sessions");
-    expect($("ended")).not.toBeNull();
-    await go("#waits");
-    expect($("tabs").querySelector("a[aria-current]")!.getAttribute("href")).toBe("#waits");
+    expect(app.oldLink("#feature/LAND-50")).toEqual({ to: "#feature/helix/LAND-50" });
+    // The Features tab and a feature of no project's stay today's feature view (until BOB-185), as do the links that stand.
+    for (const hash of ["#feature", "#feature/helix", "#feature/%E0%A4%A", "#feature/XX-1", "#feature/bobnet/BOB-4", "#laptops", "#usage", ""]) expect(app.oldLink(hash)).toBeNull();
+  });
+
+  it("takes an old link to where it goes, with the toast of one whose parts moved (BOB-174 c2, AC13)", async () => {
+    const t = $("toast");
+    for (const [from, to, said] of [["#sessions", "#laptops", true], ["#sessions/helix", "#laptops", true], ["#rules", "#laptops", false], ["#waits", "#needs", false], ["#feature/BOB-4", "#feature/bobnet/BOB-4", false]] as const) {
+      t.hidden = true;
+      await go(from);
+      expect(location.hash).toBe(to);
+      expect(t.hidden).toBe(!said);
+      if (said) expect(t.textContent).toBe("Sessions moved: laptops and agents are under Laptops.");
+    }
+    // A malformed % opens a page all the same.
+    await go("#sessions/%E0%A4%A");
+    expect(location.hash).toBe("#laptops");
+    await go("#feature/%E0%A4%A");
+    expect(view().children.length).toBeGreaterThan(0);
+  });
+
+  it("highlights Features on a feature's page and no tab on Laptops; the connection goes to Laptops, warn with a quiet one (BOB-174 c1, c3)", async () => {
+    await go("#feature/bobnet/BOB-4");
+    expect([...$("tabs").querySelectorAll("[aria-current]")].map((a) => a.textContent)).toEqual(["Features"]);
+    await go("#laptops");
+    expect($("tabs").querySelector("[aria-current]")).toBeNull();
+    expect($("laptops")).not.toBeNull();
+    const conn = $("conn");
+    conn.dataset["state"] = "live";
+    expect(conn.getAttribute("href")).toBe("#laptops");
+    const report = (laptop: string, at: number) => FakeSocket.last.frame({ t: "report", laptop, at: iso(at), snapshot: dashboard.laptops[0]!.snapshot });
+    const names = [...app.state.laptops.keys()];
+    // Every laptop this file has reported so far reports now.
+    for (const l of [...names, "ubu1"]) report(l, 0);
+    await settle();
+    const n = new Set([...names, "ubu1"]).size;
+    expect(conn.textContent).toBe(`live · ${n} laptops`);
+    expect(conn.hasAttribute("data-quiet")).toBe(false);
+    report("ubu1", 9);
+    report("mbp-1", 0);
+    await settle();
+    expect(conn.textContent).toBe("1 quiet");
+    expect(conn.hasAttribute("data-quiet")).toBe(true);
+    // The page's own state stays live: a quiet laptop isn't a dropped connection.
+    expect(conn.dataset["state"]).toBe("live");
+    report("ubu1", 60 * 30);
+    report("mbp-1", 0);
+    await settle();
+    // Over a day old it is gone, not quiet, as its banner.
+    expect(conn.textContent).toBe(`live · ${n - 1} laptop${n === 2 ? "" : "s"}`);
+    expect(document.getElementById("project")).toBeNull();
+    expect([...$("tabs").querySelectorAll("a")].some((a) => /Sessions|Waits/.test(a.textContent!))).toBe(false);
+  });
+
+  it("reaches a second project on Roadmap, Triage, Usage and the feature view without the dropdown, and stays on the page (BOB-174 c6)", async () => {
+    const pressed = () => view().querySelector('.seg.projects [aria-pressed="true"]')?.textContent;
+    const to = async (name: string) => {
+      ([...view().querySelectorAll<HTMLButtonElement>(".seg.projects button")].find((b) => b.textContent === name)!).click();
+      window.dispatchEvent(new Event("hashchange"));
+      await settle();
+    };
+    for (const page of ["roadmap", "triage", "usage", "feature"]) {
+      await go(`#${page}/bobnet`);
+      expect([page, pressed()]).toEqual([page, "bobnet"]);
+      await to("helix");
+      expect([page, location.hash, pressed()]).toEqual([page, `#${page}/helix`, "helix"]);
+    }
+    // Usage and the feature view show that project's: helix has a laptop's board, bobnet none here.
+    expect(view().querySelector("#inc-pick")).not.toBeNull();
+    await to("bobnet");
+    expect(view().querySelector("#inc-pick")).toBeNull();
+    await go("#usage/helix");
+    expect($("ctx")).not.toBeNull();
+    await to("bobnet");
+    expect($("ctx")).toBeNull();
+    // The pick is what a page opens on when its link names no project, as the dropdown's was.
+    await go("#triage");
+    expect(pressed()).toBe("bobnet");
+    await go("#feature/bobnet/BOB-4");
+    expect(pressed()).toBe("bobnet");
+    await to("helix");
+    expect([location.hash, pressed()]).toEqual(["#feature/helix", "helix"]);
+  });
+
+  it("draws the project switch on a Backlog.md roadmap too, and no switch with one project (BOB-174 c6)", async () => {
+    app.state.project = null;
+    await go("#roadmap");
+    expect(view().querySelectorAll(".seg.projects button")).toHaveLength(2);
+    await projectsAre([["helix", "LAND"]]);
+    for (const page of ["#usage", "#feature", "#roadmap"]) {
+      await go(page);
+      expect(view().querySelector(".seg.projects")).toBeNull();
+    }
   });
 });
 
@@ -2963,18 +3053,24 @@ describe("a project the service doesn't have (ADR 0012 §2, BOB-193)", () => {
     FakeSocket.last.frame({ t: "board_changed", project, seq: 1, refs: [] });
     await answer(projects);
   };
-  const picker = () => [...$("project").querySelectorAll("option")].map((o) => o.textContent);
+  /** The projects Triage's switch offers. */
+  const picker = async () => {
+    await go("#triage");
+    const of = [...view().querySelectorAll(".seg.projects button")].map((b) => b.textContent);
+    await go("#overview");
+    return of;
+  };
 
   beforeAll(async () => {
     frames();
     await read("not-known", [bobnet, athletic]);
   });
 
-  it("is on no list and no page, the header's picker included; a listed one with no releases is", async () => {
+  it("is on no list and no page, a page's project switch included; a listed one with no releases is", async () => {
     await go("#overview");
     await answer([bobnet, athletic]);
     expect([...$("plist").querySelectorAll(".prow")].map((r) => r.getAttribute("data-project"))).toEqual(["bobnet", "athletic"]);
-    expect(picker()).toEqual(["bobnet", "athletic"]);
+    expect(await picker()).toEqual(["bobnet", "athletic"]);
     // Neither its CI nor its board's work, on any page that draws a laptop's board.
     expect(view().textContent).not.toMatch(/alexa|sandbox/);
     await go("#status");
@@ -2983,7 +3079,7 @@ describe("a project the service doesn't have (ADR 0012 §2, BOB-193)", () => {
     expect(view().textContent).toContain("No project sandbox on BobNet");
     await go("#usage");
     expect(view().textContent).not.toMatch(/alexa|sandbox/);
-    await go("#sessions");
+    await go("#laptops");
     const sessions = [...view().querySelectorAll(".card, li")].map((x) => x.textContent!);
     expect(sessions.some((t) => /alexa-mcp|sandbox session|sandbox-ci/.test(t))).toBe(false);
     await go("#feature");
@@ -3007,16 +3103,16 @@ describe("a project the service doesn't have (ADR 0012 §2, BOB-193)", () => {
     await read("sandbox", [bobnet, athletic, service("sandbox", "SAN")]);
     expect($("plist").textContent).toContain("sandbox");
     expect(view().textContent).toContain("sandbox-ci");
-    expect(picker()).toContain("sandbox");
+    expect(await picker()).toContain("sandbox");
     await read("not-known", [bobnet, athletic]);
     expect(view().textContent).not.toMatch(/sandbox/);
-    expect(picker()).toEqual(["bobnet", "athletic"]);
+    expect(await picker()).toEqual(["bobnet", "athletic"]);
   });
 
   it("keeps the last list when a read of it fails", async () => {
     await go("#overview");
     await read("not-known", null);
-    expect(picker()).toEqual(["bobnet", "athletic"]);
+    expect(await picker()).toEqual(["bobnet", "athletic"]);
     expect(view().textContent).not.toMatch(/alexa|sandbox/);
   });
 
@@ -3040,7 +3136,7 @@ describe("a project the service doesn't have (ADR 0012 §2, BOB-193)", () => {
   });
 
   it("says the error on every page that lists projects, until the list is read (c2)", async () => {
-    for (const hash of ["#waits", "#usage", "#triage", "#rules", "#roadmap"]) {
+    for (const hash of ["#needs", "#usage", "#triage", "#laptops", "#roadmap"]) {
       await go(hash);
       expect(view().querySelector(".banner.down")!.textContent).toBe("Board unavailableThe board is down");
     }
