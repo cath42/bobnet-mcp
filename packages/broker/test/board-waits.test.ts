@@ -324,7 +324,8 @@ describe("review A's fixes (architecture/bob49/review-A.md B1, M1)", () => {
     const flags = await runInDurableObject(board(), (_, state) => state.storage.sql.exec<{ ref: string }>("SELECT ref FROM wait_flags").toArray().map((r) => r.ref));
     expect(flags).toHaveLength(119);
     expect(flags).not.toContain(refs[0]);
-  });
+    // 120 asks take about a second alone, past 5 s with the other suites running in the land.
+  }, 30_000);
 
   it("tells the PO a fixed bug waits on them, not on Casper, when it goes stale (m2, ADR 0011 §6.9)", async () => {
     const clock = await moveableClock(T0);
