@@ -285,9 +285,15 @@ type SummaryRow = ItemRow & {
   ac_checked: number;
   tasks_total: number | null;
   tasks_done: number | null;
+  own_total: number | null;
+  own_checked: number | null;
+  done_at: string | null;
 };
 
 const SEP = "\u001f";
+
+/** When a Done item was last moved to Done; an imported one's move has no event, so its last change. */
+const DONE_AT = `coalesce((SELECT max(e.at) FROM events e JOIN event_changes c ON c.event = e.seq WHERE e.tbl = 'items' AND e.pk = i.pk AND c.field = 'status' AND c.new = 'Done'), i.updated_at)`;
 
 /** Items as lists show them: counts, never the tasks themselves (board-service 10). */
 const SUMMARY = `
@@ -306,7 +312,10 @@ const SUMMARY = `
         THEN (SELECT count(*) FROM criteria c JOIN items t ON t.pk = c.item WHERE t.parent = i.pk AND t.archived_at IS NULL AND c.section = 'ac' AND c.state = 'checked')
         ELSE 0 END AS ac_checked,
     CASE WHEN i.kind = 'feature' THEN (SELECT count(*) FROM items t WHERE t.parent = i.pk AND t.archived_at IS NULL) END AS tasks_total,
-    CASE WHEN i.kind = 'feature' THEN (SELECT count(*) FROM items t WHERE t.parent = i.pk AND t.archived_at IS NULL AND t.status = 'Done') END AS tasks_done
+    CASE WHEN i.kind = 'feature' THEN (SELECT count(*) FROM items t WHERE t.parent = i.pk AND t.archived_at IS NULL AND t.status = 'Done') END AS tasks_done,
+    CASE WHEN i.kind = 'feature' THEN (SELECT count(*) FROM criteria c WHERE c.item = i.pk) END AS own_total,
+    CASE WHEN i.kind = 'feature' THEN (SELECT count(*) FROM criteria c WHERE c.item = i.pk AND c.state = 'checked') END AS own_checked,
+    CASE WHEN i.kind = 'feature' AND i.status = 'Done' THEN ${DONE_AT} END AS done_at
   FROM items i`;
 
 const ORDERED = "ORDER BY i.ord IS NULL, i.ord, i.pk";
@@ -1367,7 +1376,7 @@ export class BoardStore {
     const counts = this.sql
       .exec<{ n: number }>(
         `SELECT (SELECT count(*) FROM sessions s WHERE s.feature = i.pk) AS n,
-           coalesce((SELECT max(e.at) FROM events e JOIN event_changes c ON c.event = e.seq WHERE e.tbl = 'items' AND e.pk = i.pk AND c.field = 'status' AND c.new = 'Done'), i.updated_at) AS done_at
+           ${DONE_AT} AS done_at
          FROM items i WHERE i.project = ? AND i.kind = 'feature' AND i.status = 'Done' AND i.archived_at IS NULL
            AND EXISTS (SELECT 1 FROM sessions s WHERE s.feature = i.pk)
          ORDER BY done_at DESC LIMIT 20`,
@@ -3688,6 +3697,7 @@ function summary(r: SummaryRow): ItemSummary {
     open_since: r.open_since,
     archived_at: r.archived_at,
     created_at: r.created_at,
+    ...(r.kind === "feature" ? { own: { checked: r.own_checked ?? 0, total: r.own_total ?? 0 }, done_at: r.done_at } : {}),
     ...(r.kind === "backlog" ? triage(r) : {}),
   };
 }

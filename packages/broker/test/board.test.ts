@@ -820,6 +820,49 @@ describe("progress (criterion 5)", () => {
     expect(items!.find((i) => i.ref === f2)!.progress).toEqual({ checked: 0, total: 1 });
     expect((await item(f2)).progress).toEqual({ checked: 0, total: 1 });
   });
+
+  it("gives a feature its own criteria, AC and DoD, beside progress, and a task none (ADR 0014 §3a, BOB-169)", async () => {
+    const { r1 } = await helix();
+    const f = (await ok(owner, { op: "create", project: "helix", kind: "feature", type: "increment", title: "Own", release: r1, criteria: [{ text: "a" }, { text: "b" }, { text: "landed", section: "dod" }] })).ref!;
+    const t = (await ok(owner, { op: "create", project: "helix", kind: "task", type: "task", title: "T", parent: f, criteria: [{ text: "1" }, { text: "2" }, { text: "3" }, { text: "4" }] })).ref!;
+    await ok(owner, { op: "criteria", project: "helix", ref: f, change: { action: "check", n: 1, evidence: "test" } });
+    const row = async () => (await ok(owner, { op: "list", project: "helix", of: "features" })).items!.find((i) => i.ref === f)!;
+    expect(await row()).toMatchObject({ own: { checked: 1, total: 3 }, progress: { checked: 1, total: 6 }, done_at: null });
+    await ok(owner, { op: "criteria", project: "helix", ref: f, change: { action: "check", section: "dod", n: 1, evidence: "test" } });
+    expect(await row()).toMatchObject({ own: { checked: 2, total: 3 }, progress: { checked: 1, total: 6 } });
+    expect((await item(f)).own).toEqual({ checked: 2, total: 3 });
+    const tasks = (await ok(owner, { op: "list", project: "helix", of: "tasks", feature: f })).items!;
+    expect(tasks.map((i) => i.ref)).toEqual([t]);
+    expect("own" in tasks[0]! || "done_at" in tasks[0]!).toBe(false);
+  });
+
+  it("gives a Done feature its latest move to Done, and none once moved back (BOB-169)", async () => {
+    const { f1, t1 } = await helix();
+    const row = async () => (await ok(owner, { op: "list", project: "helix", of: "features" })).items!.find((i) => i.ref === f1)!;
+    const set = (status: "Done" | "In Progress") => ok(owner, { op: "update", project: "helix", ref: f1, set: { status } });
+    const moves = () =>
+      runInDurableObject(board(), (_, state) =>
+        state.storage.sql
+          .exec<{ at: string }>("SELECT e.at FROM events e JOIN event_changes c ON c.event = e.seq JOIN item_refs r ON r.item = e.pk WHERE e.tbl = 'items' AND r.ref = ? AND c.field = 'status' AND c.new = 'Done' ORDER BY e.seq", f1)
+          .toArray()
+          .map((r) => r.at),
+      );
+    expect((await row()).done_at).toBeNull();
+    await set("Done");
+    expect((await row()).done_at).toBe((await moves())[0]);
+    await set("In Progress");
+    expect((await row()).done_at).toBeNull();
+    await new Promise((r) => setTimeout(r, 5));
+    await set("Done");
+    const [first, done] = await moves();
+    expect(done! > first!).toBe(true);
+    expect((await row()).done_at).toBe(done);
+    await new Promise((r) => setTimeout(r, 5));
+    await ok(owner, { op: "update", project: "helix", ref: f1, set: { title: "Renamed later" } });
+    expect((await row()).done_at).toBe(done);
+    await ok(owner, { op: "update", project: "helix", ref: t1, set: { status: "Done" } });
+    expect("done_at" in (await item(t1))).toBe(false);
+  });
 });
 
 describe("sessions", () => {

@@ -692,6 +692,10 @@ export interface ItemSummary {
   open_since: string | null;
   archived_at: string | null;
   created_at: string;
+  /** A feature's own criteria, AC and DoD, not its tasks' (ADR 0014 §3a); a task's or backlog item's row, or an older broker's, has none. */
+  own?: Progress;
+  /** When a feature was last moved to Done; null if it isn't Done. As `own`, a feature's only. */
+  done_at?: string | null;
   /** A backlog item's triage fields, on the triage list's rows (capture 3, 4; spec: Triage); a feature's or task's has none. */
   captured_by?: string | null;
   casper_words?: string | null;
