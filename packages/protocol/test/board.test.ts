@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BOARD_READS, BoardOp, ClientFrame, ItemRef, PeerAddress, SUPERVISOR_OPS, type WaitRecord } from "../src/index.ts";
+import { BOARD_READS, BoardOp, downsample, ClientFrame, ItemRef, PeerAddress, SUPERVISOR_OPS, type WaitRecord } from "../src/index.ts";
 
 describe("BoardOp", () => {
   it("parses an item's create with its criteria, defaulting each to an acceptance criterion", () => {
@@ -100,6 +100,16 @@ describe("BOB-121's reads (ADR 0014 §3, §3a)", () => {
     expect(BoardOp.parse({ op: "usage", project: "helix", days: 90, tz: "Europe/Copenhagen" })).toMatchObject({ days: 90, tz: "Europe/Copenhagen" });
     for (const bad of [{ days: 0 }, { days: 91 }, { days: 1.5 }, { tz: "" }, { tz: "x".repeat(61) }]) expect(BoardOp.safeParse({ op: "usage", ...bad }).success).toBe(false);
     expect(BOARD_READS).toContain("usage");
+  });
+
+  it("takes usage_day for one project and a YYYY-MM-DD day, with usage's bounds, and keeps downsample's rule", () => {
+    expect(BoardOp.parse({ op: "usage_day", project: "helix", day: "2026-11-22" })).toEqual({ op: "usage_day", project: "helix", day: "2026-11-22", days: 30, tz: "UTC" });
+    for (const bad of [{ day: "22-11-2026" }, { day: "2026-11-22", days: 91 }, { day: "2026-11-22", tz: "x".repeat(61) }]) expect(BoardOp.safeParse({ op: "usage_day", project: "helix", ...bad }).success).toBe(false);
+    expect(BoardOp.safeParse({ op: "usage_day", day: "2026-11-22" }).success).toBe(false);
+    expect(BOARD_READS).toContain("usage_day");
+    const kept = downsample(Array.from({ length: 5000 }, (_, i) => i));
+    expect([kept.length, kept[0], kept.at(-1)]).toEqual([2000, 0, 4999]);
+    expect(downsample([1, 2])).toEqual([1, 2]);
   });
 });
 

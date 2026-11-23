@@ -73,3 +73,47 @@ export function cumulative(start: number, end: number, edges: number[]): number[
 export function apportion(total: number, cum: number[]): number[] {
   return cum.slice(1).map((c, i) => Math.round(total * c) - Math.round(total * cum[i]!));
 }
+
+/**
+ * A run's context at each of its calls, from its points evenly taken over them (the runs table's rule):
+ * a call between two points takes the nearer one. Empty when the run recorded none.
+ */
+export function perCall(pts: number[], calls: number): number[] {
+  const n = Math.max(calls, pts.length);
+  if (pts.length === 0 || pts.length === n) return pts;
+  if (pts.length === 1) return new Array<number>(n).fill(pts[0]!);
+  return Array.from({ length: n }, (_, j) => pts[Math.round((j * (pts.length - 1)) / (n - 1))]!);
+}
+
+/** The q-th quantile of sorted values, between the two nearest (as the dashboard's band takes it). */
+export function quantile(sorted: number[], q: number): number {
+  const i = (sorted.length - 1) * q;
+  const lo = sorted[Math.floor(i)]!;
+  return lo + (sorted[Math.ceil(i)]! - lo) * (i % 1);
+}
+
+export function median(values: number[]): number {
+  return values.length ? quantile([...values].sort((a, b) => a - b), 0.5) : 0;
+}
+
+/**
+ * Quantiles of lines call by call, each line from its own first call, while at least `min` lines reach
+ * the call: one array per quantile asked, all of the same length.
+ */
+export function bands(lines: number[][], qs: number[], min = 3): number[][] {
+  const reach = lines.filter((l) => l.length > 0).sort((a, b) => b.length - a.length);
+  const out = qs.map((): number[] => []);
+  for (let k = 0; ; k++) {
+    let n = 0;
+    while (n < reach.length && reach[n]!.length > k) n++;
+    if (n < min) return out;
+    const v = reach.slice(0, n).map((l) => l[k]!).sort((a, b) => a - b);
+    qs.forEach((q, i) => out[i]!.push(Math.round(quantile(v, q))));
+  }
+}
+
+/** A running sum: a day's Total, call by call. */
+export function summed(values: number[]): number[] {
+  let t = 0;
+  return values.map((v) => (t += v));
+}

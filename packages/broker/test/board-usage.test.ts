@@ -207,3 +207,103 @@ describe("the usage read (ADR 0014 §3, BOB-167)", () => {
     ]);
   });
 });
+
+const day = (op: Omit<Extract<BoardOpInput, { op: "usage_day" }>, "op" | "project"> & { project?: string }, caller: BoardCaller = owner) =>
+  ok(caller, { op: "usage_day", project: "helix", ...op });
+const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+const DAY = 24 * H;
+
+describe("the usage_day read (ADR 0014 §3a, BOB-170)", () => {
+  it("gives a day with two roles each role's runs in start order with their first call, and lists roles most calls first", async () => {
+    await fixedClock();
+    await project("helix", "LAND");
+    const s: SessionRef = { feature: await feature("helix", "Usage"), kind: "build", label: "1" };
+    const b2 = await run({ role: "builder", session: s, model: "opus", start: NOW - 2 * H, end: NOW - H, calls: 3, ctx: [5, 6, 7] });
+    const r1 = await run({ role: "reviewer", start: NOW - 4 * H, end: NOW - 3 * H, calls: 2, ctx: [9, 10] });
+    const b1 = await run({ role: "builder", session: s, model: "opus", start: NOW - 5 * H, end: NOW - 4 * H, calls: 2, ctx: [1, 2], resumed: true });
+    await run({ role: "builder", start: NOW - 30 * H, end: NOW - 29 * H, calls: 2, ctx: [3, 4] });
+    const d = await day({ day: "2026-11-22" });
+    expect([d.project, d.day, d.days.length, d.days.at(-1), d.lost]).toEqual(["helix", "2026-11-22", 30, "2026-11-22", 0]);
+    expect(d.runs.map((r) => [r.id, r.role, r.first, r.ctx])).toEqual([
+      [b1, "builder", 1, { calls: 2, pts: [1, 2] }],
+      [r1, "reviewer", 1, { calls: 2, pts: [9, 10] }],
+      [b2, "builder", 1, { calls: 3, pts: [5, 6, 7] }],
+    ]);
+    expect(d.runs[0]).toMatchObject({ agent: "Builder", session: s, model: "opus", resumed: true, started_at: iso(NOW - 5 * H), ended_at: iso(NOW - 4 * H) });
+    expect(d.runs[1]).toMatchObject({ session: null, model: null, resumed: false });
+    expect(d.baseline.roles.map((r) => [r.role, r.runs])).toEqual([
+      ["builder", 3],
+      ["reviewer", 1],
+    ]);
+    // Fewer than 3 days with calls: no Total baseline yet.
+    expect(d.baseline.total).toEqual({ days: 2, calls: 0, p50: { calls: 0, pts: [] } });
+  });
+
+  it("splits a run from 22:00 to 02:00 in tz: 2 h of its calls and points to each day, the second day from the next call", async () => {
+    await fixedClock();
+    await project("helix", "LAND");
+    // 22:00 to 02:00 in Copenhagen, which is UTC+1 in November.
+    const start = Date.parse("2026-11-21T21:00:00.000Z");
+    const id = await run({ start, end: start + 4 * H, calls: 8, ctx: range(1, 8) });
+    const first = await day({ day: "2026-11-21", tz: "Europe/Copenhagen" });
+    const second = await day({ day: "2026-11-22", tz: "Europe/Copenhagen" });
+    expect(first.runs.map((r) => [r.id, r.first, r.ctx])).toEqual([[id, 1, { calls: 4, pts: [1, 2, 3, 4] }]]);
+    expect(second.runs.map((r) => [r.id, r.first, r.ctx])).toEqual([[id, 5, { calls: 4, pts: [5, 6, 7, 8] }]]);
+    // In UTC the same run is 21:00 to 01:00: three hours, then one.
+    expect((await day({ day: "2026-11-22" })).runs.map((r) => [r.first, r.ctx.calls])).toEqual([[7, 2]]);
+  });
+
+  it("takes a role's baseline call by call over its runs in the period, each from its own first call, and stops where only two reach", async () => {
+    await fixedClock();
+    await project("helix", "LAND");
+    for (const [i, [calls, v]] of ([[10, 10], [8, 20], [6, 30], [4, 40]] as const).entries()) {
+      await run({ role: "builder", start: NOW - (i + 1) * DAY, end: NOW - (i + 1) * DAY + H, calls, ctx: new Array<number>(calls).fill(v) });
+    }
+    await run({ role: "builder", start: NOW - 2 * H, end: NOW - H, calls: 1, ctx: [99] });
+    const b = (await day({ day: "2026-11-22" })).baseline.roles;
+    expect(b.map((r) => [r.role, r.runs])).toEqual([["builder", 5]]);
+    // Calls 1: 99, 40, 30, 20, 10; calls 2-4: 40, 30, 20, 10; calls 5-6: 30, 20, 10; call 7 only two reach.
+    expect(b[0]!.p50).toEqual({ calls: 6, pts: [30, 25, 25, 25, 20, 20] });
+    expect(b[0]!.p25).toEqual({ calls: 6, pts: [20, 18, 18, 18, 15, 15] });
+    expect(b[0]!.p75).toEqual({ calls: 6, pts: [40, 33, 33, 33, 25, 25] });
+    // The role's median day over the 30: most days it made no calls.
+    expect(b[0]!.calls).toBe(0);
+  });
+
+  it("takes the Total baseline over the period's days, each summed as it goes: with 10, 20 and 30 calls it stops after 10 (Toad, c_6590696d)", async () => {
+    await fixedClock();
+    await project("helix", "LAND");
+    for (const [i, calls] of [10, 20, 30].entries()) await run({ start: NOW - i * DAY - 2 * H, end: NOW - i * DAY - H, calls, ctx: new Array<number>(calls).fill(i + 1) });
+    const d = await day({ day: "2026-11-21", days: 3 });
+    // Call k: the days sum to k, 2k and 3k; the median is 2k. Call 11 is reached by two days only.
+    expect(d.baseline.total).toEqual({ days: 3, calls: 20, p50: { calls: 10, pts: range(1, 10).map((k) => 2 * k) } });
+    expect((await day({ day: "2026-11-21", days: 5 })).baseline.total.calls).toBe(10);
+  });
+
+  it("sends a run over 2000 calls as at most 2000 points with its true calls, and counts a lost run without drawing it", async () => {
+    await fixedClock();
+    await project("helix", "LAND");
+    await run({ start: NOW - 3 * H, end: NOW - 2 * H, calls: 5000, ctx: range(1, 2000) });
+    await run({ start: NOW - 2 * H, end: NOW - H, calls: 0, outcome: "lost" });
+    const d = await day({ day: "2026-11-22" });
+    expect(d.runs).toHaveLength(1);
+    expect(d.runs[0]!.ctx.calls).toBe(5000);
+    expect(d.runs[0]!.ctx.pts).toHaveLength(2000);
+    expect([d.runs[0]!.ctx.pts[0], d.runs[0]!.ctx.pts.at(-1)]).toEqual([1, 2000]);
+    expect(d.lost).toBe(1);
+    expect(d.baseline.roles[0]!.p50.calls).toBe(0);
+  });
+
+  it("refuses a project the caller can't read, and a day outside the period", async () => {
+    await fixedClock();
+    await project("helix", "LAND");
+    await project("bobnet", "BOB");
+    await ok(owner, { op: "grant", project: "helix", agent: "Data", role: "dev", read: true, items: "none", fields: [] });
+    const data: BoardCaller = { kind: "agent", name: "Data", laptop: "mbp-1", supervisor: false, ctx: null };
+    expect((await day({ day: "2026-11-22" }, data)).runs).toEqual([]);
+    expect(await call(data, { op: "usage_day", project: "bobnet", day: "2026-11-22" })).toMatchObject({ ok: false, code: "forbidden" });
+    for (const d of ["2026-11-23", "2026-10-23"]) expect(await call(owner, { op: "usage_day", project: "helix", day: d })).toMatchObject({ ok: false, code: "invalid" });
+    expect((await day({ day: "2026-10-24" })).day).toBe("2026-10-24");
+    expect(await call(owner, { op: "usage_day", project: "helix", day: "2026-11-21", days: 1 })).toMatchObject({ ok: false, code: "invalid" });
+  });
+});

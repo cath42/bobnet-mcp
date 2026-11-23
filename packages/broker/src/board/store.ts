@@ -34,9 +34,12 @@ import {
   type StatusStuckRun,
   type WaitRecord,
   type TokenTotals,
+  type CallLine,
+  type UsageDay,
   type UsagePoint,
   type UsageSeries,
   BOARD_SENDER,
+  downsample,
   USAGE_WEIGHTS,
   USAGE_WEIGHTS_READ_AT,
   parseRecipient,
@@ -45,7 +48,7 @@ import {
 } from "@bobnet/protocol";
 import { BoardError } from "./errors.ts";
 import { Rules, type Scope } from "./rules.ts";
-import { apportion, calendar, cumulative, type Calendar } from "./usage.ts";
+import { apportion, bands, calendar, cumulative, median, perCall, summed, type Calendar } from "./usage.ts";
 
 // The operation layer (ADR 0001 §2, §3, §5): every read and write of the board.
 // Links are checked here first so a refusal names its reason; the schema's
@@ -319,6 +322,8 @@ export class BoardStore {
         return this.status(caller, op);
       case "usage":
         return this.usage(caller, op);
+      case "usage_day":
+        return this.usageDay(caller, op);
     }
   }
 
@@ -1120,6 +1125,73 @@ export class BoardStore {
           })),
         };
       }),
+      lost,
+    };
+  }
+
+  /**
+   * A day's context per call (ADR 0014 §3a): its runs' share of their calls and points, split over the
+   * days they ran by wall time as `usage` splits their tokens, and the period's medians to compare with:
+   * Total, each day's runs summed as they go; By agent, each role's runs whole. A lost run draws nothing.
+   */
+  private usageDay(caller: BoardCaller, op: Op<"usage_day">): UsageDay {
+    const p = this.readable(caller, op.project);
+    const cal = calendar(this.now(), op.days, op.tz);
+    const at = cal.days.indexOf(op.day);
+    if (at < 0) throw new BoardError("invalid", `${op.day} is not in the last ${op.days} days to ${cal.days.at(-1)} in ${cal.tz}`);
+    const runs = this.runsEnded(p, cal.edges[0]!, cal.edges.at(-1)!).sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at) || a.pk - b.pk);
+    const totals = cal.days.map((): number[] => []);
+    const dayCalls = cal.days.map(() => 0);
+    const roleCalls = new Map<string, number[]>();
+    const roleRuns = new Map<string, number[][]>();
+    const out: UsageDay["runs"] = [];
+    let lost = 0;
+    for (const r of runs) {
+      const cum = cumulative(Date.parse(r.started_at), Date.parse(r.ended_at!), cal.edges);
+      if (r.outcome === "lost") {
+        if (cum[at + 1]! > cum[at]!) lost++;
+        continue;
+      }
+      const ctx = perCall(ctxPoints(r["ctx"] as SqlStorageValue), r.calls);
+      const n = ctx.length || r.calls;
+      const parts = apportion(n, cum);
+      const calls = roleCalls.get(r.role) ?? cal.days.map(() => 0);
+      roleCalls.set(r.role, calls);
+      if (ctx.length) roleRuns.set(r.role, [...(roleRuns.get(r.role) ?? []), ctx]);
+      parts.forEach((c, j) => {
+        dayCalls[j]! += c;
+        calls[j]! += c;
+        const from = Math.round(n * cum[j]!);
+        for (let k = from; k < from + c && k < ctx.length; k++) totals[j]!.push(ctx[k]!);
+        if (j !== at || c === 0) return;
+        out.push({
+          id: r.id,
+          agent: r.agent,
+          role: r.role,
+          session: r.session === null ? null : this.sessionRef(r.session),
+          model: r.model,
+          started_at: r.started_at,
+          ended_at: r.ended_at!,
+          resumed: r.resumed === 1,
+          first: from + 1,
+          ctx: ctx.length ? callLine(ctx.slice(from, from + c)) : { calls: c, pts: [] },
+        });
+      });
+    }
+    const dayRoles = [...new Set(out.map((r) => r.role))].sort((a, b) => roleCalls.get(b)![at]! - roleCalls.get(a)![at]! || a.localeCompare(b));
+    return {
+      project: p.key,
+      day: op.day,
+      days: cal.days,
+      runs: out,
+      baseline: {
+        total: { days: dayCalls.filter((c) => c > 0).length, calls: Math.round(median(dayCalls)), p50: callLine(bands(totals.map(summed), [0.5])[0]!) },
+        roles: dayRoles.map((role) => {
+          const lines = roleRuns.get(role) ?? [];
+          const [p25, p50, p75] = bands(lines, [0.25, 0.5, 0.75]);
+          return { role, runs: lines.length, calls: Math.round(median(roleCalls.get(role)!)), p25: callLine(p25!), p50: callLine(p50!), p75: callLine(p75!) };
+        }),
+      },
       lost,
     };
   }
@@ -3367,6 +3439,11 @@ function ctxPoints(blob: SqlStorageValue): number[] {
 }
 
 /** Context per call as the runs table keeps it: little-endian uint32s (§9). */
+/** Context per call as a usage line: its calls, and at most 2000 points of them. */
+function callLine(values: number[]): CallLine {
+  return { calls: values.length, pts: downsample(values) };
+}
+
 function ctxBlob(points: number[]): ArrayBuffer {
   const buf = new ArrayBuffer(points.length * 4);
   const view = new DataView(buf);

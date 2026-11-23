@@ -145,6 +145,16 @@ export type CiStatus = z.infer<typeof CiStatus>;
 
 /** The most context-per-call points a run keeps (§9). */
 export const RUN_CTX_MAX = 2000;
+/**
+ * At most `max` points of a run's context per call, evenly taken, first and last kept (§9): the
+ * supervisor's rule, which a usage read's lines follow too.
+ */
+export function downsample(points: number[], max = RUN_CTX_MAX): number[] {
+  if (points.length <= max) return points;
+  const out: number[] = [];
+  for (let i = 0; i < max; i++) out.push(points[Math.round((i * (points.length - 1)) / (max - 1))]!);
+  return out;
+}
 /** A run's end reason as the board keeps it (ADR 0005 §3): the supervisor cuts a longer one. */
 export const RUN_REASON_MAX = 300;
 /** A handoff's text as a close stores it (§6). */
@@ -212,6 +222,12 @@ export const BoardOp = z.discriminatedUnion("op", [
    * the dashboard's, not the agents' tools'.
    */
   z.object({ op: z.literal("usage"), project: ProjectKey.optional(), days: usageDays.default(30), tz: timeZone.default("UTC") }),
+  /**
+   * One day of a project's usage in detail (ADR 0014 §3a): its runs' context per call, and the period's
+   * median call by call as the baseline. The period is the usage read's (the last `days` to today in
+   * `tz`), and `day` is in it. The dashboard's, on a tap; not the agents' tools'.
+   */
+  z.object({ op: z.literal("usage_day"), ...project, day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), days: usageDays.default(30), tz: timeZone.default("UTC") }),
 
   // Writes
   z.object({
@@ -494,8 +510,8 @@ export type BoardOp = z.infer<typeof BoardOp>;
 export type BoardOpInput = z.input<typeof BoardOp>;
 export type BoardOpName = BoardOp["op"];
 
-export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview" | "status" | "usage";
-export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview", "status", "usage"] satisfies BoardReadName[];
+export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview" | "status" | "usage" | "usage_day";
+export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview", "status", "usage", "usage_day"] satisfies BoardReadName[];
 /** The supervisor's own operations, which only its connection makes (§8). */
 export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_remote", "run_end", "push", "slot_run", "ci_run", "release_tag"];
 
@@ -902,6 +918,45 @@ export interface UsageSeries {
   lost: number;
 }
 
+/** Context per call over calls 1..`calls`, evenly taken, first and last kept (`downsample`): `pts.length === calls` up to 2000. */
+export interface CallLine {
+  calls: number;
+  pts: number[];
+}
+
+/** A day's context per call (ADR 0014 §3a), and the period's median, call by call, to compare it with. */
+export interface UsageDay {
+  project: string;
+  day: string;
+  /** The period, as the usage read gives it; `day` is in it. */
+  days: string[];
+  /**
+   * Runs with calls in the day, by start, each with its share of the day: a run across midnight is split
+   * by wall time. `first`: the run's own number of the day's first call (1 unless it began the day before).
+   */
+  runs: Array<{
+    id: string;
+    agent: string;
+    role: string;
+    session: SessionRef | null;
+    model: string | null;
+    started_at: string;
+    ended_at: string;
+    resumed: boolean;
+    first: number;
+    ctx: CallLine;
+  }>;
+  /** Medians over the period, call by call, while 3 or more reach the call; a line is empty when fewer reach call 1. */
+  baseline: {
+    /** Each day's Total, its runs in start order with their context summed as they go (the session card's "Whole session"); `days`: the days with calls; `calls`: the median day's calls. */
+    total: { days: number; calls: number; p50: CallLine };
+    /** Per role with calls in the day: its runs in the period, each whole from its own first call; `calls`: the role's median day's calls. */
+    roles: Array<{ role: string; runs: number; calls: number; p25: CallLine; p50: CallLine; p75: CallLine }>;
+  };
+  /** Lost runs that day: no calls, no context. */
+  lost: number;
+}
+
 /** The weight table (§1) as the board weighs with it, so a page renders it and weighs a live run alike. */
 export interface UsageWeights {
   read_at: string;
@@ -940,6 +995,7 @@ export interface BoardResults {
   status: { at: string; since: string; projects: StatusRow[] };
   /** `days`: the read's days, oldest first, `YYYY-MM-DD` in `tz`; `projects` by key. */
   usage: { weights: UsageWeights; tz: string; days: string[]; projects: UsageSeries[] };
+  usage_day: UsageDay;
   create_project: BoardWritten;
   create_release: BoardWritten;
   create: BoardWritten;
