@@ -693,6 +693,77 @@ describe("a 'release' rule organizes releases (BOB-189, ADR 0003 2026-11-22)", (
     expect(await refused(data, { op: "undo", project: "helix", seq })).toMatchObject({ code: "forbidden", message: expect.stringContaining("Casper's gate") });
   });
 
+  it("AC4: Picard's helix rule organizes the roadmap end to end: R3 and Later, a backlog item through them, R0 closed, reopened and closed", async () => {
+    // Helix as imported (BOB-9): R0-R2; R0 holds a Done feature and two not Done, R2 one.
+    await ok(owner, { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", lead: "Picard@mbp-1", po: "Picard@mbp-1" });
+    for (const title of ["Foundations", "Roadmap", "Steps"]) await ok(owner, { op: "create_release", project: "helix", title });
+    // The import numbers them from R0, and next_release follows the last (export.ts).
+    await runInDurableObject(board(), (_, state) => {
+      for (const n of [1, 2, 3]) state.storage.sql.exec("UPDATE releases SET ref = ? WHERE ref = ?", `R${n - 1}`, `R${n}`);
+      state.storage.sql.exec("UPDATE projects SET next_release = 3 WHERE key = 'helix'");
+    });
+    const feature = async (title: string, release: string) => (await ok(owner, { op: "create", project: "helix", kind: "feature", type: "increment", title, release })).ref!;
+    const shipped = await feature("Shipped", "R0");
+    const late = await feature("Late", "R0");
+    const later = await feature("Later still", "R0");
+    const steps = await feature("Steps view", "R2");
+    await ok(owner, { op: "update", project: "helix", ref: shipped, set: { status: "Done" } });
+    const idea = (await ok(owner, { op: "create", project: "helix", kind: "backlog", type: "task", title: "Nightly digest" })).ref!;
+
+    // Picard's rule exactly as board_grants shows it on helix.
+    await ok(owner, {
+      op: "grant",
+      project: "helix",
+      agent: "Picard",
+      role: "backlog PO",
+      read: true,
+      items: "not_open_feature",
+      fields: ["content", "create", "criteria", "order", "release", "status", "triage"],
+      questions: true,
+      sessions: false,
+    });
+    const picard = agent("Picard");
+    const { grants } = await ok(picard, { op: "grants", project: "helix" });
+    expect(grants.find((g) => g.agent === "Picard")).toMatchObject({ role: "backlog PO", items: "not_open_feature", sessions: false, questions: true });
+
+    expect((await ok(picard, { op: "create_release", project: "helix", title: "Nightly", goal: "Every day starts green" })).ref).toBe("R3");
+    expect((await ok(picard, { op: "create_release", project: "helix", title: "Later" })).ref).toBe("R4");
+    await ok(picard, { op: "update_release", project: "helix", ref: "R4", set: { goal: "Not yet placed" } });
+    await ok(picard, { op: "order_releases", project: "helix", refs: ["R0", "R1", "R2", "R3", "R4"] });
+
+    await ok(picard, { op: "promote", project: "helix", ref: idea });
+    await ok(picard, { op: "set_release", project: "helix", ref: idea, release: "R3" });
+    await ok(picard, { op: "set_release", project: "helix", ref: steps, release: "R3" });
+    await ok(picard, { op: "set_release", project: "helix", ref: idea, release: "R4" });
+    await ok(picard, { op: "set_release", project: "helix", ref: idea, release: null });
+    await ok(picard, { op: "set_release", project: "helix", ref: idea, release: "R3" });
+    await ok(picard, { op: "order", project: "helix", scope: "features", release: "R3", refs: [idea, steps] });
+
+    await ok(picard, { op: "close_release", project: "helix", ref: "R0", moves: [{ feature: late, to: "R3" }, { feature: later, to: "R4" }] });
+    await ok(picard, { op: "reopen_release", project: "helix", ref: "R0", reason: "closed before the review" });
+    await ok(picard, { op: "close_release", project: "helix", ref: "R0" });
+
+    const releases = (await ok(picard, { op: "list", project: "helix", of: "releases" })).releases!;
+    expect(releases.map((r) => [r.ref, r.title, r.status, r.closed_by])).toEqual([
+      ["R0", "Foundations", "closed", "Picard@mbp-1"],
+      ["R1", "Roadmap", "planned", null],
+      ["R2", "Steps", "planned", null],
+      ["R3", "Nightly", "planned", null],
+      ["R4", "Later", "planned", null],
+    ]);
+    const features = async (release: string | null) => ((await ok(picard, { op: "list", project: "helix", of: "features", release })).items ?? []).map((i) => i.ref);
+    expect(await features("R0")).toEqual([shipped]);
+    expect(await features("R2")).toEqual([]);
+    expect(await features("R3")).toEqual([idea, steps, late]);
+    expect(await features("R4")).toEqual([later]);
+    expect((await ok(picard, { op: "get", project: "helix", ref: "R0", history: true })).history!.map((e) => [e.op, e.actor.who])).toEqual([
+      ["create_release", "owner@example.com"],
+      ["close_release", "Picard@mbp-1"],
+      ["reopen_release", "Picard@mbp-1"],
+      ["close_release", "Picard@mbp-1"],
+    ]);
+  });
+
   it("leaves the owner all of it", async () => {
     const { r1, f1 } = await organizing();
     const r2 = (await ok(owner, { op: "create_release", project: "helix", title: "Nightly" })).ref!;
