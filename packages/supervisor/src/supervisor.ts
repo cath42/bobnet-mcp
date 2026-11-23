@@ -3921,8 +3921,9 @@ export function fitReport(snap: LaptopSnapshot, max = REPORT_FIT_BYTES): LaptopS
 /**
  * What a request asks, whole (ADR 0013 §1): an AskUserQuestion's questions, headers and options (not an
  * option's own preview), else the command, file path, URL or path as `preview` picks it, else the raw
- * input. Each field clipped to the protocol's maximum, and `cut` set when one was; null when any field's
- * serialised form looks like a credential.
+ * input. Each field clipped to the protocol's maximum, and `cut` set when one was; null when any field
+ * looks like a credential, as it was before its clip (a prefix of one must not cross, BOB-162), or
+ * serialised after it.
  */
 export function askOf(r: RequestRow, detect: Detect = findSecret): PendingAsk | null {
   let input: Record<string, unknown> | null = null;
@@ -3933,8 +3934,10 @@ export function askOf(r: RequestRow, detect: Detect = findSecret): PendingAsk | 
     // The raw input is the text.
   }
   let cut = false;
+  let secret = false;
   const fit = (v: unknown, max: number): string => {
     const s = typeof v === "string" ? v : "";
+    if (detect(s) || detect(JSON.stringify(s))) secret = true;
     const out = clip(s, max);
     if (out !== s) cut = true;
     return out;
@@ -3954,7 +3957,7 @@ export function askOf(r: RequestRow, detect: Detect = findSecret): PendingAsk | 
   const picked = questions[0]?.question ?? input?.["command"] ?? input?.["file_path"] ?? input?.["url"] ?? input?.["path"];
   const text = fit(typeof picked === "string" ? picked : r.input, 8000);
   const fields = [text, ...questions.flatMap((q) => [q.question, q.header, ...q.options.flatMap((o) => [o.label, o.description])])];
-  if (fields.some((f) => detect(JSON.stringify(f)))) return null;
+  if (secret || fields.some((f) => detect(JSON.stringify(f)))) return null;
   return { text, cut, questions };
 }
 

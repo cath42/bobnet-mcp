@@ -1044,6 +1044,25 @@ describe("ADR 0013 §1: a request's whole ask on the report (BOB-51)", () => {
     expect(p.preview).toBe("Which key?");
   });
 
+  it("withholds the whole ask when a credential straddles a clip, so no prefix of it crosses (BOB-162)", async () => {
+    const { sup } = await setup();
+    const token = `gh${"p_"}${"a1B2".repeat(9)}`;
+    const head = `${"x".repeat(7989)} ${token} `;
+    expect(head.indexOf(token)).toBe(7990);
+    const command = head + "y".repeat(9000 - head.length);
+    expect(row(sup, put("Bash", { command }).id).ask).toBeNull();
+    // After a line break too, which its serialised form runs into the token.
+    expect(row(sup, put("Bash", { command: command.replace(` ${token}`, `\n${token}`) }).id).ask).toBeNull();
+    // Wholly past the clip, and across a question's and an option's own clips.
+    expect(row(sup, put("Bash", { command: `${"x".repeat(8500)} ${token}` }).id).ask).toBeNull();
+    const ask = (q: Record<string, unknown>) => row(sup, put("AskUserQuestion", { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [], ...q }] }).id).ask;
+    expect(ask({ question: `${"w".repeat(3989)} ${token}` })).toBeNull();
+    expect(ask({ header: `${"h".repeat(29)} ${token}` })).toBeNull();
+    expect(ask({ options: [{ label: `${"l".repeat(189)} ${token}`, description: "d" }] })).toBeNull();
+    expect(ask({ options: [{ label: "l", description: `${"d".repeat(989)} ${token}` }] })).toBeNull();
+    expect(ask({ question: "w".repeat(4100) })).toMatchObject({ cut: true });
+  });
+
   it("keeps all the asks within the budget, filling human tier first, so the newest orchestrator rows go null first", async () => {
     const { sup } = await setup();
     const orch = Array.from({ length: 10 }, () => put("Bash", { command: "o".repeat(8000) }, "orchestrator"));
