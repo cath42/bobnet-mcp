@@ -56,7 +56,35 @@ that.
   laptop's board can be old and still current. That is why a board goes with its laptop and not by its
   own age. `laptop_supervisors` stays, so a laptop that comes back keeps its pin. A project removed from
   a laptop that is still live keeps its row until whole-board pushes retire (ADR 0001 §8). That is a
-  known limit.
+  known limit. *Lifted 2026-11-23: see below.*
+
+*Amended 2026-11-23 (BOB-193, consult c_8fd760f9): a project a laptop no longer has leaves by itself.*
+Alexa-MCP and Sandbox showed on the Overview because of the limit above. Line numbers here are at
+`d21efd0`.
+
+- **The broker, at register.** When a register has `supervisor: true` and `projects` (the laptop's
+  service projects, `frames.ts:410`, sent on every register, `supervisor.ts:689`), the broker deletes
+  that laptop's `project_boards` rows whose project isn't in the list (`NOT IN (SELECT value FROM
+  json_each(?))`), where it stores the list (`broker.ts:283`). A register without `projects` (a
+  supervisor before 8d7c1c5) deletes nothing. The 30-day sweep stays for laptops that never come back.
+  - A laptop's config changes only with a restart, and a restart registers. So a project dropped from
+    it leaves at once.
+  - A broker deploy drops every connection, so every online supervisor registers again. The two
+    retired projects' rows go with the deploy: no migration and no supervisor rc.
+- **The `board` frame is never refused or ignored for its project.** A supervisor's pass over its boards
+  stops at the first send that fails (`supervisor/src/board.ts:398-409`), so one refused project would
+  hold back the others' boards on rc.54 and older. A row for a project that is configured but not
+  `board: service` is deleted at register and comes back at its next change. That is harmless: nothing
+  shows it (next point) unless the service has the project, and then it shows as today.
+- **The dashboard** draws nothing from a board whose project isn't in the service's list (`svc.projects`).
+  One guard does it: `projects()` (`app.js:200`) filters by that list. `legacyRow`, `legacyCard` and
+  `OLD_BOARD` go, and so do their tests. No Backlog.md project is left to show. Until the list is read,
+  or when the read fails, the page shows its reading or error state, never a legacy row.
+  - An open dashboard isn't told of a deleted row. The guard already hides it.
+  - Live workers, requests and feeds still come from the laptop reports, for any project.
+- **What isn't touched.** `project_boards` is in the Broker's store. Items, releases, sessions and runs
+  are in the Board's. `ProjectBoard` and the `board` frame stay until no view reads them (ADR 0001 §8):
+  Usage, Sessions and CI do until BOB-121 wave C.
 
 ### 3. The report carries its board outbox
 
