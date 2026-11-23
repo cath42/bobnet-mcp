@@ -283,11 +283,28 @@ export const BoardOp = z.discriminatedUnion("op", [
     release: ReleaseRef.nullable().optional(),
     refs: z.array(ItemRef).min(1).max(1000),
   }),
-  /** Casper's gates (§5): a feature's release and the order of releases. */
+  /** The `release` grant's (ADR 0003, 2026-11-22): a feature's release, release records and the order of releases. */
   z.object({ op: z.literal("set_release"), ...item, release: ReleaseRef.nullable(), reason: reason.optional() }),
   z.object({ op: z.literal("order_releases"), ...project, refs: z.array(ReleaseRef).min(1).max(200) }),
+  /** A release's title, goal or spec_url; at least one. A closed release may be edited. */
+  z.object({
+    op: z.literal("update_release"),
+    ...project,
+    ref: ReleaseRef,
+    set: z
+      .object({ title, goal: text.nullable(), spec_url: z.string().url().max(500).nullable() })
+      .partial()
+      .strict()
+      .refine((s) => Object.keys(s).length > 0, "names no field"),
+    reason: reason.optional(),
+  }),
   /**
-   * Casper closes a release (§5): every feature in it not Done and not archived goes somewhere, to
+   * A closed release reopens to the status it had before its last close, its closed_at and closed_by
+   * cleared (the history keeps them). Not an undo: features the close moved stay where they went.
+   */
+  z.object({ op: z.literal("reopen_release"), ...project, ref: ReleaseRef, reason: reason.optional() }),
+  /**
+   * A release closes (§5): every feature in it not Done and not archived goes somewhere, to
    * another release that isn't closed or out of any (`to` null), last in its new release. Undo takes
    * the whole close back.
    */
@@ -1029,6 +1046,8 @@ export interface BoardResults {
   set_release: BoardWritten;
   order_releases: BoardWritten;
   close_release: BoardWritten;
+  update_release: BoardWritten;
+  reopen_release: BoardWritten;
   grant: BoardWritten;
   revoke: BoardWritten;
   capture: BoardWritten & { duplicate: boolean; dropped: string[] };

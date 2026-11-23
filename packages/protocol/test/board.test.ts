@@ -179,3 +179,20 @@ describe("Waits is never stale (ADR 0011; BOB-49)", () => {
     expect(SUPERVISOR_OPS).toContain("release_tag");
   });
 });
+
+describe("update_release and reopen_release (BOB-189)", () => {
+  it("edits a release's title, goal or spec_url, at least one, and reopens one by its ref", () => {
+    const update = (set: Record<string, unknown>, ref = "R3") => BoardOp.safeParse({ op: "update_release", project: "helix", ref, set, reason: "README's outcome" });
+    expect(update({ title: "Nightly", goal: "Every day starts green", spec_url: "https://example.com/r3" }).success).toBe(true);
+    expect(update({ goal: null, spec_url: null }).success).toBe(true);
+    expect(update({}).success).toBe(false);
+    expect(update({ status: "open" }).success).toBe(false);
+    expect(update({ ord: 1 }).success).toBe(false);
+    expect(update({ title: " " }).success).toBe(false);
+    expect(update({ title: "Nightly" }, "LAND-3").success).toBe(false);
+    expect(BoardOp.safeParse({ op: "reopen_release", project: "helix", ref: "R0" }).success).toBe(true);
+    expect(BoardOp.safeParse({ op: "reopen_release", project: "helix", ref: "R0", reason: "closed too soon" }).success).toBe(true);
+    expect(BoardOp.safeParse({ op: "reopen_release", project: "helix", ref: "LAND-3" }).success).toBe(false);
+    expect(BoardOp.safeParse({ op: "reopen_release", project: "helix" }).success).toBe(false);
+  });
+});
