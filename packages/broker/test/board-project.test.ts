@@ -67,18 +67,47 @@ describe("the current release (ADR 0014 §4, BOB-163)", () => {
     expect((await statusRelease())?.ref).toBe(r2);
   });
 
-  it("is the last release not closed when every one is done and none closed", async () => {
+  it("is the last release neither closed nor planned when every one is done", async () => {
     await project();
     const r1 = await release("Release 1");
     const r2 = await release("Release 2");
     const r3 = await release("Release 3");
     await done(await feature("A", r1));
     await done(await feature("B", r2));
+    for (const r of [r1, r2]) await setStatus(r, "open");
     await setStatus(r3, "closed");
     const row = await overviewRow();
     expect(row.release).toMatchObject({ ref: r2, features: { done: 1, total: 1 } });
     expect(row.release_number).toBe(2);
     expect(await statusRelease()).toEqual({ ref: r2, todo: 0, ready: 0 });
+  });
+
+  it("is the done release waiting for its close, not a planned empty one after it, on the Overview and the status read alike (BOB-192)", async () => {
+    await project();
+    const r1 = await release("Release 1");
+    for (const t of ["Release 2", "Release 3", "Release 4", "Release 5"]) await release(t);
+    await done(await feature("A", r1));
+    await setStatus(r1, "open");
+    const row = await overviewRow();
+    expect([row.release?.ref, row.release_number, row.release?.features]).toEqual([r1, 1, { done: 1, total: 1 }]);
+    expect((await statusRelease())?.ref).toBe(r1);
+    expect((await ok(owner, { op: "project", project: "helix" })).done_unclosed).toEqual([]);
+  });
+
+  it("is never a planned release that only holds Done features; with no open release it is none (BOB-192)", async () => {
+    await project();
+    const r1 = await release("Release 1");
+    const r2 = await release("Release 2");
+    await done(await feature("A", r2));
+    expect(await overviewRow()).toMatchObject({ release: null, release_number: null });
+    expect(await statusRelease()).toBeNull();
+    expect(await ok(owner, { op: "project", project: "helix" })).toMatchObject({ release: null, done_unclosed: [] });
+    await setStatus(r1, "open");
+    expect((await overviewRow()).release?.ref).toBe(r1);
+    // Work in the planned one makes it current again (BOB-163).
+    await feature("B", r2);
+    expect((await overviewRow()).release?.ref).toBe(r2);
+    expect((await statusRelease())?.ref).toBe(r2);
   });
 
   it("is none without releases, or with every one closed", async () => {
@@ -215,6 +244,37 @@ describe("CI history from the board (ADR 0014 §3a, BOB-168)", () => {
     ]);
     // Joined before the window, every run scanned every push: about runs × pushes, 161615 rows here.
     expect(read).toBeLessThan(runs * 2 * 6 * 2);
+  });
+
+  it("lists a run once when two pushes of its sha differ only by the repo's case (BOB-192)", async () => {
+    await ok(owner, { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", repos: ["cath42/helix"] });
+    const toad = supervisor("w_toad", "Toad");
+    await ok(toad, { op: "run_start", project: "helix", id: "w_toad", started_at: new Date().toISOString(), session: null });
+    await ok(toad, { op: "push", project: "helix", repo: "Cath42/Helix", branch: "v2", sha: SHA(1) });
+    await ok(toad, { op: "push", project: "helix", repo: "cath42/helix", branch: "v2", sha: SHA(1) });
+    await sql((s) => expect(s.exec("SELECT 1 FROM pushes").toArray()).toHaveLength(2));
+    await ci(1, {});
+    expect((await overviewRow()).ci![0]!.runs.map((r) => [r.sha, r.agent])).toEqual([[SHA(1), "Toad"]]);
+  });
+
+  it("says a workflow's usual duration once 3 of its runs passed, and not before (BOB-192)", async () => {
+    await ok(owner, { op: "create_project", key: "helix", name: "Helix", prefix: "LAND", repos: ["cath42/helix"] });
+    const took = async (n: number, name: string, min: number, status: "passed" | "failed" = "passed") => {
+      await ci(n, { name, status });
+      await sql((s) => {
+        s.exec("UPDATE ci_runs SET ended_at = ? WHERE external_id = ?", new Date(Date.parse("2026-11-20T10:00:00Z") + (n + min) * 60_000).toISOString(), `run-${n}`);
+      });
+    };
+    for (const [n, min] of [[1, 8], [2, 9], [3, 30]] as const) await took(n, "ci", min);
+    await took(4, "deploy", 5);
+    await took(5, "deploy", 5);
+    await took(6, "deploy", 90, "failed");
+    const flows = (await overviewRow()).ci!;
+    expect(flows.map((f) => [f.name, f.usual_ms])).toEqual([
+      ["ci", 9 * 60_000],
+      ["deploy", undefined],
+    ]);
+    expect("usual_ms" in flows[1]!).toBe(false);
   });
 
   it("gives every project on the Overview its ci, none as an empty list", async () => {

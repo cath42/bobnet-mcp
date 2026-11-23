@@ -3,7 +3,7 @@ import { USAGE_WEIGHTS } from "@bobnet/protocol";
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { BoardStore } from "../src/board/store.ts";
+import { BoardStore, USAGE_RUNS_SQL } from "../src/board/store.ts";
 
 // BOB-121's usage reads (ADR 0014 §3, §3a): a series per project, weighted by model, spread over the days a
 // run ran, and a day's context per call. Called as the broker calls them, on a board with a fixed clock.
@@ -205,6 +205,10 @@ describe("the usage read (ADR 0014 §3, BOB-167)", () => {
       { session: null, feature_title: null, raw: 960, weighted: 960 },
       { session: s[3]!, feature_title: "Delta", raw: 600, weighted: 1200 },
     ]);
+  });
+
+  it("reads its runs by named columns, without their context per call (BOB-192)", () => {
+    expect(USAGE_RUNS_SQL).not.toMatch(/\*|\bctx\b/);
   });
 });
 

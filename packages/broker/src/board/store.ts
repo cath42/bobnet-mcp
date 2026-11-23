@@ -96,12 +96,18 @@ const CI_HISTORY = 6;
  * pushes, whose lower(repo) no index serves (Toad, BOB-121 review A, B1). Joined before the window,
  * every run scanned every push.
  */
-export const CI_HISTORY_SQL = `SELECT h.name, h.branch, h.status, h.sha, h.url, h.started_at, h.ended_at, r.agent FROM (
+export const CI_HISTORY_SQL = `SELECT h.name, h.source, h.branch, h.status, h.sha, h.url, h.started_at, h.ended_at,
+    (SELECT r.agent FROM pushes u JOIN runs r ON r.pk = u.run
+     WHERE u.project = h.project AND lower(u.repo) = lower(h.repo) AND u.sha = h.sha ORDER BY u.pk DESC LIMIT 1) AS agent
+  FROM (
     SELECT c.*, row_number() OVER (PARTITION BY c.name ORDER BY coalesce(c.started_at, c.ended_at) DESC NULLS FIRST, c.pk DESC) AS n
     FROM ci_runs c WHERE c.project = ? AND c.source != 'slot') h
-  LEFT JOIN pushes u ON u.project = h.project AND lower(u.repo) = lower(h.repo) AND u.sha = h.sha
-  LEFT JOIN runs r ON r.pk = u.run
   WHERE h.n <= ${CI_HISTORY} ORDER BY h.name, h.n`;
+/** A run's row without its context per call, up to 8 KB a run, which a list of runs never uses. */
+const RUN_COLUMNS = "pk, id, project, session, agent, role, laptop, model, effort, started_at, ended_at, resumed, input, output, cache_read, cache_write, calls, outcome, outcome_reason";
+/** The runs behind `usage`: every project's, over up to 90 days (BOB-192). `usage_day` reads them whole. */
+export const USAGE_RUNS_SQL = `SELECT ${RUN_COLUMNS} FROM runs WHERE project = ? AND ended_at >= ? ORDER BY ended_at, pk`;
+const USAGE_DAY_RUNS_SQL = USAGE_RUNS_SQL.replace(RUN_COLUMNS, `${RUN_COLUMNS}, ctx`);
 /** Backlog is thin below this many Ready features with criteria while the open release has work to do. */
 const THIN_READY = 2;
 
@@ -685,10 +691,10 @@ export class BoardStore {
 
   /**
    * A project's current release (ADR 0014 §4): the first in the board's order that isn't closed and
-   * holds a feature not Done and not archived; else the last that isn't closed (its work done, waiting
-   * for Casper's close); else none. `number`: its place in that order, from 1. `done_unclosed`: the
-   * releases before it, not closed, with features and every one of them Done. The Overview, the status
-   * read and the project page all take it from here.
+   * holds a feature not Done and not archived; else the last neither closed nor planned (its work done,
+   * waiting for Casper's close); else none. `number`: its place in that order, from 1. `done_unclosed`:
+   * the releases before it, not closed, with features and every one of them Done. The Overview, the
+   * status read and the project page all take it from here.
    */
   private currentRelease(p: ProjectRow): { release: ReleaseRecord | null; number: number | null; done_unclosed: Array<{ ref: string; title: string }> } {
     const releases = this.sql
@@ -701,7 +707,7 @@ export class BoardStore {
       )
       .toArray();
     let at = releases.findIndex((r) => r.status !== "closed" && r.todo > 0);
-    if (at < 0) at = releases.findLastIndex((r) => r.status !== "closed");
+    if (at < 0) at = releases.findLastIndex((r) => r.status !== "closed" && r.status !== "planned");
     if (at < 0) return { release: null, number: null, done_unclosed: [] };
     const done = releases.slice(0, at).filter((r) => r.status !== "closed" && r.total > 0 && r.todo === 0);
     return { release: this.releaseRecord(releases[at]!), number: at + 1, done_unclosed: done.map((r) => ({ ref: r.ref, title: r.title })) };
@@ -741,13 +747,22 @@ export class BoardStore {
   /**
    * A project's CI history (ADR 0014 §3a): per workflow, by name, its latest run and the 5 before it,
    * newest first (a run not started yet first), passed ones too. Who landed the commit a run ran on is
-   * the agent of the run whose push it was. Slot runs are no workflow.
+   * the agent of the run whose push it was, the last one if two pushed it. `usual_ms`: the workflow's
+   * usual duration, from its latest run's source, when there is the history to say it. Slot runs are no
+   * workflow.
    */
   private ciOf(p: ProjectRow): CiWorkflow[] {
-    const rows = this.sql.exec<CiHistoryRun & Record<string, SqlStorageValue>>(CI_HISTORY_SQL, p.pk).toArray();
+    const rows = this.sql.exec<CiHistoryRun & { source: string } & Record<string, SqlStorageValue>>(CI_HISTORY_SQL, p.pk).toArray();
     const flows = new Map<string, CiHistoryRun[]>();
-    for (const r of rows) flows.set(r.name, [...(flows.get(r.name) ?? []), { name: r.name, branch: r.branch, status: r.status, sha: r.sha, url: r.url, started_at: r.started_at, ended_at: r.ended_at, agent: r.agent }]);
-    return [...flows].map(([name, runs]) => ({ name, runs }));
+    const sources = new Map<string, string>();
+    for (const r of rows) {
+      if (!sources.has(r.name)) sources.set(r.name, r.source);
+      flows.set(r.name, [...(flows.get(r.name) ?? []), { name: r.name, branch: r.branch, status: r.status, sha: r.sha, url: r.url, started_at: r.started_at, ended_at: r.ended_at, agent: r.agent }]);
+    }
+    return [...flows].map(([name, runs]) => {
+      const usual = this.usualMs({ project: p.pk, source: sources.get(name)!, name, laptop: null });
+      return { name, runs, ...(usual ? { usual_ms: usual } : {}) };
+    });
   }
 
   /**
@@ -1172,7 +1187,7 @@ export class BoardStore {
       backlog: this.backlogHealth(p, cap(STATUS_MAX)),
       ci: this.ciOf(p),
       sessions: list("sessions", sessions).map((s): ProjectSession => {
-        const runs = this.sql.exec<RunRow>("SELECT * FROM runs WHERE session = ? ORDER BY started_at, pk", s.pk).toArray();
+        const runs = this.sql.exec<RunRow>(`SELECT ${RUN_COLUMNS} FROM runs WHERE session = ? ORDER BY started_at, pk`, s.pk).toArray();
         const roles = new Map(
           this.sql.exec<{ role: string; n: number }>("SELECT role, count(*) AS n FROM session_tasks WHERE session = ? GROUP BY role", s.pk).toArray().map((r) => [r.role, r.n]),
         );
@@ -1247,7 +1262,7 @@ export class BoardStore {
     const cal = calendar(this.now(), op.days, op.tz);
     const at = cal.days.indexOf(op.day);
     if (at < 0) throw new BoardError("invalid", `${op.day} is not in the last ${op.days} days to ${cal.days.at(-1)} in ${cal.tz}`);
-    const runs = this.runsEnded(p, cal.edges[0]!, cal.edges.at(-1)!).sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at) || a.pk - b.pk);
+    const runs = this.runsEnded(p, cal.edges[0]!, cal.edges.at(-1)!, USAGE_DAY_RUNS_SQL).sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at) || a.pk - b.pk);
     const totals = cal.days.map((): number[] => []);
     const dayCalls = cal.days.map(() => 0);
     const roleCalls = new Map<string, number[]>();
@@ -1305,10 +1320,10 @@ export class BoardStore {
   }
 
   /** A project's runs that ended in [from, to), oldest end first; ends are compared as instants, whatever their offset. */
-  private runsEnded(p: ProjectRow, from: number, to: number): RunRow[] {
+  private runsEnded(p: ProjectRow, from: number, to: number, sql = USAGE_RUNS_SQL): RunRow[] {
     // Stored as the supervisor wrote them: a day's margin on the text, then the instants.
     return this.sql
-      .exec<RunRow>("SELECT * FROM runs WHERE project = ? AND ended_at >= ? ORDER BY ended_at, pk", p.pk, new Date(from - DAY_MS).toISOString())
+      .exec<RunRow>(sql, p.pk, new Date(from - DAY_MS).toISOString())
       .toArray()
       .filter((r) => {
         const t = Date.parse(r.ended_at!);
@@ -3231,7 +3246,7 @@ export class BoardStore {
   }
 
   /** "Usually about N min" (§10): the median of the last 20 passed runs of the same project, source and name (a slot run's: laptop and name), once there are three. */
-  private usualMs(c: CiRunRow): number | null {
+  private usualMs(c: Pick<CiRunRow, "project" | "source" | "name" | "laptop">): number | null {
     const like =
       c.source === "slot"
         ? this.sql.exec<{ ms: number }>(
@@ -3636,19 +3651,19 @@ function sameSession(a: SessionRef | null, b: SessionRef | null): boolean {
   return a.feature === b.feature && a.kind === b.kind && a.label === b.label;
 }
 
-/** Context per call as the runs table keeps it: little-endian uint32s (§9). */
+/** A run's context per call back from its blob, empty for a run with none. */
 function ctxPoints(blob: SqlStorageValue): number[] {
   if (!(blob instanceof ArrayBuffer)) return [];
   const view = new DataView(blob);
   return Array.from({ length: Math.floor(blob.byteLength / 4) }, (_, i) => view.getUint32(i * 4, true));
 }
 
-/** Context per call as the runs table keeps it: little-endian uint32s (§9). */
 /** Context per call as a usage line: its calls, and at most 2000 points of them. */
 function callLine(values: number[]): CallLine {
   return { calls: values.length, pts: downsample(values) };
 }
 
+/** Context per call as the runs table keeps it: little-endian uint32s (§9). */
 function ctxBlob(points: number[]): ArrayBuffer {
   const buf = new ArrayBuffer(points.length * 4);
   const view = new DataView(buf);

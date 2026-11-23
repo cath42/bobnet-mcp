@@ -662,6 +662,8 @@ export interface OverviewRow {
 export interface CiWorkflow {
   name: string;
   runs: CiHistoryRun[];
+  /** How long a run of it usually takes, as a CI run's `usual_ms`, from its latest run's source; absent with fewer than 3 passed runs, or from an older broker. */
+  usual_ms?: number;
 }
 
 /** `agent`: who landed the commit it ran on, through that land's push; null when no push tied it. */

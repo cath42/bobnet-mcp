@@ -454,7 +454,7 @@ export function backlogToExport(project: BacklogProject, input: BacklogFiles, no
   if (ranked > 0) notes.push(`ordinals: ${ranked} ranked within their feature's tasks, their release's features or the backlog, and spaced by ${ORD_STEP}; ties kept`);
   for (const r of releases) {
     if (r.status !== "closed") continue;
-    // The board's close_release refuses this, and no operation reopens a release (import review, finding 5).
+    // The board's close_release refuses this: settled before the post, not by a reopen after it (import review, finding 5).
     const featureRelease = (i: ExportItem) => (i.parent ? out.find((f) => f.ref === i.parent)?.release : i.release);
     const open = out.filter((i) => featureRelease(i) === r.ref && i.status !== "Done" && i.archived_at === null).map((i) => `${i.ref} (${i.status})`);
     if (open.length > 0) problems.push(`${r.ref} "${r.title}" comes in closed (archived) holding work not Done: ${open.join(", ")}; settle the release or the items before the post`);
