@@ -134,6 +134,10 @@ export function exportBoard(sql: SqlStorage, by: Reader, source: string | null =
 
   const projects = all<Row>("SELECT * FROM projects ORDER BY key").filter((p) => readable === null || readable.has(p["pk"] as number)).map((p): ExportProject => {
     const pk = p["pk"] as number;
+    const modelsOf = (run: unknown) => {
+      const models = all<Rows<{ model: string; input: number; output: number; cache_read: number; cache_write: number }>>("SELECT model, input, output, cache_read, cache_write FROM run_models WHERE run = ? ORDER BY model", run).map((m) => ({ ...m }));
+      return models.length > 0 ? { models } : {};
+    };
     const tasksOf = (q: string, of: unknown) => all<Rows<{ item: number }>>(q, of).map((t) => ref(t.item)!).sort();
     return {
       key: p["key"] as string,
@@ -260,6 +264,7 @@ export function exportBoard(sql: SqlStorage, by: Reader, source: string | null =
         tasks: tasksOf("SELECT item FROM run_tasks WHERE run = ?", r["pk"]),
         outcome: str(r["outcome"]) as ExportProject["runs"][number]["outcome"],
         outcome_reason: str(r["outcome_reason"]),
+        ...modelsOf(r["pk"]),
       })),
       pushes: all<Row>("SELECT * FROM pushes WHERE project = ? ORDER BY pk", pk).map((x) => ({
         repo: x["repo"] as string,
@@ -637,6 +642,9 @@ function importProject(sql: SqlStorage, p: ExportProject, doc: BoardExport, at: 
       )
       .one().pk;
     runPk.set(r.id, pk);
+    for (const m of r.models ?? []) {
+      sql.exec("INSERT INTO run_models (project, run, model, input, output, cache_read, cache_write) VALUES (?, ?, ?, ?, ?, ?, ?)", project, pk, m.model, m.input, m.output, m.cache_read, m.cache_write);
+    }
     for (const t of new Set(r.tasks)) sql.exec("INSERT INTO run_tasks (project, run, item) VALUES (?, ?, ?)", project, pk, pkOf(item(t, `run ${r.id}'s task`).ref));
   }
   const pushPk = new Map<string, number>();

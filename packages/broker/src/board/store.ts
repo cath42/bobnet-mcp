@@ -87,6 +87,7 @@ const HEAVY_MIN = 5;
 const USAGE_TOP = 3;
 const USAGE_MODELS_MAX = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const TOKEN_KINDS = ["input", "output", "cache_read", "cache_write"] as const;
 /** The project page's lists stop here (ADR 0014 §3); `more` says how many it left out. */
 const PROJECT_MAX = 50;
 /** A CI workflow's history: its latest run and the 5 before it (ADR 0014 §3a, spec §2.4). */
@@ -276,6 +277,16 @@ interface RunRow {
   calls: number;
   outcome: RunOutcome | null;
   outcome_reason: string | null;
+  [k: string]: SqlStorageValue;
+}
+
+interface RunModelRow {
+  run: number;
+  model: string;
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
   [k: string]: SqlStorageValue;
 }
 
@@ -1069,6 +1080,7 @@ export class BoardStore {
       by_session: new Map<number | null, { raw: number; weighted: number }>(),
     }));
     let lost = 0;
+    const models = this.modelsEnded(p, cal.edges[0]!);
     for (const r of this.runsEnded(p, cal.edges[0]!, cal.edges.at(-1)!)) {
       if (r.outcome === "lost") {
         lost++;
@@ -1076,7 +1088,7 @@ export class BoardStore {
       }
       const cum = cumulative(Date.parse(r.started_at), Date.parse(r.ended_at!), cal.edges);
       const calls = apportion(r.calls, cum);
-      for (const part of this.runParts(r)) {
+      for (const part of this.runParts(r, models.get(r.pk) ?? [])) {
         const kinds = { input: apportion(part.tokens.input, cum), output: apportion(part.tokens.output, cum), cache_read: apportion(part.tokens.cache_read, cum), cache_write: apportion(part.tokens.cache_write, cum) };
         const model = weightOf(part.model)?.model ?? (part.model || "unknown");
         points.forEach((pt, i) => {
@@ -1331,9 +1343,19 @@ export class BoardStore {
       });
   }
 
-  /** What a run's tokens are weighed as (§1, §2): its declared model, until per-model rows are reported. */
-  private runParts(r: RunRow): Array<{ model: string | null; tokens: TokenTotals }> {
-    return [{ model: r.model, tokens: tokensOf(r) }];
+  /** The per-model rows of a project's runs ended from `from` on, by run: one read for a list of runs. */
+  private modelsEnded(p: ProjectRow, from: number): Map<number, RunModelRow[]> {
+    const out = new Map<number, RunModelRow[]>();
+    for (const m of this.sql.exec<RunModelRow>("SELECT m.* FROM runs r JOIN run_models m ON m.run = r.pk WHERE r.project = ? AND r.ended_at >= ? ORDER BY m.run, m.model", p.pk, new Date(from - DAY_MS).toISOString())) {
+      const rows = out.get(m.run);
+      rows ? rows.push(m) : out.set(m.run, [m]);
+    }
+    return out;
+  }
+
+  /** What a run's tokens are weighed as (§1, §2): by model where its supervisor reported them, else as its declared model's. */
+  private runParts(r: RunRow, models = this.sql.exec<RunModelRow>("SELECT * FROM run_models WHERE run = ? ORDER BY model", r.pk).toArray()): Array<{ model: string | null; tokens: TokenTotals }> {
+    return models.length > 0 ? models.map((m) => ({ model: m.model, tokens: tokensOf(m) })) : [{ model: r.model, tokens: tokensOf(r) }];
   }
 
   /**
@@ -2938,6 +2960,23 @@ export class BoardStore {
       reason,
       run.pk,
     );
+    // By model only when it adds up to the run's own tokens (ADR 0014 §2): weighing must not change the count.
+    const models = outcome === "lost" ? [] : (op.models ?? []);
+    if (models.length > 0 && TOKEN_KINDS.every((k) => models.reduce((n, m) => n + m.tokens[k], 0) === t[k])) {
+      for (const m of models) {
+        this.sql.exec(
+          `INSERT INTO run_models (project, run, model, input, output, cache_read, cache_write) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (run, model) DO UPDATE SET input = input + excluded.input, output = output + excluded.output, cache_read = cache_read + excluded.cache_read, cache_write = cache_write + excluded.cache_write`,
+          p.pk,
+          run.pk,
+          m.model,
+          m.tokens.input,
+          m.tokens.output,
+          m.tokens.cache_read,
+          m.tokens.cache_write,
+        );
+      }
+    }
     const changes: Change[] = [
       ["ended_at", null, op.ended_at],
       ["input", 0, t.input],

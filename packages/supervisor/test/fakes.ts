@@ -65,7 +65,7 @@ export class FakeSession implements QueryHandle {
   foldAndEnd(turn: number, folded: number[], result = "turn done"): void {
     this.emit({ type: "assistant", message: { content: [{ type: "text", text: "after the fold" }], usage: { input_tokens: 1, output_tokens: 1 } } } as unknown as SDKMessage);
     const uuids = [turn, ...folded].map((i) => this.uuids[i]);
-    this.emit({ type: "result", subtype: "success", result, user_message_uuid: uuids[0], user_message_uuids: uuids, modelUsage: { "claude-sonnet-5-5": this.totals }, total_cost_usd: this.totals.costUSD } as unknown as SDKMessage);
+    this.emit({ type: "result", subtype: "success", result, user_message_uuid: uuids[0], user_message_uuids: uuids, modelUsage: { "claude-sonnet-5-5": this.totals, ...this.others }, total_cost_usd: this.totals.costUSD } as unknown as SDKMessage);
   }
 
   /** Asks permission the way the CLI would, through canUseTool. */
@@ -86,14 +86,17 @@ export class FakeSession implements QueryHandle {
   /** Cumulative session totals, as the SDK reports them on every result. */
   totals = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0 };
 
+  /** Other models' totals (a subagent's), beside Sonnet's. */
+  others: Record<string, Omit<FakeSession["totals"], "costUSD">> = {};
+
   finish(result = "all done"): void {
-    this.emit({ type: "result", subtype: "success", result, modelUsage: { "claude-sonnet-5-5": this.totals }, total_cost_usd: this.totals.costUSD } as unknown as SDKMessage);
+    this.emit({ type: "result", subtype: "success", result, modelUsage: { "claude-sonnet-5-5": this.totals, ...this.others }, total_cost_usd: this.totals.costUSD } as unknown as SDKMessage);
     this.end();
   }
 
   /** A turn's result with the session left open, as the SDK does while its input is: a lead's next turn may follow. */
   turnDone(result = "turn done"): void {
-    this.emit({ type: "result", subtype: "success", result, modelUsage: { "claude-sonnet-5-5": this.totals }, total_cost_usd: this.totals.costUSD } as unknown as SDKMessage);
+    this.emit({ type: "result", subtype: "success", result, modelUsage: { "claude-sonnet-5-5": this.totals, ...this.others }, total_cost_usd: this.totals.costUSD } as unknown as SDKMessage);
   }
 
   /** The SDK sends an init at every turn. */

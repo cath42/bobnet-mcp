@@ -148,6 +148,8 @@ const Run = z.object({
   /** How it ended (ADR 0005 §3, §6): optional, so a version 1 file from before it still parses. */
   outcome: RunOutcome.nullable().optional(),
   outcome_reason: text.nullable().optional(),
+  /** Its tokens by model (ADR 0014 §2): optional, as a run without them and a file from before them. */
+  models: z.array(z.object({ model: z.string(), input: count, output: count, cache_read: count, cache_write: count })).optional(),
 });
 
 const Push = z.object({ repo: z.string(), branch: z.string(), sha: z.string(), worker: z.string(), run: text.nullable(), at });

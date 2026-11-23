@@ -489,4 +489,19 @@ export const BOARD_MIGRATIONS: readonly string[] = [
   ALTER TABLE notices_new RENAME TO notices;
   CREATE INDEX notices_untaken ON notices (seq) WHERE taken_at IS NULL;
   `,
+  // 8: a run's tokens by the model that used them (ADR 0014 §2), adding up to the run's own. A run from a
+  // supervisor before it, or one that ended mid-turn, has none, and is weighed by its declared model.
+  `
+  CREATE TABLE run_models (
+    project     INTEGER NOT NULL REFERENCES projects (pk),
+    run         INTEGER NOT NULL,
+    model       TEXT NOT NULL,
+    input       INTEGER NOT NULL CHECK (input >= 0),
+    output      INTEGER NOT NULL CHECK (output >= 0),
+    cache_read  INTEGER NOT NULL CHECK (cache_read >= 0),
+    cache_write INTEGER NOT NULL CHECK (cache_write >= 0),
+    PRIMARY KEY (run, model),
+    FOREIGN KEY (project, run) REFERENCES runs (project, pk)
+  );
+  `,
 ];

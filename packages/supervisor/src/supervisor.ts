@@ -34,6 +34,8 @@ import {
   RemoteUpgrade,
   RemoteWithheld,
   RUN_CTX_MAX,
+  RUN_MODEL_MAX,
+  RUN_MODELS_MAX,
   RUN_REASON_MAX,
   type ServerFrame,
   type SessionRef,
@@ -59,7 +61,7 @@ import type { Policy } from "./policy.ts";
 import { type Answer, authorOf, Router } from "./router.ts";
 import { holdReader, RunSlots, type SlotEntry } from "./slots.ts";
 import { ACTIVE_STATES, newWorkerId, type RemoteAskRow, type RemoteSentRow, type RemoteWorkerRow, type RequestRow, type Store, type WorkerRow, type WorkerState } from "./store.ts";
-import { type Outcome, type QueryFn, type Usage, WorkerRun, type WorkerRunOptions, workerEnv, ZERO_USAGE } from "./worker.ts";
+import { type Outcome, type QueryFn, sumTokens, type Usage, WorkerRun, type WorkerRunOptions, workerEnv, ZERO_USAGE } from "./worker.ts";
 import { WORKER_SERVER, workerTools } from "./worker-tools.ts";
 import { GitReleases, overdueNotice, UPGRADE_READY_MS, UpgradeRefused, type Releases, upgradeNotice, Upgrades, type WaitingOn } from "./upgrade.ts";
 import ownPackage from "../package.json" with { type: "json" };
@@ -3136,13 +3138,16 @@ export class Supervisor {
     this.store.audit("supervisor", `exit:${outcome.state}`, id, {});
     if (run) {
       const ended = this.store.worker(id)!;
-      // The run's own tokens, net of a resumed session's earlier ones (§9).
+      // The run's own tokens, net of a resumed session's earlier ones (§9), and by model (ADR 0014 §2).
+      const { tokens } = this.ownUsage(ended);
+      const models = this.ownModels(ended, tokens);
       this.boardReport(ended, {
         op: "run_end",
         project: ended.project,
         id,
         ended_at: ended.ended_at!,
-        tokens: this.ownUsage(ended).tokens,
+        tokens,
+        ...(models ? { models } : {}),
         calls: run.ctx.length,
         ctx: downsample(run.ctx, RUN_CTX_MAX),
         // How it ended (ADR 0005 §3): the error or the stop reason, cut to what the board keeps.
@@ -3610,10 +3615,23 @@ export class Supervisor {
     const stored = w.usage ? (JSON.parse(w.usage) as { cum: Usage; base: Usage }) : { cum: ZERO_USAGE, base: ZERO_USAGE };
     const cum = run ? run.usage : stored.cum;
     const base = run ? (this.baselines.get(w.id) ?? ZERO_USAGE) : stored.base;
-    const sub = (k: keyof TokenCounts) => Math.max(0, cum.tokens[k] - base.tokens[k]);
-    return {
-      tokens: { input: sub("input"), output: sub("output"), cache_read: sub("cache_read"), cache_write: sub("cache_write") },
-    };
+    return { tokens: netTokens(cum.tokens, base.tokens) };
+  }
+
+  /**
+   * An ended worker's own tokens by model, net of a resumed session's earlier ones (ADR 0014 §2), for its
+   * run_end. Only when they add up to the tokens it reports: a run that ended mid-turn, or that resumed a
+   * session whose models aren't known, sends none, and is weighed by its declared model.
+   */
+  private ownModels(w: WorkerRow, tokens: TokenCounts): Array<{ model: string; tokens: TokenCounts }> | undefined {
+    if (!w.usage) return undefined;
+    const { cum, base } = JSON.parse(w.usage) as { cum: Usage; base: Usage };
+    const models = Object.entries(cum.models ?? {})
+      .map(([model, t]) => ({ model, tokens: netTokens(t, base.models?.[model] ?? ZERO_USAGE.tokens) }))
+      .filter((m) => TOKEN_KINDS.some((k) => m.tokens[k] > 0));
+    const sum = sumTokens(models.map((m) => m.tokens));
+    if (models.length === 0 || models.length > RUN_MODELS_MAX || models.some((m) => m.model.length > RUN_MODEL_MAX)) return undefined;
+    return TOKEN_KINDS.every((k) => sum[k] === tokens[k]) ? models : undefined;
   }
 
   /** Calls so far and the latest one's context; a running worker's whole line goes with it. */
@@ -3831,6 +3849,14 @@ function isV2(w: WorkerRow): boolean {
 /** What makes a worker `v: 2` (§7), for a worker that continues it: a resume or a reset. */
 function remoteOf(w: WorkerRow): { remoteBy?: string; spawnReq?: string } {
   return w.remote_by && w.spawn_req ? { remoteBy: w.remote_by, spawnReq: w.spawn_req } : {};
+}
+
+const TOKEN_KINDS = ["input", "output", "cache_read", "cache_write"] as const;
+
+/** What a cumulative count has over its base, never below zero. */
+function netTokens(cum: TokenCounts, base: TokenCounts): TokenCounts {
+  const sub = (k: keyof TokenCounts) => Math.max(0, cum[k] - base[k]);
+  return { input: sub("input"), output: sub("output"), cache_read: sub("cache_read"), cache_write: sub("cache_write") };
 }
 
 /** A request on one line, at most 160 characters: what the orchestrator sees before it asks for detail. */

@@ -32,6 +32,15 @@ export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options:
 /** Cumulative usage as the SDK reports it for this session (a resumed one includes its past): tokens, never money. */
 export interface Usage {
   tokens: TokenCounts;
+  /** By model, as the last result had them: `tokens` runs ahead of them mid-turn. None before a result. */
+  models?: Record<string, TokenCounts>;
+}
+
+/** Token counts added up, kind by kind. */
+export function sumTokens(list: TokenCounts[]): TokenCounts {
+  const out = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+  for (const t of list) for (const k of ["input", "output", "cache_read", "cache_write"] as const) out[k] += t[k];
+  return out;
 }
 
 export const ZERO_USAGE: Usage = { tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
@@ -489,16 +498,10 @@ export class WorkerRun {
     }
     if (msg.type === "result") {
       // modelUsage covers every model call (subagents too) and is cumulative for the session.
-      const models = Object.values(msg.modelUsage);
-      const sum = (pick: (m: (typeof models)[number]) => number) => models.reduce((n, m) => n + pick(m), 0);
-      this.usage = {
-        tokens: {
-          input: sum((m) => m.inputTokens),
-          output: sum((m) => m.outputTokens),
-          cache_read: sum((m) => m.cacheReadInputTokens),
-          cache_write: sum((m) => m.cacheCreationInputTokens),
-        },
-      };
+      const models = Object.fromEntries(
+        Object.entries(msg.modelUsage).map(([model, m]) => [model, { input: m.inputTokens, output: m.outputTokens, cache_read: m.cacheReadInputTokens, cache_write: m.cacheCreationInputTokens }]),
+      );
+      this.usage = { tokens: sumTokens(Object.values(models)), models };
     }
     const content = (msg.type === "assistant" || msg.type === "user") && Array.isArray(msg.message.content)
       ? (msg.message.content as Array<{ type: string }>)

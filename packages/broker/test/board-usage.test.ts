@@ -45,6 +45,7 @@ async function run(o: {
   start: number;
   end: number;
   tokens?: TokenTotals;
+  models?: Array<{ model: string; tokens: TokenTotals }>;
   calls?: number;
   ctx?: number[];
   outcome?: "done" | "lost";
@@ -68,6 +69,7 @@ async function run(o: {
     id,
     ended_at: iso(o.end),
     tokens: o.tokens ?? each(0),
+    ...(o.models ? { models: o.models } : {}),
     calls: o.calls ?? 0,
     ctx: o.ctx ?? [],
     outcome: o.outcome ?? "done",
@@ -205,6 +207,41 @@ describe("the usage read (ADR 0014 §3, BOB-167)", () => {
       { session: null, feature_title: null, raw: 960, weighted: 960 },
       { session: s[3]!, feature_title: "Delta", raw: 600, weighted: 1200 },
     ]);
+  });
+
+  it("weighs a run by the models its supervisor reported, and by its declared one without them (ADR 0014 §2, BOB-173)", async () => {
+    await fixedClock();
+    await project("helix", "LAND");
+    // Declared Opus; its subagent ran on Haiku.
+    await run({ model: "opus", start: NOW - 2 * H, end: NOW - H, tokens: each(110), calls: 3, models: [{ model: "claude-opus-5-5", tokens: each(10) }, { model: "claude-haiku-5-5", tokens: each(100) }] });
+    let pt = today(await usage());
+    expect(pt.raw).toEqual(each(110));
+    expect([pt.weighted, pt.unknown, pt.calls]).toEqual([80 + 25, 0, 3]);
+    expect(pt.by_model).toEqual([
+      { model: "claude-haiku-5-5", raw: 400, weighted: 25 },
+      { model: "claude-opus-5-5", raw: 40, weighted: 80 },
+    ]);
+    expect(pt.by_role).toEqual([{ role: "builder", calls: 3, raw: 440, weighted: 105 }]);
+    // Undeclared, with models: known; a run without them, by its declared one.
+    await run({ model: null, start: NOW - 2 * H, end: NOW - H, tokens: each(5), models: [{ model: "claude-sonnet-5-5", tokens: each(5) }] });
+    await run({ model: "opus", start: NOW - 2 * H, end: NOW - H, tokens: each(1) });
+    pt = today(await usage());
+    expect([pt.weighted, pt.unknown]).toEqual([105 + 20 + 8, 0]);
+    const page = await ok(owner, { op: "project", project: "helix" });
+    expect(page.other_runs.map((r) => r.weighted).sort((a, b) => a - b)).toEqual([8, 20, 105]);
+    expect(page.usage.points.at(-1)).toEqual(pt);
+  });
+
+  it("drops models that don't add up to the run's tokens, a lost run's, and adds up one named twice; a run in a session weighs by them too (BOB-173)", async () => {
+    await project("helix", "LAND");
+    const s: SessionRef = { feature: await feature("helix", "Roadmap"), kind: "build", label: "1" };
+    await run({ session: s, model: "opus", start: NOW - 2 * H, end: NOW - H, tokens: each(10), models: [{ model: "claude-haiku-5-5", tokens: each(9) }] });
+    await run({ role: "other", model: "opus", start: NOW - 2 * H, end: NOW - H, tokens: each(0), outcome: "lost", models: [{ model: "claude-haiku-5-5", tokens: each(0) }] });
+    const twice = await run({ session: s, role: "reviewer", model: null, start: NOW - 2 * H, end: NOW - H, tokens: each(10), models: [{ model: "claude-opus-5-5", tokens: each(4) }, { model: "claude-opus-5-5", tokens: each(6) }] });
+    const got = (await ok(owner, { op: "get", project: "helix", session: s })).session!;
+    expect(got.runs.map((r) => [r.weighted, r.unknown])).toEqual([[80, 0], [80, 0]]);
+    const rows = await runInDurableObject(board(), (_, state) => state.storage.sql.exec<{ id: string; model: string; input: number }>("SELECT r.id, m.model, m.input FROM run_models m JOIN runs r ON r.pk = m.run").toArray().map((r) => ({ ...r })));
+    expect(rows).toEqual([{ id: twice, model: "claude-opus-5-5", input: 10 }]);
   });
 
   it("reads its runs by named columns, without their context per call (BOB-192)", () => {

@@ -10,6 +10,7 @@ import { Policy } from "../src/policy.ts";
 import { Store } from "../src/store.ts";
 import { downsample, repoName, Supervisor } from "../src/supervisor.ts";
 import type { Releases } from "../src/upgrade.ts";
+import { ZERO_USAGE } from "../src/worker.ts";
 import { FakeBroker, fakeQuery, quiet, testConfig, tick, until } from "./fakes.ts";
 
 // A project on BobNet's board service (ADR 0001 §6, §8, §9, §10, §12): spawns
@@ -137,6 +138,56 @@ describe("a run's reports", () => {
     expect(store.outbox()).toEqual([]);
   });
 
+  it("reports its tokens by model, its subagent's too, adding up to its own; a resumed run's net of the earlier one (ADR 0014 §2)", async () => {
+    const { sup, broker, sessions } = await setup();
+    const first = await sup.spawnJoined(spawn);
+    await until(() => sessions.length === 1 && store.worker(first.id)!.session_id !== null);
+    const opus = (inputTokens: number, outputTokens: number) => ({ inputTokens, outputTokens, cacheReadInputTokens: 7, cacheCreationInputTokens: 5 });
+    const zero = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0 };
+    sessions[0]!.totals = zero;
+    sessions[0]!.others = { "claude-opus-5-5": opus(1000, 100), "claude-haiku-5-5": opus(300, 30) };
+    sessions[0]!.finish();
+    await until(() => ops(broker, "run_end").length === 1);
+    const ends = () => ops(broker, "run_end").map((o) => o.op as Extract<BoardOpInput, { op: "run_end" }>);
+    expect(ends()[0]).toMatchObject({ tokens: { input: 1300, output: 130, cache_read: 14, cache_write: 10 } });
+    expect(ends()[0]!.models).toEqual([
+      { model: "claude-opus-5-5", tokens: { input: 1000, output: 100, cache_read: 7, cache_write: 5 } },
+      { model: "claude-haiku-5-5", tokens: { input: 300, output: 30, cache_read: 7, cache_write: 5 } },
+    ]);
+    // The SDK's totals for the resumed session include the first run; Haiku wasn't used again.
+    const again = await sup.spawnJoined({ ...spawn, session: { ...spawn.session, label: "2" }, resume_session: store.worker(first.id)!.session_id! });
+    await until(() => sessions.length === 2);
+    sessions[1]!.totals = zero;
+    sessions[1]!.others = { "claude-opus-5-5": opus(1600, 150), "claude-haiku-5-5": opus(300, 30) };
+    sessions[1]!.finish();
+    await until(() => ops(broker, "run_end").length === 2);
+    expect(ends()[1]).toMatchObject({ id: again.id, tokens: { input: 600, output: 50, cache_read: 0, cache_write: 0 } });
+    expect(ends()[1]!.models).toEqual([{ model: "claude-opus-5-5", tokens: { input: 600, output: 50, cache_read: 0, cache_write: 0 } }]);
+  });
+
+  it("sends no models for a run that ended mid-turn, nor for one resuming a session whose models aren't known", async () => {
+    const { sup, broker, sessions } = await setup();
+    const first = await sup.spawnJoined(spawn);
+    await until(() => sessions.length === 1 && store.worker(first.id)!.session_id !== null);
+    sessions[0]!.totals = { inputTokens: 1000, outputTokens: 100, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0 };
+    sessions[0]!.turnDone();
+    sessions[0]!.say("into the next turn", { input_tokens: 50, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
+    sessions[0]!.end();
+    await until(() => ops(broker, "run_end").length === 1);
+    const ends = () => ops(broker, "run_end").map((o) => o.op as Extract<BoardOpInput, { op: "run_end" }>);
+    expect(ends()[0]).toMatchObject({ tokens: { input: 1050, output: 105 } });
+    expect(ends()[0]).not.toHaveProperty("models");
+    // Its usage as a supervisor before this one kept it: totals, no models.
+    store.updateWorker(first.id, { usage: JSON.stringify({ cum: { tokens: { input: 1000, output: 100, cache_read: 0, cache_write: 0 } }, base: ZERO_USAGE }) });
+    await sup.spawnJoined({ ...spawn, session: { ...spawn.session, label: "2" }, resume_session: store.worker(first.id)!.session_id! });
+    await until(() => sessions.length === 2);
+    sessions[1]!.totals = { inputTokens: 1600, outputTokens: 150, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0 };
+    sessions[1]!.finish();
+    await until(() => ops(broker, "run_end").length === 2);
+    expect(ends()[1]).toMatchObject({ tokens: { input: 600, output: 50 } });
+    expect(ends()[1]).not.toHaveProperty("models");
+  });
+
   it("says how it ended: done with no reason, failed with its error, stopped with its reason (ADR 0005 §3)", async () => {
     const { sup, broker, sessions } = await setup();
     const done = await sup.spawnJoined(spawn);
@@ -176,6 +227,7 @@ describe("a run's reports", () => {
       ctx: { worker: w.id },
       op: { op: "run_end", project: "bobnet", id: w.id, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, calls: 0, outcome: "lost", reason: "supervisor restarted" },
     });
+    expect(ops(second.broker, "run_end")[0]!.op).not.toHaveProperty("models");
   });
 
   it("gives its run the Remote Control link once the worker has it, after its start; nothing when it has none", async () => {

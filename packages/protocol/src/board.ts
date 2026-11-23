@@ -140,6 +140,10 @@ export type TokenTotals = z.infer<typeof TokenTotals>;
 export const RunOutcome = z.enum(["done", "failed", "stopped", "lost"]);
 export type RunOutcome = z.infer<typeof RunOutcome>;
 
+/** The most models a run's end reports its tokens by (ADR 0014 §2), and the longest model name. */
+export const RUN_MODELS_MAX = 10;
+export const RUN_MODEL_MAX = 100;
+
 export const CiStatus = z.enum(["queued", "running", "passed", "failed", "cancelled"]);
 export type CiStatus = z.infer<typeof CiStatus>;
 
@@ -467,6 +471,8 @@ export const BoardOp = z.discriminatedUnion("op", [
     id: runId,
     ended_at: at,
     tokens: TokenTotals,
+    /** `tokens` by the model that used them, its subagents' too (ADR 0014 §2), adding up to it; left out by an older supervisor, and for a run that ended mid-turn or was lost. */
+    models: z.array(z.object({ model: z.string().min(1).max(RUN_MODEL_MAX), tokens: TokenTotals })).max(RUN_MODELS_MAX).optional(),
     calls: count,
     /** Context per call, in order. */
     ctx: z.array(z.number().int().nonnegative().max(0xffffffff)).max(RUN_CTX_MAX).default([]),

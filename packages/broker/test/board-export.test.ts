@@ -42,7 +42,7 @@ async function helix() {
   const session = { feature: f1, kind: "build" as const, label: "1" };
   await ok(sup("Bill", session), { op: "session_join", project: "helix", session });
   await ok(sup("Bill", session), { op: "run_start", project: "helix", id: "w_bill", started_at: at(0), session, tasks: [t1] });
-  await ok(sup("Bill", session), { op: "run_end", project: "helix", id: "w_bill", ended_at: at(5), tokens: { input: 1, output: 2, cache_read: 3, cache_write: 4 }, calls: 2, ctx: [1000, 0x10000000] });
+  await ok(sup("Bill", session), { op: "run_end", project: "helix", id: "w_bill", ended_at: at(5), tokens: { input: 1, output: 2, cache_read: 3, cache_write: 4 }, calls: 2, ctx: [1000, 0x10000000], models: [{ model: "claude-opus-5-5", tokens: { input: 1, output: 2, cache_read: 3, cache_write: 4 } }] });
   await ok(sup("Bill", session), { op: "push", project: "helix", repo: "helix", branch: "v2", sha: "abc1234" });
   await ok(agent("Picard"), { op: "ask", project: "helix", text: "Which chart?", options: [{ key: "a", text: "Bars", recommended: true }], holds: [t2] });
   await ok(agent("Picard"), { op: "record_answer", project: "helix", ref: "Q-1", key: "a", words: "Bars" });
@@ -132,7 +132,7 @@ describe("export (ADR 0001 §11)", () => {
     expect(p!.items.map((i) => i.ref)).toEqual([f1, t1, t2]);
     expect(p!.items[0]).toMatchObject({ release: r1, labels: ["ui"], kind: "feature" });
     expect(p!.items[2]).toMatchObject({ parent: f1, deps: [t1] });
-    expect(p!.runs).toMatchObject([{ id: "w_bill", session: { feature: f1, kind: "build", label: "1" }, ctx: [1000, 0x10000000], tasks: [t1] }]);
+    expect(p!.runs).toMatchObject([{ id: "w_bill", session: { feature: f1, kind: "build", label: "1" }, ctx: [1000, 0x10000000], tasks: [t1], models: [{ model: "claude-opus-5-5", input: 1, output: 2, cache_read: 3, cache_write: 4 }] }]);
     expect(p!.pushes).toMatchObject([{ sha: "abc1234", run: "w_bill" }]);
     expect(p!.questions).toMatchObject([{ ref: "Q-1", state: "answered", holds: [{ item: t2 }], options: [{ key: "a", recommended: true }] }]);
     expect(p!.grants).toMatchObject([{ agent: "Picard", fields: ["content", "create", "status"] }]);

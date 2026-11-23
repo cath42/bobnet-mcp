@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { z } from "zod";
 import { BOARD_READS, BoardOp, downsample, ClientFrame, ItemRef, PeerAddress, SUPERVISOR_OPS, type WaitRecord } from "../src/index.ts";
 
 describe("BoardOp", () => {
@@ -86,6 +87,19 @@ describe("step 2's operations", () => {
     expect(BoardOp.parse(end)).toMatchObject({ ctx: [10, 20] });
     expect(BoardOp.safeParse({ ...end, ctx: Array.from({ length: 2001 }, () => 1) }).success).toBe(false);
     expect(BoardOp.parse({ ...end, cost_usd: 1 })).not.toHaveProperty("cost_usd");
+  });
+
+  it("takes a run's tokens by model, up to 10, and a broker from before them drops the field (ADR 0014 §2)", () => {
+    const tokens = { input: 1, output: 2, cache_read: 3, cache_write: 4 };
+    const end = { op: "run_end", project: "helix", id: "w_1a2b3c4d", ended_at: "2026-11-14T10:00:00.000Z", tokens, calls: 2, models: [{ model: "claude-opus-5-5", tokens }] };
+    expect(BoardOp.parse(end)).toMatchObject({ models: [{ model: "claude-opus-5-5", tokens }] });
+    expect(BoardOp.parse({ ...end, models: undefined })).not.toHaveProperty("models.0");
+    expect(BoardOp.safeParse({ ...end, models: Array.from({ length: 11 }, (_, i) => ({ model: `m${i}`, tokens })) }).success).toBe(false);
+    const runEnd = BoardOp.options.find((o) => o.shape.op.value === "run_end") as unknown as z.ZodObject;
+    const before = runEnd.omit({ models: true });
+    const read = before.safeParse(end);
+    expect(read.success).toBe(true);
+    expect(read.data).not.toHaveProperty("models");
   });
 
   it("gets a question by its ref and a session by what declares it", () => {
