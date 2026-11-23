@@ -29,7 +29,8 @@ confirm from the board. So:
 
 | What | Shown while | Leaves when |
 |---|---|---|
-| A live request from a laptop (a permission, a worker's AskUserQuestion) | its laptop's report is under 3 minutes old, the request is under a day old, and its worker is running (BOB-48's rules) | any of the three stops being true, or it is answered |
+| A live request from a laptop (a permission, a worker's AskUserQuestion) | its laptop's report is under 3 minutes old, the request is under a day old, and its worker is not known to have stopped: listed in the report and not active (BOB-48's rules; absent from the report's 100 is unknown) | any of the three stops being true, or it is answered |
+| A human-tier request whose worker a supervisor restart stopped (orphaned), labelled so | the first two above, and no worker of its project and role is queued, active or started since | either stops being true, its role runs again, or it is answered, which starts the worker again |
 | A board question or action (Q-n, A-n), a bug that blocks use | it is open, **however old**, with its age shown ("4 days") | it is answered, withdrawn or done |
 
 Daisy's reading is right: a board question open for four days is still true, and hiding it would hide
@@ -43,6 +44,18 @@ dropped. Two things follow, both in the Needs you task:
   shown.
 
 AC4's wording on the board is amended to say this.
+
+**The orphaned request** (Peach, 2026-11-23, on review C: Toad's gate 5 and Daisy, who agree;
+`architecture/bob121/review-C.md`, `design/BOB-121/review-C.md`). It stays. It is true and only
+Casper can decide it, and without it the page says "Nothing needs you" over work that waits on
+Casper. It doesn't reopen BOB-26: those requests were dead ones that never cleared, up to days old,
+and BOB-48's AC1 expires one whose worker *can't* be resumed. This one can, and it goes within a
+day or when its role runs again. An orchestrator-tier one is its lead's, as before. Answering
+resumes the worker, Deny too; a dismiss that starts nothing is BOB-199. The exact conditions and
+words are BOB-176 criteria 14 and 15.
+
+**A worker's question** has Deny only on the agent's row: Allow was always refused
+(`router.ts:128`). The row says so in Daisy's words (BOB-177 criterion 3).
 
 ### What is not built
 
