@@ -34,11 +34,18 @@ import {
   type StatusStuckRun,
   type WaitRecord,
   type TokenTotals,
+  type UsagePoint,
+  type UsageSeries,
   BOARD_SENDER,
+  USAGE_WEIGHTS,
+  USAGE_WEIGHTS_READ_AT,
   parseRecipient,
+  weigh,
+  weightOf,
 } from "@bobnet/protocol";
 import { BoardError } from "./errors.ts";
 import { Rules, type Scope } from "./rules.ts";
+import { apportion, calendar, cumulative, type Calendar } from "./usage.ts";
 
 // The operation layer (ADR 0001 §2, §3, §5): every read and write of the board.
 // Links are checked here first so a refusal names its reason; the schema's
@@ -68,6 +75,10 @@ const STUCK_MS = 2 * 60 * 60 * 1000;
 /** A heavy session: over twice its kind's median over the 30 days before it, with at least 5 to compare. */
 const HEAVY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 const HEAVY_MIN = 5;
+/** A usage point's biggest sessions: this many by raw and as many by weighted (ADR 0014 §3a); its models, at most. */
+const USAGE_TOP = 3;
+const USAGE_MODELS_MAX = 10;
+const DAY_MS = 24 * 60 * 60 * 1000;
 /** Backlog is thin below this many Ready features with criteria while the open release has work to do. */
 const THIN_READY = 2;
 
@@ -306,6 +317,8 @@ export class BoardStore {
         return this.overview(caller, op);
       case "status":
         return this.status(caller, op);
+      case "usage":
+        return this.usage(caller, op);
     }
   }
 
@@ -1001,6 +1014,131 @@ export class BoardStore {
       },
       more,
     };
+  }
+
+  /**
+   * Usage per project over a read's days (ADR 0014 §3, §3a): every project the caller reads gets its
+   * series, zeros included. Derived on read; the dashboard adds what is running from the laptop reports.
+   */
+  private usage(caller: BoardCaller, op: Op<"usage">): BoardResults["usage"] {
+    const cal = calendar(this.now(), op.days, op.tz);
+    return {
+      weights: { read_at: USAGE_WEIGHTS_READ_AT, rows: USAGE_WEIGHTS.map((w) => ({ ...w })) },
+      tz: cal.tz,
+      days: cal.days,
+      projects: this.readableProjects(caller, op.project).map((p) => this.usageOf(p, cal)),
+    };
+  }
+
+  /**
+   * One project's runs that ended in the read, each spread over the days it ran by wall time and
+   * weighed by its model (§1). A lost run's tokens are unknown: it is counted, never summed.
+   */
+  private usageOf(p: ProjectRow, cal: Calendar): UsageSeries {
+    const points = cal.days.map(() => ({
+      raw: zeroTokens(),
+      weighted: 0,
+      unknown: 0,
+      calls: 0,
+      by_model: new Map<string, { raw: number; weighted: number }>(),
+      by_role: new Map<string, { calls: number; raw: number; weighted: number }>(),
+      by_session: new Map<number | null, { raw: number; weighted: number }>(),
+    }));
+    let lost = 0;
+    for (const r of this.runsEnded(p, cal.edges[0]!, cal.edges.at(-1)!)) {
+      if (r.outcome === "lost") {
+        lost++;
+        continue;
+      }
+      const cum = cumulative(Date.parse(r.started_at), Date.parse(r.ended_at!), cal.edges);
+      const calls = apportion(r.calls, cum);
+      for (const part of this.runParts(r)) {
+        const kinds = { input: apportion(part.tokens.input, cum), output: apportion(part.tokens.output, cum), cache_read: apportion(part.tokens.cache_read, cum), cache_write: apportion(part.tokens.cache_write, cum) };
+        const model = weightOf(part.model)?.model ?? (part.model || "unknown");
+        points.forEach((pt, i) => {
+          const t: TokenTotals = { input: kinds.input[i]!, output: kinds.output[i]!, cache_read: kinds.cache_read[i]!, cache_write: kinds.cache_write[i]! };
+          const raw = sumTokens(t);
+          if (raw === 0) return;
+          const w = weigh(t, part.model);
+          addTokens(pt.raw, t);
+          pt.weighted += w.weighted;
+          pt.unknown += w.unknown;
+          const add = <K>(map: Map<K, { raw: number; weighted: number }>, key: K) => {
+            const e = map.get(key) ?? { raw: 0, weighted: 0 };
+            e.raw += raw;
+            e.weighted += w.weighted;
+            map.set(key, e);
+          };
+          add(pt.by_model, model);
+          add(pt.by_session, r.session);
+          const role = pt.by_role.get(r.role) ?? { calls: 0, raw: 0, weighted: 0 };
+          role.raw += raw;
+          role.weighted += w.weighted;
+          pt.by_role.set(r.role, role);
+        });
+      }
+      points.forEach((pt, i) => {
+        if (calls[i] === 0) return;
+        pt.calls += calls[i]!;
+        const role = pt.by_role.get(r.role) ?? { calls: 0, raw: 0, weighted: 0 };
+        role.calls += calls[i]!;
+        pt.by_role.set(r.role, role);
+      });
+    }
+    const titles = new Map<number, { session: SessionRef; feature_title: string }>();
+    const sessionOf = (pk: number) => {
+      if (!titles.has(pk)) {
+        const s = this.sql.exec<{ title: string }>("SELECT i.title FROM sessions s JOIN items i ON i.pk = s.feature WHERE s.pk = ?", pk).one();
+        titles.set(pk, { session: this.sessionRef(pk)!, feature_title: s.title });
+      }
+      return titles.get(pk)!;
+    };
+    const byRaw = (a: { raw: number; weighted: number }, b: { raw: number; weighted: number }) => b.raw - a.raw || b.weighted - a.weighted;
+    return {
+      project: p.key,
+      name: p.name,
+      points: points.map((pt): UsagePoint => {
+        const sessions = [...pt.by_session].map(([pk, v]) => ({ pk, ...v }));
+        const top = new Set([...[...sessions].sort(byRaw).slice(0, USAGE_TOP), ...[...sessions].sort((a, b) => b.weighted - a.weighted || b.raw - a.raw).slice(0, USAGE_TOP)]);
+        return {
+          raw: pt.raw,
+          weighted: Math.round(pt.weighted),
+          unknown: pt.unknown,
+          by_model: [...pt.by_model]
+            .map(([model, v]) => ({ model, raw: v.raw, weighted: Math.round(v.weighted) }))
+            .sort(byRaw)
+            .slice(0, USAGE_MODELS_MAX),
+          calls: pt.calls,
+          by_role: [...pt.by_role]
+            .map(([role, v]) => ({ role, calls: v.calls, raw: v.raw, weighted: Math.round(v.weighted) }))
+            .sort((a, b) => byRaw(a, b) || b.calls - a.calls || a.role.localeCompare(b.role)),
+          top: [...top].sort(byRaw).map((e) => ({
+            session: e.pk === null ? null : sessionOf(e.pk).session,
+            feature_title: e.pk === null ? null : sessionOf(e.pk).feature_title,
+            raw: e.raw,
+            weighted: Math.round(e.weighted),
+          })),
+        };
+      }),
+      lost,
+    };
+  }
+
+  /** A project's runs that ended in [from, to), oldest end first; ends are compared as instants, whatever their offset. */
+  private runsEnded(p: ProjectRow, from: number, to: number): RunRow[] {
+    // Stored as the supervisor wrote them: a day's margin on the text, then the instants.
+    return this.sql
+      .exec<RunRow>("SELECT * FROM runs WHERE project = ? AND ended_at >= ? ORDER BY ended_at, pk", p.pk, new Date(from - DAY_MS).toISOString())
+      .toArray()
+      .filter((r) => {
+        const t = Date.parse(r.ended_at!);
+        return t >= from && t < to;
+      });
+  }
+
+  /** What a run's tokens are weighed as (§1, §2): its declared model, until per-model rows are reported. */
+  private runParts(r: RunRow): Array<{ model: string | null; tokens: TokenTotals }> {
+    return [{ model: r.model, tokens: tokensOf(r) }];
   }
 
   /**

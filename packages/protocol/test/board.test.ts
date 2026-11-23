@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BoardOp, ClientFrame, ItemRef, PeerAddress, SUPERVISOR_OPS, type WaitRecord } from "../src/index.ts";
+import { BOARD_READS, BoardOp, ClientFrame, ItemRef, PeerAddress, SUPERVISOR_OPS, type WaitRecord } from "../src/index.ts";
 
 describe("BoardOp", () => {
   it("parses an item's create with its criteria, defaulting each to an acceptance criterion", () => {
@@ -91,6 +91,15 @@ describe("step 2's operations", () => {
   it("gets a question by its ref and a session by what declares it", () => {
     expect(BoardOp.safeParse({ op: "get", project: "helix", ref: "Q-258" }).success).toBe(true);
     expect(BoardOp.safeParse({ op: "get", project: "helix", session: { feature: "LAND-49", kind: "build", label: "1" } }).success).toBe(true);
+  });
+});
+
+describe("BOB-121's reads (ADR 0014 §3, §3a)", () => {
+  it("bounds usage to 1..90 days and a zone name of 60, 30 days in UTC by default, and reads it as a read", () => {
+    expect(BoardOp.parse({ op: "usage" })).toEqual({ op: "usage", days: 30, tz: "UTC" });
+    expect(BoardOp.parse({ op: "usage", project: "helix", days: 90, tz: "Europe/Copenhagen" })).toMatchObject({ days: 90, tz: "Europe/Copenhagen" });
+    for (const bad of [{ days: 0 }, { days: 91 }, { days: 1.5 }, { tz: "" }, { tz: "x".repeat(61) }]) expect(BoardOp.safeParse({ op: "usage", ...bad }).success).toBe(false);
+    expect(BOARD_READS).toContain("usage");
   });
 });
 

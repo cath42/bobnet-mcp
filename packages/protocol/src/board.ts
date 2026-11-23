@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SEGMENT } from "./address.ts";
+import type { UsageWeight } from "./weights.ts";
 
 // The board service (ADR 0001): every operation once, as `BoardOp`, with the
 // records and results it returns. The socket carries it in a `board_op` frame;
@@ -62,6 +63,10 @@ const text = z.string().max(16 * 1024);
 const reason = z.string().trim().min(1).max(500);
 const at = z.string().datetime({ offset: true });
 const count = z.number().int().nonnegative();
+/** How many days a usage read covers (ADR 0014 §3), to today. */
+const usageDays = z.number().int().min(1).max(90);
+/** An IANA time zone, `Europe/Copenhagen`: the calendar a usage read's days follow. The board refuses one it doesn't know. */
+const timeZone = z.string().min(1).max(60);
 /** A run's id: the supervisor's worker id. */
 const runId = z.string().regex(/^[A-Za-z0-9_./-]{1,60}$/);
 /** A run's Remote Control link: a claude.ai page, as the snapshot's (frames.ts), since the dashboard renders it as an href. */
@@ -201,6 +206,12 @@ export const BoardOp = z.discriminatedUnion("op", [
    * read, never stored. `since` is clamped to the last 31 days, and the reply says what it used.
    */
   z.object({ op: z.literal("status"), project: ProjectKey.optional(), since: at }),
+  /**
+   * Usage per project over the last `days` days to today in `tz`'s calendar (ADR 0014 §3, §3a), raw and
+   * weighted by model: one series per project the caller reads, or one. Derived on read, never stored;
+   * the dashboard's, not the agents' tools'.
+   */
+  z.object({ op: z.literal("usage"), project: ProjectKey.optional(), days: usageDays.default(30), tz: timeZone.default("UTC") }),
 
   // Writes
   z.object({
@@ -483,8 +494,8 @@ export type BoardOp = z.infer<typeof BoardOp>;
 export type BoardOpInput = z.input<typeof BoardOp>;
 export type BoardOpName = BoardOp["op"];
 
-export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview" | "status";
-export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview", "status"] satisfies BoardReadName[];
+export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview" | "status" | "usage";
+export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview", "status", "usage"] satisfies BoardReadName[];
 /** The supervisor's own operations, which only its connection makes (§8). */
 export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_remote", "run_end", "push", "slot_run", "ci_run", "release_tag"];
 
@@ -865,6 +876,38 @@ export interface StatusAnsweredHolding {
   feature: string | null;
 }
 
+/** One day of a project's usage (ADR 0014 §3, §3a): its runs' tokens spread over the days they ran, by wall time. */
+export interface UsagePoint {
+  raw: TokenTotals;
+  /** Sonnet-equivalent tokens (§1), summed over kinds; `unknown` counted at ×1. */
+  weighted: number;
+  /** Raw tokens of a model the weight table doesn't know, the undeclared included. */
+  unknown: number;
+  /** Per model, by the table's id (`claude-opus-5-5`), else as declared, else `unknown`; the largest 10 by raw. */
+  by_model: Array<{ model: string; raw: number; weighted: number }>;
+  /** Main-thread model calls, spread as the tokens are. */
+  calls: number;
+  /** Per role, largest raw first. */
+  by_role: Array<{ role: string; calls: number; raw: number; weighted: number }>;
+  /** The day's top 3 by raw and the top 3 by weighted (≤ 6), largest raw first; `session` null is the day's work outside any session, as one entry. */
+  top: Array<{ session: SessionRef | null; feature_title: string | null; raw: number; weighted: number }>;
+}
+
+export interface UsageSeries {
+  project: string;
+  name: string;
+  /** One per day of the read's `days`, oldest first. */
+  points: UsagePoint[];
+  /** Runs ended in the span with outcome `lost`: their tokens are unknown, never counted as 0. */
+  lost: number;
+}
+
+/** The weight table (§1) as the board weighs with it, so a page renders it and weighs a live run alike. */
+export interface UsageWeights {
+  read_at: string;
+  rows: UsageWeight[];
+}
+
 // ---------- Results ----------
 
 export interface BoardWritten {
@@ -895,6 +938,8 @@ export interface BoardResults {
   overview: { projects: OverviewRow[] };
   /** `at`: the Board's now; `since`: the span's start as it used it. */
   status: { at: string; since: string; projects: StatusRow[] };
+  /** `days`: the read's days, oldest first, `YYYY-MM-DD` in `tz`; `projects` by key. */
+  usage: { weights: UsageWeights; tz: string; days: string[]; projects: UsageSeries[] };
   create_project: BoardWritten;
   create_release: BoardWritten;
   create: BoardWritten;
