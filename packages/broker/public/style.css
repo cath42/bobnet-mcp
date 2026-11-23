@@ -948,8 +948,8 @@ form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width
 .ugraph .bar:focus-visible .hit { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); }
 .ugraph .bar.sel .hit { fill: color-mix(in srgb, var(--line) 55%, transparent); }
 .ugraph .spike-lab { fill: var(--warn); font-weight: 600; pointer-events: none; }
-.uday { display: grid; gap: 2px; font-size: 13px; border-left: 3px solid var(--accent); padding: 2px 10px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.uday .id { margin-right: 0; }
+.uday { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; font-size: 13px; border-left: 3px solid var(--accent); padding: 2px 10px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.uday .id { margin-right: 0; white-space: normal; }
 .ugraph .axis { pointer-events: none; }
 .uday a:hover { text-decoration: underline; }
 .u-spike, .u-unk, .u-lost { margin: 0; font-size: 13px; }
