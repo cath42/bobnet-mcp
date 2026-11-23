@@ -5,6 +5,7 @@
   Daisy designs the screens (`design/BOB-121/`). §1 is what my answer to her consult c_2c826fdc gave her.
   **Amended 2026-11-22** after Casper's Q-13 verdict (`lead/bob121/q13-verdict.md`): §3a.
   **Amended 2026-11-23** for BOB-192 (consult c_e4382435): §4's fallback, and `usual_ms` in §3a.
+  **Amended 2026-11-23** in BOB-121 review D: §3a's median day, and `done_unclosed` on the Overview (§4).
 
 ## Context
 
@@ -223,6 +224,14 @@ interface UsageDay {
   and the session card's band do today.
 - **The period is the page's** (the last `days` days to today, in `tz`), not one ending on the tapped
   day, and it includes that day. So does the bars' median day: one rule. A `day` outside it is `invalid`.
+- **The median day is over the days with work** (amended 2026-11-23, Daisy's consult c_4fa17383). A day with
+  none isn't a day to compare with: BobNet began on 13 November, and its 30-day median was 0, so every bar
+  over 4M was a spike. The p50 lines and `total.days` already left such days out.
+  - The bars: the days whose raw tokens are over 0 (raw, so the switch never changes which days count). Under
+    3 of them there is no median and no spike. The spike rule is unchanged: over twice it, and over 4M.
+  - `baseline.total.calls` and a role's `calls`: the days with calls, or on which that role made one. Under 3
+    of them it is 0, which the page reads as none. No new field.
+  - A role's context line and band still need 3 runs. Today counts as any day.
 - **Today's running workers** come from the laptop reports (`ctx`, ≤ 400 points, `frames.ts:120`),
   added by the dashboard, as §3's "so far" adds their tokens.
 - **Calls per day per role** for the period are cheap and go on `usage` itself: each point gains
@@ -270,8 +279,9 @@ already uses (`store.ts:998`). A Done feature's unticked criteria are `get`'s `c
   `features` stay done of total, non-archived features only (`releaseRecord`, `store.ts:449`).
 - **Who uses it.** `overview()` and `project` share one helper. The status read's `backlog.release`
   (`store.ts:907`) takes the same helper, so the three never disagree.
-- **Helix.** It shows R2, its true count, and R1 under `done_unclosed` (on the project page) or nothing
-  (on the Overview).
+- **Helix.** It shows R2, its true count, and R1 under `done_unclosed`, on the project page and (amended
+  2026-11-23, BOB-179 c3) on the Overview: `OverviewRow` gains it as an optional field, the same helper's list,
+  with no read of its own. A broker from before sends none, and the page then draws none.
 
 ### 5. What crosses what
 
