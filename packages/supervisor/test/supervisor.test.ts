@@ -1063,6 +1063,34 @@ describe("ADR 0013 §1: a request's whole ask on the report (BOB-51)", () => {
     expect(ask({ question: "w".repeat(4100) })).toMatchObject({ cut: true });
   });
 
+  describe.each([["newline", "\n"], ["tab", "\t"]])("a credential after a %s in an MCP tool's field (BOB-162)", (_name, sep) => {
+    const token = `gh${"p_"}${"a1B2".repeat(9)}`;
+    const hidden = { ask: null, preview: "[hidden: looks like it contains a credential]" };
+    const sent = (sup: Supervisor, input: unknown) => {
+      const { ask, preview } = row(sup, put("mcp__x__send", input).id);
+      return { ask, preview };
+    };
+
+    it.each([
+      ["whole", { body: `x${sep}${token}` }],
+      ["across the ask's clip", { body: `${"x".repeat(7950)}${sep}${token}` }],
+      ["across the preview's clip", { body: `${"x".repeat(370)}${sep}${token}` }],
+      ["nested", { a: [{ b: `x${sep}${token}` }] }],
+      ["in a key", { [`x${sep}${token}`]: 1 }],
+      ["in an input that is no object", [`x${sep}${token}`]],
+    ])("withholds the ask and hides the preview: %s", async (_case, input) => {
+      const { sup } = await setup();
+      expect(sent(sup, input)).toEqual(hidden);
+    });
+
+    it("hides nothing for a field that doesn't cross, or for the escape alone", async () => {
+      const { sup } = await setup();
+      expect(sent(sup, { path: "/a", body: `x${sep}${token}` })).toEqual({ ask: { text: "/a", cut: false, questions: [] }, preview: "/a" });
+      const text = JSON.stringify({ body: `x${sep}y` });
+      expect(sent(sup, { body: `x${sep}y` })).toEqual({ ask: { text, cut: false, questions: [] }, preview: text });
+    });
+  });
+
   it("keeps all the asks within the budget, filling human tier first, so the newest orchestrator rows go null first", async () => {
     const { sup } = await setup();
     const orch = Array.from({ length: 10 }, () => put("Bash", { command: "o".repeat(8000) }, "orchestrator"));

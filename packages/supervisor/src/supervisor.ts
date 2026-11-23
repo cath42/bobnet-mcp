@@ -209,6 +209,17 @@ function withholdSecrets<T>(value: T, detect: Detect = findSecret): T {
   return value;
 }
 
+/** Whether any string or key of a value looks like a credential, each as it is, not as JSON escapes it. */
+function holdsSecret(value: unknown, detect: Detect = findSecret): boolean {
+  const left = [value];
+  while (left.length) {
+    const v = left.pop();
+    if (typeof v === "string" && detect(v)) return true;
+    if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) left.push(k, x);
+  }
+  return false;
+}
+
 /** A value with each string whose serialised form still looks like a credential withheld whole. */
 function withholdWhole<T>(value: T, detect: Detect): T {
   if (typeof value === "string") return (detect(JSON.stringify(value)) ? WITHHELD : value) as T;
@@ -3871,15 +3882,18 @@ const HIDDEN = "[hidden: looks like it contains a credential]";
 /** What a request asks, short enough for the dashboard; never a credential. */
 function preview(r: RequestRow): string {
   let text: string;
+  let parsed: unknown;
   try {
-    const input = JSON.parse(r.input) as Record<string, unknown>;
+    parsed = JSON.parse(r.input);
+    const input = parsed as Record<string, unknown>;
     const q = (input["questions"] as Array<{ question?: string }> | undefined)?.[0]?.question;
     const v = q ?? input["command"] ?? input["file_path"] ?? input["url"] ?? input["path"];
     text = typeof v === "string" ? v : r.input;
   } catch {
     text = r.input;
   }
-  if (findSecret(text)) return HIDDEN;
+  // The raw input writes a newline as `\n`, which runs into a token after it: its strings are checked too.
+  if (findSecret(text) || (text === r.input && holdsSecret(parsed))) return HIDDEN;
   return text.length > 400 ? `${text.slice(0, 399)}…` : text;
 }
 
@@ -3923,13 +3937,14 @@ export function fitReport(snap: LaptopSnapshot, max = REPORT_FIT_BYTES): LaptopS
  * option's own preview), else the command, file path, URL or path as `preview` picks it, else the raw
  * input. Each field clipped to the protocol's maximum, and `cut` set when one was; null when any field
  * looks like a credential, as it was before its clip (a prefix of one must not cross, BOB-162), or
- * serialised after it.
+ * serialised after it; and when the raw input is the text, any string or key of it.
  */
 export function askOf(r: RequestRow, detect: Detect = findSecret): PendingAsk | null {
   let input: Record<string, unknown> | null = null;
+  let parsed: unknown;
   try {
-    const v: unknown = JSON.parse(r.input);
-    if (v && typeof v === "object" && !Array.isArray(v)) input = v as Record<string, unknown>;
+    parsed = JSON.parse(r.input);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) input = parsed as Record<string, unknown>;
   } catch {
     // The raw input is the text.
   }
@@ -3956,6 +3971,7 @@ export function askOf(r: RequestRow, detect: Detect = findSecret): PendingAsk | 
   }));
   const picked = questions[0]?.question ?? input?.["command"] ?? input?.["file_path"] ?? input?.["url"] ?? input?.["path"];
   const text = fit(typeof picked === "string" ? picked : r.input, 8000);
+  if (typeof picked !== "string" && holdsSecret(parsed, detect)) secret = true;
   const fields = [text, ...questions.flatMap((q) => [q.question, q.header, ...q.options.flatMap((o) => [o.label, o.description])])];
   if (secret || fields.some((f) => detect(JSON.stringify(f)))) return null;
   return { text, cut, questions };
