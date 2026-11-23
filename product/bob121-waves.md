@@ -12,11 +12,11 @@ their section and name their tests. Labels on the board: `wave-A`, `wave-B`, `wa
 |---|---|---|
 | **B** | BOB-171 (D4), BOB-169 (D10), BOB-172 (D5), **BOB-192** (review minors), BOB-173 (D6), BOB-162 (D7), **BOB-193** (retired projects off the Overview, last) | one broker deploy, **then** the supervisor rc (D6, D7) and a restart of mbp-1 and ubu1 |
 | **C** | BOB-174, 175, 176, 177, 178 (wave B's views) | one broker deploy |
-| **D** | BOB-179, 180, 181, 182 (wave C, first half) | broker deploy |
+| **D** | **BOB-195** (ctx_even; broker, then a supervisor rc), BOB-179, 180, 181, 182 (wave C, first half) | broker deploy; BOB-195 also an rc, before BOB-181 |
 | **E** | BOB-183, 184, 185, 186 (wave C, second half) | broker deploy |
 
 Data before the views that read it. **BOB-192's m3 lands before BOB-180** (the Usage page calls `usage`).
-B and C are Ready. D's and E's criteria are checked against what landed after C.
+B is accepted (2026-11-23: BOB-171, 169, 172, 192 Done; BOB-173 c4, BOB-162 c2 and BOB-193's post-deploy evidence wait for the broker deploy and the rc, In Review). C is Ready. Review B's minors are criteria of the tasks that must do them: Toad 1 in BOB-174 and 175, 2, 5 and 6 in BOB-180, 3 in BOB-182; Daisy m1 to m4 in BOB-176; Toad 4 is BOB-197 (a watch), 7 is BOB-196 (Luigi, after E); his finding 1 is BOB-195. BOB-194 (drop project_boards) waits for the last reader, after D, best after E. D's and E's criteria are checked against what landed after C.
 
 - Build B may be deployed before C, so no page goes dead in B: BOB-172 adds the old-link resolver, and
   BOB-174/175 switch pages over.
