@@ -3590,6 +3590,18 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
       expect(rules).toEqual(["@media (prefers-reduced-motion: no-preference) { .ci-mark.spin { animation: spin 1.6s linear infinite; } }"]);
     });
 
+    it("says a queued and a cancelled run in words that read: 4.5:1 or more in light and dark, its mark and dots in --idle (c5)", () => {
+      const css = readFileSync(join(import.meta.dirname, "../public/style.css"), "utf8");
+      const [light, dark] = [css.split("@media (prefers-color-scheme: dark)")[0]!, css.split("@media (prefers-color-scheme: dark)")[1]!];
+      const colour = (scheme: string, name: string) => new RegExp(`--${name}: (#[0-9a-f]{6})`).exec(scheme)![1]!;
+      const lum = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)).reduce((n, c, i) => n + c * [0.2126, 0.7152, 0.0722][i]!, 0);
+      const ratio = (a: string, b: string) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x! + 0.05) / (y! + 0.05); };
+      for (const scheme of [light, dark]) expect(ratio(colour(scheme, "muted"), colour(scheme, "surface"))).toBeGreaterThanOrEqual(4.5);
+      const rule = (of: string) => css.split("\n").find((l) => l.startsWith(`.ci-row[data-tone="idle"] ${of} `));
+      expect(rule(".ci-word")).toContain("var(--muted)");
+      expect(rule(".ci-mark")).toContain("var(--idle)");
+    });
+
     it("has no row for a project with no CI, and no card with none at all or from an older broker", async () => {
       ci = { bobnet: [], helix: ci["helix"] };
       await reread();

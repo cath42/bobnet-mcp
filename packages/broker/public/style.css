@@ -343,7 +343,8 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
 .ci-row[data-tone="ok"] :is(.ci-mark, .ci-word) { color: var(--ok); }
 .ci-row[data-tone="bad"] :is(.ci-mark, .ci-word) { color: var(--bad); font-weight: 600; }
 .ci-row[data-tone="run"] :is(.ci-mark, .ci-word) { color: var(--accent); }
-.ci-row[data-tone="idle"] :is(.ci-mark, .ci-word) { color: var(--idle); }
+.ci-row[data-tone="idle"] .ci-mark { color: var(--idle); }
+.ci-row[data-tone="idle"] .ci-word { color: var(--muted); }
 .ci-hist { display: inline-flex; gap: 3px; align-items: center; }
 .ci-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); display: inline-block; }
 .ci-dot.ok { background: var(--ok); }
