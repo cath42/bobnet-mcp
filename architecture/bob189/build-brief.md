@@ -40,7 +40,7 @@ creating, editing, closing and reopening releases wait on the rc.
 - **Close:** `close_release` (`store.ts:1630`) takes a destination for every feature not Done and
   records `closed_at` and `closed_by`. Only who may call it changes (R2).
 - **AC4's ops:** `promote` (`triage`, `:1523`), `set_release` (`release`, `:1590`), `order` with scope
-  `features` and a release (`order`, `:1565`). Under a `not_open_feature` rule they cover every feature
+  `features` and a release (`order`, `:1561`). Under a `not_open_feature` rule they cover every feature
   that isn't open. `promote` drops a backlog item's release: putting it in one is a `set_release` after.
   That stays.
 
