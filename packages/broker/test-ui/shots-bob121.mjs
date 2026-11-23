@@ -42,6 +42,12 @@ function fakeBroker(scene) {
     ...Object.fromEntries(projects.slice(2).map((p) => [p.key, []])),
     helix: [feat("LAND-50", "In Progress", "An agent proposes a change to a recorded lease", { open_since: iso(400) }), feat("LAND-38", "Ready", "Partner audit view of a tract's changes")],
   };
+  if (["page", "nobody", "long"].includes(scene)) {
+    const own = (checked, total) => ({ own: { checked, total } });
+    features.helix = [feat("LAND-45", "Done", "Build and CI in R2: cheaper and safer, and how we work", { done_at: iso(2 * D) }), { ...features.helix[0], ...own(5, 11) }, { ...features.helix[1], ...own(0, 6) },
+      feat("LAND-51", "Ready", "An audit trail on every record: who changed what, when, and why", own(0, 8)), feat("LAND-53", "Draft", "Undo a change within a day", own(0, 0)), feat("LAND-55", "Draft", "Rehearsal 3 pick-up: what Casper finds rehearsing the edit flow", own(0, 0))];
+    features.bobnet = [feat("BOB-6", "Draft", "Start a session from the UI, as a request to poe", { release: "R3", ...own(0, 0) }), ...features.bobnet.map((f) => ({ ...f, release: "R4" }))];
+  }
   const release = (ref, title, done, total) => ({ ref, title, goal: null, status: "open", ord: 1000, spec_url: null, closed_at: null, closed_by: null, features: { done, total }, backlog: { items: 2, bugs: 1, oldest: iso(6 * D) } });
   const run = (status, startMin, tookMin, sha, agent = null, over = {}) => ({ name: "ci", branch: "main", status, sha, url: `https://github.com/example/repo/actions/runs/${sha}`, started_at: iso(startMin), ended_at: tookMin === null ? null : iso(startMin - tookMin), agent, ...over });
   const passed = (n, from) => Array.from({ length: n }, (_, i) => run("passed", from + i * 180, 9, `${(0xa1b2c3 + i * 4097).toString(16)}d4`));
@@ -126,6 +132,8 @@ function fakeBroker(scene) {
   if (scene === "older") { delete mbp.snapshot.decided; mbp.snapshot.pending = mbp.snapshot.pending.map(({ ask, ...p }) => p); }
   const ubu = { laptop: "ubu1", at: iso(quiet ? 9 : 0.6), snapshot: snapshot({ supervisor: { started_at: iso(20 * H), concurrency: 2, active: 1, queued: 0 }, workers: [worker("w_t", "Toad", "architect", { project: "bobnet", session: "BOB-121 review B", started_at: iso(22), calls: 61, context: 77_000, tokens: { input: 90_000, output: 60_000, cache_read: 3_900_000, cache_write: 210_000 } })],
     pending: quiet ? [{ id: "r_8", worker_id: "w_t", name: "Toad", kind: "approval", tool: "Bash", tier: "human", created_at: iso(20), preview: "node bench.mjs" }] : [], board_outbox: quiet ? { count: 14, oldest_at: iso(11), code: "unavailable" } : { count: 0, oldest_at: null, code: null } }) };
+  // Nobody runs in BobNet: Toad ended ten minutes ago, and Luigi is queued.
+  if (scene === "nobody") ubu.snapshot.workers = [{ ...ubu.snapshot.workers[0], state: "done", ended_at: iso(10) }, worker("w_lq", "Luigi", "engineer", { project: "bobnet", state: "queued", started_at: null, session: null })];
   const peer = (name, laptop, online, over = {}) => ({ address: `${name}@${laptop}`, name, laptop, team: "bobnet", purpose: null, expertise: [], status: online ? (long ? `waiting on ${tool}${tool}` : "working") : null, online, last_seen: iso(online ? 0 : 200), connected_at: online ? iso(90) : null, client: { package: "@bobnet/supervisor", version: laptop === "ubu1" ? "2.0.0-rc.54" : "2.0.0-rc.55", protocol: 1 }, stats: { sent_24h: 12, received_24h: 31, inbox: 0 }, ...over });
   const peers = [peer("Mario", "mbp-1", true), peer("Peach", "mbp-1", false), peer("Toad", "ubu1", true), peer("Picard", "mbp-1", true, { team: "helix" }), peer("Howard", "mbp-1", true, { team: "helix", stats: { sent_24h: 4, received_24h: 9, inbox: 1 } }), peer("poe", "mbp-1", true, { team: "ops", client: { package: "@bobnet/client", version: "2.0.0-rc.55", protocol: 1 } })];
   const traffic = [[4, "Picard@mbp-1", "Howard@mbp-1"], [6, "Marvin@mbp-1", "Picard@mbp-1"], [11, "poe@mbp-1", "Mario@mbp-1"], [14, "Toad@ubu1", "Daisy@mbp-1"]].map(([m, from, to], i) => ({ id: `m_${i}`, type: "message", from, to: [to], urgent: false, at: iso(m) }));
@@ -170,8 +178,33 @@ function fakeBroker(scene) {
     return { project: op.project, day: op.day, days: usageDays(op.days), runs, lost: op.project === "bobnet" ? 1 : 0,
       baseline: { total: { days: op.days - 3, calls: 286, p50: line(climb(286, 28_000, 110_000, 2).map((v) => (t += v))) }, roles: roles.map((role, i) => ({ role, runs: 20 - 9 * i, calls: [60, 120, 40][i], p25: i === 2 ? line([]) : band(120, 0.75), p50: i === 2 ? line([]) : band(120, 1), p75: i === 2 ? line([]) : band(120, 1.3) })) } };
   };
+  // A project's page: Helix with agents running, BobNet with nobody in a quiet office (scene "nobody").
+  const tokn = (n) => ({ input: Math.round(n * 0.02), output: Math.round(n * 0.03), cache_write: Math.round(n * 0.09), cache_read: n - Math.round(n * 0.02) - Math.round(n * 0.03) - Math.round(n * 0.09) });
+  const prun = (id, agent, role, model, effort, m, from, took, over = {}) => ({ id, agent, role, laptop: "mbp-1", model, effort, started_at: iso(from), ended_at: took === null ? null : iso(from - took), tokens: tokn(took === null ? 0 : m * 1e6), weighted: Math.round((took === null ? 0 : m) * 1e6 * ({ opus: 2, sonnet: 1, haiku: 0.1 }[model] ?? 1)), calls: 40, outcome: took === null ? null : "done", outcome_reason: null, ...over });
+  const psess = (feature, kind, label, title, from, took, close, runs) => ({ session: { feature, kind, label }, feature_title: title, started_at: iso(from), ended_at: took === null ? null : iso(from - took), close: close && { need: close[0], summary: close[1], blockers: 0, majors: close[2] ?? 0, sent_back: close[3] ?? 0 },
+    tokens: runs.reduce((t, r) => Object.fromEntries(Object.keys(t).map((k) => [k, t[k] + r.tokens[k]])), tokn(0)), weighted: runs.reduce((n, r) => n + r.weighted, 0), unknown: 0, lost: runs.filter((r) => r.outcome === "lost").length, runs });
+  const lateSessions = {
+    helix: [
+      psess("LAND-50", "build", "2", "A person edits a recorded tract: the edit is proposed, approved and audited", 300, null, null, [prun("w_p", "Picard", "lead", "opus", "high", 0, 290, null), prun("w_h", "Howard", "engineer", "opus", "high", 0, 120, null), prun("w_m", "Marvin", "qa", "sonnet", "medium", 0, 60, null), prun("w_h0", "Howard", "engineer", "opus", "high", 8.3, 280, 120)]),
+      psess("LAND-50", "review", "1", "A person edits a recorded tract: the edit is proposed, approved and audited", 500, 110, ["answer", "Two majors: an edit under review is lost; the audit row misses the reason. Sent back to a Fixes build.", 2, 2], [prun("r1", "Bill", "reviewer", "sonnet", "high", 3.3, 500, 100), prun("r2", "Calvin", "qa", "sonnet", "medium", 2.1, 490, 90)]),
+      psess("LAND-50", "build", "1", "A person edits a recorded tract: the edit is proposed, approved and audited", 3000, 480, ["none", "Propose an edit; the change set holds it."], [prun("b1", "Howard", "engineer", "opus", "high", 21.5, 3000, 470), prun("b2", "Bender", "devops", "haiku", "low", 0.3, 2900, 20, { outcome: "failed", outcome_reason: "land refused: CI red on main" })]),
+      psess("LAND-50", "design", "A", "A person edits a recorded tract: the edit is proposed, approved and audited", 4400, 360, ["casper", "Spec and prototype of the edit flow; Casper accepted it (Q-255)."], [prun("d1", "Riker", "designer", "opus", "high", 5.2, 4400, 300), prun("d2", "Data", "architect", "fable", "high", 9.8, 4390, 300, { outcome: "stopped", outcome_reason: "by Picard" })]),
+    ],
+    bobnet: [
+      psess("BOB-121", "design", "A", "The dashboard, use case first", 120, null, null, [prun("t1", "Toad", "architect", "opus", "high", 2.6, 118, 60), prun("t2", "Daisy", "designer", "opus", "high", 6.1, 110, 90)]),
+      psess("BOB-48", "review", "A", "A laptop that stops reporting says so, everywhere it matters", 4600, 120, ["none", "Quiet-laptop banners reviewed on phone and desktop; no findings."], [prun("q1", "Daisy", "designer", "opus", "high", 1.8, 4600, 110), prun("q2", "Toad", "architect", "opus", "high", 0, 4590, 30, { laptop: "ubu1", outcome: "lost", outcome_reason: "ubu1 restarted mid-run" })]),
+      psess("BOB-48", "build", "A", "A laptop that stops reporting says so, everywhere it matters", 5200, 360, ["none", "Banners on Overview and Waits; the laptop card on Sessions."], [prun("q3", "Luigi", "engineer", null, null, 12.4, 5200, 350)]),
+    ],
+  };
+  const projectPage = (p) => {
+    const helix = p.key === "helix", sp = features[p.key];
+    return { project: p, release: helix ? { ...release("R2", "R2 Edit and audit", 1, 6), number: 2 } : { ...release("R3", "R3 Vitals", 0, 1), number: 3 }, done_unclosed: helix ? [] : [{ ref: "R1", title: "R1 Central backlog view" }], waits: [],
+      backlog: { ready: helix ? [{ ref: "LAND-38", title: "x", release: "R2", criteria: 6 }, { ref: "LAND-51", title: "x", release: "R2", criteria: 8 }] : [], sessions_estimate: null, no_criteria: sp.filter((f) => f.status === "Draft").map((f) => ({ ref: f.ref, title: f.title })), triage: { count: helix ? 9 : 12, oldest: { ref: "DRAFT-100", at: iso(14 * D) } }, release: helix ? { ref: "R2", todo: 5, ready: 2 } : { ref: "R3", todo: 1, ready: 0 }, thin: !helix },
+      ci: ci[p.key] ?? [], sessions: lateSessions[p.key] ?? [], other_runs: helix ? [] : [prun("c1", "Peach", "product", "opus", "high", 1.1, 900, 20), prun("c2", "Toad", "architect", "sonnet", "medium", 0.4, 800, 10)], usage: {}, more: {} };
+  };
   const answer = (op) => {
     switch (op.op) {
+      case "project": return projectPage(projects.find((p) => p.key === op.project));
       case "usage_day": return dayOfUsage(op);
       case "usage": return { weights, tz: op.tz, days: usageDays(op.days), projects: projects.filter((p) => !op.project || p.key === op.project).map((p) => usageSeries(p, op.days)) };
       case "projects": return { projects };
@@ -194,7 +227,7 @@ function fakeBroker(scene) {
     }
   };
 
-  const fails = (op) => (scene === "down" ? true : scene === "listdown" ? op.op === "projects" : scene === "failday" ? op.op === "usage_day" : false);
+  const fails = (op) => (scene === "down" ? true : scene === "listdown" ? op.op === "projects" : scene === "failday" ? op.op === "usage_day" : scene === "failpage" || scene === "forbidden" ? op.op === "project" : false);
   class FakeSocket extends EventTarget {
     static OPEN = 1;
     readyState = 1;
@@ -276,6 +309,14 @@ const all = [
   ["bob121-day-dark", "live", "usage", ".ugrid", [bar("helix", 10), byAgent], ".ucard[data-project=helix]", [390, 1440]],
   ["bob121-day-loading", "noday", "usage", ".ugrid", [bar("helix", 10)], ".ucard[data-project=helix]", [390, 1024]],
   ["bob121-day-failed", "failday", "usage", ".ugrid", [bar("helix", 10)], ".ucard[data-project=helix]", [390, 1440]],
+  ["bob121-project-helix", "page", "project/helix", ".lately", []],
+  ["bob121-project-helix-weighed", "page", "project/helix", ".lately", [weigh, (p) => p.locator(".puse .bar").nth(8).click()], ".pside", [390, 1440]],
+  ["bob121-project-helix-open", "page", "project/helix", ".lately", [(p) => p.locator(".prun .a-line", { hasText: "Marvin" }).locator(".a-btn").click(), (p) => p.locator(".pwaits .l-t").first().click()], null, [390, 1440]],
+  ["bob121-project-bobnet", "nobody", "project/bobnet", ".lately", [(p) => p.locator(".others summary").click()]],
+  ["bob121-project-dark", "page", "project/helix", ".lately", [], null, [390, 1440]],
+  ["bob121-project-failed", "failpage", "project/bobnet", ".banner.down", [], null, [390, 1440]],
+  ["bob121-project-forbidden", "forbidden", "project/secret", ".banner.down", [], null, [390]],
+  ["bob121-project-long", "long", "project/helix", ".lately", []],
   ["bob121-usage-dark", "live", "usage", ".ugrid", [bar("bobnet", 0)], null, [390, 1440]],
   ["bob121-usage-many", "many", "usage", ".ugrid", [], null, [390, 1024]],
   ["bob121-usage-down", "down", "usage", ".banner.down", [], null, [390]],

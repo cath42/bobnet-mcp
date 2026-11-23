@@ -1320,7 +1320,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
       "NextWaits on you: Q-4Then Ready: BOB-9Move Helix's board",
       "Backlog13 items2 bugs · oldest 4 days",
     ]);
-    expect(rows[0]!.querySelector(".pname a")!.getAttribute("href")).toBe("#roadmap/bobnet");
+    expect(rows[0]!.querySelector(".pname a")!.getAttribute("href")).toBe("#project/bobnet");
     expect(rows[0]!.querySelector('a[href="#feature/bobnet/BOB-3"]')).not.toBeNull();
     expect(rows[0]!.querySelector('a[href="#triage/bobnet"]')).not.toBeNull();
     expect(view().textContent).not.toContain("Backlog.md");
@@ -2950,10 +2950,10 @@ describe("usage data (BOB-172)", () => {
     expect([app.callAt(old!.ctx, 0), app.callAt(old!.ctx, 399)]).toEqual([601, 1000]);
   });
 
-  it("resolves the old links to pages that exist in build C, a malformed % too (BOB-174 c2, c7)", async () => {
+  it("resolves the old links to pages that exist, #sessions to the first project's, a malformed % too (BOB-174 c2, c7; BOB-182 c7)", async () => {
     await projectsAre([["bobnet", "BOB"], ["helix", "LAND"]]);
-    const toast = "Sessions moved: laptops and agents are under Laptops.";
-    for (const hash of ["#sessions", "#sessions/helix", "#sessions/BOB-4%20build%202", "#sessions/gone", "#sessions/%E0%A4%A"]) expect(app.oldLink(hash)).toEqual({ to: "#laptops", toast });
+    const toast = "Sessions moved: who ran is on each project's page; laptops and agents are under Laptops.";
+    for (const hash of ["#sessions", "#sessions/helix", "#sessions/BOB-4%20build%202", "#sessions/gone", "#sessions/%E0%A4%A"]) expect(app.oldLink(hash)).toEqual({ to: "#project/bobnet", toast });
     expect(app.oldLink("#rules")).toEqual({ to: "#laptops" });
     expect(app.oldLink("#waits")).toEqual({ to: "#needs" });
     expect(app.oldLink("#feature/BOB-4")).toEqual({ to: "#feature/bobnet/BOB-4" });
@@ -2964,16 +2964,17 @@ describe("usage data (BOB-172)", () => {
 
   it("takes an old link to where it goes, with the toast of one whose parts moved (BOB-174 c2, AC13)", async () => {
     const t = $("toast");
-    for (const [from, to, said] of [["#sessions", "#laptops", true], ["#sessions/helix", "#laptops", true], ["#rules", "#laptops", false], ["#waits", "#needs", false], ["#feature/BOB-4", "#feature/bobnet/BOB-4", false]] as const) {
+    for (const [from, to, said] of [["#sessions", "#project/bobnet", true], ["#sessions/helix", "#project/bobnet", true], ["#rules", "#laptops", false], ["#waits", "#needs", false], ["#feature/BOB-4", "#feature/bobnet/BOB-4", false]] as const) {
       t.hidden = true;
       await go(from);
       expect(location.hash).toBe(to);
       expect(t.hidden).toBe(!said);
-      if (said) expect(t.textContent).toBe("Sessions moved: laptops and agents are under Laptops.");
+      if (said) expect(t.textContent).toBe("Sessions moved: who ran is on each project's page; laptops and agents are under Laptops.");
+      if (said) expect([...$("tabs").querySelectorAll("[aria-current]")].map((a) => a.textContent)).toEqual(["Overview"]);
     }
     // A malformed % opens a page all the same.
     await go("#sessions/%E0%A4%A");
-    expect(location.hash).toBe("#laptops");
+    expect(location.hash).toBe("#project/bobnet");
     await go("#feature/%E0%A4%A");
     expect(view().children.length).toBeGreaterThan(0);
   });
@@ -3886,8 +3887,8 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
       expect(row("test").querySelector(".ci-st .muted")!.textContent).toBe(" · 4be01c7 · Toad's land");
       expect(row("ci").querySelector(".ci-st .muted")!.textContent).toBe(" · 7c1e2a9 · Howard's land");
       expect(row("e2e").querySelector(".ci-st .muted")!.textContent).toBe(" · 57e7002");
-      for (const a of row("test").querySelectorAll("a")) expect([a.getAttribute("href"), a.getAttribute("target")]).toEqual(["https://github.com/x/y/actions/runs/4be01c77aa", "_blank"]);
-      expect([...row("test").querySelectorAll("a")].map((a) => a.textContent)).toEqual(["✕test on v2", "Run ↗"]);
+      for (const a of row("test").querySelectorAll("a.ci-wf, a.ci-link")) expect([a.getAttribute("href"), a.getAttribute("target")]).toEqual(["https://github.com/x/y/actions/runs/4be01c77aa", "_blank"]);
+      expect([...row("test").querySelectorAll("a")].map((a) => a.textContent)).toEqual(["BobNet", "✕test on v2", "Run ↗"]);
       expect(row("pages").querySelectorAll("a")).toHaveLength(0);
       expect([...row("test").children].map((c) => c.className)).toEqual(["ci-p", "ci-wf", "ci-st", "ci-hist", "ci-link"]);
       expect(view().textContent).not.toMatch(/\$\d/);

@@ -435,6 +435,44 @@ describe("the project read (ADR 0014 §3, BOB-171)", () => {
     expect(page.backlog.no_criteria).toHaveLength(52);
   });
 
+  it("weighs each run once, from one read of the per-model rows: 100 runs more don't make 100 queries more (BOB-182 c9, Toad review B minor 3)", async () => {
+    await project();
+    const f = await feature("Roadmap", null);
+    const ss: SessionRef = { feature: f, kind: "build", label: "1" };
+    await ok(inSession("w_0", "builder", ss), { op: "session_join", project: "helix", session: ss });
+    const run = async (id: string, session: SessionRef | null, min: number) => {
+      const who = inSession(id, "builder", session);
+      await ok(who, { op: "run_start", project: "helix", id, started_at: ago(min + 5), session, model: "opus" });
+      await ok(who, { op: "run_end", project: "helix", id, ended_at: ago(min), tokens: each(10), calls: 1, outcome: "done", models: [{ model: "claude-opus-5-5", tokens: each(6) }, { model: "claude-haiku-5-5", tokens: each(4) }] });
+    };
+    const count = () =>
+      runInDurableObject(board(), (instance) => {
+        const store = (instance as unknown as { store: { sql: SqlStorage } }).store;
+        const real = store.sql;
+        const queries: string[] = [];
+        store.sql = new Proxy(real, { get: (t, k) => (k === "exec" ? (q: string, ...args: SqlStorageValue[]) => (queries.push(q), t.exec(q, ...args)) : Reflect.get(t, k)) });
+        try {
+          (store as unknown as { read(c: BoardCaller, op: unknown): unknown }).read(owner, { op: "project", project: "helix", days: 14, tz: "UTC" });
+        } finally {
+          store.sql = real;
+        }
+        return { all: queries.length, models: queries.filter((q) => q.includes("run_models")).length };
+      });
+    await run("w_1", ss, 60);
+    // One from before the span, of the session that is still open: weighed by its models too.
+    await run("w_old", ss, 60 * 24 * 40);
+    const few = await count();
+    for (let i = 0; i < 100; i++) await run(`w_n${i}`, i % 2 ? ss : null, 30);
+    const many = await count();
+    expect([few.models, many.models]).toEqual([1, 1]);
+    expect(many.all).toBeLessThanOrEqual(few.all + 5);
+    const page = await ok(owner, { op: "project", project: "helix" });
+    // Opus at 2, Haiku at 0.05 (its cache reads 0.1): 4 x 6 x 2 + 3 x 4 x 0.05 + 4 x 0.1.
+    expect([...new Set([...page.sessions[0]!.runs, ...page.other_runs].map((r) => r.weighted))]).toEqual([49]);
+    expect(page.sessions[0]!.runs.map((r) => r.id)).toContain("w_old");
+    expect(page.sessions[0]!.weighted).toBe(52 * 49);
+  });
+
   it("weighs a session and its runs on get, an undeclared model as unknown", async () => {
     await project();
     const s: SessionRef = { feature: await feature("Roadmap", null), kind: "build", label: "1" };

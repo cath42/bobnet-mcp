@@ -986,3 +986,82 @@ form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width
 .ud .tip { min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ud .note { margin: 0; }
 @media (max-width: 600px) { .ud-x { min-width: 44px; min-height: 44px; } .ud-frame button { min-height: 44px; } .ud-roles { width: 100%; } }
+
+/* A project's page (BOB-121 spec 2.3): what it is doing on the left, what it needs and uses on the right; one column under 1000 px. */
+.p-top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+.p-title { display: grid; gap: 2px; min-width: 0; justify-items: start; overflow-wrap: anywhere; }
+.p-title .back { font-size: 13px; }
+.p-h { margin: 0; font-size: 24px; text-transform: none; letter-spacing: 0; color: var(--text); }
+.pgrid { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.pmain, .pside { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); align-content: start; min-width: 0; }
+@media (min-width: 1000px) { .pgrid { grid-template-columns: minmax(0, 1fr) clamp(320px, 30vw, 400px); } }
+.pgrid .card { gap: 8px; grid-template-columns: minmax(0, 1fr); }
+.pgrid .card > h3 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+.pgrid .card > h3 .count { text-transform: none; letter-spacing: 0; }
+.pgrid .card > p { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.rel-line { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; }
+.rel-line b { font-size: 16px; overflow-wrap: anywhere; }
+.prel .meter { max-width: 320px; }
+.warn-t { color: var(--warn); } .bad-t { color: var(--bad); } .on-t { color: var(--ok); }
+.warn-t a { color: var(--accent); }
+.flist { list-style: none; margin: 0; padding: 0; display: grid; }
+.flist li { display: grid; grid-template-columns: 6em minmax(0, 1fr); gap: 0 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; align-items: baseline; }
+.flist li:first-child { border-top: 0; }
+.flist .ft { color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+.flist .ft:hover { text-decoration: underline; }
+.flist .fs { grid-column: 2; font-size: 13px; color: var(--muted); }
+.flist li.done .ft { color: var(--muted); }
+.flist li.is-open { box-shadow: inset 3px 0 0 var(--ok); padding-left: 10px; }
+.flist .left { color: var(--text); }
+.nobody { margin: 0; color: var(--muted); font-size: 14px; }
+.nobody b { color: var(--text); font-weight: 600; }
+.nobody .id { margin-right: 4px; }
+.prun .more.queued { margin: 0; font-size: 13px; color: var(--muted); }
+.lately { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
+.lately > li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 10px 0; border-top: 1px solid var(--line); }
+.lately > li:first-child { border-top: 0; padding-top: 2px; }
+.lately > li.is-open { box-shadow: inset 3px 0 0 var(--ok); padding-left: 10px; }
+.lt-h { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; font-size: 14px; }
+.lt-h .kind[data-kind="design"] { --k: var(--k-design); } .lt-h .kind[data-kind="build"] { --k: var(--k-build); } .lt-h .kind[data-kind="review"] { --k: var(--k-review); } .lt-h .kind[data-kind="retro"] { --k: var(--k-retro); }
+.lt-h .id { margin-right: 0; }
+.lt-h .ft-t { color: var(--muted); font-size: 13px; flex: 1 1 8em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lt-h .lt-at { font-size: 12.5px; }
+.lt-tok { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.lately .outcome .sum { flex-basis: 100%; color: var(--text); overflow-wrap: anywhere; }
+.runs { list-style: none; margin: 0; padding: 0 0 0 12px; border-left: 2px solid var(--line); display: grid; gap: 2px; grid-template-columns: minmax(0, 1fr); }
+.runs li { display: grid; grid-template-columns: auto minmax(0, 1fr) fit-content(45%) auto; gap: 0 8px; font-size: 13px; align-items: baseline; }
+.runs .r-on, .runs .r-out { overflow-wrap: anywhere; min-width: 0; }
+.runs .r-out { color: var(--muted); text-align: right; }
+.runs .r-tok { font-variant-numeric: tabular-nums; text-align: right; min-width: 5.5em; white-space: nowrap; }
+@media (max-width: 600px) {
+  .runs li { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .runs .r-out { grid-column: 1 / -1; grid-row: 2; text-align: left; }
+  .flist li { grid-template-columns: 5.4em minmax(0, 1fr); }
+  .flist .id, .flist .ft, .lt-h .id { min-height: 44px; display: inline-flex; align-items: center; }
+  .flist li { padding: 2px 0; }
+  .lately .more-t, .others > summary, .prel .links a, .p-health a, .prel .warn-t a, .p-title .back, .nobody .id, .ci-p a, .lately + .more-t { min-height: 44px; display: inline-flex; align-items: center; }
+}
+.others > summary { cursor: pointer; font-size: 13.5px; color: var(--accent); width: fit-content; }
+.others[open] > summary { margin-bottom: 6px; }
+.more-t.all { justify-self: start; padding-left: 0; }
+.p-health { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; margin: 0; font-size: 14px; align-items: baseline; }
+.p-health dt { color: var(--muted); }
+.p-health dd { margin: 0; }
+.p-health a { color: var(--accent); }
+.ci-p a { color: inherit; text-decoration: none; }
+.ci-p a:hover { text-decoration: underline; }
+/* In the aside a CI row has its status on its own row at every width. */
+.pside .ci-row { grid-template-columns: minmax(0, 1fr) auto; }
+.pside .ci-row .ci-st { grid-column: 1 / -1; grid-row: 2; }
+.pside .ci-row .ci-hist { grid-column: 2; grid-row: 1; }
+.pside .ci-row .ci-link { display: none; }
+.puse .seg { justify-self: start; max-width: 100%; }
+/* And a waiting item is the phone's: its badge and age on a row, its text across. Folded, always compact here. */
+.pside .lines li.need { grid-template-columns: minmax(0, 1fr) auto; }
+.pside li.need .n-b { grid-row: auto; grid-column: 1; display: flex; gap: 8px; align-items: baseline; }
+.pside li.need .age { grid-column: 2; grid-row: 1; }
+.pside li.need .l-h { grid-column: 1 / -1; flex-wrap: wrap; }
+.pside li.need .l-t { flex: 1 1 100%; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.pside li.need.open .l-t { display: block; white-space: pre-line; }
+.pside li.need > :is(.fix, .whole, .m-row) { grid-column: 1 / -1; }
+.others > summary .muted { white-space: pre; }

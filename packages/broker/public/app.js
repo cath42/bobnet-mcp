@@ -1041,7 +1041,7 @@ async function loadProjects() {
   // A failed list doesn't hold back the overview and the waits, which are read on their own (BOB-176 m2).
   if (svc.projects?.length || ov.rows || svc.error) loadOverview();
   // So does usage, read again where it shows: the page may have been cut off.
-  usageChanged();
+  readsChanged();
   // The Status tab's dot and the Overview's line read from the start, on every view.
   loadStatus();
   scheduleRender();
@@ -1060,7 +1060,7 @@ async function loadRoadmap(key) {
   } finally {
     svc.loading.delete(key);
   }
-  if (viewName() === "roadmap" || viewName() === "feature") scheduleRender();
+  if (viewName() === "roadmap" || viewName() === "feature" || viewName() === "project") scheduleRender();
   if (svc.again.delete(key)) await loadRoadmap(key);
 }
 
@@ -1463,7 +1463,7 @@ function viewOverview() {
       h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count", id: "needs-count" }, waitCount() || "")),
         h("div", { class: "card" }, needsBody(needsItems(), true))),
       h("div", { class: "ov-side" }, h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length || "")),
-        now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map(nowLine)), queuedLine()) : h("div", { class: "empty-card" }, "No agent is working.", queuedLine())),
+        now.length ? h("div", { class: "card" }, h("ul", { class: "lines now-list", id: "working" }, now.map((w) => nowLine(w))), queuedLine()) : h("div", { class: "empty-card" }, "No agent is working.", queuedLine())),
         ciCard()),
       h("section", { class: "ov-proj" }, h("h2", null, "Projects"),
         h("div", { class: "plist", id: "plist" },
@@ -1524,12 +1524,12 @@ function ciRow(wf, project) {
 }
 /** Every project's workflows from the board (`OverviewRow.ci`); a project with none has no row, and with none at all there is no card. */
 function ciCard() {
-  const rows = (ov.rows ?? []).flatMap((o) => (o.ci ?? []).filter((wf) => wf.runs.length).map((wf, i) => ciRow(wf, i ? "" : o.project.name)));
+  const rows = (ov.rows ?? []).flatMap((o) => (o.ci ?? []).filter((wf) => wf.runs.length).map((wf, i) => ciRow(wf, i ? "" : h("a", { href: projectHref(o.project.key) }, o.project.name))));
   return rows.length ? h("section", { class: "ov-ci" }, h("h2", null, "CI"), h("div", { class: "card" }, h("ul", { class: "ci-list", id: "ci" }, rows))) : null;
 }
 
 /** "2 queued: Luigi, Toad" (spec, BOB-3 gap 2). */
-const queuedLine = () => { const q = workers().filter((w) => w.state === "queued"); return q.length ? h("p", { class: "more queued" }, `${q.length} queued: `, whoNames(q)) : null; };
+const queuedLine = (key = null) => { const q = workers().filter((w) => w.state === "queued" && (key === null || w.project === key)); return q.length ? h("p", { class: "more queued" }, `${q.length} queued: `, whoNames(q)) : null; };
 
 // ---------- Needs you: what waits on Casper, across projects, and his answers from here (BOB-121 spec 2.2; notes 22-24, 35, 40-43) ----------
 
@@ -1878,6 +1878,8 @@ function needItem(x, { compact = false, page = false, project = true, before = n
   const edited = !!w && editedUnderForm(w);
   const text = p ? permText(p) : w.text;
   const toggle = () => toggleWhole(id);
+  // Needs you may be showing another project's: the item is on it all the same.
+  const listed = () => { if (state.waitsProject !== x.project) state.waitsProject = "all"; };
   const where = [project ? (key ? projectName(key) : p.laptop) : null, feature && feature !== w?.ref ? h("a", { class: "id", href: featureHref(key, feature) }, feature) : null].filter(Boolean);
   const closed = w ? w.waiting_sessions.map((y) => `${y.feature === w.feature ? stepName(y) : `${y.feature} ${stepName(y)}`}`) : [];
   const holds = p?.orphan ? null : p ? ["holds up ", worker ? heldIn([worker], ss ? declaredStep(worker) : null) : p.name] : w.kind === "bug" ? "blocks use" : ["holds up ", heldParts(w)];
@@ -1896,8 +1898,8 @@ function needItem(x, { compact = false, page = false, project = true, before = n
     w?.recommended ? h("div", { class: "rec" }, h("b", null, "Recommended "), w.recommended.text) : null,
     compact && w ? staleSpan(w) : null,
     // The context stays on the Needs you page, where it opens: it can be pages long (BOB-31).
-    !page && w?.context ? h("a", { href: "#needs", class: "more-t", onclick: () => { state.whole.add(`ctx:${id}`); saveWhole(); scrollAfter = `c-${id}`; } }, "Its context, on Needs you →") : null,
-    compact ? h("a", { href: "#needs", class: "more-t", onclick: () => (scrollAfter = `w-${id}`) }, w?.kind === "bug" || w?.kind === "review_gate" ? "On Needs you →" : "Answer it on Needs you →") : null,
+    !page && w?.context ? h("a", { href: "#needs", class: "more-t", onclick: () => { state.whole.add(`ctx:${id}`); saveWhole(); scrollAfter = `c-${id}`; listed(); } }, "Its context, on Needs you →") : null,
+    compact ? h("a", { href: "#needs", class: "more-t", onclick: () => { scrollAfter = `w-${id}`; listed(); } }, w?.kind === "bug" || w?.kind === "review_gate" ? "On Needs you →" : "Answer it on Needs you →") : null,
   ].filter(Boolean) : [];
   const unchanged = !compact && w ? staleSpan(w) : null;
   const act = compact ? null : p ? answerToggle(id, ANSWER_VERB.permission) : ANSWER_VERB[w.kind] ? answerToggle(id, ANSWER_VERB[w.kind]) : waitLink(w);
@@ -2024,7 +2026,7 @@ function viewNeeds() {
 }
 
 /** An agent working now: who, its state, tokens, then project › feature › session › tasks; it opens its detail row (spec, BOB-3 gap 2). */
-function nowLine(w) {
+function nowLine(w, named = true) {
   const ss = sessionOf(w);
   const st = agentState(w);
   const items = projects().find((e) => e.board.project === w.project)?.board.backlog?.items ?? [];
@@ -2032,7 +2034,7 @@ function nowLine(w) {
   const href = ss ? featureHref(w.project, ss.feature) : null;
   return agentLine(w,
     [h("span", { class: "l-who" }, h("i", { class: `dot ${st.cls === "warn" ? "warn" : "on"}`, "aria-hidden": "true" }), whoName(w), h("span", { class: "muted" }, ` ${w.role}`)),
-      h("span", { class: "l-path" }, h("span", { class: "muted" }, projectName(w.project), " › "),
+      h("span", { class: "l-path" }, named ? h("span", { class: "muted" }, projectName(w.project), " › ") : null,
         ss ? [h("a", { class: "id", href }, ss.feature), h("span", { class: "muted" }, `${declaredStep(w)}${tasks.length ? " › " : ""}`),
             tasks.map((id, i) => [i ? h("span", { class: "muted tsep" }, " · ") : null, h("a", { href, class: "l-task" }, h("span", { class: "id" }, id), items.find((x) => x.id === id)?.title ?? "")])]
           : h("span", { class: "muted", style: "font-style:italic" }, "Other work (no session)")),
@@ -2049,7 +2051,7 @@ function projectRow(o) {
   const on = open ? onFeature(p.key, open.ref) : [];
   const toTriage = () => (state.triage = { filter: "all", all: false });
   return h("div", { class: "card prow", dataset: { project: p.key } },
-    h("div", { class: "pc pname" }, h("a", { href: `#roadmap/${p.key}` }, p.name),
+    h("div", { class: "pc pname" }, h("a", { href: projectHref(p.key) }, p.name),
       h("span", { class: "muted" }, [...laptopsOf(p.key), p.lead ? `lead ${shortName(p.lead)}` : null, p.po ? `PO ${shortName(p.po)}` : null].filter(Boolean).join(" · "))),
     cell("Release", r
       ? [h("span", { class: "v" }, h("b", null, String(o.release_number)), " ", r.title), meterOf(r.features.done, r.features.total), h("span", { class: "muted" }, `${r.features.done} of ${plural(r.features.total, "feature")} done`)]
@@ -2953,23 +2955,23 @@ function usageSoFar(reply, key) {
   return { ...series, points: [...series.points.slice(0, -1), pt] };
 }
 
-/** "<project, or * for every one>|<days>|<tz>" → the `usage` read, kept: { reply, error, loading, old, at (asked), read }. */
-const usages = new Map();
-const USAGE_AGAIN_MS = 30_000;
-/** The usage read of every project (key null) or one, asked once and kept; `again` is Retry's. Read again once the board has changed, and when the day turns. */
-function usageRead(key, days, again = false) {
-  const tz = usageTz(), id = [key ?? "*", days, tz].join("|");
-  const e = usages.get(id) ?? { key, days, tz, reply: null, error: null, loading: false, old: true, at: 0, read: 0 };
-  usages.set(id, e);
-  const turned = e.reply && e.reply.days.at(-1) !== localDay(brokerNow()) && Date.now() - e.at > USAGE_AGAIN_MS;
-  if (!e.loading && (again || e.old || turned)) void readUsage(e);
+/** Board reads a page keeps, by id: { op, project (null: every one), shown, reply, error, loading, old, at (asked), read, day }. */
+const reads = new Map();
+const READ_AGAIN_MS = 30_000;
+/** A read asked once and kept; `again` is Retry's. Read again once the board has changed, and when the day turns. */
+function keptRead(op, project, shown, again = false) {
+  const id = JSON.stringify(op), today = localDay(brokerNow());
+  const e = reads.get(id) ?? { op, project, shown, reply: null, error: null, loading: false, old: true, at: 0, read: 0, day: today };
+  reads.set(id, e);
+  const turned = e.reply && e.day !== today && Date.now() - e.at > READ_AGAIN_MS;
+  if (!e.loading && (again || e.old || turned)) void readKept(e);
   return e;
 }
-async function readUsage(e) {
+async function readKept(e) {
   Object.assign(e, { loading: true, old: false, at: Date.now() });
   try {
-    const reply = await boardOp({ op: "usage", ...(e.key ? { project: e.key } : {}), days: e.days, tz: e.tz });
-    Object.assign(e, { reply, error: null, read: Date.now() });
+    const reply = await boardOp(e.op);
+    Object.assign(e, { reply, error: null, read: Date.now(), day: localDay(brokerNow()) });
   } catch (err) {
     // What was read stays; with nothing read yet it is said, never drawn as none.
     e.error = err.message;
@@ -2978,17 +2980,19 @@ async function readUsage(e) {
   }
   scheduleRender();
   // A change while it read: read again, if a page still shows it.
-  if (e.old && usageShown(e)) await readUsage(e);
+  if (e.old && e.shown()) await readKept(e);
 }
-const usageShown = (e) => viewName() === "usage" && e.key === null && e.days === state.span;
-/** A run that ended leaves its laptop's report for the board: its project's reads are read again, the one that shows at once (Toad, review B minor 5). */
-function usageChanged(project = null) {
-  for (const e of usages.values()) {
-    if (project !== null && e.key !== null && e.key !== project) continue;
+/** A run that ended leaves its laptop's report for the board: its project's reads are read again, those that show at once (Toad, review B minor 5). */
+function readsChanged(project = null) {
+  for (const e of reads.values()) {
+    if (project !== null && e.project !== null && e.project !== project) continue;
     e.old = true;
-    if (usageShown(e) && !e.loading) void readUsage(e);
+    if (e.shown() && !e.loading) void readKept(e);
   }
 }
+/** The usage read of every project (key null), as Usage shows it, or of one, as its page does. */
+const usageRead = (key, days, again = false) => keptRead({ op: "usage", ...(key ? { project: key } : {}), days, tz: usageTz() }, key,
+  key ? () => projectRoute() === key : () => viewName() === "usage" && days === state.span, again);
 
 const dayDate = (d) => new Date(`${d}T00:00:00`);
 /** A usage day in words: "13 Nov", "Fri 13 Nov". */
@@ -3056,12 +3060,12 @@ function usageScroll() {
 }
 
 /** One project's days as bars, on its own scale: a spike in warn with its value, today's lighter, the picked one outlined. */
-function usageBars(key, series, days, W, small = false) {
+function usageBars(key, series, days, W, small = false, id = key) {
   const { vals, spikes } = usageFigures(series, days);
   const max = Math.max(1, ...vals) * 1.12, step = niceStep(max, small ? 3 : 4), top = Math.ceil(max / step) * step;
   const H = small ? 130 : 160, L = 46, R = 8, B = 22, T = 18, bw = (W - L - R) / days.length;
   const x = (i) => L + i * bw, y = (v) => T + (1 - v / top) * (H - T - B);
-  const any = vals.some((v) => v > 0), picked = state.usageDay.get(key), today = localDay(brokerNow());
+  const any = vals.some((v) => v > 0), picked = state.usageDay.get(id), today = localDay(brokerNow());
   const ticks = any ? Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step) : [0];
   // A spike's value is on top of it; of two whose values would meet, the larger's shows.
   const half = 21, labelled = [];
@@ -3072,15 +3076,15 @@ function usageBars(key, series, days, W, small = false) {
   const bars = days.map((d, i) => {
     const v = vals[i], spike = spikes.some((sp) => sp.day === d), so = d === today;
     const said = `${wordDay(d)}${so ? ", so far" : ""}: ${fmtTokens(v)} ${tokensWord()}${spike ? ", a spike" : ""}`;
-    const g = s("g", { class: ["bar", spike && "spike", so && "today", picked === d && "sel"].filter(Boolean).join(" "), tabindex: "0", role: "button", "aria-label": said, "aria-pressed": String(picked === d), "data-day": d, "data-fk": `bar/${key}/${d}` },
+    const g = s("g", { class: ["bar", spike && "spike", so && "today", picked === d && "sel"].filter(Boolean).join(" "), tabindex: "0", role: "button", "aria-label": said, "aria-pressed": String(picked === d), "data-day": d, "data-fk": `bar/${id}/${d}` },
       s("title", null, said),
       s("rect", { class: "hit", x: x(i), y: 0, width: bw, height: H }),
       s("rect", { class: "b", x: x(i) + bw * 0.15, y: y(v), width: bw * 0.7, height: Math.max(v > 0 ? 1 : 0, y(0) - y(v)), rx: Math.min(2, bw * 0.2) }));
-    g.addEventListener("click", () => pickDay(key, d));
+    g.addEventListener("click", () => pickDay(id, d));
     g.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" && e.key !== " ") return;
       e.preventDefault();
-      pickDay(key, d);
+      pickDay(id, d);
     });
     return g;
   });
@@ -3094,8 +3098,8 @@ function usageBars(key, series, days, W, small = false) {
 }
 
 /** Under a graph: the picked day's total, its split by model and its biggest sessions. */
-function usageDayLine(key, series, days, weights) {
-  const day = state.usageDay.get(key), pt = series.points[days.indexOf(day)];
+function usageDayLine(key, series, days, weights, id = key) {
+  const day = state.usageDay.get(id), pt = series.points[days.indexOf(day)];
   if (!pt) return null;
   const models = pt.by_model.map((m) => [modelShort(m.model, weights.rows), usageFigure(m)]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   const top = [...pt.top].sort((a, b) => usageFigure(b) - usageFigure(a)).slice(0, 3);
@@ -3272,8 +3276,6 @@ function dayDetail(key, series, days, W) {
     lostNote);
 }
 
-/** Where a project's name goes. */
-const projectHref = (key) => `#roadmap/${key}`;
 /** A project's card on Usage: its total, its days, the picked day, its spikes. */
 function usageCard(reply, p, W) {
   const series = usageSoFar(reply, p.project), days = reply.days, { vals, median, total } = usageFigures(series, days);
@@ -3376,6 +3378,184 @@ function totalLine(runs) {
     done += ctx.calls;
   }
   return out;
+}
+
+// ---------- A project's page: its release, who runs and ran, what waits on Casper, CI, usage, backlog health (BOB-121 spec 2.3) ----------
+
+/** Where a project's name goes. */
+const projectHref = (key) => `#project/${key}`;
+/** The project whose page shows, null on any other: the hash's, else the one last picked. */
+const projectRoute = () => (viewName() === "project" ? hashPath()[1] || pageProject() : null);
+const PAGE_DAYS = 14;
+/** Who ran lately: how many sessions show before Show all. */
+const LATELY = 8;
+const projectRead = (key, again = false) => keptRead({ op: "project", project: key, days: PAGE_DAYS, tz: usageTz() }, key, () => projectRoute() === key, again);
+
+/** A release by its ref and title, which often starts with it: "R2 Edit and audit". */
+const releaseName = (r) => (r.title.startsWith(r.ref) ? r.title : `${r.ref} ${r.title}`);
+/** Where a feature stands, in words (spec 2.6): a done one when, an open one what is left, a Ready or a Draft one what it has. */
+function whereStands(f) {
+  const c = f.own ?? f.progress, t = f.tasks ?? { done: 0, total: 0 }, left = c.total - c.checked, tasks = t.total - t.done;
+  if (f.status === "Done") return h("span", { class: "muted" }, f.done_at ? `done ${day(f.done_at)}` : "done");
+  if (f.status === "Draft" && !f.open_since) {
+    return h("span", { class: "muted" }, "draft · ", !c.total ? "no criteria yet" : c.checked ? `${left} of ${plural(c.total, "criterion", "criteria")} left` : `${plural(c.total, "criterion", "criteria")} written`);
+  }
+  if (f.status === "Ready" && !f.open_since) return h("span", { class: "muted" }, `ready · ${c.total ? `${plural(left, "criterion", "criteria")} to meet` : "no criteria yet"}`);
+  if (!left && !tasks) return h("span", { class: "left" }, c.total ? `${c.total === 1 ? "its criterion is" : `all ${c.total} criteria are`} met` : "no criteria yet");
+  return h("span", { class: "left" }, [c.total ? `${left} of ${plural(c.total, "criterion", "criteria")}` : null, t.total ? `${tasks} of ${plural(t.total, "task")}` : null].filter(Boolean).join(" and "), " left");
+}
+/** A feature of the release: its id, title, where it stands and who is on it; the open one has the green edge. */
+function releaseFeature(key, f) {
+  const on = onFeature(key, f.ref);
+  return h("li", { class: f.status === "Done" ? "done" : f.open_since ? "is-open" : null, dataset: { ref: f.ref } },
+    h("a", { class: "id", href: featureHref(key, f.ref) }, f.ref), h("a", { class: "ft", href: featureHref(key, f.ref) }, f.title),
+    h("span", { class: "fs" }, whereStands(f), on.length ? h("span", { class: "on-t" }, " · ", whoNames(on), " on it") : null));
+}
+
+/** Who ran last in a project with nobody running: from the laptops' reports and boards, and from its page's sessions when they are read. */
+function lastRun(key, page = null) {
+  const ran = [
+    ...workers().filter((w) => w.project === key && w.ended_at).map((w) => ({ name: w.name, laptop: w.laptop, session: w.session, at: w.ended_at })),
+    ...(laptopBoard(key)?.runs ?? []).filter((r) => r.ended_at && !r.id.startsWith("orchestrator:")).map((r) => ({ name: r.name, session: r.session, at: r.ended_at })),
+    ...(page?.sessions ?? []).flatMap((ss) => ss.runs.filter((r) => r.ended_at).map((r) => ({ name: r.agent, laptop: r.laptop, session: sessionKey(ss.session), at: r.ended_at }))),
+    ...(page?.other_runs ?? []).map((r) => ({ name: r.agent, laptop: r.laptop, session: null, at: r.ended_at })),
+  ];
+  return ran.reduce((a, r) => (!a || Date.parse(r.at) > Date.parse(a.at) ? r : a), null);
+}
+/** A project's agents now, or that nobody runs and who ran last; then its queued ones. */
+function runningOf(key, page = null) {
+  const on = running().filter((w) => w.project === key);
+  const last = on.length ? null : lastRun(key, page), ss = last && sessionOf(last);
+  return [
+    on.length ? h("ul", { class: "lines now-list" }, on.map((w) => nowLine(w, false)))
+      : h("p", { class: "nobody" }, "Nobody is running.", last ? [" Last: ", h("b", null, last.name),
+        ss ? [" on ", h("a", { class: "id", href: featureHref(key, ss.feature) }, ss.feature), declaredStep(last)] : null, ", ended ", ago(last.at), " ago."] : null),
+    queuedLine(key),
+  ];
+}
+
+/** A run's tokens as the switch shows them: a running one's from its laptop's report, so far; null when they aren't known. */
+function runFigure(r, w, weights) {
+  if (r.outcome === "lost") return null;
+  if (r.ended_at) return usageFigure({ raw: r.tokens, weighted: r.weighted });
+  if (!w) return null;
+  if (!state.weigh) return workerTokens(w);
+  const tokens = typeof w.tokens === "number" ? { input: w.tokens, output: 0, cache_read: 0, cache_write: 0 } : w.tokens;
+  return weights ? Math.round(weighTokens(tokens, w.model, weights.rows).weighted) : null;
+}
+/** One run: who, on what, how it ended and its tokens. A lost one's are unknown, never 0. */
+function runLi(key, r, w, weights) {
+  const n = runFigure(r, w, weights), live = !r.ended_at;
+  const bad = r.outcome === "failed" || r.outcome === "lost";
+  const out = live ? h("span", { class: "on-t" }, "running") : bad ? h("span", { class: "bad-t" }, `${r.outcome}${r.outcome_reason ? `: ${r.outcome_reason}` : ""}`)
+    : r.outcome === "stopped" ? `stopped${r.outcome_reason ? `: ${r.outcome_reason}` : ""}` : r.outcome ?? "ended";
+  return h("li", { dataset: { run: r.id, outcome: live ? "running" : r.outcome ?? "ended" } },
+    whoName({ name: r.agent, laptop: r.laptop, project: key }), h("span", { class: "muted r-on" }, `${r.role} · ${r.model ?? "default model"}${r.effort ? ` · ${r.effort}` : ""}`),
+    h("span", { class: "r-out" }, out),
+    h("span", { class: "r-tok" }, n === null ? h("span", { class: "warn-t" }, live && w ? "not weighed" : live ? "no report" : "tokens unknown") : `${fmtTokens(n)}${live ? " so far" : ""}`));
+}
+/** One session of who ran lately: its kind, label, feature and span, its tokens, its close, then its runs. */
+function latelyLi(key, x, weights) {
+  const ss = x.session, byId = new Map(workers().map((w) => [w.id, w]));
+  // A worker the board has no run of yet runs too.
+  const extra = running().filter((w) => w.project === key && w.session === sessionKey(ss) && !x.runs.some((r) => r.id === w.id))
+    .map((w) => ({ id: w.id, agent: w.name, role: w.role, laptop: w.laptop, model: w.model, effort: w.effort, started_at: w.started_at, ended_at: null, outcome: null, outcome_reason: null }));
+  const runs = [...x.runs, ...extra], figures = runs.map((r) => runFigure(r, byId.get(r.id), weights));
+  const sum = figures.reduce((n, v) => n + (v ?? 0), 0), unknown = figures.length > 0 && figures.every((v) => v === null);
+  const open = !x.ended_at, c = x.close;
+  const found = c ? [c.blockers ? plural(c.blockers, "blocker") : null, c.majors ? plural(c.majors, "major") : null, c.sent_back ? `${c.sent_back} sent back` : null].filter(Boolean).join(" · ") || "no findings" : "";
+  return h("li", { class: open ? "is-open" : null, dataset: { session: sessionKey(ss) } },
+    h("div", { class: "lt-h" }, h("span", { class: "kind", dataset: { kind: ss.kind } }, ss.kind), h("b", null, ss.label), featLink(key, ss.feature), h("span", { class: "ft-t", title: x.feature_title }, x.feature_title),
+      h("span", { class: "muted lt-at" }, open ? ["open since ", ago(x.started_at), " ago"] : span(x.started_at, x.ended_at)),
+      h("span", { class: "lt-tok" }, unknown ? h("span", { class: "warn-t" }, "tokens unknown") : `${fmtTokens(sum)}${open ? " so far" : ""}`)),
+    c ? h("div", { class: "outcome" }, h("span", { class: "need", dataset: { need: c.need } }, `need: ${c.need}`), h("span", { class: "muted" }, found), c.summary ? h("span", { class: "sum" }, c.summary) : null) : null,
+    runs.length ? h("ul", { class: "runs" }, runs.map((r) => runLi(key, r, byId.get(r.id), weights))) : null);
+}
+/** Who ran lately: the page's sessions, newest activity first, then the runs outside any. */
+function lately(key, page, weights) {
+  const all = page.sessions, shown = state.open.has(`lately/${key}`) ? all : all.slice(0, LATELY);
+  const others = page.other_runs, byId = new Map(workers().map((w) => [w.id, w]));
+  if (!all.length && !others.length) return h("p", { class: "muted" }, "Nobody ran in the last 14 days.");
+  const sum = others.reduce((n, r) => n + (runFigure(r, byId.get(r.id), weights) ?? 0), 0);
+  return [
+    all.length ? h("ul", { class: "lately" }, shown.map((x) => latelyLi(key, x, weights))) : null,
+    all.length > shown.length ? button(`Show all ${all.length} sessions`, "more-t all", () => { state.open.add(`lately/${key}`); render(); }) : null,
+    all.length === shown.length && page.more?.sessions ? cutLine(page.more.sessions, false, h("a", { href: `#roadmap/${key}` }, "on the Roadmap")) : null,
+    others.length ? details(`others/${key}`, { class: "others" }, h("summary", null, `${plural(others.length + (page.more?.other_runs ?? 0), "run")} outside any session`, h("span", { class: "muted" }, ` · ${fmtTokens(sum)}`)),
+      h("ul", { class: "runs" }, others.map((r) => runLi(key, r, byId.get(r.id), weights)))) : null,
+  ];
+}
+
+/** The project's backlog health: what is Ready, what lacks criteria, what waits on triage, its open bugs. */
+function backlogHealth(key, page) {
+  const b = page.backlog, rel = b.release, bugs = ov.rows?.find((o) => o.project.key === key)?.backlog.bugs;
+  const row = (label, ...v) => [h("dt", null, label), h("dd", null, ...v)];
+  return [
+    h("dl", { class: "p-health" },
+      row("Ready to start", plural(whole(page, "backlog.ready", b.ready), "feature")),
+      row("Without criteria", plural(whole(page, "backlog.no_criteria", b.no_criteria), "feature")),
+      row("To triage", h("a", { href: `#triage/${key}`, onclick: () => (state.triage = { filter: "all", all: false }) }, plural(b.triage.count, "item")),
+        b.triage.oldest ? h("span", { class: "muted" }, ` · oldest ${age(b.triage.oldest.at)}`) : null),
+      bugs === undefined ? null : row("Open bugs", plural(bugs, "bug"))),
+    rel && rel.ready === 0 && rel.todo > 0 ? h("p", { class: "warn-t" }, `${rel.ref} has nothing Ready: its next feature needs criteria.`) : null,
+  ];
+}
+
+function viewProject() {
+  if (!svc.projects && !svc.error) return [unread()];
+  const key = projectRoute();
+  if (!key) return [noProjects()];
+  if (svc.projects && !ov.rows && !ov.loading && !ov.error) loadOverview();
+  const known = knownProjects().find((p) => p.key === key), r = projectRead(key), page = r.reply;
+  const p = page?.project ?? known, name = p?.name ?? key;
+  const retry = () => button("Retry", "", () => { projectRead(key, true); if (svc.roadmaps.get(key)?.error) loadRoadmap(key); render(); });
+  const who = [p?.lead ? `lead ${shortName(p.lead)}` : null, p?.po ? `PO ${shortName(p.po)}` : null, laptopsOf(key).join(", ") || null, p?.repos?.join(", ") || null].filter(Boolean).join(" · ");
+  const head = h("div", { class: "p-top" },
+    h("div", { class: "p-title" }, h("a", { class: "back", href: "#overview" }, "‹ Overview"), h("h2", { class: "p-h" }, name), who ? h("span", { class: "muted" }, who) : null),
+    svc.projects && svc.projects.length > 1 ? projectSwitch(key, (k) => projectHref(k)) : null);
+  // Not one this page knows of: what the board says about it, or that it is being read.
+  if (!p) return [head, r.error ? h("div", { class: "banner down" }, h("b", null, `${name} couldn't be read`), h("span", null, r.error), retry()) : h("div", { class: "empty-card" }, "Reading the board…")];
+
+  const road = svc.roadmaps.get(key);
+  if (!road && !svc.loading.has(key)) loadRoadmap(key);
+  const u = usageRead(key, PAGE_DAYS), weights = u.reply?.weights, series = u.reply && usageSoFar(u.reply, key);
+  const reading = (part) => h("p", { class: "muted" }, r.error ? `${part} couldn't be read.` : "Reading the board…");
+  const rel = page?.release, feats = rel && road && !road.error ? road.features.filter((f) => f.release === rel.ref) : null;
+  const waits = needsItems().filter((x) => x.project === key).sort((a, b) => Number(b.blocking) - Number(a.blocking));
+  const ci = ov.rows?.find((o) => o.project.key === key)?.ci?.filter((wf) => wf.runs.length);
+  const on = running().filter((w) => w.project === key).length;
+  const card = (cls, title, n, ...kids) => h("section", { class: `card ${cls}` }, h("h3", null, title, " ", h("span", { class: "count" }, n)), ...kids);
+  const asideId = `aside/${key}`;
+  const W = usageWidth(1, window.innerWidth >= 1000 ? Math.min(400, Math.max(320, Math.round(window.innerWidth * 0.3))) : null);
+  return [
+    staleBanners(),
+    head,
+    r.error ? h("div", { class: "banner down" }, h("b", null, page ? "The board couldn't be read again" : "The board couldn't be read"),
+      h("span", null, page ? `${r.error} Its release, who ran and its backlog are from ${clock(new Date(r.read).toISOString())}.` : `${r.error} Its release, who ran and its backlog aren't shown.`), retry()) : null,
+    h("div", { class: "pgrid" },
+      h("div", { class: "pmain" },
+        card("prel", "Current release", "",
+          !page ? reading("Its release") : rel
+            ? [h("div", { class: "rel-line" }, h("b", null, releaseName(rel)), h("span", { class: "muted" }, `${rel.features.done} of ${plural(rel.features.total, "feature")} done`)), meterOf(rel.features.done, rel.features.total)]
+            : h("p", { class: "muted" }, "No open release."),
+          (page?.done_unclosed ?? []).map((x) => h("p", { class: "warn-t" }, `${releaseName(x)}: all done, waiting for your close. `, h("a", { href: `#roadmap/${key}` }, "Close it on the Roadmap →"))),
+          rel ? (feats ? h("ul", { class: "flist" }, feats.map((f) => releaseFeature(key, f))) : h("p", { class: "muted" }, road?.error ? "Its features couldn't be read." : "Reading its features…")) : null,
+          h("div", { class: "links" }, h("a", { href: `#roadmap/${key}` }, "Roadmap"), h("a", { href: `#triage/${key}` }, "Triage"))),
+        card("prun", "Running now", on || "", runningOf(key, page)),
+        card("plate", "Who ran lately", "last 14 days", page ? lately(key, page, weights) : reading("Who ran"))),
+      h("aside", { class: "pside" },
+        card("pwaits", "Waits on you", waits.length || "",
+          waits.length ? h("ul", { class: "lines" }, waits.map((x) => needItem(x, { compact: true, project: false }))) : ov.waits ? h("p", { class: "st-empty ok" }, "Nothing waits on you.") : null,
+          ov.waits ? null : h("p", { class: "muted" }, boardError() ? "What waits on you couldn't be read." : "Reading the board…"),
+          waits.length ? h("a", { class: "more-t", href: "#needs", onclick: () => (state.waitsProject = key) }, "Answer them on Needs you →") : null),
+        card("pci", "CI", "", ci?.length ? h("ul", { class: "ci-list" }, ci.map((wf) => ciRow(wf, null)))
+          : h("p", { class: "muted" }, ci ? "No CI run on the board yet." : ov.error ? "CI couldn't be read." : "Reading the board…")),
+        card("puse", "Usage", series ? `${fmtTokens(usageFigures(series, u.reply.days).total)} ${tokensWord()}, ${PAGE_DAYS} days` : "",
+          series ? [usageBars(key, series, u.reply.days, W, true, asideId), usageDayLine(key, series, u.reply.days, weights, asideId)] : h("p", { class: "muted" }, u.error ? "Usage couldn't be read." : "Reading usage…"),
+          weighSwitch(),
+          h("a", { class: "more-t", href: "#usage" }, "Usage, every project →")),
+        card("pback", "Backlog health", "", page ? backlogHealth(key, page) : reading("Its backlog")))),
+  ];
 }
 
 // ---------- Laptops: the supervisors, the agents, the rules and who messaged whom (BOB-121 spec 2.11) ----------
@@ -3499,19 +3679,19 @@ function rulesSections() {
 // ---------- Views ----------
 
 // Now left the tabs (BOB-5 as built 3): "#now" opens the Overview, as any unknown view does.
-const VIEWS = { overview: viewOverview, needs: viewNeeds, status: viewStatus, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, laptops: viewLaptops };
+const VIEWS = { overview: viewOverview, needs: viewNeeds, status: viewStatus, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, project: viewProject, laptops: viewLaptops };
 const viewName = () => (VIEWS[hashPath()[0]] ? hashPath()[0] : "overview");
 
 function render() {
   const v = viewName();
-  for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${v}`);
+  for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${v === "project" ? "overview" : v}`);
   // Nothing waits: the count leaves the tab.
   $("needs-n").textContent = waitCount() || "";
   $("tabs").querySelector('a[href="#status"]').dataset.new = String(statusNew());
   drawConn();
   // Capture always has a project (Casper, 2026-11-13): only once the service has one.
   $("capture-open").hidden = !svc.projects?.length;
-  $("view").classList.toggle("wide", v === "overview" || v === "feature" || v === "roadmap" || v === "status" || v === "usage");
+  $("view").classList.toggle("wide", v === "overview" || v === "feature" || v === "roadmap" || v === "status" || v === "usage" || v === "project");
   // The answer box he is typing in keeps its focus and caret across a draw.
   const box = document.activeElement?.closest?.("form.answer") ? document.activeElement : null;
   const at = box?.selectionStart;
@@ -3533,13 +3713,16 @@ function focusKey(fk) {
 }
 
 /**
- * Where a link from before the new pages goes (spec 2.0, build C), or null for one that still stands. #features
- * and #project come with their pages (BOB-182, BOB-185). A `%` that decodes to nothing is taken as it is.
+ * Where a link from before the new pages goes (spec 2.0), or null for one that still stands, or that waits for the
+ * projects to be read. #features comes with its page (BOB-185). A `%` that decodes to nothing is taken as it is.
  */
 function oldLink(hash) {
   const [v, ...rest] = hash.replace(/^#/, "").split("?")[0].split("/");
   if (v === "waits") return { to: "#needs" };
-  if (v === "sessions") return { to: "#laptops", toast: "Sessions moved: laptops and agents are under Laptops." };
+  if (v === "sessions") {
+    const first = svc.projects?.[0];
+    return first ? { to: projectHref(first.key), toast: "Sessions moved: who ran is on each project's page; laptops and agents are under Laptops." } : null;
+  }
   if (v === "rules") return { to: "#laptops" };
   if (v === "feature" && rest.length === 1 && rest[0]) {
     let ref = rest[0];
@@ -3728,7 +3911,7 @@ function connect() {
           for (const id of feats.keys()) if (id.startsWith(`${f.project}/`)) loadFeature(f.project, id.slice(f.project.length + 1));
         }
         usageDayChanged(f.project);
-        usageChanged(f.project);
+        readsChanged(f.project);
         // One during the first read too: it is read again when that ends (Toad, review C minor 5).
         if (ov.rows || ov.error || ov.loading) loadOverview();
         if (rules.rows) loadRules();
@@ -3769,8 +3952,8 @@ setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send('{"t":"ping"}'), 
 setInterval(() => ws?.readyState === WebSocket.OPEN && (dashboardRid = request("dashboard")), 60_000);
 // The Status tab's dot, on any view (ADR 0005 §2: every 60 s when Status and the Overview aren't showing).
 setInterval(() => ws?.readyState === WebSocket.OPEN && (svc.projects ? (loadStatus(), ov.error ? loadOverview() : null) : loadProjects()), 60_000);
-// A usage read that failed is tried again while a page shows it.
-setInterval(() => { for (const e of usages.values()) if (e.error && usageShown(e) && !e.loading && ws?.readyState === WebSocket.OPEN) void readUsage(e); }, 60_000);
+// A kept read that failed is tried again while a page shows it.
+setInterval(() => { for (const e of reads.values()) if (e.error && e.shown() && !e.loading && ws?.readyState === WebSocket.OPEN) void readKept(e); }, 60_000);
 // Waits, hourly: a row goes stale and is flagged with no change on the board to say so (ADR 0011 §2; review A m3).
 setInterval(() => ws?.readyState === WebSocket.OPEN && svc.projects && loadOverview(), 60 * 60_000);
 

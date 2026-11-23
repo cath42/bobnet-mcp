@@ -1071,7 +1071,7 @@ export class BoardStore {
    * One project's runs that ended in the read, each spread over the days it ran by wall time and
    * weighed by its model (§1). A lost run's tokens are unknown: it is counted, never summed.
    */
-  private usageOf(p: ProjectRow, cal: Calendar): UsageSeries {
+  private usageOf(p: ProjectRow, cal: Calendar, models = this.modelsEnded(p, cal.edges[0]!)): UsageSeries {
     const points = cal.days.map(() => ({
       raw: zeroTokens(),
       weighted: 0,
@@ -1082,7 +1082,6 @@ export class BoardStore {
       by_session: new Map<number | null, { raw: number; weighted: number }>(),
     }));
     let lost = 0;
-    const models = this.modelsEnded(p, cal.edges[0]!);
     for (const r of this.runsEnded(p, cal.edges[0]!, cal.edges.at(-1)!)) {
       if (r.outcome === "lost") {
         lost++;
@@ -1193,6 +1192,7 @@ export class BoardStore {
     const others = this.runsEnded(p, cal.edges[0]!, cal.edges.at(-1)!)
       .filter((r) => r.session === null)
       .reverse();
+    const models = this.modelsEnded(p, cal.edges[0]!, since);
     return {
       project: this.projectRecord(p),
       release: current.release && { ...current.release, number: current.number! },
@@ -1205,11 +1205,11 @@ export class BoardStore {
         const roles = new Map(
           this.sql.exec<{ role: string; n: number }>("SELECT role, count(*) AS n FROM session_tasks WHERE session = ? GROUP BY role", s.pk).toArray().map((r) => [r.role, r.n]),
         );
+        const weighed = runs.map((r) => ({ r, w: this.weighRun(r, models.get(r.pk) ?? []) }));
         const tokens = zeroTokens();
         let weighted = 0;
         let unknown = 0;
-        for (const r of runs) {
-          const w = this.weighRun(r);
+        for (const { r, w } of weighed) {
           addTokens(tokens, r);
           weighted += w.weighted;
           unknown += w.unknown;
@@ -1227,16 +1227,16 @@ export class BoardStore {
           weighted: Math.round(weighted),
           unknown,
           lost: runs.filter((r) => r.outcome === "lost").length,
-          runs: runs.map((r) => this.projectRun(r)),
+          runs: weighed.map(({ r, w }) => this.projectRun(r, w.weighted)),
         };
       }),
-      other_runs: list("other_runs", others).map((r) => this.projectRun(r)),
-      usage: this.usageOf(p, cal),
+      other_runs: list("other_runs", others).map((r) => this.projectRun(r, this.weighRun(r, models.get(r.pk) ?? []).weighted)),
+      usage: this.usageOf(p, cal, models),
       more,
     };
   }
 
-  private projectRun(r: RunRow): ProjectRun {
+  private projectRun(r: RunRow, weighted: number): ProjectRun {
     return {
       id: r.id,
       agent: r.agent,
@@ -1247,7 +1247,7 @@ export class BoardStore {
       started_at: r.started_at,
       ended_at: r.ended_at,
       tokens: tokensOf(r),
-      weighted: this.weighRun(r).weighted,
+      weighted,
       calls: r.calls,
       outcome: r.outcome ?? null,
       outcome_reason: r.outcome_reason ?? null,
@@ -1255,10 +1255,10 @@ export class BoardStore {
   }
 
   /** A run's tokens weighed by model (ADR 0014 §1), rounded to whole tokens, and those of a model the table doesn't know. */
-  private weighRun(r: RunRow): { weighted: number; unknown: number } {
+  private weighRun(r: RunRow, models?: RunModelRow[]): { weighted: number; unknown: number } {
     let weighted = 0;
     let unknown = 0;
-    for (const part of this.runParts(r)) {
+    for (const part of this.runParts(r, models)) {
       const w = weigh(part.tokens, part.model);
       weighted += w.weighted;
       unknown += w.unknown;
@@ -1345,10 +1345,17 @@ export class BoardStore {
       });
   }
 
-  /** The per-model rows of a project's runs ended from `from` on, by run: one read for a list of runs. */
-  private modelsEnded(p: ProjectRow, from: number): Map<number, RunModelRow[]> {
+  /**
+   * The per-model rows of a project's runs ended from `from` on, by run: one read for a list of runs.
+   * With `sessions`, also those of the earlier runs of a session open or ended since then.
+   */
+  private modelsEnded(p: ProjectRow, from: number, sessions?: string): Map<number, RunModelRow[]> {
     const out = new Map<number, RunModelRow[]>();
-    for (const m of this.sql.exec<RunModelRow>("SELECT m.* FROM runs r JOIN run_models m ON m.run = r.pk WHERE r.project = ? AND r.ended_at >= ?", p.pk, new Date(from - DAY_MS).toISOString())) {
+    const since = new Date(from - DAY_MS).toISOString();
+    const ended = "SELECT m.* FROM runs r JOIN run_models m ON m.run = r.pk WHERE r.project = ? AND r.ended_at >= ?";
+    const earlier = "SELECT m.* FROM sessions s JOIN runs r ON r.session = s.pk JOIN run_models m ON m.run = r.pk WHERE s.project = ? AND (s.ended_at IS NULL OR s.ended_at >= ?) AND r.ended_at < ?";
+    const rows = sessions === undefined ? this.sql.exec<RunModelRow>(ended, p.pk, since) : this.sql.exec<RunModelRow>(`${ended} UNION ALL ${earlier}`, p.pk, since, p.pk, sessions, since);
+    for (const m of rows) {
       const rows = out.get(m.run);
       rows ? rows.push(m) : out.set(m.run, [m]);
     }
