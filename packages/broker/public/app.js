@@ -31,6 +31,8 @@ const state = {
   answering: null,
   /** Needs you lines shown whole, and Waits items with their context open ("ctx:" + id): kept for the tab's life (BOB-31). */
   whole: new Set(),
+  /** Usage weighed by model (Sonnet-equivalent), or raw: the hash's, else this device's (ADR 0014; spec 2.9). */
+  weigh: false,
   last: 10,
 };
 /** Updates kept in the page: the broker's snapshot plus what arrives live. */
@@ -56,6 +58,10 @@ function toggleWhole(id) {
   saveWhole();
   render();
 }
+
+/** The hash's path ("usage", "helix", a day), without its filters (`?weigh=1`). */
+const hashPath = () => location.hash.slice(1).split("?")[0].split("/");
+const hashFilter = (name) => new URLSearchParams(location.hash.split("?")[1] ?? "").get(name);
 
 /** Builds an element; string children become text nodes, never HTML. */
 function h(tag, attrs, ...children) {
@@ -354,7 +360,7 @@ const empty = (b) => h("section", null, h("div", { class: "banner idle" }, h("sp
 
 function viewFeature() {
   // `#feature/<project>/<id>`: a feature in the service opens on its steps; one on a Backlog.md board opens as before.
-  const id = location.hash.slice(1).split("/")[1];
+  const id = hashPath()[1];
   const route = featureRoute();
   if (route) return viewServiceFeature(route.p, route.ref);
   if (id) state.inc = id;
@@ -435,7 +441,7 @@ async function loadFeature(key, ref) {
 
 /** `#feature/<project>/<id>`; a bare `#feature/<id>` finds its project by prefix, or draft prefix (Toad, BOB-3 finding 2). */
 function featureRoute() {
-  const [, a, b] = location.hash.slice(1).split("/");
+  const [, a, b] = hashPath();
   const ps = svc.projects ?? [];
   if (b) { const p = ps.find((x) => x.key === a); return p ? { p, ref: b } : null; }
   if (!a) return null;
@@ -969,7 +975,7 @@ async function loadRoadmap(key) {
 
 /** `#roadmap/<project>[/edit]`, or the project picked above, when its board is in the service; null for a Backlog.md one. */
 function roadmapRoute() {
-  const [, key, mode] = location.hash.slice(1).split("/");
+  const [, key, mode] = hashPath();
   const keys = (svc.projects ?? []).map((p) => p.key);
   const edit = mode === "edit";
   if (keys.includes(key)) return { key, edit };
@@ -2091,7 +2097,7 @@ function statusBanners(reply) {
 
 function viewStatus() {
   if (svc.projects && !stv.base && !stv.loading && !stv.error) loadStatus();
-  const [, k, sec] = location.hash.slice(1).split("/");
+  const [, k, sec] = hashPath();
   const reply = stReply();
   if (k && k !== "needs") return statusProject(k, sec, reply);
   const rows = reply?.projects ?? null;
@@ -2324,7 +2330,7 @@ function statusLine() {
 function statusScroll() {
   if (viewName() !== "status" || stv.scrollFor === location.hash || !stReply()) return;
   stv.scrollFor = location.hash;
-  const [, k, sec] = location.hash.slice(1).split("/");
+  const [, k, sec] = hashPath();
   const el = k === "needs" ? $("status-needs") : sec ? $(`sec-${sec}`) : null;
   el?.scrollIntoView({ block: "start" });
 }
@@ -2354,7 +2360,7 @@ async function loadBacklog(key) {
 
 /** `#triage/<project>[/edit]`, or the project picked above, or the first in the service. */
 function triageRoute() {
-  const [, key, mode] = location.hash.slice(1).split("/");
+  const [, key, mode] = hashPath();
   const keys = (svc.projects ?? []).map((p) => p.key);
   const edit = mode === "edit";
   if (keys.includes(key)) return { key, edit };
@@ -2464,7 +2470,7 @@ const titleOf = (text) => text.split(/(?<=[.!?])\s|\n/)[0].trim().slice(0, 300);
 /** The project on screen, else the one picked above, else the first. */
 function captureProject() {
   const keys = (svc.projects ?? []).map((p) => p.key);
-  const [v, key] = location.hash.slice(1).split("/");
+  const [v, key] = hashPath();
   if ((v === "roadmap" || v === "triage") && keys.includes(key)) return key;
   if (v === "feature" && featureRoute()) return featureRoute().p.key;
   if (v === "triage") return triageRoute()?.key ?? keys[0];
@@ -2793,6 +2799,150 @@ function viewUsage() {
   ];
 }
 
+// ---------- Usage data: weighed, what runs now, a day's detail (ADR 0014; BOB-172). Its views read these. ----------
+
+const WEIGH = "bobnet.weigh";
+/** A link's setting holds for the page, and doesn't change the device's. */
+function hashWeigh() {
+  const of = hashFilter("weigh");
+  if (of !== null) state.weigh = of === "1";
+}
+function setWeigh(on) {
+  state.weigh = on;
+  try { localStorage.setItem(WEIGH, on ? "1" : "0"); } catch {}
+  history.replaceState(null, "", `#${hashPath().join("/")}?weigh=${on ? 1 : 0}`);
+  render();
+}
+/** A usage figure as the toggle shows it: a point, or a by_model, by_role or top row (whose `raw` is one number). */
+const usageFigure = (x) => (state.weigh ? x.weighted : typeof x.raw === "number" ? x.raw : totalTokens(x.raw));
+
+const TOKEN_KINDS = ["input", "output", "cache_read", "cache_write"];
+/** A model's row of the read's weights, by the board's rule: its full id, an alias, its family's current model; else null. */
+function weightRow(model, rows) {
+  const m = (model ?? "").trim().toLowerCase().replace(/\[[^\]]*\]$/, "");
+  const alias = rows.find((r) => r.alias !== null && r.alias === m);
+  if (alias) return alias;
+  const id = /^claude-([a-z]+)-(\d{1,2}(?:-\d{1,2})?)(?:-\d{8})?$/.exec(m);
+  return id ? (rows.find((r) => r.model === `claude-${id[1]}-${id[2]}`) ?? rows.find((r) => r.alias === id[1]) ?? null) : null;
+}
+/** Tokens weighed as the board weighs them; an unknown model's count at ×1. */
+function weighTokens(tokens, model, rows) {
+  const row = weightRow(model, rows), raw = totalTokens(tokens);
+  return row ? { weighted: TOKEN_KINDS.reduce((sum, k) => sum + tokens[k] * row[k], 0), unknown: 0 } : { weighted: raw, unknown: raw };
+}
+
+/** The zone the usage reads are asked in: this device's, so a day starts at its own midnight. */
+const usageTz = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+const dayStart = (day) => new Date(`${day}T00:00:00`).getTime();
+function localDay(t) {
+  const d = new Date(t), two = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+
+/** A project's workers whose run the board doesn't have yet: the laptop reports' running, queued and waiting. */
+const liveWorkers = (key) => workers().filter((w) => w.project === key && [...ACTIVE, "queued"].includes(w.state));
+/** How much of a running worker came before today, 0 to 1, by wall time. */
+function beforeToday(w, today) {
+  const start = Date.parse(w.started_at), now = brokerNow();
+  return now > start ? Math.min(1, Math.max(0, (dayStart(today) - start) / (now - start))) : 0;
+}
+
+/**
+ * A project's series with what runs now in today's point (`so_far`): each worker's share of today, by
+ * wall time, weighed with the read's own table. `top` stays the board's, of runs that ended. A reply
+ * from before midnight has no today in it, and takes none.
+ */
+function usageSoFar(reply, key) {
+  const series = reply.projects.find((p) => p.project === key);
+  const today = reply.days.at(-1);
+  if (!series || today !== localDay(brokerNow())) return series ?? null;
+  const last = series.points.at(-1);
+  const pt = { ...last, raw: { ...last.raw }, by_model: last.by_model.map((m) => ({ ...m })), by_role: last.by_role.map((r) => ({ ...r })), so_far: true };
+  const add = (list, field, name, row) => {
+    const e = list.find((x) => x[field] === name) ?? list[list.push({ [field]: name, raw: 0, weighted: 0, ...(field === "role" ? { calls: 0 } : {}) }) - 1];
+    for (const [k, v] of Object.entries(row)) e[k] += v;
+  };
+  for (const w of liveWorkers(key)) {
+    if (!w.started_at) continue;
+    const before = beforeToday(w, today);
+    const part = (n) => n - Math.round(n * before);
+    const whole = typeof w.tokens === "number" ? { input: w.tokens, output: 0, cache_read: 0, cache_write: 0 } : w.tokens;
+    const tokens = Object.fromEntries(TOKEN_KINDS.map((k) => [k, part(whole[k])]));
+    const raw = totalTokens(tokens), calls = part(w.calls ?? 0);
+    const { weighted, unknown } = weighTokens(tokens, w.model, reply.weights.rows);
+    for (const k of TOKEN_KINDS) pt.raw[k] += tokens[k];
+    pt.weighted += weighted;
+    pt.unknown += unknown;
+    pt.calls += calls;
+    if (raw) add(pt.by_model, "model", weightRow(w.model, reply.weights.rows)?.model ?? (w.model || "unknown"), { raw, weighted });
+    if (raw || calls) add(pt.by_role, "role", w.role, { raw, weighted, calls });
+  }
+  for (const x of [pt, ...pt.by_model, ...pt.by_role]) x.weighted = Math.round(x.weighted);
+  for (const list of [pt.by_model, pt.by_role]) list.sort((a, b) => b.raw - a.raw || b.weighted - a.weighted);
+  return { ...series, points: [...series.points.slice(0, -1), pt] };
+}
+
+/** "<project>|<day>|<days>|<tz>" → { reply, error, loading, at, old }: a day's detail, read on the tap and kept. */
+const usageDays = new Map();
+const USAGE_DAY_AGAIN_MS = 30_000;
+/**
+ * A day's detail: asked once and kept; `again` is Retry's. Today's is asked again, at most twice a
+ * minute, once the board has changed (a run that ended leaves the laptop's report for the board), and
+ * any day's once its period has moved on; what shows stays until the reply.
+ */
+function usageDay(key, day, days, again = false) {
+  const tz = usageTz(), id = [key, day, days, tz].join("|");
+  const e = usageDays.get(id) ?? { reply: null, error: null, loading: false, at: 0, old: false };
+  const today = localDay(brokerNow());
+  const old = e.reply && (e.reply.days.at(-1) !== today || (e.old && day === today)) && Date.now() - e.at > USAGE_DAY_AGAIN_MS;
+  if (e.loading || (usageDays.has(id) && !again && !old)) return e;
+  usageDays.set(id, e);
+  Object.assign(e, { loading: true, error: null, at: Date.now(), old: false });
+  boardOp({ op: "usage_day", project: key, day, days, tz })
+    .then((reply) => (e.reply = reply), (err) => (e.error = err.message))
+    .finally(() => {
+      e.loading = false;
+      scheduleRender();
+    });
+  return e;
+}
+function usageDayChanged(key) {
+  for (const [id, e] of usageDays) if (id.startsWith(`${key}|`)) e.old = true;
+}
+
+/** Context at each of a running worker's calls from `from` (0-based); its report has the last 400, so `known` is the first call it has. */
+function liveLine(w, from) {
+  const calls = Math.max(w.calls ?? 0, w.ctx?.length ?? 0), n = w.ctx?.length ?? 0;
+  const lead = Math.max(0, calls - n - from);
+  return { calls: calls - from, pts: (w.ctx ?? []).slice(Math.max(0, from - (calls - n))), ...(n && lead ? { known: lead + 1 } : {}) };
+}
+/** A day's runs, by start: the reply's, and today's running workers as runs (`live`, `ended_at` null). */
+function dayRuns(reply) {
+  if (reply.day !== localDay(brokerNow())) return reply.runs;
+  const have = new Set(reply.runs.map((r) => r.id));
+  const live = liveWorkers(reply.project).filter((w) => w.started_at && !have.has(w.id)).map((w) => {
+    const from = Math.round(Math.max(w.calls ?? 0, w.ctx?.length ?? 0) * beforeToday(w, reply.day));
+    return { id: w.id, agent: w.name, role: w.role, session: null, declared: w.session ?? null, model: w.model ?? null, started_at: w.started_at, ended_at: null, resumed: false, first: from + 1, ctx: liveLine(w, from), live: true };
+  }).filter((r) => r.ctx.calls > 0);
+  return [...reply.runs, ...live].sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
+}
+/** The call (1-based) a line's point i is at: evenly taken over its calls, first and last kept; a running worker's are its last. */
+function callAt(line, i) {
+  if (line.known) return line.known + i;
+  return line.pts.length > 1 ? 1 + Math.round((i * (line.calls - 1)) / (line.pts.length - 1)) : 1;
+}
+/** Total: runs in start order, their context summed as they go; a point counts for the calls it stands for. A run with no context draws nothing. */
+function totalLine(runs) {
+  const out = [];
+  let sum = 0, done = 0;
+  for (const { ctx } of runs) {
+    if (!ctx.pts.length) continue;
+    ctx.pts.forEach((v, i) => out.push({ call: done + callAt(ctx, i), sum: (sum += v * (ctx.calls / ctx.pts.length)) }));
+    done += ctx.calls;
+  }
+  return out;
+}
+
 // ---------- Rendering: sessions (debugging) ----------
 
 function taskChip(task) {
@@ -2928,7 +3078,7 @@ function viewRules() {
 
 // Now left the tabs (BOB-5 as built 3): "#now" opens the Overview, as any unknown view does.
 const VIEWS = { overview: viewOverview, waits: viewWaits, status: viewStatus, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, sessions: viewSessions, rules: viewRules };
-const viewName = () => (VIEWS[location.hash.slice(1).split("/")[0]] ? location.hash.slice(1).split("/")[0] : "overview");
+const viewName = () => (VIEWS[hashPath()[0]] ? hashPath()[0] : "overview");
 
 function render() {
   const v = viewName();
@@ -2957,6 +3107,28 @@ function render() {
   }
 }
 
+/**
+ * Where a link from before the new pages goes (spec 2.0), or null for one that still stands. The pages
+ * ask it as they switch over (BOB-174, 175): until then #sessions and #waits open what they did.
+ */
+function oldLink(hash) {
+  const [path] = hash.replace(/^#/, "").split("?");
+  const [v, ...rest] = path.split("/");
+  const ps = svc.projects ?? [];
+  const pageOf = (p) => (p ? `#project/${p.key}` : "#overview");
+  const feature = (ref) => { const p = ps.find((x) => ref.startsWith(`${x.prefix}-`)) ?? ps.find((x) => x.draft_prefix && ref.startsWith(`${x.draft_prefix}-`)); return p ? `#feature/${p.key}/${ref}` : null; };
+  if (v === "waits") return { to: "#needs" };
+  if (v === "sessions") {
+    // A session's name starts with its feature ("LAND-41 build 3").
+    const x = decodeURIComponent(rest[0] ?? "");
+    const to = ps.some((p) => p.key === x) ? `#project/${x}` : (feature(x.split(" ")[0]) ?? pageOf(ps[0]));
+    return { to, toast: "Sessions moved: who ran is on each project's page; laptops and agents are under Laptops." };
+  }
+  if (v === "feature" && !rest[0]) return { to: "#features" };
+  if (v === "feature" && rest.length === 1) return { to: feature(rest[0]) ?? "#features" };
+  return null;
+}
+
 /** Live frames re-render at most a few times a second, and not while a chart is pointed at or a menu is open. */
 let renderTimer = null;
 function scheduleRender() {
@@ -2982,6 +3154,7 @@ let scrollAfter = null;
 let lastView = viewName();
 window.addEventListener("hashchange", () => {
   holdRender = false;
+  hashWeigh();
   // A toast that stays (I'm caught up's) goes with the tab it was made on.
   if (viewName() !== lastView && $("toast").dataset.keep === "true") $("toast").hidden = true;
   lastView = viewName();
@@ -3107,6 +3280,7 @@ function connect() {
           if (backlogs.has(f.project)) loadBacklog(f.project);
           for (const id of feats.keys()) if (id.startsWith(`${f.project}/`)) loadFeature(f.project, id.slice(f.project.length + 1));
         }
+        usageDayChanged(f.project);
         if (ov.rows) loadOverview();
         if (rules.rows) loadRules();
         statusChanged();
@@ -3133,6 +3307,8 @@ function connect() {
   });
 }
 
+try { state.weigh = localStorage.getItem(WEIGH) === "1"; } catch {}
+hashWeigh();
 render();
 connect();
 // Keepalive, and a full refresh every minute for the 24-hour counts.
@@ -3142,3 +3318,6 @@ setInterval(() => ws?.readyState === WebSocket.OPEN && (dashboardRid = request("
 setInterval(() => ws?.readyState === WebSocket.OPEN && svc.projects && loadStatus(), 60_000);
 // Waits, hourly: a row goes stale and is flagged with no change on the board to say so (ADR 0011 §2; review A m3).
 setInterval(() => ws?.readyState === WebSocket.OPEN && svc.projects && loadOverview(), 60 * 60_000);
+
+// For the tests: what the views read that has no screen of its own yet.
+export { state, usageFigure, setWeigh, weighTokens, usageSoFar, usageDay, dayRuns, callAt, totalLine, oldLink };

@@ -2708,6 +2708,210 @@ describe("the laptop mark (BOB-44; design/BOB-44/laptop-mark.md)", () => {
   });
 });
 
+describe("usage data (BOB-172: no screen of its own yet)", () => {
+  type Tok = { input: number; output: number; cache_read: number; cache_write: number };
+  type Pt = { raw: Tok; weighted: number; unknown: number; calls: number; so_far?: boolean; by_model: Array<Record<string, unknown>>; by_role: Array<Record<string, unknown>>; top: unknown[] };
+  type Line = { calls: number; pts: number[]; known?: number };
+  type Run = { id: string; started_at: string; ended_at: string | null; first: number; ctx: Line; live?: boolean };
+  type Detail = { project: string; day: string; days: string[]; runs: Run[]; baseline: unknown; lost: number };
+  let app: {
+    state: { weigh: boolean };
+    usageFigure: (x: unknown) => number;
+    setWeigh: (on: boolean) => void;
+    usageSoFar: (reply: unknown, key: string) => { points: Pt[] };
+    usageDay: (key: string, day: string, days: number, again?: boolean) => { reply: Detail | null; error: string | null; loading: boolean };
+    dayRuns: (reply: Detail) => Run[];
+    callAt: (line: Line, i: number) => number;
+    totalLine: (runs: Run[]) => Array<{ call: number; sum: number }>;
+    oldLink: (hash: string) => { to: string; toast?: string } | null;
+  };
+  const each = (n: number) => ({ input: n, output: n, cache_read: n, cache_write: n });
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const dayOf = (back: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() - back);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+  const days = [dayOf(2), dayOf(1), dayOf(0)];
+  const zero = (): Pt => ({ raw: each(0), weighted: 0, unknown: 0, calls: 0, by_model: [], by_role: [], top: [] });
+  const ended: Pt = { raw: each(10), weighted: 80, unknown: 0, calls: 5, by_model: [{ model: "claude-opus-5-5", raw: 40, weighted: 80 }], by_role: [{ role: "luigi", calls: 5, raw: 40, weighted: 80 }], top: [] };
+  // Not the real ratios: a figure made with hard-coded ones is wrong here.
+  const rows = [
+    { model: "claude-opus-5-5", alias: "opus", input: 3, output: 3, cache_read: 7, cache_write: 3 },
+    { model: "claude-sonnet-5-5", alias: "sonnet", input: 1, output: 1, cache_read: 1, cache_write: 1 },
+  ];
+  const reply = (points: Pt[]) => ({ weights: { read_at: "2026-11-22", rows }, tz: "UTC", days, projects: [{ project: "usage-x", name: "X", points, lost: 0 }] });
+  const live = (over: Record<string, unknown>) =>
+    worker({ project: "usage-x", role: "luigi", name: "Luigi", session: "BOB-1 build 2", task_ref: null, tokens: each(100), calls: 4, ctx: [10, 20, 30, 40], started_at: startToday, ...over });
+  /** A minute ago, or midnight if that was yesterday. */
+  const startToday = new Date(Math.max(Date.now() - 60_000, new Date(`${dayOf(0)}T00:00:00`).getTime())).toISOString();
+  const report = (...workers: unknown[]) => FakeSocket.last.frame({ t: "report", laptop: "usage-1", at: new Date().toISOString(), snapshot: { supervisor: { started_at: iso(9), concurrency: 1, active: 0, queued: 0 }, workers, pending: [], usage: [] } });
+  const asked = () => FakeSocket.last.sent.filter((f) => (f["op"] as { op?: string } | undefined)?.op === "usage_day");
+  const answer = (f: Record<string, unknown>, over: Partial<Detail> = {}) => {
+    const op = f["op"] as { project: string; day: string };
+    FakeSocket.last.frame({ t: "ok", rid: f["rid"], result: { project: op.project, day: op.day, days, runs: [], baseline: { total: { days: 0, calls: 0, p50: { calls: 0, pts: [] } }, roles: [] }, lost: 0, ...over } });
+  };
+
+  beforeAll(async () => {
+    app = (await import("../public/app.js")) as unknown as typeof app;
+  });
+  afterAll(() => report());
+
+  it("adds a running, waiting or queued worker to today's point, and not an ended one's, another project's or yesterday's", () => {
+    report(
+      live({ id: "w_run" }),
+      live({ id: "w_wait", state: "waiting-answer", role: "toad", model: "claude-sonnet-5-5" }),
+      live({ id: "w_q", state: "queued", started_at: null, tokens: each(0), calls: 0, ctx: [] }),
+      live({ id: "w_done", state: "done", ended_at: iso(0) }),
+      live({ id: "w_other", project: "usage-y" }),
+    );
+    const got = app.usageSoFar(reply([zero(), ended, ended]), "usage-x");
+    expect(got.points.slice(0, 2)).toEqual([zero(), ended]);
+    // Opus at this table's 3 (cache reads 7): 100 × 3 × 3 + 100 × 7; Sonnet 400.
+    expect(got.points[2]).toEqual({
+      raw: each(210),
+      weighted: 80 + 1600 + 400,
+      unknown: 0,
+      calls: 13,
+      so_far: true,
+      by_model: [
+        { model: "claude-opus-5-5", raw: 440, weighted: 1680 },
+        { model: "claude-sonnet-5-5", raw: 400, weighted: 400 },
+      ],
+      by_role: [
+        { role: "luigi", calls: 9, raw: 440, weighted: 1680 },
+        { role: "toad", calls: 4, raw: 400, weighted: 400 },
+      ],
+      top: [],
+    });
+    report(live({ id: "w_run", state: "done", ended_at: iso(0) }));
+    expect(app.usageSoFar(reply([zero(), ended, ended]), "usage-x").points[2]).toEqual({ ...ended, so_far: true });
+  });
+
+  it("counts an undeclared model at ×1 as unknown, splits a worker that began before today, and adds nothing to a reply from before midnight", () => {
+    const midnight = new Date(`${dayOf(0)}T00:00:00`).getTime();
+    const began = new Date(midnight - (Date.now() - midnight)).toISOString();
+    report(live({ id: "w_old", model: null, started_at: began, tokens: each(1000) }));
+    const pt = app.usageSoFar(reply([zero(), zero(), zero()]), "usage-x").points[2]!;
+    // Half its time was yesterday's, so about half its tokens.
+    expect(pt.raw.input).toBeGreaterThan(490);
+    expect(pt.raw.input).toBeLessThan(510);
+    expect([pt.unknown, pt.weighted]).toEqual([pt.raw.input * 4, pt.raw.input * 4]);
+    expect(pt.by_model.map((m) => m["model"])).toEqual(["unknown"]);
+    const stale = { ...reply([zero(), zero(), zero()]), days: [dayOf(3), dayOf(2), dayOf(1)] };
+    expect(app.usageSoFar(stale, "usage-x").points[2]).toEqual(zero());
+  });
+
+  it("shows raw figures equal to the read's with the toggle off, weighted with it on; the setting is in state, the hash and the device", async () => {
+    await go("#usage");
+    app.setWeigh(false);
+    expect(app.usageFigure(ended)).toBe(40);
+    expect(app.usageFigure(ended.by_role[0])).toBe(40);
+    expect([app.state.weigh, location.hash, localStorage.getItem("bobnet.weigh")]).toEqual([false, "#usage?weigh=0", "0"]);
+    app.setWeigh(true);
+    expect([app.usageFigure(ended), app.usageFigure(ended.by_model[0])]).toEqual([80, 80]);
+    expect([app.state.weigh, location.hash, localStorage.getItem("bobnet.weigh")]).toEqual([true, "#usage?weigh=1", "1"]);
+    expect($("tabs").querySelector("a[aria-current]")!.getAttribute("href")).toBe("#usage");
+    // A link's setting holds for the page, and isn't the device's.
+    await go("#usage?weigh=0");
+    expect([app.state.weigh, localStorage.getItem("bobnet.weigh")]).toEqual([false, "1"]);
+    await go("#status");
+    expect(app.state.weigh).toBe(false);
+    localStorage.removeItem("bobnet.weigh");
+  });
+
+  it("asks for a day's detail once per project, day, span and tz", async () => {
+    const before = asked().length;
+    expect(app.usageDay("usage-x", days[1]!, 30).loading).toBe(true);
+    app.usageDay("usage-x", days[1]!, 30);
+    expect(asked().length).toBe(before + 1);
+    expect(asked().at(-1)!["op"]).toEqual({ op: "usage_day", project: "usage-x", day: days[1], days: 30, tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
+    answer(asked().at(-1)!);
+    await settle();
+    expect(app.usageDay("usage-x", days[1]!, 30)).toMatchObject({ loading: false, error: null, reply: { day: days[1] } });
+    FakeSocket.last.frame({ t: "board_changed", project: "usage-x" });
+    app.usageDay("usage-x", days[1]!, 30);
+    expect(asked().length).toBe(before + 1);
+    app.usageDay("usage-x", days[1]!, 14);
+    app.usageDay("usage-x", days[0]!, 30);
+    app.usageDay("usage-y", days[1]!, 30);
+    expect(asked().length).toBe(before + 4);
+  });
+
+  it("keeps a failed read's error until Retry, and asks today's again once the board has changed", async () => {
+    const before = asked().length;
+    app.usageDay("usage-x", days[2]!, 30);
+    FakeSocket.last.frame({ t: "error", rid: asked().at(-1)!["rid"], code: "invalid", message: "No" });
+    await settle();
+    expect(app.usageDay("usage-x", days[2]!, 30)).toMatchObject({ loading: false, error: "No", reply: null });
+    expect(asked().length).toBe(before + 1);
+    app.usageDay("usage-x", days[2]!, 30, true);
+    answer(asked().at(-1)!);
+    await settle();
+    FakeSocket.last.frame({ t: "board_changed", project: "usage-x" });
+    // Not twice in half a minute; what it has stays.
+    expect(app.usageDay("usage-x", days[2]!, 30).reply).not.toBeNull();
+    expect(asked().length).toBe(before + 2);
+    const at = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => at + 31_000);
+    expect(app.usageDay("usage-x", days[2]!, 30)).toMatchObject({ loading: true, reply: { day: days[2] } });
+    expect(asked().length).toBe(before + 3);
+    clock.mockRestore();
+    answer(asked().at(-1)!);
+    await settle();
+  });
+
+  it("has a running worker's context per call in today's detail, and not in yesterday's nor twice once its run is the board's", () => {
+    report(live({ id: "w_run" }), live({ id: "w_done", state: "done", ended_at: iso(0) }));
+    const detail = (day: string, runs: Run[] = []): Detail => ({ project: "usage-x", day, days, runs, baseline: null, lost: 0 });
+    expect(app.dayRuns(detail(days[2]!))).toMatchObject([{ id: "w_run", agent: "Luigi", role: "luigi", ended_at: null, live: true, first: 1, ctx: { calls: 4, pts: [10, 20, 30, 40] } }]);
+    expect(app.dayRuns(detail(days[1]!))).toEqual([]);
+    const board: Run = { id: "w_run", started_at: startToday, ended_at: iso(0), first: 1, ctx: { calls: 1, pts: [9] } };
+    expect(app.dayRuns(detail(days[2]!, [board]))).toEqual([board]);
+  });
+
+  it("puts a downsampled line's points at the calls they stand for, and sums Total by the calls each counts for", () => {
+    const line = { calls: 10, pts: [1, 2, 3, 4] };
+    expect(line.pts.map((_, i) => app.callAt(line, i))).toEqual([1, 4, 7, 10]);
+    expect(app.callAt({ calls: 1, pts: [5] }, 0)).toBe(1);
+    const run = (ctx: Line): Run => ({ id: "r", started_at: iso(1), ended_at: iso(0), first: 1, ctx });
+    expect(app.totalLine([run({ calls: 2, pts: [100, 200] }), run({ calls: 3, pts: [] }), run(line)])).toEqual([
+      { call: 1, sum: 100 },
+      { call: 2, sum: 300 },
+      { call: 3, sum: 302.5 },
+      { call: 6, sum: 307.5 },
+      { call: 9, sum: 315 },
+      { call: 12, sum: 325 },
+    ]);
+    // A running worker's report has its last 400 calls: they are drawn where they were made.
+    report(live({ id: "w_long", calls: 500, ctx: Array.from({ length: 400 }, (_, i) => i) }));
+    const [long] = app.dayRuns({ project: "usage-x", day: days[2]!, days, runs: [], baseline: null, lost: 0 });
+    expect([long!.ctx.calls, app.callAt(long!.ctx, 0), app.callAt(long!.ctx, 399)]).toEqual([500, 101, 500]);
+  });
+
+  it("resolves the old links, and #sessions and #waits still open their pages until the new ones are in", async () => {
+    // A project the page doesn't know is asked for: the service's list is this test's.
+    FakeSocket.last.frame({ t: "board_changed", project: "not-known" });
+    const projects = [["bobnet", "BOB"], ["helix", "LAND"]].map(([key, prefix]) => ({ key, name: key, prefix, draft_prefix: null, lead: null, po: null, repos: [] }));
+    FakeSocket.last.frame({ t: "ok", rid: FakeSocket.last.sent.findLast((f) => (f["op"] as { op?: string } | undefined)?.op === "projects")!["rid"], result: { projects } });
+    await settle();
+    const toast = "Sessions moved: who ran is on each project's page; laptops and agents are under Laptops.";
+    expect(app.oldLink("#sessions")).toEqual({ to: "#project/bobnet", toast });
+    expect(app.oldLink("#sessions/helix")).toEqual({ to: "#project/helix", toast });
+    expect(app.oldLink("#sessions/BOB-4%20build%202")).toEqual({ to: "#feature/bobnet/BOB-4", toast });
+    expect(app.oldLink("#sessions/gone")).toEqual({ to: "#project/bobnet", toast });
+    expect(app.oldLink("#waits")).toEqual({ to: "#needs" });
+    expect(app.oldLink("#feature/BOB-4")).toEqual({ to: "#feature/bobnet/BOB-4" });
+    expect(app.oldLink("#feature")).toEqual({ to: "#features" });
+    expect([app.oldLink("#feature/bobnet/BOB-4"), app.oldLink("#usage"), app.oldLink("")]).toEqual([null, null, null]);
+    await go("#sessions");
+    expect($("tabs").querySelector("a[aria-current]")!.getAttribute("href")).toBe("#sessions");
+    expect($("ended")).not.toBeNull();
+    await go("#waits");
+    expect($("tabs").querySelector("a[aria-current]")!.getAttribute("href")).toBe("#waits");
+  });
+});
+
 describe("a reload (BOB-31)", () => {
   it("opens again what was open in this tab: the page reads it from sessionStorage", async () => {
     await go("#overview");
