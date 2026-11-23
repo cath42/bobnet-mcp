@@ -3716,6 +3716,8 @@ const VIEWS = { overview: viewOverview, needs: viewNeeds, status: viewStatus, fe
 const viewName = () => (VIEWS[hashPath()[0]] ? hashPath()[0] : "overview");
 
 function render() {
+  // A chart drawn away gets no pointerleave; one still pointed at holds again as the pointer moves.
+  holdRender = false;
   const v = viewName();
   for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${v === "project" ? "overview" : v}`);
   // Nothing waits: the count leaves the tab.

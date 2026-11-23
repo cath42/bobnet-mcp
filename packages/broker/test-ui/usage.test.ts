@@ -343,6 +343,31 @@ describe("a day's detail (BOB-181)", () => {
     expect((ud()!.querySelector(".tip") as HTMLElement).hidden).toBe(true);
   });
 
+  it("draws live again once Escape or Enter on the bar closes the day under the pointer, and not while its graph is pointed at (Toad, review D M1)", async () => {
+    // happy-dom sends a hashchange for replaceState, as no browser does, and that lets go of the graph too.
+    const replaced = vi.spyOn(history, "replaceState").mockImplementation(() => {});
+    await open("#usage");
+    const pointed = () => ud()!.querySelector(".ud-plot rect.hit")!.dispatchEvent(Object.assign(new Event("pointermove"), { clientX: 46 }));
+    const drawn = async () => {
+      const before = card("bobnet");
+      report("mbp-1", snapshot([]));
+      await settle();
+      return card("bobnet") !== before;
+    };
+    for (const close of [() => key(ud()!.querySelector("svg"), "Escape"), () => key(bar("bobnet", 4), "Enter")]) {
+      await click(bar("bobnet", 4));
+      await settle();
+      pointed();
+      expect(await drawn()).toBe(false);
+      await close();
+      expect(ud()).toBeNull();
+      // Past the frame that waited: the next one draws too.
+      await settle();
+      expect([await drawn(), await drawn()]).toEqual([true, true]);
+    }
+    replaced.mockRestore();
+  });
+
   it("By agent: the day's roles, most calls first; one's runs with a break between, its band and its median, named in the note; a role whose runs were all lost isn't there (c3)", async () => {
     detail["lost"] = 2;
     await open("#usage");
