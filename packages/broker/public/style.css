@@ -966,8 +966,9 @@ form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width
 }
 /* A day's detail under its line: two graphs against the period's median (Casper's Q-13) */
 .ud { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; margin-top: 4px; }
-.ud-h { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
-.ud-h h3 { margin: 0; font-size: 14px; font-weight: 600; flex: 1 1 auto; }
+.ud-h { display: flex; flex-wrap: nowrap; gap: 6px 12px; align-items: center; }
+.ud-h h3 { margin: 0; font-size: 14px; font-weight: 600; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.ud-h > .seg, .ud-x { flex: none; }
 .ud-x { border: 0; background: transparent; color: var(--muted); font-size: 20px; line-height: 1; min-width: 32px; min-height: 32px; padding: 0; }
 .ud-x:hover { color: var(--text); }
 .ud-roles { overflow-x: auto; max-width: 100%; width: fit-content; }
