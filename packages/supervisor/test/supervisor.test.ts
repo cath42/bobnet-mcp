@@ -573,6 +573,22 @@ describe("usage and snapshots", () => {
     expect(sup.snapshot().workers[0]).toMatchObject({ calls: 2, context: 42005, ctx: [] });
   });
 
+  it.each([[100, 100], [1000, 400]])("reports a live worker's context evenly taken: %i calls as %i points, the first and the last kept (BOB-195 c1)", async (calls, points) => {
+    const { sup, sessions } = await setup();
+    sup.spawn({ project: "helix", role: "bill", task: "Bob's brief, LAND-41 build 3.", tasks: ["LAND-41.16"], session: { feature: "LAND-41", kind: "build", label: "3" } });
+    await until(() => sessions.length === 1);
+    // Call n carries n tokens, so a point's value is its call.
+    for (let n = 1; n <= calls; n++) sessions[0]!.emit({ type: "assistant", parent_tool_use_id: null, message: { id: `msg_${n}`, content: [{ type: "text", text: "x" }], usage: { input_tokens: n, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } } as never);
+    await until(() => sup.snapshot().workers[0]!.calls === calls);
+    const w = sup.snapshot().workers[0]!;
+    expect(w).toMatchObject({ calls, context: calls, ctx_even: true });
+    expect(w.ctx).toEqual(Array.from({ length: points }, (_, i) => 1 + Math.round((i * (calls - 1)) / (points - 1))));
+    expect([w.ctx.length, w.ctx[0], w.ctx.at(-1)]).toEqual([points, 1, calls]);
+    sessions[0]!.finish();
+    await until(() => sup.snapshot().workers[0]!.state === "done");
+    expect(sup.snapshot().workers[0]).not.toHaveProperty("ctx_even");
+  });
+
   it("asks a spawn in a project with a backlog which items the worker is on, and keeps them on a reset", async () => {
     const { sup } = await setup(`  books:\n    path: /work/books\n    backlog: { dir: product/backlog }\n    roles:\n      ann: { dir: /work/books/ann }\n`);
     const review = { feature: "LAND-41", kind: "review" as const, label: "1" };
@@ -1328,7 +1344,7 @@ describe("ADR 0013, Consequences: a report always fits the broker's limit (BOB-5
       id: `w_${i}`.padEnd(pad ? 40 : 10, "0"), name: s(40, "Luigi"), project: s(40, "bobnet"), role: s(40, "luigi"), state: "running" as const,
       task: "x".repeat(200), model: s(60, "claude-opus-5-5"), effort: "high", checkpoint: "y".repeat(300), started_at: "2026-11-22T09:00:00.000Z", ended_at: null,
       last_event_at: "2026-11-22T09:00:00.000Z", tokens: { input: 1e9, output: 1e9, cache_read: 1e9, cache_write: 1e9 }, session: s(60, "BOB-51 build A"),
-      task_ref: "BOB-51", task_refs: ["BOB-51"], calls: 400, context: 1_000_000, ctx: Array.from({ length: 400 }, () => 1_000_000),
+      task_ref: "BOB-51", task_refs: ["BOB-51"], calls: 400, context: 1_000_000, ctx: Array.from({ length: 400 }, () => 1_000_000), ctx_even: true,
       remote_url: null, remote_from: null, remote_by: null,
     }));
     const usage = Array.from({ length: 500 }, (_, i) => ({

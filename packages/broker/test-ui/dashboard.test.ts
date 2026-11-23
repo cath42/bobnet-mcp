@@ -2953,6 +2953,38 @@ describe("usage data (BOB-172: no screen of its own yet)", () => {
     expect([long!.ctx.calls, app.callAt(long!.ctx, 0), app.callAt(long!.ctx, 399)]).toEqual([500, 101, 500]);
   });
 
+  it("draws a running worker's evenly taken line as an ended run's, Total equal to it; without the flag the last 400 where they were made (BOB-195 c3)", () => {
+    const ctx = Array.from({ length: 1000 }, (_, i) => i + 1);
+    const even = Array.from({ length: 400 }, (_, i) => ctx[Math.round((i * 999) / 399)]!);
+    const of = (runs: Run[] = []): Detail => ({ project: "usage-x", day: days[2]!, days, runs, baseline: null, lost: 0 });
+    report(live({ id: "w_even", calls: 1000, ctx: even, ctx_even: true }));
+    const [run] = app.dayRuns(of());
+    expect(run).toMatchObject({ first: 1, ctx: { calls: 1000, pts: even }, live: true });
+    expect(run!.ctx).not.toHaveProperty("known");
+    // Point i is where it was made: 1 + round(i x (calls - 1) / (pts.length - 1)), and its context here is its call.
+    expect(even.map((v, i) => app.callAt(run!.ctx, i) === v)).toEqual(even.map(() => true));
+    // The same run ended, as the board has it (up to 2000 points): the same Total at the end.
+    const ended: Run = { id: "w_even", started_at: startToday, ended_at: iso(0), first: 1, ctx: { calls: 1000, pts: ctx } };
+    expect(app.totalLine([run!]).at(-1)).toEqual({ call: 1000, sum: 500_500 });
+    expect(app.totalLine([ended]).at(-1)).toEqual({ call: 1000, sum: 500_500 });
+    // And with the board's points cut to the same 400, the same line throughout.
+    expect(app.totalLine([run!])).toEqual(app.totalLine([{ ...ended, ctx: { calls: 1000, pts: even } }]));
+    // Split over days: half its time was yesterday's, so today has its second half, call by call.
+    const midnight = new Date(`${dayOf(0)}T00:00:00`).getTime();
+    report(live({ id: "w_even", calls: 1000, ctx: even, ctx_even: true, started_at: new Date(midnight - (Date.now() - midnight)).toISOString() }));
+    const [half] = app.dayRuns(of());
+    expect(half!.first).toBeGreaterThan(480);
+    expect(half!.first).toBeLessThan(520);
+    expect([half!.ctx.calls, half!.ctx.pts.length]).toEqual([1001 - half!.first, 1001 - half!.first]);
+    expect(half!.ctx.pts.at(-1)).toBe(1000);
+    expect(Math.abs(half!.ctx.pts[0]! - half!.first)).toBeLessThanOrEqual(2);
+    // An older supervisor's: `known`, as before, and Total too steep until it ends (the page says so).
+    report(live({ id: "w_old", calls: 1000, ctx: ctx.slice(-400) }));
+    const [old] = app.dayRuns(of());
+    expect(old!.ctx).toMatchObject({ calls: 1000, known: 601 });
+    expect([app.callAt(old!.ctx, 0), app.callAt(old!.ctx, 399)]).toEqual([601, 1000]);
+  });
+
   it("resolves the old links to pages that exist in build C, a malformed % too (BOB-174 c2, c7)", async () => {
     await projectsAre([["bobnet", "BOB"], ["helix", "LAND"]]);
     const toast = "Sessions moved: laptops and agents are under Laptops.";

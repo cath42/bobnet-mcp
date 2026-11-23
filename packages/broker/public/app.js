@@ -3094,9 +3094,19 @@ function usageDayChanged(key) {
   for (const [id, e] of usageDays) if (id.startsWith(`${key}|`)) e.old = true;
 }
 
-/** Context at each of a running worker's calls from `from` (0-based); its report has the last 400, so `known` is the first call it has. */
+/** A context line's points as one per call, a call between two points taking the nearer (the board's `perCall`). */
+function perCall(pts, calls) {
+  if (pts.length < 2 || pts.length >= calls) return pts.length === 1 ? new Array(calls).fill(pts[0]) : pts;
+  return Array.from({ length: calls }, (_, j) => pts[Math.round((j * (pts.length - 1)) / (calls - 1))]);
+}
+/**
+ * Context at each of a running worker's calls from `from` (0-based). With `ctx_even` its points are evenly
+ * taken, a line as an ended run's, split over days as the board splits one. An older supervisor's report
+ * has the last 400 calls: `known` is the first it has.
+ */
 function liveLine(w, from) {
   const calls = Math.max(w.calls ?? 0, w.ctx?.length ?? 0), n = w.ctx?.length ?? 0;
+  if (w.ctx_even) return { calls: calls - from, pts: from ? perCall(w.ctx, calls).slice(from) : w.ctx };
   const lead = Math.max(0, calls - n - from);
   return { calls: calls - from, pts: (w.ctx ?? []).slice(Math.max(0, from - (calls - n))), ...(n && lead ? { known: lead + 1 } : {}) };
 }
@@ -3110,7 +3120,7 @@ function dayRuns(reply) {
   }).filter((r) => r.ctx.calls > 0);
   return [...reply.runs, ...live].sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
 }
-/** The call (1-based) a line's point i is at: evenly taken over its calls, first and last kept; a running worker's are its last. */
+/** The call (1-based) a line's point i is at: evenly taken over its calls, first and last kept; with `known`, its last. */
 function callAt(line, i) {
   if (line.known) return line.known + i;
   return line.pts.length > 1 ? 1 + Math.round((i * (line.calls - 1)) / (line.pts.length - 1)) : 1;

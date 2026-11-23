@@ -532,6 +532,24 @@ describe("the laptop mark's data (BOB-70, ADR 0007 §7)", () => {
   });
 });
 
+describe("a live worker's context, evenly taken (BOB-195 c2)", () => {
+  const worker = {
+    id: "w_1", name: "Luigi", project: "bobnet", role: "luigi", state: "running", task: "BOB-2", checkpoint: null, calls: 1000, context: 9, ctx: [1, 9],
+    started_at: null, ended_at: null, last_event_at: null, tokens: { input: 1, output: 2, cache_read: 3, cache_write: 4 },
+  };
+
+  it("takes a snapshot with ctx_even and one without", () => {
+    expect(WorkerSnapshot.parse({ ...worker, ctx_even: true })).toMatchObject({ ctx: [1, 9], ctx_even: true });
+    expect(WorkerSnapshot.parse(worker)).not.toHaveProperty("ctx_even");
+  });
+
+  it("a broker from before drops the field and still takes the snapshot", () => {
+    const got = WorkerSnapshot.omit({ ctx_even: true }).parse({ ...worker, ctx_even: true });
+    expect(got).not.toHaveProperty("ctx_even");
+    expect(got).toMatchObject({ ctx: [1, 9], calls: 1000 });
+  });
+});
+
 describe("a laptop's last cleanup (BOB-123 AC 6)", () => {
   const snap = { supervisor: { started_at: "x", concurrency: 1, active: 0, queued: 0 }, workers: [], pending: [], usage: [] };
   const run = {

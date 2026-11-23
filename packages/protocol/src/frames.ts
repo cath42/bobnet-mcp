@@ -118,6 +118,8 @@ export const WorkerSnapshot = z.object({
   context: z.number().int().nonnegative().nullable().default(null),
   /** Context per call, for a worker that is running; a past run's is on its project's board. */
   ctx: z.array(z.number().int().nonnegative()).max(400).default([]),
+  /** `ctx` is evenly taken over all its calls, first and last kept (BOB-195); absent from an older supervisor, whose `ctx` is the last 400 calls. */
+  ctx_even: z.boolean().optional(),
   /** Its Remote Control session on claude.ai, while it runs with one. */
   remote_url: z.string().url().startsWith("https://claude.ai/").max(200).nullable().default(null),
   /** A remote spawn's authorised sender (`supervisor@mbp-1`) and the agent it named (`poe`, ADR 0007 §7); null when spawned here. */

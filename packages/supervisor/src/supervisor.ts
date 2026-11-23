@@ -139,6 +139,8 @@ const FILE_WRITE_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 const HOLD_CHECK_MS = 5_000;
 /** An orphaned request this old is expired: the restart's notice went out long ago, and the work has moved on (BOB-26). */
 const ORPHAN_TTL_MS = 24 * 3_600_000;
+/** The most context-per-call points a running worker's report carries (the protocol's `WorkerSnapshot.ctx`). */
+const LIVE_CTX_MAX = 400;
 /** The most tasks a board ctx carries (the protocol's BoardCtx). */
 const MAX_TASKS = 50;
 /** A queued board report the board refuses is dropped, not retried: a retry gets the same answer and blocks the rows behind it. */
@@ -3645,11 +3647,10 @@ export class Supervisor {
     return TOKEN_KINDS.every((k) => sum[k] === tokens[k]) ? models : undefined;
   }
 
-  /** Calls so far and the latest one's context; a running worker's whole line goes with it. */
-  private callsOf(w: WorkerRow, run: WorkerRun | undefined): Pick<WorkerSnapshot, "calls" | "context" | "ctx"> {
+  /** Calls so far and the latest one's context; a running worker's whole line goes with it, evenly taken (BOB-195). */
+  private callsOf(w: WorkerRow, run: WorkerRun | undefined): Pick<WorkerSnapshot, "calls" | "context" | "ctx" | "ctx_even"> {
     const ctx = run ? run.ctx : w.ctx ? (JSON.parse(w.ctx) as number[]) : [];
-    const line = run ? (ctx.length > 400 ? ctx.slice(-400) : ctx) : [];
-    return { calls: ctx.length, context: ctx.at(-1) ?? null, ctx: line };
+    return { calls: ctx.length, context: ctx.at(-1) ?? null, ctx: run ? downsample(run.ctx, LIVE_CTX_MAX) : [], ...(run ? { ctx_even: true } : {}) };
   }
 
   snapshot(): LaptopSnapshot {
