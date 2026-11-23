@@ -3636,7 +3636,7 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
       const more = d.querySelector(".ask-more") as HTMLButtonElement;
       expect([more.textContent, more.hidden, more.getAttribute("aria-expanded")]).toEqual(["Show all", false, "false"]);
       expect([...d.querySelectorAll(".actions a")].map((a) => [a.textContent, a.getAttribute("href")])).toEqual([["Open in Claude ↗", "https://claude.ai/code/x"], ["Its session →", "#feature/helix/LAND-50"]]);
-      expect([...d.querySelectorAll(".grp")].map((g) => g.textContent)).toEqual(["AllowDeny", "StopReset"]);
+      expect([...d.querySelectorAll(".grp")].map((g) => g.textContent)).toEqual(["Deny", "StopReset"]);
       // It lives here, not on Needs you: its lead answers it.
       expect($("needs").textContent).not.toContain("Marvin");
       expect($("needs-n").textContent).toBe("1");
@@ -3653,7 +3653,7 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
       ]);
       // BOB-161 isn't built: nothing picks.
       expect(d.querySelectorAll(".ask input, .ask button, .ask [role], .ask [tabindex]")).toHaveLength(0);
-      expect(d.querySelector(".later")!.textContent).toBe("Picking an option here is BOB-161, planned for later. Today Allow and Deny override the lead.");
+      expect(d.querySelector(".later")!.textContent).toBe("Picking an option here is BOB-161, planned for later. Today its lead answers it; Deny sends Marvin on without an answer.");
       expect(d.querySelector(".ask-more")!.textContent).toBe("Show less");
       click(d.querySelector(".ask-more"));
       expect(detail("Marvin").querySelectorAll(".aq")).toHaveLength(1);
@@ -3701,6 +3701,8 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
       await settle();
       expect(detail("Marvin").querySelector(".ask-h b")!.textContent).toBe("Marvin wants Bash");
       expect(detail("Marvin").querySelector(".ask .preview")!.textContent).toBe("pnpm test");
+      // An approval can be allowed; a question, never.
+      expect([...detail("Marvin").querySelectorAll(".grp")].map((g) => g.textContent)).toEqual(["AllowDeny", "StopReset"]);
       expect(detail("Marvin").querySelector(".later")).toBeNull();
     });
 

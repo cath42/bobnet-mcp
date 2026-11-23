@@ -567,7 +567,8 @@ function agentDetail(w, ctx) {
     // Two groups, never Stop beside Deny (spec, BOB-4 as built).
     h("div", { class: "actions groups" },
       p ? h("span", { class: "grp" },
-          button("Allow", "primary", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "allow" }, b)),
+          // A question can be answered or denied, never allowed: the router refuses it.
+          p.kind === "question" ? null : button("Allow", "primary", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "allow" }, b)),
           button("Deny", "danger", (b) => act(p.laptop, { kind: "answer", request: p.id, decision: "deny" }, b))) : null,
       h("span", { class: "grp" },
         button("Stop", "danger", (b) => act(w.laptop, { kind: "stop", worker: w.id }, b, `Stop ${w.name} (${w.id})? It is interrupted, then ended.`)),
@@ -589,7 +590,7 @@ function askOf(w, p) {
     h("div", { class: "ask-h" }, h("b", null, askTitle(p)), h("span", { class: "muted" }, " · ", ago(p.created_at), ` · ${whoAnswers(w)}`)),
     askBlock(p, open),
     p.ask ? h("button", { type: "button", class: "more-t ask-more", hidden: !(open || more) || null, "aria-expanded": String(open), onclick: (e) => { e.stopPropagation(); toggleWhole(id); } }, open ? "Show less" : "Show all") : null,
-    open && qs.length ? h("p", { class: "note later" }, "Picking an option here is BOB-161, planned for later. Today Allow and Deny override the lead.") : null,
+    open && qs.length ? h("p", { class: "note later" }, `Picking an option here is BOB-161, planned for later. Today its lead answers it; Deny sends ${p.name} on without an answer.`) : null,
   ];
 }
 /** What a request asks, as its laptop sent it: a command, or each question with its header, how many to pick and the options. Read only. Without it, the preview. */
