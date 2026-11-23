@@ -827,6 +827,7 @@ main.wide .st { max-width: 1320px; }
 @media (max-width: 600px) { .lap { max-width: 10ch; } .lap-age { display: none; } }
 
 /* Rules for every project (BOB-118): one field and its button, wrapping on a phone. */
+details.msgs > summary { margin: 0; }
 form.rule-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 form.rule-form label { font-size: 13px; color: var(--muted); }
 form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); }

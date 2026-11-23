@@ -411,8 +411,8 @@ const all = [
   // BOB-111 (AC4): the toast after answering says who was told, the supervisor too, and whom it waits for; or that no supervisor runs the project.
   ["bob111-answer-toast", "waits", answerQ258, false, "#toast"],
   ["bob111-answer-toast-nosup", "waits", answerQ258, false, "#toast"],
-  // BOB-123: each laptop's last cleanup on its row (Sessions), one with none yet.
-  ["bob123-laptops", "sessions", [(p) => p.locator("#laptops").scrollIntoViewIfNeeded()], false, null, "#laptops"],
+  // BOB-123: each laptop's last cleanup on its row (Laptops), one with none yet.
+  ["bob123-laptops", "laptops", [(p) => p.locator("#laptops").scrollIntoViewIfNeeded()], false, null, "#laptops"],
   ["bob7-closed-folded", "roadmap/bobnet/edit", [(p) => p.locator("#rel-R2").getByRole("button", { name: "Close release" }).click(), (p) => p.getByRole("button", { name: "Close R2" }).click()], true, '#rel-R2 .badge[data-state="closed"]'],
 ];
 
@@ -448,7 +448,7 @@ try {
       }
       await page.addInitScript(fakeBroker);
       await page.goto(`${base}#${hash}`);
-      await page.waitForSelector(hash.startsWith("triage") ? ".totals" : hash.startsWith("waits") ? '#waits-holding li[data-kind="question"]' : hash.startsWith("overview") ? ".prow" : hash.startsWith("feature") ? "#feature-head" : hash.startsWith("sessions") ? "#laptops .card" : "section.release");
+      await page.waitForSelector(hash.startsWith("triage") ? ".totals" : hash.startsWith("waits") ? '#waits-holding li[data-kind="question"]' : hash.startsWith("overview") ? ".prow" : hash.startsWith("feature") ? "#feature-head" : hash.startsWith("laptops") ? "#laptops .card" : "section.release");
       for (const step of steps) {
         await step(page);
         await page.waitForTimeout(400);

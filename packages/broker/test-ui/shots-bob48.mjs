@@ -81,7 +81,7 @@ const all = [
   ["overview-one-stale", "one", "overview", ".stale-banners", null],
   ["waits-one-stale", "one", "waits", ".stale-banners", null],
   ["overview-three-stale", "three", "overview", ".stale-banners", null],
-  ["laptops-card", "laptops", "sessions", "#laptops .outbox", "section:has(#laptops)"],
+  ["laptops-card", "laptops", "laptops", "#laptops .outbox", "section:has(#laptops)"],
 ];
 
 await mkdir(out, { recursive: true });

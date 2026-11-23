@@ -8,9 +8,7 @@ const state = {
   laptops: new Map(),
   /** "laptop|project" → { laptop, at, board } */
   boards: new Map(),
-  updates: [],
   traffic: [],
-  taskFilter: null,
   project: null,
   inc: null,
   release: null,
@@ -35,8 +33,8 @@ const state = {
   weigh: false,
   last: 10,
 };
-/** Updates kept in the page: the broker's snapshot plus what arrives live. */
-const UPDATES_MAX = 200;
+/** Messages kept in the page, as many as the broker's snapshot has. */
+const TRAFFIC_MAX = 50;
 const ACTIVE = ["running", "waiting-approval", "waiting-answer"];
 let ws = null;
 let rid = 0;
@@ -180,20 +178,6 @@ function cleanupLine(c) {
       h("span", null, p.name, " ", h("span", { class: "num" }, freedText(p.freed))),
       p.steps.filter((s) => !s.ok || s.skipped).map((s) => h("span", { class: s.ok ? "skip" : "fail" }, s.ok ? `${s.step} skipped: ${s.skipped}` : `${s.step} failed: ${s.error ?? "no reason given"}`))))) : null);
 }
-
-/**
- * The task number an update is about: of the backlog ids in it (LAND-41, LAND-41.2),
- * the most specific, the first on a tie. Same rule as the supervisor's taskRef.
- */
-function taskRef(text) {
-  let best = null;
-  for (const [ref] of text.matchAll(/\b[A-Z][A-Z0-9]*-\d+(?:\.\d+)*\b/g)) {
-    if (!best || ref.split(".").length > best.split(".").length) best = ref;
-  }
-  return best;
-}
-/** An update's text without its leading "LAND-41.2 · ", which the chip shows. */
-const withoutTask = (text, task) => (task && text.startsWith(task) ? text.slice(task.length).replace(/^\s*[·:-]\s*/, "") : text);
 
 // ---------- Data ----------
 
@@ -2977,65 +2961,52 @@ function totalLine(runs) {
   return out;
 }
 
-// ---------- Rendering: sessions (debugging) ----------
-
-function taskChip(task) {
-  const b = h("button", { type: "button", class: `chip${state.taskFilter === task ? " on" : ""}`, title: `Show only ${task}` }, task);
-  b.addEventListener("click", () => {
-    state.taskFilter = state.taskFilter === task ? null : task;
-    render();
-  });
-  return b;
-}
-
-function workerCard(w) {
-  return h("div", { class: "card" },
-    h("div", { class: "top" }, h("span", { class: "name" }, w.name), h("span", { class: "badge", dataset: { state: w.state } }, w.state)),
-    h("div", { class: "sub" }, `${w.project} / ${w.role} · ${w.id} · ${fmtModel(w)} · ${w.laptop}${w.session ? ` · ${w.session}` : ""}${spawnerOf(w) ? ` · spawned by ${spawnerOf(w)}` : ""}`),
-    h("div", { class: "task" }, w.task),
-    w.checkpoint ? h("div", { class: "checkpoint" }, w.checkpoint) : null,
-    h("div", { class: "meta" },
-      h("span", null, w.started_at && w.ended_at ? `ran ${duration(Date.parse(w.ended_at) - Date.parse(w.started_at))}` : "not started"),
-      h("span", null, `${fmtTokens(totalTokens(w.tokens))} tokens`),
-      w.calls ? h("span", null, `${w.calls} calls, last context ${fmtTokens(w.context ?? 0)}`) : null));
-}
+// ---------- Laptops: the supervisors, the agents, the rules and who messaged whom (BOB-121 spec 2.11) ----------
 
 /** Which client an agent runs: "supervisor 0.2.0 · protocol 1". */
 const clientLabel = (c) => c ? `${c.package.replace(/^@bobnet\//, "")} ${c.version} · protocol ${c.protocol}` : "client version unknown";
 
-function viewSessions() {
-  const items = state.updates.map((u) => ({ ...u, task: taskRef(u.text) }));
-  const shown = state.taskFilter ? items.filter((u) => u.task === state.taskFilter) : items;
-  const ended = workers().filter((w) => w.ended_at).sort((a, c) => c.ended_at.localeCompare(a.ended_at));
+/** A laptop's supervisor version, from an agent of its supervisor: "supervisor 2.0.0-rc.55"; null when none says it. */
+function supervisorVersion(laptop) {
+  const of = state.peers.filter((p) => p.laptop === laptop && p.client?.package.endsWith("/supervisor"));
+  const p = of.find((x) => x.online) ?? of[0];
+  return p ? `supervisor ${p.client.version}` : null;
+}
+
+function laptopCard(l) {
+  const sup = l.snapshot.supervisor, stale = staleReport(l), n = livePending(l).length, version = supervisorVersion(l.laptop);
+  return h("div", { class: "card" },
+    h("div", { class: "top" }, h("span", { class: "name" }, l.laptop), h("span", { class: "badge", dataset: { state: stale ? "stopped" : "running" } }, stale ? "no recent report" : "supervisor up")),
+    h("div", { class: "meta" }, h("span", null, `${sup.active} of ${sup.concurrency} slots busy`), h("span", null, `${sup.queued} queued`), h("span", null, "up ", ago(sup.started_at)), h("span", null, "reported ", ago(l.at), " ago"),
+      version ? h("span", null, version) : null,
+      stale && n ? h("span", null, `${plural(n, "request")} wait${n === 1 ? "s" : ""} until it reports again`) : null),
+    outboxLine(l.snapshot.board_outbox),
+    cleanupLine(l.snapshot.cleanup ?? null));
+}
+
+/** Not a tab: the header's connection and a quiet laptop's banner lead here. */
+function viewLaptops() {
   const peers = [...state.peers].sort((a, c) => Number(c.online) - Number(a.online) || a.address.localeCompare(c.address));
   return [
-    h("p", { class: "note", style: "margin:0" }, "For debugging: what each session said and did. ", h("a", { href: "#rules" }, "Rules for every project")),
-    h("section", null, h("h2", null, "Session updates ", h("span", { class: "count", id: "updates-filter" }, state.taskFilter ? [`${state.taskFilter} only · `, taskChip(state.taskFilter)] : [])),
-      h("ul", { class: "feed", id: "updates" }, shown.length
-        ? shown.map((u) => h("li", null, h("time", { datetime: u.at, title: u.at }, clock(u.at)), h("span", null, u.task ? taskChip(u.task) : null, h("b", null, shortName(u.from)), " ", withoutTask(u.text, u.task))))
-        : h("li", { class: "empty" }, "No updates yet."))),
-    h("section", null, details("ended", null, h("summary", null, "Workers ended in the last 24 hours ", h("span", { class: "count" }, ended.length)), h("div", { class: "cards", id: "ended" }, ended.map(workerCard)))),
-    h("section", null, h("h2", null, "Messages"), h("ul", { class: "feed", id: "traffic" }, state.traffic.length
-      ? state.traffic.map((t) => h("li", null, h("time", { datetime: t.at, title: t.at }, clock(t.at)), h("span", null, t.from, t.type === "broadcast" ? ` broadcast to ${t.to.length}` : ` → ${t.to.join(", ")}`, t.urgent ? " (urgent)" : "")))
-      : h("li", { class: "empty" }, "No messages in the last 24 hours.")), h("p", { class: "note" }, "Who messaged whom, never what was said.")),
-    h("section", null, h("h2", null, "Laptops"), h("div", { class: "cards", id: "laptops" }, state.laptops.size ? [...state.laptops.values()].map((l) => {
-      const sup = l.snapshot.supervisor, stale = staleReport(l), n = livePending(l).length;
-      return h("div", { class: "card" },
-        h("div", { class: "top" }, h("span", { class: "name" }, l.laptop), h("span", { class: "badge", dataset: { state: stale ? "stopped" : "running" } }, stale ? "no recent report" : "supervisor up")),
-        h("div", { class: "meta" }, h("span", null, `${sup.active} of ${sup.concurrency} slots busy`), h("span", null, `${sup.queued} queued`), h("span", null, "up ", ago(sup.started_at)), h("span", null, "reported ", ago(l.at), " ago"),
-          stale && n ? h("span", null, `${plural(n, "request")} wait${n === 1 ? "s" : ""} until it reports again`) : null),
-        outboxLine(l.snapshot.board_outbox),
-        cleanupLine(l.snapshot.cleanup ?? null));
-    }) : h("div", { class: "empty" }, "No laptop has reported in the last 30 days."))),
+    h("p", { class: "note", style: "margin:0" }, "The laptops' supervisors, the agents on BobNet, and the rules for every project."),
+    h("section", null, h("h2", null, "Laptops"), h("div", { class: "cards", id: "laptops" },
+      state.laptops.size ? [...state.laptops.values()].map(laptopCard) : h("div", { class: "empty" }, "No laptop has reported in the last 30 days."))),
     h("section", null, h("h2", null, "Agents ", h("span", { class: "count", id: "agents-count" }, `${peers.filter((p) => p.online).length} online of ${peers.length}`)),
-      h("div", { class: "table-wrap" }, h("table", { id: "agents" },
+      h("div", { class: "table-wrap" }, h("table", { class: "stack", id: "agents" },
         h("thead", null, h("tr", null, h("th", null, "Agent"), h("th", null, "Status"), h("th", { class: "num" }, "Up"), h("th", { class: "num" }, "In / out 24h"), h("th", { class: "num" }, "Inbox"))),
         h("tbody", null, peers.map((p) => h("tr", null,
-          h("td", null, h("span", { class: `dot${p.online ? " on" : ""}` }), h("span", { class: "addr" }, p.address), p.team ? h("div", { class: "team" }, p.team) : null, h("div", { class: "client" }, clientLabel(p.client))),
-          h("td", null, p.status ?? (p.online ? "" : `last seen ${since(p.last_seen)} ago`)),
-          h("td", { class: "num" }, p.online && p.connected_at ? ago(p.connected_at) : "–"),
-          h("td", { class: "num" }, `${p.stats.received_24h} / ${p.stats.sent_24h}`),
-          h("td", { class: "num" }, p.stats.inbox ? String(p.stats.inbox) : "–"))))))),
+          h("td", { class: "wide" }, h("span", { class: `dot${p.online ? " on" : ""}` }), h("span", { class: "addr" }, p.address), p.team ? h("div", { class: "team" }, p.team) : null, h("div", { class: "client" }, clientLabel(p.client))),
+          h("td", { "data-label": "Status" }, p.status ?? (p.online ? "" : `last seen ${since(p.last_seen)} ago`)),
+          h("td", { class: "num", "data-label": "Up" }, p.online && p.connected_at ? ago(p.connected_at) : "–"),
+          h("td", { class: "num", "data-label": "In / out 24h" }, `${p.stats.received_24h} / ${p.stats.sent_24h}`),
+          h("td", { class: "num", "data-label": "Inbox" }, p.stats.inbox ? String(p.stats.inbox) : "–"))))))),
+    ...rulesSections(),
+    details("messages", { class: "card msgs" },
+      h("summary", null, "Messages in the last 24 hours ", h("span", { class: "count" }, state.traffic.length < TRAFFIC_MAX ? state.traffic.length : `the latest ${TRAFFIC_MAX}`)),
+      h("ul", { class: "feed", id: "traffic" }, state.traffic.length
+        ? state.traffic.map((t) => h("li", null, h("time", { datetime: t.at, title: t.at }, clock(t.at)), h("span", null, t.from, t.type === "broadcast" ? ` broadcast to ${t.to.length}` : ` → ${t.to.join(", ")}`, t.urgent ? " (urgent)" : "")))
+        : h("li", { class: "empty" }, "No messages in the last 24 hours.")),
+      h("p", { class: "note" }, "Who messaged whom, never what was said.")),
   ];
 }
 
@@ -3079,8 +3050,8 @@ async function setGlobalAdmin(who, admin) {
   await loadRules();
 }
 
-function viewRules() {
-  if (!svc.projects?.length) return [noProjects()];
+function rulesSections() {
+  if (!svc.projects?.length) return [h("section", null, h("h2", null, "Rules for every project"), noProjects())];
   if (rules.rows === null && !rules.error) loadRules();
   const rows = rules.rows ?? [];
   const yes = (b) => (b ? "yes" : "no");
@@ -3111,7 +3082,7 @@ function viewRules() {
 // ---------- Views ----------
 
 // Now left the tabs (BOB-5 as built 3): "#now" opens the Overview, as any unknown view does.
-const VIEWS = { overview: viewOverview, needs: viewNeeds, status: viewStatus, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, laptops: () => [...viewSessions(), ...viewRules()] };
+const VIEWS = { overview: viewOverview, needs: viewNeeds, status: viewStatus, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, laptops: viewLaptops };
 const viewName = () => (VIEWS[hashPath()[0]] ? hashPath()[0] : "overview");
 
 function render() {
@@ -3284,7 +3255,6 @@ function connect() {
           state.peers = f.result.peers;
           state.laptops = new Map(f.result.laptops.map((l) => [l.laptop, l]));
           state.boards = new Map((f.result.boards ?? []).map((b) => [`${b.laptop}|${b.board.project}`, b]));
-          state.updates = f.result.updates;
           state.traffic = f.result.traffic;
           // Live before the render: the stale banners draw only on a live page.
           setConn("live");
@@ -3321,12 +3291,8 @@ function connect() {
         if (rules.rows) loadRules();
         statusChanged();
         break;
-      case "update":
-        state.updates = [f.item, ...state.updates].slice(0, UPDATES_MAX);
-        if (viewName() === "laptops") scheduleRender();
-        break;
       case "traffic":
-        state.traffic = [f.item, ...state.traffic].slice(0, 50);
+        state.traffic = [f.item, ...state.traffic].slice(0, TRAFFIC_MAX);
         if (viewName() === "laptops") scheduleRender();
         break;
     }

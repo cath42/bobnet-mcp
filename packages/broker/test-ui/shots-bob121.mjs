@@ -174,6 +174,8 @@ const all = [
   ["bob121-header-usage", "live", "usage/bobnet", ".seg.projects", [], "top"],
   ["bob121-triage-bobnet", "live", "triage/bobnet", ".totals", []],
   ["bob121-triage-helix", "live", "triage/helix", ".totals", []],
+  ["bob121-laptops", "live", "laptops", "#global-rules", []],
+  ["bob121-laptops-quiet", "quiet", "laptops", "#global-rules", [(p) => p.locator("details.msgs summary").click()]],
 ];
 
 const shots = all.filter(([name]) => name.startsWith(process.argv[2] ?? ""));

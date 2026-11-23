@@ -241,18 +241,53 @@ describe("Usage", () => {
   });
 });
 
-describe("Sessions", () => {
-  it("keeps the feeds, ended workers, laptops and agents for debugging, agent text as text", async () => {
+describe("Laptops (BOB-175)", () => {
+  it("has the laptops, the agents, the rules and the message log folded; no session updates nor ended workers", async () => {
     await go("#laptops");
-    expect($("updates").textContent).toContain("started");
+    expect([...view().querySelectorAll("h2")].map((x) => x.textContent!.replace(/ \d.*$/, "").trim())).toEqual(["Laptops", "Agents", "Rules for every project", "Make an agent global admin"]);
+    const messages = view().querySelector("details.msgs") as HTMLDetailsElement;
+    expect(messages.open).toBe(false);
+    expect(messages.querySelector("summary")!.textContent).toBe("Messages in the last 24 hours 1");
     expect($("traffic").textContent).toContain("supervisor@mbp-1 → Bob@mbp-1");
     expect($("laptops").textContent).toContain("1 of 3 slots busy");
+    expect($("laptops").textContent).toContain("supervisor 0.2.0");
     expect($("agents-count").textContent).toBe("1 online of 2");
     const rows = [...$("agents").querySelectorAll("tbody tr")].map((r) => r.querySelector(".client")?.textContent);
     expect(rows).toEqual(["supervisor 0.2.0 · protocol 1", "client version unknown"]);
-    const ended = $("ended").textContent!;
-    expect(ended).toContain("Write a <b>haiku</b>");
-    expect($("ended").querySelector("b")).toBeNull();
+    expect([...$("agents").querySelectorAll("tbody tr")].map((r) => r.children[1]!.textContent)).toEqual(["running build 3", "last seen 1h 0m ago"]);
+    // Dropped (spec 2.11), and the haiku's writer, ended, is on no card.
+    expect(view().textContent).not.toMatch(/Session updates|Workers ended|haiku/);
+    // An update still arrives from an agent's status; the page has no list of them.
+    FakeSocket.last.frame({ t: "update", item: { seq: 2, from: "Bob@mbp-1", laptop: "mbp-1", text: "LAND-41.16 · landed", at: iso(0) } });
+    await settle();
+    expect(view().textContent).not.toContain("landed");
+  });
+
+  it("keeps the message log open across a redraw, and takes messages as they come", async () => {
+    const messages = () => view().querySelector("details.msgs") as HTMLDetailsElement;
+    messages().open = true;
+    messages().dispatchEvent(new Event("toggle"));
+    FakeSocket.last.frame({ t: "traffic", item: { id: "m_2", type: "message", from: "Bob@mbp-1", to: ["Riker@mbp-1"], urgent: true, at: iso(0) } });
+    await settle();
+    expect(messages().open).toBe(true);
+    expect($("traffic").children[0]!.textContent).toContain("Bob@mbp-1 → Riker@mbp-1 (urgent)");
+    expect(messages().querySelector("summary")!.textContent).toBe("Messages in the last 24 hours 2");
+    messages().open = false;
+    messages().dispatchEvent(new Event("toggle"));
+  });
+
+  it("is where the header's connection and a quiet laptop's banner lead (c3)", async () => {
+    const heartbeat = (snapshot: unknown = dashboard.laptops[0]!.snapshot) => FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot });
+    FakeSocket.last.frame({ t: "report", laptop: "mbp-2", at: iso(10), snapshot: { supervisor: { started_at: iso(900), concurrency: 2, active: 0, queued: 0 }, workers: [], pending: [], usage: [] } });
+    heartbeat();
+    await go("#overview");
+    for (const a of [$("conn"), view().querySelector(".stale-banners a")!]) {
+      expect(a.getAttribute("href")).toBe("#laptops");
+      await go(a.getAttribute("href")!);
+      expect($("laptops")).not.toBeNull();
+      await go("#overview");
+    }
+    await go("#laptops");
   });
 
   it("marks a laptop that stopped reporting and never offers its last requests (BOB-26)", async () => {
@@ -327,16 +362,6 @@ describe("Sessions", () => {
     expect(line().textContent).toBe("Cleanup skipped · the run slot was busy · scheduled · 5m ago · it tries again at the next check");
     ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
     await settle();
-  });
-
-  it("filters the feed by task", async () => {
-    const ws = FakeSocket.last;
-    ws.frame({ t: "update", item: { seq: 2, from: "Bob@mbp-1", laptop: "mbp-1", text: "LAND-41.16 · landed", at: iso(0) } });
-    await settle();
-    expect($("updates").children).toHaveLength(2);
-    ($("updates").querySelector(".chip") as HTMLButtonElement).click();
-    expect($("updates").children).toHaveLength(1);
-    expect($("updates-filter").textContent).toContain("LAND-41.16 only");
   });
 });
 
@@ -2633,8 +2658,8 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
       { id: "w_o", agent: "Daisy", role: "designer", session: ss("BOB-45", "build", "A"), outcome: "stopped", reason: "stopped by Casper", ended_at: iso(45) },
     ];
     const rows = [statusRow({ stuck: { ...statusRow().stuck, runs, idle_sessions: [], settled: [] } })];
-    await answerStatus(rows);
-    await answerStatus(rows);
+    // Every read of it, the page's own each minute too, which may come while this one goes.
+    while (statusOps().length || !$("sec-stuck")) await answerStatus(rows);
     const metas = [...$("sec-stuck").querySelectorAll("li .what")].map((x) => x.querySelector(".m")?.textContent);
     expect(metas).toEqual(["on ubu1 · Running when its supervisor restarted; nobody has started it again.", "stopped by Casper"]);
   });
@@ -2705,18 +2730,6 @@ describe("the laptop mark (BOB-44; design/BOB-44/laptop-mark.md)", () => {
     expect(lap.getAttribute("title")).toBe("Runs on ubu1; no report for 5 min");
     expect(line("w_l").querySelector(".who-at")!.textContent).toBe("Luigi@ubu1 · no report 5 min");
     expect(line("w_m").querySelector(".lap")!.classList.contains("stale")).toBe(false);
-  });
-
-  it("puts the spawner on an ended worker's card in Sessions", async () => {
-    const snap = { supervisor: { started_at: iso(300), concurrency: 3, active: 0, queued: 0 }, pending: [], usage: [],
-      workers: [worker({ id: "w_e", name: "Luigi", project: "bobnet", role: "luigi", state: "done", ended_at: iso(2), remote_from: "supervisor@mbp-1", remote_by: "poe" })] };
-    FakeSocket.last.frame({ t: "report", laptop: "ubu1", at: iso(0), snapshot: snap });
-    await go("#laptops");
-    const card = [...$("ended").querySelectorAll(".card")].find((c) => c.textContent!.includes("w_e"))!;
-    expect(card.querySelector(".sub")!.textContent).toMatch(/· ubu1 · .*· spawned by poe@mbp-1$/);
-    FakeSocket.last.frame({ t: "report", laptop: "ubu1", at: iso(0), snapshot: { ...snap, workers: [] } });
-    FakeSocket.last.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: helixOnMbp });
-    await settle();
   });
 });
 
