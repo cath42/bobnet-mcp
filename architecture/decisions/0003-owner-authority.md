@@ -191,3 +191,40 @@ only into a broker from b1ba363 on.
 rules, invisible in `board_grants`, and wrong for Helix's two-PO rules. Folding it into `triage`:
 `triage` already slots backlog items, but every holder of `triage` would gain release moves; a field of
 its own lets a project give one without the other.
+
+## Addendum (2026-11-22, BOB-189): the `release` grant organizes releases too
+
+**Context.** After BOB-122, a PO holding `release` moved features between releases, but creating
+releases (`create`), ordering them and closing them (`ownerOnly`, `store.ts:1607, 1631`) were not
+theirs. There was also no way to edit a release or reopen one. Helix's PO couldn't add R3-R10 and
+Later or close R0 (BOB-189). On 2026-11-22 Casper ruled, verbatim, through poe: "Make sure the ability
+for roadmap PO's to organize backlogged features to releases, edit releases, move features around and
+close/open releases is prioritized".
+
+**Decision** (build brief `architecture/bob189/build-brief.md`):
+
+- `release` covers every write to a release record: `create_release` (it was `create`),
+  `update_release` (new: title, goal, spec_url), `order_releases`, `close_release` and `reopen_release`
+  (new). Releases are under no feature, so the rule's `items` covers them as it covers backlog items
+  (ADR 0001 §5).
+- A close moves features, so it also needs `release` on each moved feature, as `set_release` does. A
+  `not_open_feature` PO can't close a release out from under an open session.
+- A reopen returns the status the release had before its last close and clears `closed_at` and
+  `closed_by`. The history keeps them. It is not an undo: features the close moved stay where they went.
+- Still the owner's alone: `undo`, of his own events. Casper keeps every release write on the dashboard,
+  because the owner holds every grant (`rules.ts:97`). ADR 0001 §5's "Casper's gates" list now holds
+  answering a question and marking an action done, plus `undo`.
+- **The order of releases** is the one part Casper's words don't name. It goes to `release` with the
+  rest, pending his answer (Mario asks). If he keeps it, `orderReleases` stays `ownerOnly` and a PO's
+  new release goes last.
+
+**Consequences.** The client must offer the ops. `board_write`'s op list and its pre-send parse are the
+client's (`client/src/board-tools.ts:33, 40`), so this needs an rc and a restart. The protocol change is
+additive (two new ops). Deploy the broker before the rc: an old broker refuses the new ops as invalid.
+No migration. An `admin` can now hand a project's release order and close to a rule, so who holds
+`release` on each project is the project's PO's call through its rules (Peach for BobNet's).
+
+**Alternatives.** Reusing item ops (`create` with kind `release`, `update` on an R-ref, `order` with a
+`releases` scope): each still fails the installed client's parse, so it saves no rc, and it blurs items
+and releases in one schema. A field of its own for release records, separate from `release` (feature
+moves): Casper's words give one PO both, and no project has asked to split them.
