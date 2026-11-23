@@ -111,12 +111,12 @@ on the right. Projects run full width under both.
      question clamped to 3 lines (2 on a phone). **Show all** opens every question, its header
      ("1 · Account"), "Pick one"/"Pick any", and every option with its description. It then reads
      **Show less**. Open stays open across redraws (`state.whole`). When open, a muted line: "Picking
-     an option here is BOB-161, in the backlog for your verdict. Today Allow and Deny override the
-     lead." That marks where BOB-161 would sit without building it.
+     an option here is BOB-161, planned for later. Today its lead answers it; Deny sends Marvin on
+     without an answer." A question can't be allowed, so its row has Deny only (review C, M1).
    - A human-tier request of this agent: "**Howard wants Bash** · 14m · on Needs you →" (it is
      answered there).
    - Links: Open in Claude ↗, Its session →. Then two button groups, as today: [Allow][Deny] for an
-     orchestrator-tier request, and [Stop][Reset].
+     orchestrator-tier approval ([Deny] for a question), and [Stop][Reset].
 5. **CI** (AC3; 2.4), a card listing every project's workflows.
 6. **Projects** (AC5): a row per project. The whole row is a link to `#project/<key>`.
    - **Name ›**, then laptops · lead · PO, then a CI pill (`CI failed` / `CI running` / `CI passed`,
@@ -145,6 +145,7 @@ on the right. Projects run full width under both.
 | Age | right, muted: `14m`, `3h 10m` under a day, then `4 days`; the title has the stamp | right of the badge |
 | Meta | `Helix › LAND-50 · holds up ● Howard, ● Marvin (Fixes)`, each held agent with its live dot. A bug: `· blocks use`. When you have time: `· from Bill`, never "holds up". `· needed before R2` when set. `· BOB-49 review closed on it (need: casper)` last, as today | under the text |
 | Unchanged, kept (BOB-49) | in the meta row, at the right, before the button: `Unchanged for 2 days, Peach asked to check it 3h ago`, or `Kept by Peach 1h ago: “…”` | its own row under the meta |
+| Links (opened, not on Needs you) | last, after the meta row | same, 44 px |
 | Action | one button at the right of the meta row: Answer / Mark done / Allow or deny / Open in triage (a link) | right of the meta, 44 px |
 | Open | the recommendation under the text (`Recommended …`); a permission's command whole, as a code block | same |
 | Context (BOB-31) | **Show context** / **Hide context**, a text button and the item's last row, with the context under it. An open answer form comes after it | same, the button 44 px |
@@ -163,10 +164,16 @@ item (today's forms).
 
 - every item shows its age;
 - a permission shows only while its laptop's report is under 3 minutes old and the request under a
-  day old, and only while its worker runs (BOB-48's rules);
-- an item leaves as soon as it's answered, or when its worker is gone;
+  day old, and only until its worker stops for good (BOB-48's rules). The one exception is an
+  **orphaned** human-tier request, whose worker a supervisor restart stopped: it stays in Holds work
+  up, with "stopped by a restart 5m ago" in warn in place of "holds up" and no live dot, until it is
+  answered, its role runs again or it is a day old. Its form's foot: "Howard stopped when mbp-1
+  restarted. Allow or Deny starts it again, with your decision and your note. It can't be taken back."
+  (BOB-176 c14-c16);
+- an item leaves as soon as it's answered (a permission on `ok: true`), or when its worker stops for
+  good;
 - the freshness line at the foot of the card: "Up to date: mbp-1 reported 18s ago, ubu1 reported
-  36s ago. An item leaves when it's answered or its worker stops." A quiet laptop is left out of it
+  36s ago. An item leaves when it's answered or its worker stops for good." A quiet laptop is left out of it
   and gets its banner at the top;
 - counts (tab, Overview, the project switch) count exactly what is shown.
 
@@ -209,7 +216,7 @@ radios, then Send answer. "Question edited since you opened this" stays at the f
 - A board answer keeps its Undo, as today.
 
 Foot note: "Oldest first in each group. Answer here or in the project's conversation… A permission
-request shows for a day at most, and only while its worker runs; a quiet laptop's requests wait
+request shows for a day at most, until its worker stops for good; a quiet laptop's requests wait
 under its banner."
 
 ### 2.3 A project's page (`#project/<key>`) (AC6, AC13)
@@ -217,8 +224,9 @@ under its banner."
 - **Head**: "‹ Overview", the name (24 px), then "lead · PO · laptops · repo". At the right a
   project switch (BobNet / Helix), as on Roadmap.
 - **≥1000 px**: two columns, the main one (what it's doing) and an aside of 320-400 px (what it
-  needs and costs). Under that, one column in this order: release, running now, who ran lately,
-  waits on you, CI, usage, backlog health.
+  needs and costs). Under that, one column in this order: release, running now, waits
+  on you, CI, who ran lately, usage, backlog health (review D, m1: who ran lately is the longest card,
+  and put what needs Casper four screens down).
 
 Main:
 
@@ -238,7 +246,10 @@ Main:
    - Then a line per run: agent, role · model · effort ("default model" for null), the outcome
      (done; running in green; `failed: land refused: CI red on main` or `lost: …` in `--bad`), and
      tokens.
-   - A lost run's tokens read **"tokens unknown"** (warn), never 0. A running worker's tokens come
+   - Consults (a run stopped "consult answered") are one line at the session's end: "14 consults ·
+    294k", a disclosure with their lines (review D, m1).
+  - An ended run never shows its laptop's "no report" mark; only a running one does.
+  - A lost run's tokens read **"tokens unknown"** (warn), never 0. A running worker's tokens come
      from its laptop report.
    - Weigh by model, when on, applies here too.
    - Empty: "Nobody ran in the last 14 days."
@@ -271,9 +282,12 @@ latest run and at most 5 before it), not the laptop report's `ci`. The projects 
   | passed | ✓ | `passed 52m ago` | `--ok` |
   | failed | ✕ | `failed 2h 5m ago` | `--bad`, bold |
   | running | ◔, turning unless reduced motion is set | `running 4m` | `--accent` |
-  | queued | ○ | `queued`, and its age when it has a start | `--idle` |
-  | cancelled | ● | `cancelled 20m ago` | `--idle`, never red: nobody has to act on it |
+  | queued | ○ | `queued`, and its age when it has a start | mark and dots `--idle`, words `--muted` |
+  | cancelled | ● | `cancelled 20m ago` | mark and dots `--idle`, words `--muted`; never red: nobody has to act on it |
 
+- ≥1100 px the row is project, name, status, dots, Run. The name's column is as wide as its name, at
+  most 45% (`fit-content(45%)`): a short name leaves the status its room on one line, so the statuses
+  don't line up down the card (review D).
 - `usually 9 min` follows `running 4m` only when the workflow has `usual_ms` (BOB-192); without it,
   nothing stands in for it.
 - Then the short sha, and who landed it when the run has an `agent` ("Howard's land"); nothing when
@@ -373,8 +387,14 @@ Today's page, with these changes:
     "Sonnet-equivalent tokens"), then "today so far 27.6M · median day 40.4M".
   - The graph: a bar per day, with a y axis in tokens and dates under it. Each project has its own
     scale, so a small project's spike shows.
+  - **The median day** is over the span's days with tokens, not all of them; under 3 such days there is
+    none ("median day –") and no spike (review D, M1; Toad to confirm, see "Baseline").
+  - With no tokens in the span there is no graph: "No tokens in these 30 days."
   - A day over twice the span's median (and over 4M) is a **spike**: its bar in `--warn` with its
     value on top. Today's bar is lighter ("so far").
+- A graph is one tab stop: Left and Right move along its days, Enter picks. A picked day's line starts
+  with ‹ and › (44 px on a phone, where a bar is 9 px wide), the day before and after; off at the ends
+  (review D, m3).
 - Tap or Enter on a day selects it (outlined) and adds the day's line under the graph: "Fri 13 Nov:
   139.1M Sonnet-equivalent tokens", its split by model ("opus 128.0M · sonnet 11.0M · haiku 115k"),
   and "Biggest: LAND-49 build 2 104.0M, …" (links to the feature page; `usage`'s `top`, the three
@@ -401,7 +421,7 @@ tz (D5); the calls per day come from `usage` (each point's `calls` and `by_role`
   "Whole session"), and a Close button (×, `aria-label="Close Fri 13 Nov's detail"`).
   - **By agent** adds a second row of buttons, one per role with calls that day, most calls first
     ("luigi · 212 calls"). The first is picked. On a phone the row scrolls sideways; it doesn't wrap.
-- **Graph 1, Context per call:** x is the call (1 … the day's calls), y is context in tokens.
+- **Graph 1, Context per call** (Total's caption: "Context, summed call by call"): x is the call (1 … the day's calls), y is context in tokens.
   - Total: the day's runs in start order, their points summed as they go, solid `--accent`, 2.5 px.
     Today's line is named "Sun 22 Nov so far" and includes the running workers (D5).
   - By agent: the role's runs that day, one after another; a new run starts again from a small
@@ -433,7 +453,7 @@ tz (D5); the calls per day come from `usage` (each point's `calls` and `by_role`
     graphs' height with "Loading Fri 13 Nov's calls…", so nothing jumps when they arrive. The switch
     works while loading.
   - Failed: "Couldn't load Fri 13 Nov's calls." and a Retry button, in the same frame.
-  - No calls that day: "No calls on Fri 13 Nov." in the frame, no graphs; plus "1 run lost: no context
+  - No calls that day: "No calls on Fri 13 Nov." in a frame of one line's height, no graphs; plus "1 run lost: no context
     recorded" when `lost` > 0. The Total/By agent switch is hidden.
   - No baseline (fewer than 3 days reach call 1, or 3 of the role's runs): no dashed line or band, and
     the note says "No dashed line: fewer than 3 days in these 30 to compare with" (By agent: "fewer than
@@ -456,7 +476,9 @@ by call, of:
   card's "Whole session" draws it).
 - **By agent:** that role's runs in the period, each from its own first call. Their middle half stays
   the grey band of today's chart.
-- **Calls:** the median day's calls (the day's, or the role's), in the key beside the day's own.
+- **Calls:** the median day's calls (the day's, or the role's), in the key beside the day's own: over
+  the days with a call (the role's: the days it made one), as Total's line already is (review D, M1;
+  Toad to confirm: asked, no answer yet).
 
 Where fewer than 3 days (Total) or 3 runs (By agent) reach a call, the line stops: there is nothing to
 compare against. Under the graphs, the page says: "Dashed: the median over these 30 days. Total: a
@@ -478,7 +500,7 @@ went to Sessions). Contents, all from the Sessions tab and drawn as there:
   supervisor's version, outbox, last cleanup).
 - **Agents**: online of total, the table (agent, team, client version, status or last seen, in/out
   24 h, inbox).
-- **Rules for every project** (BOB-118): each global admin with Remove admin, as `#rules` today.
+- **Rules for every project** (BOB-118): each global admin with Take admin away, as `#rules` today.
 - **Messages in the last 24 hours**, folded: who messaged whom. Kept for debugging, as Casper
   agreed (Q-13, §6 Q5).
 
