@@ -305,6 +305,11 @@ close recorded. No migration.
 
 - **Asking:** an agent holding `questions` (`board_ask`) creates a question or action with its
   options, what it holds up and what it is needed before.
+  *Amended 2026-11-23 (BOB-187, built in BOB-176).* Options are a question's only. An `ask` of kind
+  `action` with options is refused (`invalid`), as is an edit that gives an action options, and the
+  message says to ask a question instead. The broker refuses, so every client gets it, and the wire
+  shape doesn't change. An open action that already has options keeps them, shown as plain text above
+  Mark done.
 - **Answering from the dashboard** is the owner's `answer_question` (the option's key and/or his
   words, stored verbatim) or `mark_done` (with an optional note). It is write-once. Any other role is
   refused.

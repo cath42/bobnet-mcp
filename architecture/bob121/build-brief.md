@@ -63,7 +63,8 @@ the views that read them.** D8-D10 and the additions to D3 and D5 are ADR 0014 �
   - a project with R1 open and all done, and R2 planned with work: the Overview gives R2, number 2,
     its count;
   - R2 `open` with work after an R1 that is closed: R2;
-  - every release done but none closed: the last one;
+  - every release done but none closed: the last one that is `open` (amended 2026-11-23, §4, BOB-192: a
+    `planned` one is never the fallback; with only planned, workless ones, null);
   - no releases: null;
   - an archived not-Done feature is not "work".
 - Then check it on the dashboard against Helix's real board (AC5 evidence).
@@ -189,6 +190,7 @@ per call, Total and By agent (role), and the period's median as the baseline (sp
 - The `project` read (D4) gains `ci`. `OverviewRow` gains it as an optional field, for every project.
 - The dashboard's CI card and project page read it instead of the report's `ci`. The report's `ci`
   stays on the wire.
+- Each workflow also carries an optional `usual_ms` (§3a, amended 2026-11-23; built in BOB-192).
 - **Done when tests show:**
   - a workflow with 8 runs gives its latest and the 5 before it, a passed run included;
   - a run on a landed sha names the agent whose push tied it, and one without a push has `agent` null;

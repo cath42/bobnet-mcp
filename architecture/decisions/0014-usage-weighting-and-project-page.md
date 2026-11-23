@@ -4,6 +4,7 @@
   and 13. Line numbers are at `89c5f58` (origin/v2). The build brief is `architecture/bob121/build-brief.md`.
   Daisy designs the screens (`design/BOB-121/`). §1 is what my answer to her consult c_2c826fdc gave her.
   **Amended 2026-11-22** after Casper's Q-13 verdict (`lead/bob121/q13-verdict.md`): §3a.
+  **Amended 2026-11-23** for BOB-192 (consult c_e4382435): §4's fallback, and `usual_ms` in §3a.
 
 ## Context
 
@@ -239,6 +240,12 @@ status, sha, url, started_at, ended_at, agent }`, where `agent` is `runs.agent` 
 else null. The `project` read gains `ci`, and `OverviewRow` gains it as an optional field. The laptop
 report's `ci` stays on the wire for older dashboards.
 
+**`usual_ms`** (2026-11-23, BOB-192; for BOB-178's "usually 9 min"). Each `CiWorkflow` gains an optional
+`usual_ms`, as `get`'s CI runs have it, by the same `usualMs()`: the median of the last 20 passed runs
+of the project, the workflow's name and its latest run's source, in ms. It is absent, never null or 0,
+with fewer than three of them. It is per workflow, not per run. Nothing is stored: no migration, and an
+older reader ignores it.
+
 **A feature's own criteria** (spec §6 Q3). `Progress` stays its own plus its tasks' AC (`store.ts:266`),
 as every list reads it. A feature's `ItemSummary` gains optional `own: { checked, total }`: its own AC
 and DoD together. It also gains `done_at`: when it was last moved to Done, by the rule the status read
@@ -250,8 +257,14 @@ already uses (`store.ts:998`). A Done feature's unticked criteria are `get`'s `c
 - **The rule.** A project's current release is the first release, in the board's order (`ord IS NULL,
   ord, pk`), whose status is not `closed` and which holds at least one feature that is not Done and not
   archived.
-- **When there is none,** it is the last non-closed release (all its work done, waiting for Casper's
-  close), or null.
+- **When there is none,** it is the last release that is neither `closed` nor `planned` (its work done,
+  waiting for Casper's close). When there is none of those either, it is null, with no `done_unclosed`:
+  the Overview says "no open release" and doesn't guess one.
+  - *Amended 2026-11-23 (BOB-192; Daisy's rule, BOB-189 review A m4).* It was the last release not
+    closed, so "R1 all done, R2 to R5 planned and empty" gave "R5, 0 of 0", with R1 under
+    `done_unclosed`. Now it gives R1. A release opens when its first session starts, so a `planned`
+    release that only holds Done features is not current either.
+  - The rule above is unchanged: a `planned` release that has work is still chosen (BOB-163).
 - **`CurrentRelease`** is `ReleaseRecord` plus `number`, its 1-based place in that order. Its
   `features` stay done of total, non-archived features only (`releaseRecord`, `store.ts:449`).
 - **Who uses it.** `overview()` and `project` share one helper. The status read's `backlog.release`

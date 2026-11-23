@@ -116,7 +116,8 @@ None.
    `done_unclosed`. §4 means R1, which waits for Casper's close.
    - The ADR's wording allows it, and that is mine.
    - Better: the last release, not closed, that has features; else the last not closed.
-   - I'll amend §4 if Luigi or Mario agree. It's a small change in `currentRelease`.
+   - **Settled (2026-11-23):** Daisy's rule instead: the last release neither closed nor planned, else
+     none. ADR 0014 §4 is amended, and BOB-192 c1 builds it.
 2. **D2: no test reads the status read's `backlog.release`.** `store.ts:944`. It changed with the
    helper, but only the Overview is tested. Add a test that a project gives the same release ref in
    the two.
