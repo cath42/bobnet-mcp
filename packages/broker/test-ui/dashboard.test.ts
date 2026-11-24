@@ -551,19 +551,19 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     await lists();
   });
 
-  it("opens a feature in the service on its head card: release and number, state, criteria, tasks, who is on it", async () => {
+  it("opens a feature in the service on its head card: release, state, where it stands, who is on it", async () => {
     await go("#feature/bobnet/BOB-7");
     expect(view().textContent).toContain("Reading the board…");
     await opened();
     const head = $("feature-head");
     expect(head.classList.contains("is-open")).toBe(true);
-    expect(head.textContent).toContain("BobNet · R1 Central backlog view · number 6");
+    expect(head.textContent).toContain("BOB-7BobNetR1 Central backlog view");
     expect(head.querySelector("h2")!.textContent).toBe("Who may write what");
-    expect(head.textContent).toContain("3 of 10 criteria");
+    expect(head.querySelector(".stands")!.textContent).toBe("7 of 10 criteria left");
     expect(head.textContent).toContain("nobody on it now");
     await go("#feature/bobnet/BOB-1");
     await opened();
-    expect($("feature-head").textContent).toContain("2 of 2 criteria");
+    expect($("feature-head").querySelector(".stands")!.textContent).toBe("done");
     await go("#feature/bobnet/BOB-99");
     await opened();
     expect(view().textContent).toBe("No feature BOB-99 in BobNet.");
@@ -582,8 +582,7 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     expect(row.textContent).not.toContain("138");
     await go("#feature/bobnet/BOB-22");
     await opened([...features, land22]);
-    expect($("feature-head").textContent).toContain("3 of 138 criteria");
-    expect($("feature-head").querySelector(".sub-note")!.textContent).toBe("Done, criteria not ticked");
+    expect($("feature-head").textContent).not.toContain("138");
     // A Done feature has no Next: no banner, no dashed step (spec, BOB-4 as built 1).
     expect(view().querySelector(".next-banner")).toBeNull();
     expect($("next")).toBeNull();

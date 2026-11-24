@@ -374,13 +374,22 @@ function fold(key, dflt, attrs, ...children) {
 /** A session's runs: the board's, with the snapshot's live numbers for those still running, and live workers the board hasn't yet. */
 function runsOf(key, ss) {
   const live = new Map(workers().filter((w) => w.project === key && w.session === sessionKey(ss) && (ACTIVE.includes(w.state) || w.ended_at)).map((w) => [w.id, w]));
+  const ended = (r) => ({ calls: Math.max(r.calls ?? 0, r.ctx?.length ?? 0), pts: r.ctx ?? [] });
+  const now = (w) => { const line = liveLine(w, 0); return { line, calls: line.calls, ctx: w.ctx ?? [], tokens: workerTokens(w) }; };
   const out = ss.runs.map((r) => {
-    const w = live.get(r.id);
+    const w = live.get(r.id), line = ended(r);
     live.delete(r.id);
-    return w && !r.ended_at ? { ...r, name: r.agent, tokens: workerTokens(w), calls: w.calls ?? r.calls, ctx: w.ctx?.length ? w.ctx : r.ctx } : { ...r, name: r.agent, tokens: totalTokens(r.tokens) };
+    if (w && !r.ended_at && w.ctx?.length) return { ...r, name: r.agent, ...now(w) };
+    return { ...r, name: r.agent, line, calls: Math.max(line.calls, r.ended_at ? 0 : w?.calls ?? 0), tokens: w && !r.ended_at ? workerTokens(w) : totalTokens(r.tokens) };
   });
-  for (const w of live.values()) out.push({ id: w.id, name: w.name, role: w.role, model: w.model, laptop: w.laptop, started_at: w.started_at, resumed: false, tokens: workerTokens(w), calls: w.calls ?? 0, ctx: w.ctx ?? [], tasks: refsOf(w) });
+  for (const w of live.values()) out.push({ id: w.id, name: w.name, role: w.role, model: w.model, laptop: w.laptop, started_at: w.started_at, resumed: false, ...now(w), tasks: refsOf(w) });
   return out.sort((a, b) => (a.started_at ?? "").localeCompare(b.started_at ?? ""));
+}
+
+/** A run's context, one value per call: null where an older supervisor's report hasn't it, the rest then counting for those calls too (`k`). */
+function callLine({ line }) {
+  if (line.known) return { pts: [...new Array(line.known - 1).fill(null), ...line.pts], k: line.calls / line.pts.length };
+  return { pts: line.pts.length ? perCall(line.pts, line.calls) : [], k: 1 };
 }
 
 /** The CI and slot runs an agent or session waits on now: running or queued, or failed and not run again since (notes 44-48). */
@@ -540,10 +549,9 @@ function viewServiceFeature(p, ref) {
   if (!f) return [h("div", { class: "empty-card" }, `No feature ${ref} in ${p.name}.`)];
   if (!fd.item) return [h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, fd.error))];
   const r = data.releases.find((x) => x.ref === f.release);
-  const n = data.features.filter((x) => x.release === f.release).indexOf(f) + 1;
   const st = featureState(f), on = onFeature(p.key, f.ref);
-  const { checked, total } = f.progress;
   const sessions = fd.sessions;
+  const criteria = fd.item.criteria ?? [], open = criteria.filter((c) => c.state === "open");
   const tasks = fd.tasks;
   const nx = nextOf(p, f, sessions);
   // A task some session moved, or a running agent is on, is in a session; the rest are in none yet.
@@ -554,14 +562,14 @@ function viewServiceFeature(p, ref) {
     h("a", { class: "back", href: `#features/${p.key}` }, `‹ ${p.name}'s features`),
     h("div", { class: "feat" },
       h("div", { class: `card feature-head${st === "open" ? " is-open" : ""}`, id: "feature-head" },
-        h("div", { class: "fh-top" }, h("span", { class: "id" }, f.ref), h("span", { class: "muted" }, `${p.name} · ${r ? `${r.title} · number ${n}` : "not in a release"}`), badge(st)),
+        h("div", { class: "fh-top" }, h("span", { class: "id" }, f.ref), h("a", { href: projectHref(p.key) }, p.name), h("span", { class: "muted" }, r ? releaseName(r) : "Not in a release"), badge(st)),
         h("h2", null, f.title),
         h("div", { class: "fh-m" },
-          total ? h("div", { class: "crit" }, meterOf(checked, total, st === "done" ? "idle" : "ok"), h("span", { class: "m" }, `${checked} of ${total} criteria`)) : h("span", { class: "muted" }, "no criteria yet"),
-          f.status === "Done" && total && checked < total ? h("span", { class: "sub-note" }, "Done, criteria not ticked") : null,
-          h("span", null, f.tasks?.total ? `${f.tasks.done} of ${f.tasks.total} tasks done` : h("span", { class: "muted" }, "no tasks")),
+          h("span", { class: "stands" }, whereStands(f)),
+          f.status === "Done" && f.tasks?.total ? h("span", null, `${f.tasks.done} of ${plural(f.tasks.total, "task")} done`) : null,
           h("span", null, plural(sessions.length, "session")),
           on.length ? h("span", { class: "now" }, "● ", whoNames(on), " on it now") : st === "open" ? h("span", { class: "muted" }, "nobody on it now") : null)),
+      f.status === "Done" && open.length ? unticked(p, id, f, open) : null,
       fd.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, `Showing what it last said. ${fd.error}`)) : null,
       nx ? nextBanner(nx) : null,
       on.length ? h("section", { class: "card on-now", id: "on-now" }, h("h2", { style: "margin:0" }, "On it now"),
@@ -576,7 +584,8 @@ function viewServiceFeature(p, ref) {
           sessions.length || nx
             ? h("ol", { class: "steps" }, sessions.map((ss, i) => stepItem(p, f, ss, sessions, tasks, i === sessions.length - 1, runOf)), nx ? nextItem(nx) : null)
             : h("div", { class: "empty-card" }, "No session has run on this feature yet.")),
-        h("aside", null, h("h2", null, "Tasks ", h("span", { class: "count" }, tasks.length || "")),
+        h("aside", null, h("h2", null, "Criteria"), criteriaCard(criteria),
+          h("h2", null, "Tasks ", h("span", { class: "count" }, tasks.length || "")),
           loose.length ? h("div", { class: "card loose" }, h("div", { class: "muted" }, "In no session yet"), h("ul", { class: "tasks" }, loose.map((t) => taskLi(p.key, t, t.status, true, false, runOf)))) : null,
           tasks.length
             ? fold(`all-tasks:${id}`, window.innerWidth >= 1100, { class: "card", id: "all-tasks" }, h("summary", null, `All ${tasks.length}, as the board has them now`), h("ul", { class: "tasks" }, tasks.map((t) => taskLi(p.key, t, t.status, true, true, runOf))))
@@ -584,6 +593,49 @@ function viewServiceFeature(p, ref) {
         historySection(p, f, fd))),
     h("p", { class: "note" }, h("a", { href: `#roadmap/${p.key}` }, `${p.name}'s roadmap`), ". Sessions and their outcomes are read from the board's session closes; who is on what, from what each agent's spawn declared."),
   ];
+}
+
+/** "AC 1", "DoD 2". */
+const critName = (c) => `${c.section === "dod" ? "DoD" : "AC"} ${c.n}`;
+/** A Done feature's criteria that aren't ticked: each one's text, which says where it went, and what the board has against it. */
+function unticked(p, id, f, open) {
+  return details(`unticked:${id}`, { class: "card unticked" },
+    h("summary", null, `Done${f.done_at ? ` ${day(f.done_at)}` : ""}, with ${plural(open.length, "criterion", "criteria")} not ticked`),
+    h("ul", null, open.map((c) => h("li", null, h("b", null, critName(c)), ` ${c.text}`, c.evidence ? h("span", { class: "muted" }, ` ${c.evidence}`) : null))),
+    h("p", { class: "note" }, `${p.name}'s PO closed it with these open; the board keeps them as they were.`));
+}
+/** The feature's own criteria, beside its sessions: how many are met, and each with ✓ or ○. */
+function criteriaCard(criteria) {
+  if (!criteria.length) return h("div", { class: "card crit-list" }, h("p", { class: "muted" }, "No criteria yet."));
+  const met = criteria.filter((c) => c.state === "checked").length;
+  return h("div", { class: "card crit-list" }, h("p", { class: "muted" }, `${met} of ${plural(criteria.length, "criterion", "criteria")} met`),
+    h("ul", null, criteria.map((c) => h("li", { dataset: { done: String(c.state === "checked") }, title: c.evidence ?? null },
+      h("span", { class: "mark", role: "img", "aria-label": c.state === "checked" ? "met" : "open" }, c.state === "checked" ? "✓" : "○"), h("span", null, h("b", null, critName(c)), ` ${c.text}`)))));
+}
+/** Who ran a session: each run's agent, model, outcome and tokens, as the switch on Usage shows them. */
+function runsTable(key, ss) {
+  const runs = withLive(key, ss, ss.runs), byId = new Map(workers().map((w) => [w.id, w]));
+  if (!runs.length) return null;
+  const weights = state.weigh && runs.some((r) => !r.ended_at) ? weightsNow(key) : null;
+  return h("table", { class: "runs-t" },
+    h("thead", null, h("tr", null, h("th", null, "Agent"), h("th", null, "Model"), h("th", null, "Outcome"), h("th", { class: "num" }, state.weigh ? "Sonnet-equivalent" : "Tokens"))),
+    h("tbody", null, runs.map((r) => h("tr", { dataset: { run: r.id } },
+      h("td", null, whoName({ name: r.agent, laptop: r.laptop }, true, key), h("span", { class: "muted" }, ` ${r.role}`)),
+      h("td", { class: "muted" }, `${r.model ?? "default model"}${r.effort ? ` · ${r.effort}` : ""}`),
+      h("td", null, runOutcome(r)),
+      h("td", { class: "num" }, runTokens(r, byId.get(r.id), weights, "unknown"))))));
+}
+/** A review's evidence, from its close: what it found, and the files its handoff names (its reports and shots). */
+function reviewEvidence(p, c, byRef) {
+  const found = [["Blockers", c.blockers], ["Majors", c.majors], ["Sent back", c.sent_back]].filter(([, refs]) => refs.length);
+  const files = [...new Set(`${c.summary ?? ""}\n${c.handoff_text ?? ""}`.match(/(?<![\w/.~-])(?:[\w.-]+\/)+(?:[\w.@-]+\.(?:md|png|jpe?g|html)\b|shots[\w.-]*)/g) ?? [])].slice(0, 40);
+  const repo = p.repos?.[0];
+  // Two folders deep it is a path from the repo's root; less may be a handoff's shorthand.
+  const file = (path) => (repo && c.commit && path.split("/").length > 2 ? h("a", { href: `https://github.com/${repo}/tree/${c.commit}/${path}`, target: "_blank", rel: "noopener" }, `${path} ↗`) : h("code", null, path));
+  return h("div", { class: "evidence" },
+    found.length ? found.map(([label, refs]) => h("div", null, h("b", null, label), h("ul", null, refs.map((r) => h("li", null, h("span", { class: "id" }, r), ` ${byRef.get(r)?.title ?? ""}`))))) : h("p", { class: "muted" }, "It found no blocker and no major, and sent nothing back."),
+    c.minors_fixed ? h("p", { class: "muted" }, `${plural(c.minors_fixed, "minor")} fixed`) : null,
+    files.length ? h("div", null, h("b", null, "Reports and shots its close names"), h("ul", null, files.map((x) => h("li", null, file(x))))) : h("p", { class: "muted" }, "Its close names no report or shot."));
 }
 
 const agentWho = (w, st) => h("span", { class: "l-who" }, h("i", { class: `dot ${st.cls === "warn" ? "warn" : st.cls === "run" ? "run" : "on"}`, "aria-hidden": "true" }), whoName(w), h("span", { class: "muted" }, ` ${w.role} · `), stateSpan(st), h("span", { class: "muted" }, ` · ${fmtTokens(workerTokens(w))} tokens`));
@@ -627,14 +679,14 @@ function stepItem(p, f, ss, sessions, tasks, last, runOf) {
   const st = c ? "closed" : agents.some((w) => w.state === "running") ? "running" : "waiting";
   const byRef = new Map(tasks.map((t) => [t.ref, t]));
   const runs = runsOf(p.key, ss);
-  const calls = runs.reduce((n, r) => n + (r.ctx?.length || r.calls || 0), 0);
+  const calls = runs.reduce((n, r) => n + r.calls, 0);
   // Running: the tasks its agents' spawns named, then any it moved; closed: those it moved, with the status it left them in.
   const on = st === "running" ? [...new Set([...agents.flatMap(refsOf), ...ss.tasks_moved.map((m) => m.task)])].filter((r) => byRef.has(r)) : [];
   const moved = st === "running" ? on.map((r) => taskLi(p.key, byRef.get(r), byRef.get(r).status, false, false, runOf)) : ss.tasks_moved.filter((m) => byRef.has(m.task)).map((m) => taskLi(p.key, byRef.get(m.task), m.status, false, false, runOf));
   const closedN = ss.tasks_moved.filter((m) => m.status === "Done").length;
   const rc = runs.find((r) => r.remote_url)?.remote_url ?? agents.find((w) => w.remote_url)?.remote_url;
   const panelKey = `${p.key}/${sessionKey(ss)}`;
-  const hand = state.open.has(`handoff:${panelKey}`);
+  const hand = state.open.has(`handoff:${panelKey}`), evid = state.open.has(`evidence:${panelKey}`);
   const repo = svc.projects.find((x) => x.key === p.key)?.repos?.[0];
   const loose = waitingRuns(ss).filter((r) => !agents.some((w) => w.id === r.worker));
   return h("li", { class: "step", id: stepId(ss), dataset: { kind: ss.kind, state: st } }, h("span", { class: "dot2", "aria-hidden": "true" }),
@@ -646,7 +698,7 @@ function stepItem(p, f, ss, sessions, tasks, last, runOf) {
         c.minors_fixed ? h("span", null, `${plural(c.minors_fixed, "minor")} fixed`) : null,
         c.sent_back.length ? h("span", null, `${c.sent_back.length} sent back`) : null,
         h("span", null, closedN ? `closed ${plural(closedN, "task")}` : `moved ${plural(ss.tasks_moved.length, "task")}`),
-        h("span", { class: "muted" }, `${fmtTokens(totalTokens(ss.tokens))} tokens`)) : null,
+        h("span", { class: "muted" }, `${fmtTokens(usageFigure({ raw: ss.tokens, weighted: ss.weighted ?? totalTokens(ss.tokens) }))} ${tokensWord()}`)) : null,
       agents.length ? h("ul", { class: "lines s-agents" }, agents.map((w) => {
         const run = runOf(w);
         return agentLine(w, agentWho(w, agentState(w, run)),
@@ -655,12 +707,15 @@ function stepItem(p, f, ss, sessions, tasks, last, runOf) {
       })) : null,
       loose.map(runLine),
       c?.summary ? h("div", { class: "sub" }, c.summary) : null,
+      runsTable(p.key, ss),
       h("div", { class: "links" },
         c?.handoff_text ? h("button", { type: "button", class: "ctx-btn", "aria-expanded": String(hand), title: c.handoff_path ?? "", onclick: () => { hand ? state.open.delete(`handoff:${panelKey}`) : state.open.add(`handoff:${panelKey}`); render(); } }, "Handoff")
           : c?.handoff_path ? h("span", { class: "off", title: c.handoff_path }, "Handoff on its laptop") : h("span", { class: "off" }, "No handoff"),
         c?.commit ? (repo ? h("a", { href: `https://github.com/${repo}/commit/${c.commit}`, target: "_blank", rel: "noopener" }, `Close ${c.commit.slice(0, 7)} ↗`) : h("span", null, `Close ${c.commit.slice(0, 7)}`)) : null,
         rc ? h("a", { href: rc, target: "_blank", rel: "noopener" }, "Remote Control ↗") : null,
-        h("button", { type: "button", class: "ctx-btn", "aria-expanded": String(state.ctxOpen.has(panelKey)), onclick: () => { state.ctxOpen.has(panelKey) ? state.ctxOpen.delete(panelKey) : state.ctxOpen.set(panelKey, { agent: null }); render(); } }, `Context per call · ${plural(calls, "call")}`)),
+        h("button", { type: "button", class: "ctx-btn", "aria-expanded": String(state.ctxOpen.has(panelKey)), onclick: () => { state.ctxOpen.has(panelKey) ? state.ctxOpen.delete(panelKey) : state.ctxOpen.set(panelKey, { agent: null }); render(); } }, `Context per call · ${callsSaid(calls)}`),
+        c && ss.kind === "review" ? h("button", { type: "button", class: "ctx-btn", "aria-expanded": String(evid), onclick: () => { evid ? state.open.delete(`evidence:${panelKey}`) : state.open.add(`evidence:${panelKey}`); render(); } }, "Review evidence") : null),
+      evid && c ? reviewEvidence(p, c, byRef) : null,
       hand ? h("pre", { class: "handoff" }, c.handoff_text) : null,
       state.ctxOpen.has(panelKey) ? ctxPanel(p.key, ss, sessions, runs, panelKey) : null,
       moved.length ? fold(`moved:${panelKey}`, last, { class: "moved" }, h("summary", null, st === "running" ? `Tasks it is on (${moved.length})` : `Tasks it moved (${moved.length})`), h("ul", { class: "tasks" }, moved)) : null));
@@ -669,10 +724,10 @@ function stepItem(p, f, ss, sessions, tasks, last, runOf) {
 /** Context per call inside a session card (notes 36-39): the whole session cumulative, or one agent's runs as one line. */
 function ctxPanel(key, ss, sessions, runs, panelKey) {
   const pick = state.ctxOpen.get(panelKey).agent;
-  const names = [...new Set(runs.map((r) => r.name))];
+  const names = [...new Set(runs.map((r) => r.name))], cut = runs.filter((r) => r.line.known).map((r) => r.name);
   const set = (agent) => { state.ctxOpen.set(panelKey, { agent }); render(); };
   const prev = sessions.filter((x) => x.kind === ss.kind && x.started_at < ss.started_at).at(-1);
-  const cum = (rs) => { let t = 0; return rs.flatMap((r) => r.ctx ?? []).map((v) => (t += v)); };
+  const cum = (rs) => { let t = 0; return rs.map(callLine).flatMap(({ pts, k }) => pts.map((v) => (v === null ? null : (t += v * k)))); };
   let series, band = null, note;
   if (!pick) {
     series = [{ name: `${stepName(ss)}${ss.close ? "" : " so far"}`, pts: cum(runs), color: "var(--accent)", style: "solid", w: 2.5 },
@@ -684,25 +739,27 @@ function ctxPanel(key, ss, sessions, runs, panelKey) {
     const role = mine[0]?.role;
     // Earlier runs of that role on the feature: the middle half and median at each call, once three reach it.
     const earlier = sessions.filter((x) => x.started_at < ss.started_at).flatMap((x) => runsOf(key, x)).filter((r) => r.role === role && r.ctx?.length);
+    const lines = earlier.map((r) => callLine(r).pts);
     band = [];
-    for (let i = 0; ; i++) { const v = earlier.map((r) => r.ctx[i]).filter((x) => x !== undefined); if (v.length < 3) break; band.push([quantile(v, 0.25), quantile(v, 0.5), quantile(v, 0.75)]); }
+    for (let i = 0; ; i++) { const v = lines.map((pts) => pts[i] ?? undefined).filter((x) => x !== undefined); if (v.length < 3) break; band.push([quantile(v, 0.25), quantile(v, 0.5), quantile(v, 0.75)]); }
     const laps = [...new Set(mine.map((r) => r.laptop).filter(Boolean))];
     series = [{ name: `${pick}, ${stepName(ss)}`, tip: laps.length === 1 ? `${whoText({ name: pick, laptop: laps[0] }, key)}, ${stepName(ss)}` : null, pts: line.pts, resets: line.resets, color: "var(--accent)", style: "solid", w: 2.5 }];
     note = `${pick}'s runs in the session, one after another; a new worker starts again from a small context (dotted). ${band.length ? `The grey band is the middle half of ${earlier.length} earlier ${pick} runs on this feature at the same call.` : `No band: fewer than three earlier ${pick} runs on this feature.`}`;
   }
   const { svg, tip, wrap } = plotChart(series, band?.length ? band : null);
-  const key2 = series.map((sr) => h("span", null, h("i", { class: sr.style === "solid" ? "" : sr.style, style: `--k:${sr.color}` }), `${sr.name} · ${sr.pts.length} calls`));
+  const key2 = series.map((sr) => h("span", null, h("i", { class: sr.style === "solid" ? "" : sr.style, style: `--k:${sr.color}` }), `${sr.name} · ${callsSaid(sr.pts.length)}`));
   if (band?.length) key2.push(h("span", null, h("i", { class: "band", style: "--k:var(--idle)" }), "earlier runs, middle half and median"));
   wrap.append(svg, h("div", { class: "key" }, key2), tip);
   const rows = names.map((nm) => {
     const rs = runs.filter((r) => r.name === nm);
     const laps = [...new Set(rs.map((r) => r.laptop).filter(Boolean))];
-    return { nm, laptop: laps.length === 1 ? laps[0] : null, model: rs.at(-1)?.model ?? "default", runs: rs.length, calls: rs.reduce((n, r) => n + (r.ctx?.length || r.calls || 0), 0), peak: Math.max(0, ...rs.flatMap((r) => r.ctx ?? [])), tokens: rs.reduce((n, r) => n + r.tokens, 0) };
+    return { nm, laptop: laps.length === 1 ? laps[0] : null, model: rs.at(-1)?.model ?? "default", runs: rs.length, calls: rs.reduce((n, r) => n + r.calls, 0), peak: Math.max(0, ...rs.flatMap((r) => r.ctx ?? [])), tokens: rs.reduce((n, r) => n + r.tokens, 0) };
   });
   const top = Math.max(1, ...rows.map((x) => x.peak));
   return h("div", { class: "ctxp" },
     h("span", { class: "seg" }, h("button", { type: "button", "aria-pressed": String(!pick), onclick: () => set(null) }, "Whole session"), names.map((nm) => h("button", { type: "button", "aria-pressed": String(pick === nm), onclick: () => set(nm) }, nm))),
     wrap, h("p", { class: "note", style: "margin:0" }, note),
+    !pick && cut.length ? h("p", { class: "note ud-approx", style: "margin:0" }, `The session's line is approximate while ${andList(cut)} ${cut.length === 1 ? "runs" : "run"}: ${cut.length === 1 ? "its" : "their"} laptop's supervisor reports only the last 400 calls.`) : null,
     h("div", { class: "table-wrap" }, h("table", { class: "stack ctx-agents" },
       h("thead", null, h("tr", null, h("th", null, "Agent"), h("th", null, "Model"), h("th", { class: "num" }, "Runs"), h("th", { class: "num" }, "Calls"), h("th", { class: "num" }, "Peak context"), h("th", null, ""), h("th", { class: "num" }, "Tokens"))),
       h("tbody", null, rows.map((x) => h("tr", { class: `pick${pick === x.nm ? " sel" : ""}`, tabindex: "0", onclick: () => set(x.nm), onkeydown: (e) => e.key === "Enter" && set(x.nm) },
@@ -2758,7 +2815,7 @@ function chartWidth() { const w = ($("view")?.clientWidth || 760) - (window.inne
 /** A role's runs as one line: the call count carries on, and each new worker starts from a small context again. */
 function roleLine(runs) {
   const pts = [], resets = [];
-  for (const r of runs.filter((x) => x.ctx?.length)) { if (pts.length) resets.push({ at: pts.length + 1, resumed: !!r.resumed }); pts.push(...r.ctx); }
+  for (const r of runs.filter((x) => x.ctx?.length)) { if (pts.length) resets.push({ at: pts.length + 1, resumed: !!r.resumed }); for (const v of callLine(r).pts) pts.push(v); }
   return { pts, resets };
 }
 
@@ -2769,7 +2826,7 @@ let holdRender = false;
 function plotChart(series, band) {
   const W = chartWidth(), H = W < 500 ? 240 : 260, L = 46, R = W < 500 ? 16 : 140, T = 14, B = 28;
   const xMax = Math.max(10, ...series.map((x) => x.pts.length), band?.length ?? 0);
-  const yMax0 = Math.max(1, ...series.flatMap((x) => x.pts), ...(band ?? []).map((x) => x[2]));
+  const yMax0 = [...series.flatMap((x) => x.pts), ...(band ?? []).map((x) => x[2])].reduce((a, b) => Math.max(a, b ?? 0), 1);
   const step = niceStep(yMax0), yMax = Math.ceil(yMax0 / step) * step;
   const yt = Array.from({ length: Math.round(yMax / step) + 1 }, (_, i) => i * step);
   const xs = niceStep(xMax, W < 500 ? 4 : 6), xt = Array.from({ length: Math.floor(xMax / xs) + 1 }, (_, i) => i * xs);
@@ -2788,7 +2845,7 @@ function plotChart(series, band) {
     // A role's line breaks at each new worker, so the drop reads as a restart, not a fall.
     const cuts = [0, ...(sr.resets ?? []).map((r) => r.at - 1), sr.pts.length];
     for (let k = 0; k < cuts.length - 1; k++) {
-      svg.append(s("polyline", { points: sr.pts.slice(cuts[k], cuts[k + 1]).map((v, j) => `${x(cuts[k] + j + 1)},${y(v)}`).join(" "), fill: "none", stroke: sr.color, "stroke-width": sr.w, "stroke-dasharray": dash[sr.style], "stroke-linejoin": "round", "stroke-linecap": "round", "stroke-opacity": sr.op ?? 1 }));
+      svg.append(s("polyline", { points: thin(sr.pts.slice(cuts[k], cuts[k + 1]).map((v, j) => [cuts[k] + j + 1, v]).filter(([, v]) => v !== null)).map(([c, v]) => `${x(c)},${y(v)}`).join(" "), fill: "none", stroke: sr.color, "stroke-width": sr.w, "stroke-dasharray": dash[sr.style], "stroke-linejoin": "round", "stroke-linecap": "round", "stroke-opacity": sr.op ?? 1 }));
     }
     for (const r of sr.resets ?? []) svg.append(s("line", { x1: x(r.at - 0.5), x2: x(r.at - 0.5), y1: T, y2: H - B, stroke: sr.color, "stroke-width": 1, "stroke-dasharray": "2 3", "stroke-opacity": 0.6 }));
     labels.push({ y: y(sr.pts.at(-1)), x: x(sr.pts.length), text: sr.name, m: sr.style !== "solid" });
@@ -2811,7 +2868,7 @@ function plotChart(series, band) {
     const i = Math.round(((px - L) / (W - L - R)) * xMax);
     if (i < 1 || i > xMax) return leave();
     cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
-    const rows = series.filter((sr) => sr.pts.length >= i).map((sr) => [sr, sr.pts[i - 1]]).sort((a, c) => c[1] - a[1]).slice(0, 6);
+    const rows = series.filter((sr) => sr.pts.length >= i && sr.pts[i - 1] !== null).map((sr) => [sr, sr.pts[i - 1]]).sort((a, c) => c[1] - a[1]).slice(0, 6);
     tip.replaceChildren(h("b", null, `Call ${i}`), ...rows.map(([sr, v]) => h("div", { class: "row" }, h("span", null, h("i", { class: sr.style === "solid" ? "" : "dash", style: `--k:${sr.color}` }), sr.tip ?? sr.name), h("span", null, fmtTokens(v)))),
       band?.[i - 1] ? h("div", { class: "row muted" }, h("span", null, "earlier runs, median"), h("span", null, fmtTokens(band[i - 1][1]))) : null);
     tip.hidden = false;
@@ -3013,6 +3070,8 @@ function whatsFactored(weights) {
         [r.input, r.output, r.cache_write, r.cache_read].map((v) => h("td", { class: "num" }, `×${v}`))))))),
     h("p", { class: "note" }, `Ratios of each model's list price to Sonnet 5.5's, per kind of token, read ${weights.read_at}. Effort is ×1 at every level. A model not in the table counts ×1 and is named under its graph.`));
 }
+/** The table to weigh a running worker's tokens by: of any usage read kept, else this project's. */
+const weightsNow = (key) => ([...reads.values()].find((e) => e.reply?.weights)?.reply ?? usageRead(key, PAGE_DAYS).reply)?.weights ?? null;
 const weighSwitch = () => h("span", { class: "seg weigh", role: "group", "aria-label": "Weigh by model" },
   [[false, "Raw tokens"], [true, "Sonnet-equivalent"]].map(([on, label]) => h("button", { type: "button", "aria-pressed": String(state.weigh === on), "data-fk": `weigh/${on}`, onclick: () => setWeigh(on) }, label)));
 
@@ -3432,22 +3491,33 @@ function runFigure(r, w, weights) {
 }
 /** One run: who, on what, how it ended and its tokens. A lost one's are unknown, never 0. */
 function runLi(key, r, w, weights) {
-  const n = runFigure(r, w, weights), live = !r.ended_at;
-  const bad = r.outcome === "failed" || r.outcome === "lost";
-  const out = live ? h("span", { class: "on-t" }, "running") : bad ? h("span", { class: "bad-t" }, `${r.outcome}${r.outcome_reason ? `: ${r.outcome_reason}` : ""}`)
-    : r.outcome === "stopped" ? `stopped${r.outcome_reason ? `: ${r.outcome_reason}` : ""}` : r.outcome ?? "ended";
-  return h("li", { dataset: { run: r.id, outcome: live ? "running" : r.outcome ?? "ended" } },
+  return h("li", { dataset: { run: r.id, outcome: r.ended_at ? r.outcome ?? "ended" : "running" } },
     whoName({ name: r.agent, laptop: r.laptop, project: key }), h("span", { class: "muted r-on" }, `${r.role} · ${r.model ?? "default model"}${r.effort ? ` · ${r.effort}` : ""}`),
-    h("span", { class: "r-out" }, out),
-    h("span", { class: "r-tok" }, n === null ? h("span", { class: "warn-t" }, live && w ? "not weighed" : live ? "no report" : "tokens unknown") : `${fmtTokens(n)}${live ? " so far" : ""}`));
+    h("span", { class: "r-out" }, runOutcome(r)),
+    h("span", { class: "r-tok" }, runTokens(r, w, weights)));
+}
+/** A session's runs, and the workers the board has no run of yet: they run too. */
+function withLive(key, ss, runs) {
+  return [...runs, ...running().filter((w) => w.project === key && w.session === sessionKey(ss) && !runs.some((r) => r.id === w.id))
+    .map((w) => ({ id: w.id, agent: w.name, role: w.role, laptop: w.laptop, model: w.model, effort: w.effort, started_at: w.started_at, ended_at: null, outcome: null, outcome_reason: null }))];
+}
+/** How a run ended, or that it runs. */
+function runOutcome(r) {
+  if (!r.ended_at) return h("span", { class: "on-t" }, "running");
+  if (r.outcome === "failed" || r.outcome === "lost") return h("span", { class: "bad-t" }, `${r.outcome}${r.outcome_reason ? `: ${r.outcome_reason}` : ""}`);
+  return r.outcome === "stopped" ? `stopped${r.outcome_reason ? `: ${r.outcome_reason}` : ""}` : r.outcome ?? "ended";
+}
+/** A run's tokens in words; a running one the switch can't weigh yet says its raw ones. */
+function runTokens(r, w, weights, unknown = "tokens unknown") {
+  const n = runFigure(r, w, weights), live = !r.ended_at;
+  if (n !== null) return `${fmtTokens(n)}${live ? " so far" : ""}`;
+  if (live && w) return `${fmtTokens(workerTokens(w))} raw so far`;
+  return h("span", { class: "warn-t" }, live ? "no report" : unknown);
 }
 /** One session of who ran lately: its kind, label, feature and span, its tokens, its close, then its runs. */
 function latelyLi(key, x, weights) {
   const ss = x.session, byId = new Map(workers().map((w) => [w.id, w]));
-  // A worker the board has no run of yet runs too.
-  const extra = running().filter((w) => w.project === key && w.session === sessionKey(ss) && !x.runs.some((r) => r.id === w.id))
-    .map((w) => ({ id: w.id, agent: w.name, role: w.role, laptop: w.laptop, model: w.model, effort: w.effort, started_at: w.started_at, ended_at: null, outcome: null, outcome_reason: null }));
-  const runs = [...x.runs, ...extra], figures = runs.map((r) => runFigure(r, byId.get(r.id), weights));
+  const runs = withLive(key, ss, x.runs), figures = runs.map((r) => runFigure(r, byId.get(r.id), weights));
   const sum = figures.reduce((n, v) => n + (v ?? 0), 0), unknown = figures.length > 0 && figures.every((v) => v === null);
   const open = !x.ended_at, c = x.close;
   const found = c ? [c.blockers ? plural(c.blockers, "blocker") : null, c.majors ? plural(c.majors, "major") : null, c.sent_back ? `${c.sent_back} sent back` : null].filter(Boolean).join(" · ") || "no findings" : "";
