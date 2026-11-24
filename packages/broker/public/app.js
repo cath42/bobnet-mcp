@@ -10,11 +10,8 @@ const state = {
   boards: new Map(),
   traffic: [],
   project: null,
-  inc: null,
   release: null,
   showAccepted: false,
-  openLanes: new Set(),
-  openCards: new Set(),
   open: new Set(),
   /** The steps view: folds Casper opened or shut, the agent line whose detail row is open, open context panels and history. */
   folds: new Map(),
@@ -23,6 +20,8 @@ const state = {
   hist: new Map(),
   /** Triage's filter (all, bugs, none or a release) and whether past 25 rows show. */
   triage: { filter: "all", all: false },
+  /** Features: which are listed, and the words they are found by. */
+  features: { filter: "all", text: "" },
   /** Needs you: the project picked, and the one answer form open with what Casper has put in it so far (notes 40). */
   waitsProject: "all",
   answering: null,
@@ -232,7 +231,7 @@ function laptopBoard(key) {
  */
 function projectSwitch(key, to) {
   return h("span", { class: "seg projects" }, svc.projects.map((q) => h("button", { type: "button", "aria-pressed": String(q.key === key), onclick: () => {
-    Object.assign(state, { project: q.key, inc: null, release: null });
+    Object.assign(state, { project: q.key, release: null });
     location.hash = to(q.key);
   } }, q.name)));
 }
@@ -245,21 +244,6 @@ function sessionsOf(b) {
   const cur = named.at(-1) ?? b.sessions.at(-1) ?? null;
   const same = b.sessions.filter((x) => x.kind === cur?.kind && x !== cur);
   return { cur, prev: same.at(-1) ?? null, prev2: same.at(-2) ?? null };
-}
-
-/** A session's runs: the board's ended ones, and the snapshot's for those still running or not yet on the board. */
-function sessionRuns(b, name) {
-  if (!name) return [];
-  const seen = new Set();
-  const out = [];
-  for (const w of workers()) {
-    if (w.project !== b.project || w.session !== name || (!ACTIVE.includes(w.state) && !w.ended_at)) continue;
-    const ended = b.runs.find((r) => r.id === w.id);
-    seen.add(w.id);
-    out.push(ended && w.ended_at ? { ...ended, laptop: b.laptop } : { ...w, ctx: w.ctx.length ? w.ctx : (ended?.ctx ?? []), tokens: totalTokens(w.tokens) });
-  }
-  for (const r of b.runs) if (r.session === name && !seen.has(r.id)) out.push({ ...r, laptop: b.laptop });
-  return out.sort((a, c) => (a.started_at ?? "").localeCompare(c.started_at ?? ""));
 }
 
 // ---------- Backlog ----------
@@ -283,41 +267,6 @@ function backlogModel(b) {
   return { items, byId, kids, settled, workerOn, runningOnInc, commitsInBuild, milestone, cur };
 }
 
-const owner = (x) => (x.assignee.join(", ") || x.labels.find((l) => /^(svc|layer):/.test(l)) || "unassigned");
-
-/**
- * An increment's tasks by session. A task's `build:<n>` (or `build:design`) label places it; without
- * one, the latest session whose workers had it as their task does; the rest are not in a build yet.
- */
-function lanesOf(b, m, inc) {
-  const ks = m.kids(inc.id);
-  const place = new Map();
-  for (const x of ks) {
-    const l = x.labels.find((v) => /^build:/.test(v))?.slice(6);
-    if (l) place.set(x.id, l === "design" ? "design" : `build ${l}`);
-  }
-  const prefix = `${inc.id} `;
-  // Only design and build sessions place work; a review's fix-up leaves a task in the build that made it.
-  const sessions = b.sessions.filter((x) => x.name.startsWith(prefix) && (x.kind === "design" || x.kind === "build"));
-  for (const ss of sessions) {
-    const key = ss.name.slice(prefix.length);
-    for (const r of sessionRuns(b, ss.name)) for (const id of refsOf(r)) if (ks.some((k) => k.id === id) && !ks.find((k) => k.id === id).labels.some((v) => v.startsWith("build:"))) place.set(id, key);
-  }
-  // In the order the sessions started, design first; a lane only a build:<n> label names goes after them.
-  const order = (k) => (k === "design" ? "" : sessions.find((x) => x.name === `${prefix}${k}`)?.started_at ?? `~${k}`);
-  const keys = [...new Set(place.values())].sort((a, c) => (order(a) < order(c) ? -1 : order(a) > order(c) ? 1 : 0));
-  const lanes = keys.map((key) => {
-    const ids = ks.filter((k) => place.get(k.id) === key).map((k) => k.id);
-    const ss = sessions.find((x) => x.name === `${prefix}${key}`);
-    const now = !!ss && m.cur?.name === ss.name;
-    // A lane with an agent on one of its cards stays open, as during a review of its build.
-    return { title: key[0].toUpperCase() + key.slice(1), ids, now, closed: !now && ids.every((id) => m.settled(m.byId.get(id).status) && !m.workerOn(id).length) };
-  });
-  const rest = ks.filter((k) => !place.has(k.id)).map((k) => k.id);
-  if (rest.length) lanes.push({ title: "Not in a build yet", ids: rest, now: false, closed: false });
-  return lanes;
-}
-
 // ---------- Rendering: kanban ----------
 
 /** A worker with no activity this long is flagged, never interrupted (Casper, 2026-11-07): you decide. */
@@ -339,37 +288,17 @@ function agentTag(w, showTask, m) {
 
 const narrow = () => window.innerWidth < 600;
 
-function board(cols, lanes) {
-  if (narrow()) return boardList(cols, lanes);
+function board(cols, cells) {
+  if (narrow()) {
+    // On a phone: the cards under their column's heading, empty columns left out.
+    return h("div", { class: "board-list" }, cols.filter((c) => cells[c.key].length).map((c) =>
+      h("div", { class: "grp" }, h("div", { class: `grp-h${c.live ? " live" : ""}` }, h("span", null, c.name), h("span", null, String(c.count ?? cells[c.key].length))), cells[c.key])));
+  }
   // Below desktop width, columns empty on the whole board give their room to the rest.
-  if (window.innerWidth < 1100) cols = cols.filter((c) => (c.count ?? lanes.reduce((n, l) => n + l.cells[c.key].length, 0)) > 0);
-  const grid = h("div", { class: "board", style: `--cols:${cols.length}` }, cols.map((c) => h("div", { class: `col-h${c.live ? " live" : ""}` }, h("span", null, c.name), h("span", null, String(c.count ?? lanes.reduce((n, l) => n + l.cells[c.key].length, 0))))));
-  for (const l of lanes) {
-    const folded = l.closed && !state.openLanes.has(l.title);
-    const n = cols.reduce((k, c) => k + l.cells[c.key].length, 0);
-    if (l.title) grid.append(laneHead(l, folded, `show ${n} tasks, all built`));
-    if (folded) continue;
-    for (const c of cols) grid.append(h("div", { class: "col" }, l.cells[c.key]));
-  }
-  return h("div", { class: "board-wrap" }, grid);
-}
-
-function laneHead(l, folded, label) {
-  return h("div", { class: "lane-h" }, h("b", null, l.title), l.now ? h("span", { class: "now" }, "now") : null, l.sub ? h("span", { class: "muted" }, l.sub) : null,
-    l.closed ? h("button", { type: "button", class: "chip", onclick: () => { folded ? state.openLanes.add(l.title) : state.openLanes.delete(l.title); render(); } }, folded ? label : "fold") : null);
-}
-
-/** The board on a phone: each lane a list, its cards under their column's heading, empty columns left out. */
-function boardList(cols, lanes) {
-  const out = h("div", { class: "board-list" });
-  for (const l of lanes) {
-    const n = cols.reduce((k, c) => k + l.cells[c.key].length, 0);
-    const folded = l.closed && !state.openLanes.has(l.title);
-    if (l.title) out.append(laneHead(l, folded, `show ${n}, all built`));
-    if (folded) continue;
-    for (const c of cols) if (l.cells[c.key].length) out.append(h("div", { class: "grp" }, h("div", { class: `grp-h${c.live ? " live" : ""}` }, h("span", null, c.name), h("span", null, String(c.count ?? l.cells[c.key].length))), l.cells[c.key]));
-  }
-  return out;
+  if (window.innerWidth < 1100) cols = cols.filter((c) => (c.count ?? cells[c.key].length) > 0);
+  return h("div", { class: "board-wrap" }, h("div", { class: "board", style: `--cols:${cols.length}` },
+    cols.map((c) => h("div", { class: `col-h${c.live ? " live" : ""}` }, h("span", null, c.name), h("span", null, String(c.count ?? cells[c.key].length)))),
+    cols.map((c) => h("div", { class: "col" }, cells[c.key]))));
 }
 
 const boardDown = (text) => h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, text));
@@ -379,66 +308,6 @@ const boardError = () => ov.error ?? (svc.projects ? null : svc.error);
 const unread = () => (svc.error ? boardDown(svc.error) : h("div", { class: "empty-card" }, "Reading the board…"));
 /** No project to show: the list isn't read yet, or has none. */
 const noProjects = () => (svc.projects ? h("div", { class: "empty-card" }, "No project's board is in the service yet.") : unread());
-const empty = (b) => !svc.projects ? h("section", null, unread()) : h("section", null, h("div", { class: "banner idle" }, h("span", null, b ? "This project has no backlog configured." : "No board yet."), h("span", { class: "muted" }, b ? "Set backlog: { dir } for it in supervisor.yaml." : "A supervisor sends its projects' boards within a minute of starting.")));
-
-function viewFeature() {
-  // `#feature/<project>/<id>`: a feature in the service opens on its steps; one on a Backlog.md board opens as before.
-  const id = hashPath()[1];
-  const route = featureRoute();
-  const bar = (key) => switchBar(key, (k) => `#feature/${k}`);
-  if (route) return [bar(route.p.key), ...viewServiceFeature(route.p, route.ref)];
-  // `#feature/<project>`, where the switch goes, is that project's feature view.
-  const key = pageProject();
-  if (id && id !== key) state.inc = id;
-  const b = key ? laptopBoard(key) : current();
-  if (!b?.backlog) return [bar(key), empty(b)];
-  const m = backlogModel(b);
-  const open = m.items.filter((x) => x.type === "increment" && x.status !== "Done" && m.kids(x.id).length);
-  const curInc = m.cur?.name.split(" ")[0];
-  const inc = m.byId.get(state.inc) ?? m.byId.get(curInc) ?? open[0];
-  if (!inc) return [bar(key), empty(b)];
-  const ks = m.kids(inc.id);
-  const cols = [{ key: "Draft", name: "Draft" }, { key: "Ready", name: "Ready" }, { key: "In Progress", name: "In progress", live: true }, { key: "In Review", name: "Built, awaiting review" }, { key: "Done", name: "Done" }];
-  // An agent on it, or commits on main this session, put a task in progress before the board's own move.
-  const column = (x) => (!m.settled(x.status) && (m.workerOn(x.id).length || m.commitsInBuild(x.id).length) ? "In Progress" : cols.some((c) => c.key === x.status) ? x.status : "Draft");
-  const card = (x) => {
-    const ws = m.workerOn(x.id), opened = ws.length > 0 || state.openCards.has(x.id);
-    const bl = x.deps.filter((d) => m.byId.get(d) && !m.settled(m.byId.get(d).status)), cs = m.commitsInBuild(x.id), moved = column(x) !== x.status;
-    const waits = bl.length && !m.settled(x.status) && !cs.length ? h("span", { style: "color:var(--warn)" }, `waits on ${bl.map((d) => d.replace(/^[A-Z]+-/, "")).join(", ")}`) : null;
-    const toggle = () => { state.openCards.has(x.id) ? state.openCards.delete(x.id) : state.openCards.add(x.id); render(); };
-    return h("div", { class: `kc${ws.length ? " live" : ""}${opened ? "" : " compact"}`, role: "button", tabindex: "0", "aria-expanded": String(opened), dataset: { id: x.id }, onclick: toggle, onkeydown: (e) => e.key === "Enter" && toggle() },
-      h("span", { class: "t", style: opened ? "" : "color:var(--text)" }, h("b", { style: "font-weight:600;margin-right:6px" }, x.id.replace(/^[A-Z]+-/, "")), x.title),
-      opened
-        ? [
-            h("span", { class: "m" }, h("span", null, owner(x)), waits, cs.length ? h("span", null, `${cs.length} commit${cs.length > 1 ? "s" : ""} on main`) : null),
-            moved ? h("span", { class: "overlay" }, `board says ${x.status} until the session closes`) : null,
-            state.openCards.has(x.id) && x.desc ? h("span", { class: "m", style: "display:block" }, x.desc.replace(/^## What\s*/, "")) : null,
-            state.openCards.has(x.id) && x.ac.length ? h("span", { class: "m" }, `Acceptance: ${x.ac.filter((a) => a[0]).length} of ${x.ac.length} met`) : null,
-          ]
-        : cs.length ? h("span", { class: "m" }, `${cs.length} commit${cs.length > 1 ? "s" : ""} on main`) : waits ? h("span", { class: "m" }, waits) : null,
-      ws.map((w) => agentTag(w, false, m)));
-  };
-  const lanes = lanesOf(b, m, inc).map((l) => {
-    const cells = Object.fromEntries(cols.map((c) => [c.key, []]));
-    for (const id of l.ids) cells[column(m.byId.get(id))].push(card(m.byId.get(id)));
-    return { ...l, cells };
-  });
-  const ws = m.runningOnInc(inc.id), onFeature = ws.filter((w) => refsOf(w).includes(inc.id));
-  return [
-    bar(key),
-    h("div", { class: "bar-row" },
-      h("label", { for: "inc-pick", class: "muted" }, "Feature"),
-      h("select", { id: "inc-pick", onchange: (e) => { state.inc = e.target.value; render(); } }, (open.includes(inc) ? open : [inc, ...open]).map((x) => h("option", { value: x.id, selected: x.id === inc.id || null }, `${x.id} · ${x.title.slice(0, 70)}`))),
-      h("span", { class: "muted" }, `${inc.milestone ? m.milestone(inc.milestone) : "no release"} · ${ks.filter((k) => m.settled(k.status)).length} of ${ks.length} built · ${ws.length ? `${ws.length} agent${ws.length > 1 ? "s" : ""} on it now` : "nobody on it now"}`)),
-    details("feature-desc", { class: "card" }, h("summary", { style: "margin:0;color:var(--text);font-weight:600" }, inc.title),
-      inc.desc ? h("div", { class: "sub" }, inc.desc.replace(/^## What\s*/, "")) : null,
-      inc.ac.length ? h("ol", { class: "ac", style: "font-size:13px" }, inc.ac.map(([on, t]) => h("li", null, on ? "✓ " : "", t))) : null),
-    onFeature.length ? h("div", { class: "card" }, h("div", { class: "muted", style: "margin-bottom:6px" }, "On the feature as a whole"), onFeature.map((w) => agentTag(w, true, m))) : null,
-    board(cols, lanes),
-    h("p", { class: "note" }, "Click a task to open it. Tasks with an agent on them stay open, and an agent links to its session's context per call. A task's build:<n> label puts it in a build; without one, the build whose workers had it as their task."),
-  ];
-}
-
 // ---------- The steps view: a feature in the service, its sessions, outcomes and tasks (BOB-4) ----------
 
 /** "<project>/<ref>" → { item, history, tasks, sessions, error }: read when opened, refetched on board_changed. */
@@ -475,6 +344,12 @@ function featureRoute() {
   const p = ps.find((x) => a.startsWith(`${x.prefix}-`)) ?? ps.find((x) => x.draft_prefix && a.startsWith(`${x.draft_prefix}-`));
   return p ? { p, ref: a } : null;
 }
+function viewFeature() {
+  if (!svc.projects) return [unread()];
+  const route = featureRoute();
+  return route ? viewServiceFeature(route.p, route.ref) : [h("div", { class: "empty-card" }, `No project on BobNet has a feature ${hashPath().slice(1).join("/")}.`, " ", h("a", { href: "#features" }, "Features"))];
+}
+
 /** A feature's link: with its project when its board is in the service. */
 const featureHref = (key, ref) => (knownProjects().some((p) => p.key === key) ? `#feature/${key}/${ref}` : `#feature/${ref}`);
 
@@ -675,14 +550,8 @@ function viewServiceFeature(p, ref) {
   const touched = new Set([...sessions.flatMap((ss) => ss.tasks_moved.map((m) => m.task)), ...on.flatMap(refsOf)]);
   const loose = tasks.filter((t) => !touched.has(t.ref));
   const runOf = (w) => sessions.flatMap(waitingRuns).find((c) => c.worker === w.id) ?? null;
-  const picks = [...svc.roadmaps.entries()].flatMap(([k, d]) => d.features.filter((x) => x.status !== "Done" && (x.open_since || x.status === "Ready")).map((x) => [k, x]));
-  if (!picks.some(([, x]) => x === f)) picks.unshift([p.key, f]);
-  for (const q of svc.projects) if (!svc.roadmaps.has(q.key) && !svc.loading.has(q.key)) loadRoadmap(q.key);
   return [
-    h("div", { class: "bar-row" },
-      h("label", { for: "feat-pick", class: "muted" }, "Feature"),
-      h("select", { id: "feat-pick", onchange: (e) => (location.hash = `#feature/${e.target.value}`) },
-        picks.map(([k, x]) => h("option", { value: `${k}/${x.ref}`, selected: x === f || null }, `${x.ref} · ${x.title.slice(0, 60)}`)))),
+    h("a", { class: "back", href: `#features/${p.key}` }, `‹ ${p.name}'s features`),
     h("div", { class: "feat" },
       h("div", { class: `card feature-head${st === "open" ? " is-open" : ""}`, id: "feature-head" },
         h("div", { class: "fh-top" }, h("span", { class: "id" }, f.ref), h("span", { class: "muted" }, `${p.name} · ${r ? `${r.title} · number ${n}` : "not in a release"}`), badge(st)),
@@ -945,7 +814,7 @@ function details(key, attrs, ...children) {
 /** A project still on its supervisor's Backlog.md board: features in columns by where they stand. */
 function viewBacklogRoadmap() {
   const b = current();
-  if (!b?.backlog) return [empty(b)];
+  if (!b?.backlog) return [noProjects()];
   const m = backlogModel(b);
   const curInc = m.cur?.name.split(" ")[0];
   const release = state.release ?? m.byId.get(curInc)?.milestone ?? b.backlog.milestones[0]?.id ?? "all";
@@ -962,7 +831,7 @@ function viewBacklogRoadmap() {
   const accepted = [];
   for (const x of incs) {
     const col = column(x), ks = m.kids(x.id), ws = m.runningOnInc(x.id);
-    const openIt = () => { state.inc = x.id; location.hash = "feature"; };
+    const openIt = () => (location.hash = featureHref(b.project, x.id));
     if (col === "accepted") {
       accepted.push(h("button", { type: "button", class: "kc compact", onclick: openIt }, h("span", null, chip(x.id)), h("span", { class: "t" }, x.title)));
       continue;
@@ -985,7 +854,7 @@ function viewBacklogRoadmap() {
     switchBar(b.project, (k) => `#roadmap/${k}`),
     h("div", { class: "bar-row" }, h("span", { class: "seg" }, ...b.backlog.milestones.map((ms) => pick(ms.id, ms.title)), pick("none", "Not in a release"), pick("all", "All open")),
       h("span", { class: "muted" }, live.length ? `${live.length} agent${live.length > 1 ? "s" : ""} working, shown on their feature` : "No agents working right now")),
-    board(cols, [{ cells }]),
+    board(cols, cells),
     h("p", { class: "note" }, "A feature is Building once any of its tasks is built or has an agent on it, whatever its board status. Open a card for its task board."),
     h("section", null, details("drafts", null, h("summary", null, "Drafts, not yet placed ", h("span", { class: "count" }, b.backlog.drafts.length)),
       h("ul", { class: "feed" }, [...b.backlog.drafts].sort((a, c) => (c.updated ?? "").localeCompare(a.updated ?? "")).map((d) => h("li", null, h("time", null, (d.updated ?? "").slice(5, 10)), h("span", null, h("b", null, d.id), " ", d.title)))))),
@@ -1050,7 +919,7 @@ async function loadProjects() {
 /** Whether the page that shows draws a project's roadmap. */
 function roadmapShown(key) {
   const v = viewName();
-  return v === "roadmap" ? roadmapRoute()?.key === key : v === "project" ? projectRoute() === key : v === "feature" ? featureRoute()?.p.key === key : false;
+  return v === "roadmap" ? roadmapRoute()?.key === key : v === "project" ? projectRoute() === key : v === "features" ? pageProject() === key : v === "feature" ? featureRoute()?.p.key === key : false;
 }
 /** A project's releases and features, read once and kept: again when a page that draws them shows and they have changed since. */
 function roadmapOf(key) {
@@ -1082,7 +951,7 @@ async function loadRoadmap(key) {
   } finally {
     svc.loading.delete(key);
   }
-  if (viewName() === "roadmap" || viewName() === "feature" || viewName() === "project") scheduleRender();
+  if (["roadmap", "features", "feature", "project"].includes(viewName())) scheduleRender();
   if (svc.again.delete(key)) await loadRoadmap(key);
 }
 
@@ -1142,6 +1011,54 @@ function viewBoardRoadmap(key, edit) {
   if (none.length || data.none?.items) out.push(releaseSection(key, data, null, null, edit));
   out.push(h("p", { class: "note" }, `Order inside a release is ${poOf(p)}'s; the order of releases is yours and ${poOf(p)}'s. A number in italics: the board has no order for it, so it follows the ordered ones by id. Where it stands: a feature not done says how many of its own criteria and tasks are left; a done one says when it was done. The feature's page lists any criteria it closed without.`));
   return out;
+}
+
+// ---------- Features: a project's features from the board, by state or by words (BOB-121 spec 2.7) ----------
+
+const FEATURE_RANK = { "In Progress": 1, "In Review": 1, Ready: 2, Draft: 3, Done: 4 };
+const FEATURE_FILTERS = [["all", "All", () => true], ["open", "Open now", (f) => featureState(f) === "open"], ["ready", "Ready", (f) => f.status === "Ready"], ["draft", "Draft", (f) => f.status === "Draft"], ["done", "Done", (f) => f.status === "Done"]];
+/** Every word of `text` is in the feature's id or title. */
+const featureHas = (f, text) => text.toLowerCase().split(/\s+/).every((w) => `${f.ref} ${f.title}`.toLowerCase().includes(w));
+/** Open first, then Ready, Draft and Done, the oldest done first; else in the Roadmap's order. */
+function featuresInOrder(data) {
+  const rank = (f) => (featureState(f) === "open" ? 0 : FEATURE_RANK[f.status] ?? 3);
+  const rel = (f) => { const i = data.releases.findIndex((r) => r.ref === f.release); return i < 0 ? data.releases.length : i; };
+  return [...data.features].sort((a, b) => rank(a) - rank(b) || (a.status === "Done" ? (a.done_at ?? "~").localeCompare(b.done_at ?? "~") : 0) || rel(a) - rel(b));
+}
+/** One feature: its id, title, state, where it stands, who is on it, its release and what of it waits on him. */
+function featureLi(key, data, f) {
+  const on = onFeature(key, f.ref), st = featureState(f), r = data.releases.find((x) => x.ref === f.release);
+  const waits = (ov.waits ?? []).filter((w) => w.project === key && (w.feature === f.ref || w.holds.items.includes(f.ref))).map((w) => w.ref);
+  return h("li", { class: st === "done" ? "done" : st === "open" ? "is-open" : null, dataset: { ref: f.ref } },
+    h("a", { class: "id", href: featureHref(key, f.ref) }, f.ref), h("a", { class: "ft", href: featureHref(key, f.ref) }, f.title),
+    h("span", { class: "fs" }, badge(st), " ", whereStands(f), on.length ? h("span", { class: "on-t" }, " · ", whoNames(on), " on it") : null,
+      h("span", { class: "muted" }, ` · ${r ? releaseName(r) : "Not in a release"}`),
+      waits.length ? h("span", { class: "warn-t" }, ` · waits on you: ${upTo2(waits)}`) : null));
+}
+
+function viewFeatures() {
+  if (!svc.projects) return [unread()];
+  const key = pageProject();
+  if (!key) return [noProjects()];
+  if (!ov.waits && !ov.loading && !ov.error) loadOverview();
+  const name = projectName(key), data = roadmapOf(key), fx = state.features, words = fx.text.trim();
+  const find = h("input", { type: "search", class: "find", id: "find", placeholder: "Find a feature: id or words", "aria-label": "Find a feature: id or words", value: fx.text, autocomplete: "off",
+    oninput: (e) => { fx.text = e.target.value; render(); } });
+  const bar = h("div", { class: "bar-row" }, svc.projects.length > 1 ? projectSwitch(key, (k) => `#features/${k}`) : h("b", null, name), find);
+  const list = (...kids) => [bar, h("div", { id: "features-list" }, ...kids)];
+  if (!data) return list(h("div", { class: "empty-card" }, "Reading the board…"));
+  const down = data.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, data.features.length ? `Showing what it last said. ${data.error}` : data.error), button("Retry", "", () => { loadRoadmap(key); render(); })) : null;
+  if (data.error && !data.features.length) return list(down);
+  const found = featuresInOrder(data).filter((f) => !words || featureHas(f, words));
+  const [, label, match] = FEATURE_FILTERS.find(([k]) => k === fx.filter) ?? FEATURE_FILTERS[0];
+  const fs = found.filter(match), kind = fx.filter === "all" ? "" : `${label === "Open now" ? "open" : label.toLowerCase()} `;
+  const all = fx.filter === "all" && !words ? null : button("Show all", "more-t", () => { Object.assign(fx, { filter: "all", text: "" }); render(); });
+  return list(down,
+    h("div", { class: "bar-row" }, h("span", { class: "seg filters", role: "group", "aria-label": "Which features" }, FEATURE_FILTERS.map(([k, l, m]) =>
+      h("button", { type: "button", "aria-pressed": String(fx.filter === k), "data-fk": `features/${k}`, onclick: () => { fx.filter = k; render(); } }, l, " ", h("span", { class: "count" }, String(found.filter(m).length)))))),
+    fs.length ? h("ul", { class: "flist big card" }, fs.map((f) => featureLi(key, data, f)))
+      : h("div", { class: "empty-card" }, words ? `No ${kind}feature of ${name}'s matches “${words}”.` : `${name} has no ${kind}feature${fx.filter === "all" ? " yet" : ""}.`, all ? [" ", all] : null),
+    h("p", { class: "note" }, `Every feature on ${name}'s board, archived ones left out. The `, h("a", { href: `#roadmap/${key}` }, "Roadmap"), " shows them by release, in order."));
 }
 
 /** One release and its features in their order; `r` null is "Not in a release". */
@@ -3609,7 +3526,7 @@ function viewProject() {
             : h("p", { class: "muted" }, "No open release."),
           (page?.done_unclosed ?? []).map((x) => h("p", { class: "warn-t" }, `${releaseName(x)}: all done, waiting for your close. `, h("a", { href: `#roadmap/${key}` }, "Close it on the Roadmap →"))),
           rel ? (feats ? h("ul", { class: "flist" }, feats.map((f) => releaseFeature(key, f))) : h("p", { class: "muted" }, road?.error ? "Its features couldn't be read." : "Reading its features…")) : null,
-          h("div", { class: "links" }, h("a", { href: `#roadmap/${key}` }, "Roadmap"), h("a", { href: `#triage/${key}` }, "Triage"))),
+          h("div", { class: "links" }, h("a", { href: `#roadmap/${key}` }, "Roadmap"), h("a", { href: `#features/${key}` }, "All features"), h("a", { href: `#triage/${key}` }, "Triage"))),
         card("prun", "Running now", on || "", runningOf(key, page)),
         card("plate", "Who ran lately", "last 14 days", page ? lately(key, page, weights) : reading("Who ran"))),
       h("aside", { class: "pside" },
@@ -3748,21 +3665,31 @@ function rulesSections() {
 // ---------- Views ----------
 
 // Now left the tabs (BOB-5 as built 3): "#now" opens the Overview, as any unknown view does.
-const VIEWS = { overview: viewOverview, needs: viewNeeds, status: viewStatus, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, project: viewProject, laptops: viewLaptops };
+const VIEWS = { overview: viewOverview, needs: viewNeeds, status: viewStatus, features: viewFeatures, feature: viewFeature, roadmap: viewRoadmap, triage: viewTriage, usage: viewUsage, project: viewProject, laptops: viewLaptops };
 const viewName = () => (VIEWS[hashPath()[0]] ? hashPath()[0] : "overview");
 
 function render() {
   // A chart drawn away gets no pointerleave; one still pointed at holds again as the pointer moves.
   holdRender = false;
   const v = viewName();
-  for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${v === "project" ? "overview" : v}`);
+  // A project's page is the Overview's, a feature's is Features'.
+  const tab = { project: "overview", feature: "features" }[v] ?? v;
+  for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${tab}`);
   // Nothing waits: the count leaves the tab.
   $("needs-n").textContent = waitCount() || "";
   $("tabs").querySelector('a[href="#status"]').dataset.new = String(statusNew());
   drawConn();
   // Capture always has a project (Casper, 2026-11-13): only once the service has one.
   $("capture-open").hidden = !svc.projects?.length;
-  $("view").classList.toggle("wide", v === "overview" || v === "feature" || v === "roadmap" || v === "status" || v === "usage" || v === "project");
+  $("view").classList.toggle("wide", ["overview", "features", "feature", "roadmap", "status", "usage", "project"].includes(v));
+  // The find box keeps its place and caret while he types and while the laptops report: what it finds is drawn under it.
+  const find = document.activeElement;
+  if (v === "features" && find?.id === "find") {
+    const fresh = h("div", null, ...VIEWS[v]().filter(Boolean)), switched = fresh.querySelector(".projects"), list = fresh.querySelector("#features-list");
+    if (switched) $("view").querySelector(".projects")?.replaceWith(switched);
+    $("features-list")?.replaceWith(list);
+    return;
+  }
   // The answer box he is typing in keeps its focus and caret across a draw.
   const box = document.activeElement?.closest?.("form.answer") ? document.activeElement : null;
   const at = box?.selectionStart;
@@ -3785,7 +3712,7 @@ function focusKey(fk) {
 
 /**
  * Where a link from before the new pages goes (spec 2.0), or null for one that still stands, or that waits for the
- * projects to be read. #features comes with its page (BOB-185). A `%` that decodes to nothing is taken as it is.
+ * projects to be read. A `%` that decodes to nothing is taken as it is.
  */
 function oldLink(hash) {
   const [v, ...rest] = hash.replace(/^#/, "").split("?")[0].split("/");
@@ -3795,8 +3722,10 @@ function oldLink(hash) {
     return first ? { to: projectHref(first.key), toast: "Sessions moved: who ran is on each project's page; laptops and agents are under Laptops." } : null;
   }
   if (v === "rules") return { to: "#laptops" };
-  if (v === "feature" && rest.length === 1 && rest[0]) {
+  if (v === "feature" && !rest[0]) return { to: "#features" };
+  if (v === "feature" && rest.length === 1) {
     let ref = rest[0];
+    if (svc.projects?.some((x) => x.key === ref)) return { to: `#features/${ref}` };
     try { ref = decodeURIComponent(ref); } catch {}
     const ps = svc.projects ?? [];
     const p = ps.find((x) => ref.startsWith(`${x.prefix}-`)) ?? ps.find((x) => x.draft_prefix && ref.startsWith(`${x.draft_prefix}-`));

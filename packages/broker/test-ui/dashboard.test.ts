@@ -171,33 +171,6 @@ describe("Now's parts on the Overview (BOB-5 as built 3)", () => {
   });
 });
 
-describe("Feature", () => {
-  it("shows the current build's feature by session, with agents on their tasks", async () => {
-    await go("#feature");
-    const text = view().textContent!;
-    expect(text).toContain("An agent proposes changes to recorded records");
-    const lanes = [...view().querySelectorAll(".lane-h b")].map((b) => b.textContent);
-    // Labels place 41.1, 41.16 and 41.20; the build 3 worker's brief places 41.18.
-    expect(lanes).toEqual(["Design", "Build 3", "Build 4"]);
-    const card = view().querySelector('[data-id="LAND-41.18"]')!;
-    expect(card.classList.contains("live")).toBe(true);
-    expect(card.textContent).toContain("records-agent");
-    expect(card.textContent).toContain("board says Ready until the session closes");
-    // The design lane is all built and folded.
-    expect(view().querySelector('[data-id="LAND-41.1"]')).toBeNull();
-  });
-
-  it("opens a task's details on click and keeps them across a re-render", async () => {
-    const card = view().querySelector('[data-id="LAND-41.20"]') as HTMLElement;
-    expect(card.getAttribute("aria-expanded")).toBe("false");
-    card.click();
-    await settle();
-    const again = view().querySelector('[data-id="LAND-41.20"]')!;
-    expect(again.getAttribute("aria-expanded")).toBe("true");
-    expect(again.textContent).toContain("waits on 41.16");
-  });
-});
-
 describe("Roadmap", () => {
   it("puts features in columns by where they stand, agents on their feature, accepted ones folded", async () => {
     await go("#roadmap");
@@ -212,11 +185,11 @@ describe("Roadmap", () => {
     expect(view().querySelector(".feed i")).toBeNull();
   });
 
-  it("opens a feature's board from its card", async () => {
+  it("opens a feature's page from its card", async () => {
     (view().querySelector(".col .kc") as HTMLElement).click();
     await settle();
-    expect(location.hash).toBe("#feature");
-    expect((view().querySelector("#inc-pick") as HTMLSelectElement).value).toBe("LAND-42");
+    expect(location.hash).toBe("#feature/helix/LAND-42");
+    await go("#roadmap");
   });
 });
 
@@ -454,70 +427,6 @@ describe("laptops that stopped reporting, dead requests and a stuck board outbox
     await settle();
     await go("#laptops");
     expect($("laptops").querySelector(".empty")).toBeNull();
-  });
-});
-
-describe("a review session", () => {
-  it("marks no build lane now", async () => {
-    const ws = FakeSocket.last;
-    const next = structuredClone(board);
-    next.sessions.push({ name: "LAND-41 review", kind: "review", started_at: iso(30), ended_at: null, workers: 1, calls: 10, tokens: tokens(5_000_000) });
-    next.runs.push({ id: "w_r", name: "Bill", role: "bill", session: "LAND-41 review", task_ref: "LAND-41.16", model: "opus", effort: "high", started_at: iso(30), ended_at: iso(10), resumed: false, tokens: 5_000_000, ctx: [30000, 70000] });
-    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board: next });
-    await go("#feature");
-    expect(view().querySelector(".lane-h .now")).toBeNull();
-    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board });
-    await settle();
-  });
-
-  it("shows each agent on the items its spawn named, opening a finished build's lane while one is on it", async () => {
-    const ws = FakeSocket.last;
-    const snap = structuredClone(dashboard.laptops[0]!.snapshot);
-    snap.workers = [
-      worker({ id: "w_b", name: "Bill", role: "bill", task: "LAND-41 review 1", session: "LAND-41 review 1", task_ref: "LAND-41", task_refs: ["LAND-41"] }),
-      worker({ id: "w_h", name: "Homer", role: "homer", task: "LAND-41 review 1: QUICK fix of R1-1", session: "LAND-41 review 1", task_ref: "LAND-41.1", task_refs: ["LAND-41.1", "LAND-41.16"] }),
-    ] as never;
-    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: snap });
-    await go("#feature");
-    const pick = $("inc-pick") as HTMLSelectElement;
-    pick.value = "LAND-41";
-    pick.dispatchEvent(new Event("change"));
-    await settle();
-    expect(view().textContent).toContain("2 agents on it now");
-    expect(view().textContent).toContain("On the feature as a whole");
-    // The design lane is all reviewed, so it would fold; Homer on 41.1 keeps it open.
-    expect(view().querySelector('[data-id="LAND-41.1"] .agent')!.textContent).toContain("Homer");
-    expect(view().querySelector('[data-id="LAND-41.16"] .agent')!.textContent).toContain("Homer");
-    expect(view().querySelector('[data-id="LAND-41.18"] .agent')).toBeNull();
-    ws.frame({ t: "report", laptop: "mbp-1", at: iso(0), snapshot: dashboard.laptops[0]!.snapshot });
-    await settle();
-  });
-});
-
-describe("build lanes", () => {
-  it("follow the order their sessions started, labels as declared", async () => {
-    const ws = FakeSocket.last;
-    const next = structuredClone(board) as typeof board & { sessions: Array<Record<string, unknown>> };
-    next.backlog.items.push(item("LAND-41.30", "Ready", { title: "a task of build A" }), item("LAND-41.31", "Ready", { title: "a task of build B" }));
-    next.sessions.push(
-      { name: "LAND-41 build A", kind: "build", started_at: iso(100), ended_at: iso(60), workers: 1, calls: 5, tokens: tokens(1_000_000) },
-      { name: "LAND-41 build B", kind: "build", started_at: iso(50), ended_at: null, workers: 1, calls: 5, tokens: tokens(1_000_000) },
-    );
-    next.runs.push(
-      { id: "w_b", name: "records-agent", role: "records", session: "LAND-41 build B", task_ref: "LAND-41.31", model: "opus", effort: "high", started_at: iso(50), ended_at: iso(40), resumed: false, tokens: 1, ctx: [1] },
-      { id: "w_a", name: "records-agent", role: "records", session: "LAND-41 build A", task_ref: "LAND-41.30", model: "opus", effort: "high", started_at: iso(100), ended_at: iso(60), resumed: false, tokens: 1, ctx: [1] },
-    );
-    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board: next });
-    await go("#feature");
-    const pick = $("inc-pick") as HTMLSelectElement;
-    pick.value = "LAND-41";
-    pick.dispatchEvent(new Event("change"));
-    await settle();
-    const titles = [...view().querySelectorAll(".lane-h b")].map((x) => x.textContent).filter((t) => /^Build/.test(t!));
-    // Build 4 is only a build:4 label, no session yet: after them.
-    expect(titles).toEqual(["Build 3", "Build A", "Build B", "Build 4"]);
-    ws.frame({ t: "board", laptop: "mbp-1", at: iso(0), board });
-    await settle();
   });
 });
 
@@ -2960,8 +2869,9 @@ describe("usage data (BOB-172)", () => {
     expect(app.oldLink("#waits")).toEqual({ to: "#needs" });
     expect(app.oldLink("#feature/BOB-4")).toEqual({ to: "#feature/bobnet/BOB-4" });
     expect(app.oldLink("#feature/LAND-50")).toEqual({ to: "#feature/helix/LAND-50" });
-    // The Features tab and a feature of no project's stay today's feature view (until BOB-185), as do the links that stand.
-    for (const hash of ["#feature", "#feature/helix", "#feature/%E0%A4%A", "#feature/XX-1", "#feature/bobnet/BOB-4", "#laptops", "#usage", ""]) expect(app.oldLink(hash)).toBeNull();
+    // The old Features tab is #features (BOB-185); a feature of no project's and the links that stand stay.
+    for (const [hash, to] of [["#feature", "#features"], ["#feature/", "#features"], ["#feature/helix", "#features/helix"]] as const) expect(app.oldLink(hash)).toEqual({ to });
+    for (const hash of ["#features", "#features/helix", "#feature/%E0%A4%A", "#feature/XX-1", "#feature/bobnet/BOB-4", "#laptops", "#usage", ""]) expect(app.oldLink(hash)).toBeNull();
   });
 
   it("takes an old link to where it goes, with the toast of one whose parts moved (BOB-174 c2, AC13)", async () => {
@@ -3014,23 +2924,20 @@ describe("usage data (BOB-172)", () => {
     expect([...$("tabs").querySelectorAll("a")].some((a) => /Sessions|Waits/.test(a.textContent!))).toBe(false);
   });
 
-  it("reaches a second project on Roadmap, Triage and the feature view without the dropdown, and stays on the page (BOB-174 c6)", async () => {
+  it("reaches a second project on Roadmap, Triage and Features without the dropdown, and stays on the page (BOB-174 c6)", async () => {
     const pressed = () => view().querySelector('.seg.projects [aria-pressed="true"]')?.textContent;
     const to = async (name: string) => {
       ([...view().querySelectorAll<HTMLButtonElement>(".seg.projects button")].find((b) => b.textContent === name)!).click();
       window.dispatchEvent(new Event("hashchange"));
       await settle();
     };
-    for (const page of ["roadmap", "triage", "feature"]) {
+    for (const page of ["roadmap", "triage", "features"]) {
       await go(`#${page}/bobnet`);
       expect([page, pressed()]).toEqual([page, "bobnet"]);
       await to("helix");
       expect([page, location.hash, pressed()]).toEqual([page, `#${page}/helix`, "helix"]);
     }
-    // The feature view shows that project's: helix has a laptop's board, bobnet none here.
-    expect(view().querySelector("#inc-pick")).not.toBeNull();
     await to("bobnet");
-    expect(view().querySelector("#inc-pick")).toBeNull();
     // Usage has every project at once, no switch (BOB-180).
     await go("#usage");
     expect(view().querySelector(".seg.projects")).toBeNull();
@@ -3045,10 +2952,10 @@ describe("usage data (BOB-172)", () => {
     };
     await go("#triage");
     expect(pressed()).toBe("bobnet");
-    await go("#feature/bobnet/BOB-4");
+    await go("#features");
     expect(pressed()).toBe("bobnet");
     await to("helix");
-    expect([location.hash, pressed()]).toEqual(["#feature/helix", "helix"]);
+    expect([location.hash, pressed()]).toEqual(["#features/helix", "helix"]);
   });
 
   it("draws the project switch on a Backlog.md roadmap too, and no switch with one project (BOB-174 c6)", async () => {
@@ -3056,7 +2963,7 @@ describe("usage data (BOB-172)", () => {
     await go("#roadmap");
     expect(view().querySelectorAll(".seg.projects button")).toHaveLength(2);
     await projectsAre([["helix", "LAND"]]);
-    for (const page of ["#feature", "#roadmap"]) {
+    for (const page of ["#features", "#roadmap"]) {
       await go(page);
       expect(view().querySelector(".seg.projects")).toBeNull();
     }
@@ -3134,7 +3041,7 @@ describe("a project the service doesn't have (ADR 0012 §2, BOB-193)", () => {
     await go("#laptops");
     const sessions = [...view().querySelectorAll(".card, li")].map((x) => x.textContent!);
     expect(sessions.some((t) => /alexa-mcp|sandbox session|sandbox-ci/.test(t))).toBe(false);
-    await go("#feature");
+    await go("#features");
     expect(view().textContent).not.toMatch(/alexa|sandbox/);
   });
 
