@@ -74,7 +74,7 @@ describe("the Usage page (BOB-180)", () => {
     await open("#usage");
     expect(texts(".ucard .u-name")).toEqual(["BobNet", "Helix", "Vitals"]);
     expect(view().querySelector(".seg.projects")).toBeNull();
-    for (const k of ["bobnet", "helix", "vitals"]) expect(card(k).querySelectorAll(".bar")).toHaveLength(30);
+    for (const k of ["bobnet", "helix"]) expect(card(k).querySelectorAll(".bar")).toHaveLength(30);
     expect(sent("usage").map((f) => f.op)).toEqual([{ op: "usage", days: 30, tz: Intl.DateTimeFormat().resolvedOptions().timeZone }]);
     // Its own scale: Helix's 5M spike stands higher than BobNet's 20M days, on an axis of its own.
     const axis = (k: string) => texts(".axis text", card(k)).filter((t) => /^[\d.]+(M|k)?$/.test(t));
@@ -82,9 +82,10 @@ describe("the Usage page (BOB-180)", () => {
     expect(axis("helix").at(-1)).toBe("6.0M");
     const tall = (el: Element) => Number(el.querySelector(".b")!.getAttribute("height"));
     expect(tall(bar("helix", 3))).toBeGreaterThan(3 * tall(bar("bobnet", 2)));
-    // A project with no runs has its graph, empty, and 0 for what is 0.
+    // A project with no runs has no graph, in words, and 0 for what is 0 (BOB-200 c3).
     expect(text(".u-tot", card("vitals"))).toBe("0 tokens, 30 days");
-    expect(axis("vitals")).toEqual(["0"]);
+    expect(text(".u-none", card("vitals"))).toBe("No tokens in these 30 days.");
+    expect(card("vitals").querySelector("svg")).toBeNull();
   });
 
   it("switches every number between raw and Sonnet-equivalent; off equals the read's raw; says what is factored (c2; AC12)", async () => {
@@ -262,6 +263,63 @@ describe("the Usage page (BOB-180)", () => {
     report("mbp-1", snapshot([]));
     await settle();
     expect(document.activeElement!.getAttribute("data-fk")).toBe(`bar/bobnet/${dayOf(6)}`);
+  });
+
+  it("is one tab stop a graph: Left and Right move along its days, Enter picks, and a redraw keeps the stop (BOB-200 c2)", async () => {
+    await open("#usage");
+    const stops = (k: string) => [...card(k).querySelectorAll(".bar[tabindex='0']")].map((b) => b.getAttribute("data-day"));
+    expect([stops("bobnet"), stops("helix")]).toEqual([[dayOf(0)], [dayOf(0)]]);
+    (bar("bobnet", 0) as unknown as HTMLElement).focus();
+    await key(document.activeElement, "ArrowRight");
+    expect(document.activeElement!.getAttribute("data-day")).toBe(dayOf(0));
+    await key(document.activeElement, "ArrowLeft");
+    await key(document.activeElement, "ArrowLeft");
+    expect([document.activeElement!.getAttribute("data-day"), stops("bobnet"), stops("helix")]).toEqual([dayOf(2), [dayOf(2)], [dayOf(0)]]);
+    await key(document.activeElement, "ArrowRight");
+    report("mbp-1", snapshot([]));
+    await settle();
+    expect([document.activeElement!.getAttribute("data-day"), stops("bobnet")]).toEqual([dayOf(1), [dayOf(1)]]);
+    await key(document.activeElement, "Enter");
+    expect(text(".uday b", card("bobnet"))).toBe(`${word(dayOf(1))}: 20.0M tokens`);
+  });
+
+  it("steps a picked day by ‹ and ›, off at the ends, the keyboard staying on them (BOB-200 c2)", async () => {
+    await open("#usage");
+    await click(bar("bobnet", 1));
+    const step = (word: string) => card("bobnet").querySelector(`.u-step[aria-label="The day ${word}"]`) as HTMLButtonElement;
+    expect([step("before").textContent, step("after").textContent]).toEqual(["‹", "›"]);
+    step("after").focus();
+    await click(step("after"));
+    expect(text(".uday b", card("bobnet"))).toMatch(new RegExp(`^${word(dayOf(0))}, so far`));
+    expect(location.hash).toBe(`#usage/bobnet/${dayOf(0)}`);
+    expect([step("after").disabled, step("before").disabled]).toEqual([true, false]);
+    expect(document.activeElement).toBe(step("before"));
+    await click(step("before"));
+    await click(step("before"));
+    expect(text(".uday b", card("bobnet"))).toBe(`${word(dayOf(2))}: 20.0M tokens`);
+    expect(card("bobnet").querySelector(".bar.sel")!.getAttribute("data-day")).toBe(dayOf(2));
+  });
+
+  it("leaves a spike's value out where a taller bar beside it would be under it (BOB-200 c3)", async () => {
+    data["bobnet"] = { every: () => opus(5), back: { 10: opus(40), 11: opus(80), 20: opus(40) } };
+    await open("#usage");
+    expect(texts(".spike-lab", card("bobnet"))).toEqual(["80.0M", "40.0M"]);
+    expect(text(".u-spike b", card("bobnet"))).toBe("3 spikes");
+  });
+
+  it("has ticks under 10k that differ: 1.5k, never 2k twice (BOB-200 c3)", async () => {
+    data["helix"] = { every: () => zero(), back: { 3: { ...opus(0), raw: tok(1400), weighted: 2800 } } };
+    await open("#usage");
+    const ticks = texts(".axis text", card("helix")).filter((t) => /k$|^\d+$/.test(t));
+    expect(ticks).toContain("1.5k");
+    expect(new Set(ticks).size).toBe(ticks.length);
+  });
+
+  it("says which laptop's figure is as of when in today so far, only of one with workers here (BOB-200 c5)", async () => {
+    world.laptops = [{ laptop: "mbp-1", at: iso(14 * 60), snapshot: snapshot([worker({ started_at: iso(15 * 60) })]) }, { laptop: "ubu1", at: iso(0), snapshot: snapshot([worker({ id: "w_2", project: "helix" })]) }];
+    await open("#usage");
+    expect(text(".u-today", card("bobnet"))).toMatch(/^today so far [\d.]+M, mbp-1's as of 14h (0m )?ago · median day 20\.0M$/);
+    expect(text(".u-today", card("helix"))).toMatch(/^today so far [\d.]+M · median day 1\.0M$/);
   });
 
   it("links an agent on a Backlog.md task to its session's card, not to Usage", () => {
@@ -465,7 +523,10 @@ describe("a day's detail (BOB-181)", () => {
     world.reads["usage_day"] = usageDay;
     await click(button("Retry"));
     await settle();
-    expect(text(".ud-frame")).toBe(`No calls on ${word(dayOf(4))}.1 run lost: no context recorded`);
+    // One line's frame, not the graphs' height (BOB-200 c3).
+    expect(text(".ud-frame")).toBe(`No calls on ${word(dayOf(4))}.`);
+    expect((ud()!.querySelector(".ud-frame") as HTMLElement).style.minHeight).toBe("");
+    expect(text(".ud .u-lost")).toBe("1 run lost: no context recorded");
     expect(ud()!.querySelector(".seg")).toBeNull();
     expect(ud()!.querySelector("svg")).toBeNull();
   });

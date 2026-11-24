@@ -246,8 +246,50 @@ describe("a project's page (BOB-182)", () => {
     // And the other way round.
     world.reads["usage"] = () => refuse("No usage.");
     await go("#project/helix");
-    expect(text(".puse p")).toBe("Usage couldn't be read.");
+    expect(text(".puse p")).toBe("Usage couldn't be read. No usage.");
     expect(text(".rel-line b")).toBe("R2 Edit and audit");
+  });
+
+  it("usage down: the read's message and Retry in its card, and a running run isn't 'not weighed' (BOB-200 c4)", async () => {
+    localStorage.setItem("bobnet.weigh", "1");
+    world.laptops = helixRuns();
+    const was = world.reads["usage"]!;
+    world.reads["usage"] = () => refuse("The board's database isn't answering.");
+    await open("#project/helix");
+    expect(text(".puse p")).toBe("Usage couldn't be read. The board's database isn't answering.");
+    expect(text("li[data-run='w_h'] .r-tok")).toBe("1.4M raw so far");
+    expect(card("plate").textContent).not.toContain("not weighed");
+    world.reads["usage"] = was;
+    await click(card("puse").querySelector("button.u-retry"));
+    await settle();
+    expect(card("puse").querySelector(".ugraph")).not.toBeNull();
+    expect(text("li[data-run='w_h'] .r-tok")).toBe("2.8M so far");
+  });
+
+  it("folds a session's consults to one line at its end, and marks only a running run's quiet laptop (BOB-200 c1)", async () => {
+    const consult = (id: string) => run(id, "Bill", { outcome: "stopped", outcome_reason: "consult answered", tokens: tok(15_000), weighted: 30_000, laptop: "ubu1" });
+    (page["helix"]!["sessions"] as Array<{ runs: unknown[] }>)[0]!.runs.push(consult("w_c1"), consult("w_c2"), run("w_u", "Bill", { laptop: "ubu1" }));
+    world.laptops = [...helixRuns(), { laptop: "ubu1", at: iso(14), snapshot: snapshot([worker({ id: "w_gone", name: "Marvin", project: "helix", session: "LAND-50 build Fixes" })]) }];
+    await open("#project/helix");
+    const li = session("LAND-50 build Fixes");
+    const fold = li.querySelector("details.consults") as HTMLDetailsElement;
+    expect([fold.open, text("summary", fold)]).toEqual([false, "2 consults · 30k"]);
+    expect(li.lastElementChild).toBe(fold);
+    expect([...li.querySelectorAll(":scope > .runs > li")].map((x) => x.getAttribute("data-run"))).toEqual(["w_old", "w_h", "w_gone", "w_u"]);
+    expect(texts("details.consults li .r-out", li)).toEqual(["stopped: consult answered", "stopped: consult answered"]);
+    expect(text("li[data-run='w_gone'] .who-at", li)).toBe("Marvin@ubu1 · no report 14 min");
+    expect(text("li[data-run='w_u'] .who-at", li)).toBe("Bill@ubu1");
+  });
+
+  it("in one column: release, running, waits, CI, who ran, usage, backlog (BOB-200 c1)", async () => {
+    const order = () => [...view().querySelectorAll(".pgrid .card")].map((c) => c.className.split(" ")[1]);
+    await open("#project/helix");
+    expect(order()).toEqual(["prel", "prun", "plate", "pwaits", "pci", "puse", "pback"]);
+    const width = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { value: 390, configurable: true, writable: true });
+    await open("#project/helix");
+    expect(order()).toEqual(["prel", "prun", "pwaits", "pci", "plate", "puse", "pback"]);
+    Object.defineProperty(window, "innerWidth", { value: width, configurable: true, writable: true });
   });
 
   it("reads again on board_changed, its own project's only, and shows every session past eight on Show all", async () => {

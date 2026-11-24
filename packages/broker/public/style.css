@@ -342,6 +342,7 @@ dialog .note.refused { color: var(--bad); font-size: 13px; }
 .ci-wf { min-width: 0; overflow-wrap: anywhere; }
 .ci-wf b { font-weight: 600; }
 .ci-wf > * { min-width: 0; }
+.ci-name { min-width: 0; overflow-wrap: anywhere; }
 a.ci-wf { color: var(--text); text-decoration: none; }
 a.ci-wf:hover b { text-decoration: underline; }
 .ci-st { min-width: 0; overflow-wrap: anywhere; }
@@ -577,12 +578,15 @@ form.answer .who-gets { margin-right: auto; font-size: 12.5px; color: var(--mute
 /* The next step is amber only when it waits on Casper; else the accent (spec, BOB-4 as built 1). */
 .step.next > .dot2 { background: var(--bg); border: 2px dashed var(--accent); }
 .step.next.you > .dot2 { border-color: var(--warn); }
-.step.next .kind { color: var(--accent); }
-.step.next.you .kind { color: var(--warn); }
 .step > .card { display: grid; gap: 8px; min-width: 0; }
 .step.next > .card { border-style: dashed; border-color: var(--accent); }
 .step.next.you > .card { border-color: var(--warn); }
-.kind { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--k, var(--muted)); }
+.kind { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text); white-space: nowrap; }
+/* The kind in words anyone can read, its colour a square before it (review D, m10). */
+.kind::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--k, var(--idle)); margin-right: 6px; }
+.step.next .kind { color: var(--accent); }
+.step.next.you .kind { color: var(--warn); }
+.step.next .kind::before { content: none; }
 .step .top { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; justify-content: flex-start; }
 .links a, .runw a, .a-detail a, .events a { color: var(--accent); }
 .step .when { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -875,6 +879,17 @@ main.wide .st { max-width: 1320px; }
 .st-line { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; color: var(--text); text-decoration: none; font-size: 14px; grid-column: 1 / -1; border-left-color: var(--ok); }
 .st-line[data-tone="warn"] { border-left-color: var(--warn); }
 .st-line[data-tone="bad"] { border-left-color: var(--bad); }
+/* A phone's second row of the Status line's card: one card, two rows. */
+.st-two { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr); }
+.st-two > * { margin: 0; }
+.st-now { padding: 0 12px; display: flex; flex-wrap: wrap; align-items: center; border-left-color: var(--ok); }
+.st-now[data-tone="warn"] { border-left-color: var(--warn); }
+.st-now[data-tone="bad"] { border-left-color: var(--bad); }
+.st-two > .st-line + .st-now { border-top: 0; border-top-left-radius: 0; border-top-right-radius: 0; }
+.st-two > .st-line { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.st-now button { border: 0; background: transparent; padding: 0; min-height: 44px; font-size: 14px; font-weight: 600; }
+.st-now .muted { white-space: pre; }
+.run-t { color: var(--accent); } .ok-t { color: var(--ok); }
 .st-line .go { margin-left: auto; color: var(--accent); font-weight: 600; white-space: nowrap; }
 
 /* A toast that stays (I'm caught up's Undo) closes with ×. */
@@ -979,13 +994,24 @@ form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width
 .u-spike, .u-unk, .u-lost { margin: 0; font-size: 13px; }
 .u-spike b { color: var(--warn); }
 .u-spike .more-t { padding: 0 2px; min-height: 24px; }
+.u-day-h { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.u-day-h b { margin-left: 6px; min-width: 0; }
+.u-step { border: 0; background: transparent; color: var(--accent); font-size: 20px; line-height: 1; min-width: 28px; min-height: 32px; padding: 0; flex: none; }
+.u-step:disabled { color: var(--muted); opacity: .5; }
+.u-none { margin: 0; font-size: 13.5px; color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; padding: 12px; }
+.ud-frame.short { padding: 10px 12px; }
+.puse .u-retry { justify-self: start; }
 .u-spike .more-t[aria-pressed="true"] { font-weight: 600; text-decoration: underline; }
 @media (max-width: 600px) {
-  .u-spike .more-t, .factored > summary, .uday a { min-height: 44px; display: inline-flex; align-items: center; }
+  .factored > summary, .puse .u-retry { min-height: 44px; display: inline-flex; align-items: center; }
+  .u-step { min-width: 44px; min-height: 44px; }
+  /* A spike, and each of the biggest, has a row of its own: the row is the tap. */
+  .big-s { min-height: 44px; display: flex; gap: 6px; align-items: center; min-width: 0; }
+  .big-s .sep { display: none; }
+  .big-s a, .big-s .more-t { min-height: 44px; display: inline-flex; align-items: center; min-width: 0; }
   .u-name { padding: 12px 0; margin: -12px 0; }
   .banner button { min-height: 44px; }
-  .biggest { display: flex; flex-wrap: wrap; gap: 0 6px; align-items: center; }
-  .big-s { white-space: pre-wrap; }
+  .biggest { display: grid; }
   .factored th, .factored td { padding-left: 8px; padding-right: 8px; }
 }
 /* A day's detail under its line: two graphs against the period's median (Casper's Q-13) */
@@ -1084,7 +1110,13 @@ form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width
   .back, .step .links .ctx-btn, .step .links a, .fh-top a:not(.id) { min-height: 44px; display: inline-flex; align-items: center; }
   .step .links { row-gap: 0; }
   .unticked > summary { padding: 12px 0; }
-  .lately .more-t, .others > summary, .prel .links a, .p-health a, .prel .warn-t a, .p-title .back, .nobody .id, .ci-p a, .lately + .more-t { min-height: 44px; display: inline-flex; align-items: center; }
+  .runs li:is([data-outcome="done"], [data-outcome="running"]) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+  .runs li:is([data-outcome="done"], [data-outcome="running"]) .r-out { grid-column: auto; grid-row: auto; }
+  .lately .more-t, .prel .links a, .p-title .back, .ci-p a, .lately + .more-t { min-height: 44px; display: inline-flex; align-items: center; }
+  .others > summary { padding: 13px 0; }
+  /* In running text a link keeps the text's line; its tap grows around it (review D, m2). */
+  :is(.p-health a, .prel .warn-t a, .nobody .id, .prow .pc:not(.pname) a:not(.clamp), .note a) { position: relative; }
+  :is(.p-health a, .prel .warn-t a, .nobody .id, .prow .pc:not(.pname) a:not(.clamp), .note a)::after { content: ""; position: absolute; inset: -12px 0; }
 }
 .others > summary { cursor: pointer; font-size: 13.5px; color: var(--accent); width: fit-content; }
 .others[open] > summary { margin-bottom: 6px; }
@@ -1121,6 +1153,7 @@ form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width
 .ov .now-p .more.queued { border-top: 0; padding: 2px 0 8px; }
 .prow { position: relative; transition: border-color .15s; }
 .prow:hover { border-color: var(--accent); }
+.prow .pname, .prow .pname a { min-width: 0; overflow-wrap: anywhere; }
 .prow .pname a::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); }
 .prow .pname a:focus-visible { outline: none; }
 .prow .pname a:focus-visible::after { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1135,13 +1168,13 @@ form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width
 .ci-pill[data-tone="ok"] { color: var(--ok); }
 .ci-pill[data-tone="idle"] { border-color: var(--idle); }
 @media (max-width: 1099px) { .prow .pmini { grid-column: 1 / -1; } }
-@media (max-width: 600px) { .prow .pc:not(.pname) a:not(.clamp), .now-p .grp-h a { min-height: 44px; display: inline-flex; align-items: center; } .prow .pc:not(.pname) a.clamp { padding: 12px 0; } .now-p .grp-h { align-items: center; padding-top: 0; } }
+@media (max-width: 600px) { .now-p .grp-h a { min-height: 44px; display: inline-flex; align-items: center; } .prow .pc:not(.pname) a.clamp { padding: 12px 0; } .now-p .grp-h:has(a) { align-items: center; padding-top: 0; } }
 /* An opened item's links, last; "couldn't be read" stands clear of the link under it. */
 li.need > .n-links { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 2px 16px; min-width: 0; }
 .pside li.need > .n-links { grid-column: 1 / -1; }
 @media (max-width: 520px) { li.need > .n-links { grid-column: 1 / -1; } }
 .ngrp + .st-empty { margin-bottom: 8px; }
 .a-detail .actions > .ctx-btn { align-items: center; }
-@media (max-width: 600px) { .now-list .a-btn, .ov > .st-line { min-height: 44px; align-content: center; } .ov a.more { min-height: 44px; display: flex; align-items: center; } }
+@media (max-width: 600px) { .now-list .a-btn, .ov .st-line { min-height: 44px; align-content: center; } .ov a.more { min-height: 44px; display: flex; align-items: center; } }
 .ov .prow { padding: 12px 14px; column-gap: 22px; }
 @media (min-width: 1100px) { .ov .prow { row-gap: 8px; } }

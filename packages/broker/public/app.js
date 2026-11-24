@@ -32,6 +32,8 @@ const state = {
   /** Usage's span in days, and each project's day picked on its graph ("YYYY-MM-DD"). */
   span: 30,
   usageDay: new Map(),
+  /** Each graph's one tab stop: the day the keyboard was last on. */
+  usageStop: new Map(),
   /** The opened days' details, by project: Total, or By agent and which role; and the card a link's day is scrolled to. */
   detail: new Map(),
   usageScroll: null,
@@ -620,7 +622,7 @@ function runsTable(key, ss) {
   return h("table", { class: "runs-t" },
     h("thead", null, h("tr", null, h("th", null, "Agent"), h("th", null, "Model"), h("th", null, "Outcome"), h("th", { class: "num" }, state.weigh ? "Sonnet-equivalent" : "Tokens"))),
     h("tbody", null, runs.map((r) => h("tr", { dataset: { run: r.id } },
-      h("td", null, whoName({ name: r.agent, laptop: r.laptop }, true, key), h("span", { class: "muted" }, ` ${r.role}`)),
+      h("td", null, ranName(r, key), h("span", { class: "muted" }, ` ${r.role}`)),
       h("td", { class: "muted" }, `${r.model ?? "default model"}${r.effort ? ` · ${r.effort}` : ""}`),
       h("td", null, runOutcome(r)),
       h("td", { class: "num" }, runTokens(r, byId.get(r.id), weights, "unknown"))))));
@@ -1395,6 +1397,8 @@ function lapMark(w, key = w.project) {
   }
   return laptopsOf(key).length > 1 ? h("span", { class: "lap", title: `Runs on ${w.laptop}` }, `@${w.laptop}`) : null;
 }
+/** A run's agent and its laptop: an ended one's is only where it ran, whatever the laptop does since (review D, m8). */
+const ranName = (r, key) => (r.ended_at ? h("span", { class: "who-at" }, h("b", null, r.agent), r.laptop && laptopsOf(key).length > 1 ? h("span", { class: "lap", title: `Ran on ${r.laptop}` }, `@${r.laptop}`) : null) : whoName({ name: r.agent, laptop: r.laptop }, true, key));
 /** A worker's name and its mark, kept on one line. */
 const whoName = (w, bold = true, key = w.project) => h("span", { class: "who-at" }, bold ? h("b", null, w.name) : w.name, lapMark(w, key));
 /** Workers' names with their marks: "Luigi@ubu1, Toad@mbp-1". */
@@ -1449,6 +1453,17 @@ function heldParts(w) {
   return [parts.slice(0, 2).map((x, i) => [i ? ", " : null, x]), parts.length > 2 ? ` +${parts.length - 2} more` : null];
 }
 
+/** On a phone Needs you can fill the first screen: under the Status line, who runs and CI, each opening its section (BOB-121 AC3; Peach, review D). */
+function statusCard(n) {
+  const line = statusLine();
+  if (window.innerWidth > 600) return line;
+  const at = (s) => (ov.rows ?? []).filter((o) => ciWorst(o.ci) === s).map((o) => o.project.name), failed = at("failed"), busy = [...at("running"), ...at("queued")];
+  const ci = failed.length ? `CI failed on ${failed.join(", ")}` : busy.length ? `CI running on ${busy.join(", ")}` : (ov.rows ?? []).some((o) => ciWorst(o.ci)) ? "CI passed" : null;
+  const to = (sel, cls, words) => h("button", { type: "button", class: cls, "data-fk": `now/${sel}`, onclick: () => underHeader($("view").querySelector(sel)) }, words);
+  return h("div", { class: "st-two" }, line, h("div", { class: "banner st-now", dataset: { tone: line?.dataset.tone ?? null } }, to(".ov-now", n ? "on-t" : "muted", n ? `${n} running` : "nobody running"),
+    ci ? [h("span", { class: "muted", "aria-hidden": "true" }, " · "), to(".ov-ci", failed.length ? "bad-t" : busy.length ? "run-t" : "ok-t", ci)] : null));
+}
+
 function viewOverview() {
   if (svc.projects && !ov.rows && !ov.loading && !ov.error) loadOverview();
   const now = running();
@@ -1457,7 +1472,7 @@ function viewOverview() {
     down ? boardDown(down) : null,
     staleBanners(),
     h("div", { class: "ov" },
-      statusLine(),
+      statusCard(now.length),
       h("section", { class: "ov-needs" }, h("h2", null, "Needs you ", h("span", { class: "count", id: "needs-count" }, waitCount() || "")),
         h("div", { class: "card" }, needsBody(needsItems(), true))),
       h("div", { class: "ov-side" }, h("section", { class: "ov-now" }, h("h2", null, "Working now ", h("span", { class: "count" }, now.length || "")),
@@ -1521,7 +1536,7 @@ function ciWords(wf) {
 function ciRow(wf, project) {
   const r = wf.runs[0], [mark, tone] = CI_MARK[r.status];
   const link = (cls, ...kids) => h("a", { class: cls, href: r.url, target: "_blank", rel: "noopener" }, ...kids);
-  const name = [h("span", { class: `ci-mark${r.status === "running" ? " spin" : ""}`, "aria-hidden": "true" }, mark), h("b", null, wf.name), r.branch ? h("span", { class: "muted" }, ` on ${r.branch}`) : null];
+  const name = [h("span", { class: `ci-mark${r.status === "running" ? " spin" : ""}`, "aria-hidden": "true" }, mark), h("span", { class: "ci-name" }, h("b", null, wf.name), r.branch ? h("span", { class: "muted" }, ` on ${r.branch}`) : null)];
   return h("li", { class: "ci-row", dataset: { tone, status: r.status } },
     project === null ? null : h("span", { class: "ci-p" }, project),
     r.url ? link("ci-wf", ...name) : h("span", { class: "ci-wf" }, ...name),
@@ -3105,6 +3120,19 @@ function usageScroll() {
   underHeader(el);
 }
 
+/** A tick: "1.5k" under 10k, so two ticks never read the same. */
+const fmtTick = (n) => (n >= 1e3 && n < 1e4 && n % 1e3 ? `${+(n / 1e3).toFixed(2)}k` : fmtTokens(n));
+/** The day before or after the picked one: its ‹ and ›, for a phone where a bar is 9 px wide. */
+function stepDay(id, key, days, by) {
+  const day = days[days.indexOf(state.usageDay.get(id)) + by];
+  if (!day) return;
+  state.usageDay.set(id, day);
+  state.usageStop.set(id, day);
+  if (viewName() === "usage") setPath(`usage/${key}/${day}`);
+  render();
+  // At an end its own button is off: the other keeps the keyboard.
+  if (!days[days.indexOf(day) + by]) focusKey(`step/${id}/${-by}`);
+}
 /** One project's days as bars, on its own scale: a spike in warn with its value, today's lighter, the picked one outlined. */
 function usageBars(key, series, days, W, small = false, id = key) {
   const { vals, spikes } = usageFigures(series, days);
@@ -3112,22 +3140,34 @@ function usageBars(key, series, days, W, small = false, id = key) {
   const H = small ? 130 : 160, L = 46, R = 8, B = 22, T = 18, bw = (W - L - R) / days.length;
   const x = (i) => L + i * bw, y = (v) => T + (1 - v / top) * (H - T - B);
   const any = vals.some((v) => v > 0), picked = state.usageDay.get(id), today = localDay(brokerNow());
-  const ticks = any ? Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step) : [0];
-  // A spike's value is on top of it; of two whose values would meet, the larger's shows.
-  const half = 21, labelled = [];
+  if (!any) return h("p", { class: "u-none" }, `No tokens in these ${days.length} days.`);
+  const ticks = Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step);
+  // A spike's value is on top of it, left out where it would be over a taller bar; of two that would meet, the larger's shows.
+  const half = 22, labelled = [];
+  const overBar = (i, cx) => vals.some((v, j) => j !== i && v > vals[i] && x(j) + bw * 0.85 > cx - half && x(j) + bw * 0.15 < cx + half);
   for (const sp of [...spikes].sort((a, b) => b.v - a.v)) {
     const i = days.indexOf(sp.day), cx = Math.min(W - half, Math.max(L + half, x(i) + bw / 2));
-    if (!labelled.some((l) => Math.abs(l.cx - cx) < 2 * half && Math.abs(y(l.v) - y(sp.v)) < 14)) labelled.push({ i, cx, v: sp.v });
+    if (!overBar(i, cx) && !labelled.some((l) => Math.abs(l.cx - cx) < 2 * half + 4 && Math.abs(y(l.v) - y(sp.v)) < 16)) labelled.push({ i, cx, v: sp.v });
   }
+  // A graph is one tab stop: the day last on, else the picked one, else the last.
+  const stop = [state.usageStop.get(id), picked, days.at(-1)].find((d) => days.includes(d));
   const bars = days.map((d, i) => {
     const v = vals[i], spike = spikes.some((sp) => sp.day === d), so = d === today;
     const said = `${wordDay(d)}${so ? ", so far" : ""}: ${fmtTokens(v)} ${tokensWord()}${spike ? ", a spike" : ""}`;
-    const g = s("g", { class: ["bar", spike && "spike", so && "today", picked === d && "sel"].filter(Boolean).join(" "), tabindex: "0", role: "button", "aria-label": said, "aria-pressed": String(picked === d), "data-day": d, "data-fk": `bar/${id}/${d}` },
+    const g = s("g", { class: ["bar", spike && "spike", so && "today", picked === d && "sel"].filter(Boolean).join(" "), tabindex: d === stop ? "0" : "-1", role: "button", "aria-label": said, "aria-pressed": String(picked === d), "data-day": d, "data-fk": `bar/${id}/${d}` },
       s("title", null, said),
       s("rect", { class: "hit", x: x(i), y: 0, width: bw, height: H }),
       s("rect", { class: "b", x: x(i) + bw * 0.15, y: y(v), width: bw * 0.7, height: Math.max(v > 0 ? 1 : 0, y(0) - y(v)), rx: Math.min(2, bw * 0.2) }));
-    g.addEventListener("click", () => pickDay(id, d));
+    g.addEventListener("click", () => { state.usageStop.set(id, d); pickDay(id, d); });
     g.addEventListener("keydown", (e) => {
+      const by = { ArrowLeft: -1, ArrowRight: 1 }[e.key], to = by && bars[i + by];
+      if (by) e.preventDefault();
+      if (to) {
+        state.usageStop.set(id, days[i + by]);
+        g.setAttribute("tabindex", "-1");
+        to.setAttribute("tabindex", "0");
+        to.focus();
+      }
       if (e.key !== "Enter" && e.key !== " ") return;
       e.preventDefault();
       pickDay(id, d);
@@ -3138,9 +3178,9 @@ function usageBars(key, series, days, W, small = false, id = key) {
   return h("div", { class: "ugraph" }, s("svg", { viewBox: `0 0 ${W} ${H}`, role: "group", "aria-label": `${series.name}: ${tokensWord()} per day, the last ${days.length} days` },
     s("g", { class: "grid" }, ...ticks.map((v) => s("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }))),
     ...bars,
-    s("g", { class: "axis" }, ...ticks.map((v) => s("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, fmtTokens(v))),
+    s("g", { class: "axis" }, ...ticks.map((v) => s("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, fmtTick(v))),
       ...days.map((d, i) => ((days.length - 1 - i) % every ? "" : s("text", { x: Math.min(W - 18, x(i) + bw / 2), y: H - 5, "text-anchor": "middle" }, d === today ? "today" : shortDay(d))))),
-    ...(any ? labelled.map((l) => s("text", { class: "spike-lab", x: l.cx, y: y(l.v) - 4, "text-anchor": "middle" }, fmtTokens(l.v))) : [])));
+    ...labelled.map((l) => s("text", { class: "spike-lab", x: l.cx, y: y(l.v) - 4, "text-anchor": "middle" }, fmtTokens(l.v)))));
 }
 
 /** Under a graph: the picked day's total, its split by model and its biggest sessions. */
@@ -3149,20 +3189,21 @@ function usageDayLine(key, series, days, weights, id = key) {
   if (!pt) return null;
   const models = pt.by_model.map((m) => [modelShort(m.model, weights.rows), usageFigure(m)]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   const top = [...pt.top].sort((a, b) => usageFigure(b) - usageFigure(a)).slice(0, 3);
+  const at = days.indexOf(day), go = (by, mark, word) => h("button", { type: "button", class: "u-step", "aria-label": `The day ${word}`, "data-fk": `step/${id}/${by}`, disabled: !days[at + by] || null, onclick: () => stepDay(id, key, days, by) }, mark);
   return h("div", { class: "uday" },
-    h("b", null, `${wordDay(day)}${pt.so_far ? ", so far" : ""}: ${fmtTokens(usageFigure(pt))} ${tokensWord()}`),
+    h("div", { class: "u-day-h" }, go(-1, "‹", "before"), go(1, "›", "after"), h("b", null, `${wordDay(day)}${pt.so_far ? ", so far" : ""}: ${fmtTokens(usageFigure(pt))} ${tokensWord()}`)),
     models.length ? h("span", { class: "muted" }, models.map(([m, v]) => `${m} ${fmtTokens(v)}`).join(" · ")) : null,
     top.length ? h("span", { class: "biggest" }, pt.so_far ? "Biggest, of the runs that ended: " : "Biggest: ", top.map((t, i) => h("span", { class: "big-s" },
       t.session ? h("a", { class: "id", href: featureHref(key, t.session.feature), title: t.feature_title, onclick: () => (scrollAfter = stepId(t.session)) }, sessName(t.session)) : "work outside any session",
-      ` ${fmtTokens(usageFigure(t))}${i < top.length - 1 ? ", " : ""}`))) : null);
+      ` ${fmtTokens(usageFigure(t))}`, i < top.length - 1 ? h("span", { class: "sep" }, ", ") : null))) : null);
 }
 /** Under a graph: its spikes, each a button that picks its day, and what isn't counted or is counted at ×1. */
 function usageNotes(key, series, days) {
   const { spikes } = usageFigures(series, days);
   const unknown = series.points.reduce((n, pt) => n + pt.unknown, 0);
   return [
-    spikes.length ? h("p", { class: "u-spike" }, h("b", null, plural(spikes.length, "spike")), " over twice the median day: ", spikes.map((sp, i) => [i ? ", " : null,
-      h("button", { type: "button", class: "more-t", "data-fk": `spike/${key}/${sp.day}`, "aria-pressed": String(state.usageDay.get(key) === sp.day), onclick: () => pickDay(key, sp.day) }, `${shortDay(sp.day)} ${fmtTokens(sp.v)}`)])) : null,
+    spikes.length ? h("p", { class: "u-spike" }, h("b", null, plural(spikes.length, "spike")), " over twice the median day: ", spikes.map((sp, i) => h("span", { class: "big-s" },
+      h("button", { type: "button", class: "more-t", "data-fk": `spike/${key}/${sp.day}`, "aria-pressed": String(state.usageDay.get(key) === sp.day), onclick: () => pickDay(key, sp.day) }, `${shortDay(sp.day)} ${fmtTokens(sp.v)}`), i < spikes.length - 1 ? h("span", { class: "sep" }, ", ") : null))) : null,
     unknown ? h("p", { class: "muted u-unk" }, `${fmtTokens(unknown)} tokens on an unnamed model, counted at ×1`) : null,
     series.lost ? h("p", { class: "muted u-lost" }, `${plural(series.lost, "run")} lost, tokens unknown: not counted`) : null,
   ];
@@ -3236,7 +3277,7 @@ function callGraph({ fk, said, calls, line, resets = [], base, band, W, H, unit,
 /** Where the keyboard was on a detail's graph, so a redraw leaves it there. */
 const detailCall = new Map();
 /** A graph's y axis, three labels: 0, half and the top. */
-const threeTicks = (top, x1, x2, y) => s("g", null, ...[0, top / 2, top].flatMap((v) => [s("line", { class: "gl", x1, x2, y1: y(v), y2: y(v) }), s("text", { x: x1 - 6, y: y(v) + 4, "text-anchor": "end" }, fmtTokens(v))]));
+const threeTicks = (top, x1, x2, y) => s("g", null, ...[0, top / 2, top].flatMap((v) => [s("line", { class: "gl", x1, x2, y1: y(v), y2: y(v) }), s("text", { x: x1 - 6, y: y(v) + 4, "text-anchor": "end" }, fmtTick(v))]));
 
 /** Calls per day over the period: the day's line, the median day across it (0: none), the tapped day's dot with its value, today's hollow. */
 function callsGraph({ days, vals, median, day, W, H, said }) {
@@ -3275,7 +3316,7 @@ function dayDetail(key, series, days, W) {
       ? frame(h("p", null, `Couldn't load ${name}'s calls.`), button("Retry", "", () => { usageDay(key, day, state.span, true); render(); }))
       : frame(h("p", { class: "muted" }, `Loading ${name}'s calls…`)));
   }
-  if (none) return box(frame(h("p", null, `No calls on ${name}.`), lostNote));
+  if (none) return box(h("div", { class: "ud-frame short" }, h("p", null, `No calls on ${name}.`)), lostNote);
 
   const byRole = new Map();
   for (const x of runs) byRole.set(x.role, [...(byRole.get(x.role) ?? []), x]);
@@ -3309,7 +3350,7 @@ function dayDetail(key, series, days, W) {
   return box(
     total ? null : h("div", { class: "seg ud-roles", role: "group", "aria-label": "Agent" }, roles.map((x) => h("button", { type: "button", "aria-pressed": String(x.role === one.role), "data-fk": `role/${key}/${x.role}`, onclick: () => set({ role: x.role }) }, `${x.role} · ${callsSaid(x.calls)}`))),
     h("div", { class: `ud-graphs${side ? " side" : ""}` },
-      h("figure", null, h("figcaption", null, "Context per call"), callGraph({ fk: `ctx/${key}/${day}/${total ? "" : one.role}`, said: `${label}, ${whose}context per call, ${said}`, calls, line, resets, base, band, W: W1, H, summed: total })),
+      h("figure", null, h("figcaption", null, total ? "Context, summed call by call" : "Context per call"), callGraph({ fk: `ctx/${key}/${day}/${total ? "" : one.role}`, said: `${label}, ${whose}context per call, ${said}`, calls, line, resets, base, band, W: W1, H, summed: total })),
       h("figure", null, h("figcaption", null, "Calls per day"), callsGraph({ days, vals, median, day, W: W2, H, said: `${whose}calls per day, the last ${n} days; ${label} ${said}${median ? `, the median day ${fmtInt.format(median)}` : ""}` }))),
     h("div", { class: "key" },
       h("span", { class: "k-day" }, h("i", { style: "--k:var(--accent)" }), `${label} · ${said}`),
@@ -3322,6 +3363,11 @@ function dayDetail(key, series, days, W) {
     lostNote);
 }
 
+/** Today's figure is short by what a quiet laptop's workers used since it last reported: which laptop's, and as of when (review D; Peach). */
+function quietSince(key) {
+  const on = new Set(liveWorkers(key).filter((w) => w.started_at).map((w) => w.laptop));
+  return [...state.laptops.values()].filter((l) => on.has(l.laptop) && staleReport(l)).sort((a, b) => a.at.localeCompare(b.at)).map((l) => h("span", { class: "warn-t" }, `, ${l.laptop}'s as of `, ago(l.at), " ago"));
+}
 /** A project's card on Usage: its total, its days, the picked day, its spikes. */
 function usageCard(reply, p, W) {
   const series = usageSoFar(reply, p.project), days = reply.days, { vals, median, total } = usageFigures(series, days);
@@ -3331,7 +3377,7 @@ function usageCard(reply, p, W) {
   return h("section", { class: "card ucard", dataset: { project: p.project }, onkeydown: esc },
     h("div", { class: "u-h" }, h("a", { class: "u-name", href: projectHref(p.project) }, p.name),
       h("span", { class: "u-tot" }, h("b", null, fmtTokens(total)), h("span", { class: "muted" }, ` ${tokensWord()}, ${days.length} days`)),
-      h("span", { class: "muted u-today" }, runsToday ? `today so far ${fmtTokens(vals.at(-1))} · ` : null, `median day ${median === null ? "–" : fmtTokens(median)}`)),
+      h("span", { class: "muted u-today" }, runsToday ? [`today so far ${fmtTokens(vals.at(-1))}`, quietSince(p.project), " · "] : null, `median day ${median === null ? "–" : fmtTokens(median)}`)),
     usageBars(p.project, series, days, W),
     usageDayLine(p.project, series, days, reply.weights),
     dayDetail(p.project, series, days, W),
@@ -3492,7 +3538,7 @@ function runFigure(r, w, weights) {
 /** One run: who, on what, how it ended and its tokens. A lost one's are unknown, never 0. */
 function runLi(key, r, w, weights) {
   return h("li", { dataset: { run: r.id, outcome: r.ended_at ? r.outcome ?? "ended" : "running" } },
-    whoName({ name: r.agent, laptop: r.laptop, project: key }), h("span", { class: "muted r-on" }, `${r.role} · ${r.model ?? "default model"}${r.effort ? ` · ${r.effort}` : ""}`),
+    ranName(r, key), h("span", { class: "muted r-on" }, `${r.role} · ${r.model ?? "default model"}${r.effort ? ` · ${r.effort}` : ""}`),
     h("span", { class: "r-out" }, runOutcome(r)),
     h("span", { class: "r-tok" }, runTokens(r, w, weights)));
 }
@@ -3520,13 +3566,17 @@ function latelyLi(key, x, weights) {
   const runs = withLive(key, ss, x.runs), figures = runs.map((r) => runFigure(r, byId.get(r.id), weights));
   const sum = figures.reduce((n, v) => n + (v ?? 0), 0), unknown = figures.length > 0 && figures.every((v) => v === null);
   const open = !x.ended_at, c = x.close;
+  // A consult is a question answered, 15k tokens and a call: one line for them all.
+  const consults = runs.filter((r) => r.outcome === "stopped" && r.outcome_reason === "consult answered"), work = runs.filter((r) => !consults.includes(r));
   const found = c ? [c.blockers ? plural(c.blockers, "blocker") : null, c.majors ? plural(c.majors, "major") : null, c.sent_back ? `${c.sent_back} sent back` : null].filter(Boolean).join(" · ") || "no findings" : "";
   return h("li", { class: open ? "is-open" : null, dataset: { session: sessionKey(ss) } },
     h("div", { class: "lt-h" }, h("span", { class: "kind", dataset: { kind: ss.kind } }, ss.kind), h("b", null, ss.label), featLink(key, ss.feature), h("span", { class: "ft-t", title: x.feature_title }, x.feature_title),
       h("span", { class: "muted lt-at" }, open ? ["open since ", ago(x.started_at), " ago"] : span(x.started_at, x.ended_at)),
       h("span", { class: "lt-tok" }, unknown ? h("span", { class: "warn-t" }, "tokens unknown") : `${fmtTokens(sum)}${open ? " so far" : ""}`)),
     c ? h("div", { class: "outcome" }, h("span", { class: "need", dataset: { need: c.need } }, `need: ${c.need}`), h("span", { class: "muted" }, found), c.summary ? h("span", { class: "sum" }, c.summary) : null) : null,
-    runs.length ? h("ul", { class: "runs" }, runs.map((r) => runLi(key, r, byId.get(r.id), weights))) : null);
+    work.length ? h("ul", { class: "runs" }, work.map((r) => runLi(key, r, byId.get(r.id), weights))) : null,
+    consults.length ? details(`consults/${key}/${sessionKey(ss)}`, { class: "others consults" }, h("summary", null, plural(consults.length, "consult"), h("span", { class: "muted" }, ` · ${fmtTokens(consults.reduce((n, r) => n + (runFigure(r, byId.get(r.id), weights) ?? 0), 0))}`)),
+      h("ul", { class: "runs" }, consults.map((r) => runLi(key, r, byId.get(r.id), weights)))) : null);
 }
 /** Who ran lately: the page's sessions, newest activity first, then the runs outside any. */
 function lately(key, page, weights) {
@@ -3556,6 +3606,12 @@ function backlogHealth(key, page) {
       bugs === undefined ? null : row("Open bugs", plural(bugs, "bug"))),
     rel && rel.ready === 0 && rel.todo > 0 ? h("p", { class: "warn-t" }, `${rel.ref} has nothing Ready: its next feature needs criteria.`) : null,
   ];
+}
+
+/** The page's cards: what it does beside what it needs and uses; in one column, what waits and CI before the long list of who ran (spec 2.3). */
+function columns(rel, run, late, waits, ci, use, back) {
+  const main = (...kids) => h("div", { class: "pmain" }, ...kids), side = (...kids) => h("aside", { class: "pside" }, ...kids);
+  return h("div", { class: "pgrid" }, window.innerWidth >= 1000 ? [main(rel, run, late), side(waits, ci, use, back)] : [main(rel, run), side(waits, ci), main(late), side(use, back)]);
 }
 
 function viewProject() {
@@ -3588,8 +3644,7 @@ function viewProject() {
     head,
     r.error ? h("div", { class: "banner down" }, h("b", null, page ? "The board couldn't be read again" : "The board couldn't be read"),
       h("span", null, page ? `${r.error} Its release, who ran and its backlog are from ${clock(new Date(r.read).toISOString())}.` : `${r.error} Its release, who ran and its backlog aren't shown.`), retry()) : null,
-    h("div", { class: "pgrid" },
-      h("div", { class: "pmain" },
+    columns(
         card("prel", "Current release", "",
           !page ? reading("Its release") : rel
             ? [h("div", { class: "rel-line" }, h("b", null, releaseName(rel)), h("span", { class: "muted" }, `${rel.features.done} of ${plural(rel.features.total, "feature")} done`)), meterOf(rel.features.done, rel.features.total)]
@@ -3598,8 +3653,7 @@ function viewProject() {
           rel ? (feats ? h("ul", { class: "flist" }, feats.map((f) => releaseFeature(key, f))) : h("p", { class: "muted" }, road?.error ? "Its features couldn't be read." : "Reading its features…")) : null,
           h("div", { class: "links" }, h("a", { href: `#roadmap/${key}` }, "Roadmap"), h("a", { href: `#features/${key}` }, "All features"), h("a", { href: `#triage/${key}` }, "Triage"))),
         card("prun", "Running now", on || "", runningOf(key, page)),
-        card("plate", "Who ran lately", "last 14 days", page ? lately(key, page, weights) : reading("Who ran"))),
-      h("aside", { class: "pside" },
+        card("plate", "Who ran lately", "last 14 days", page ? lately(key, page, weights) : reading("Who ran")),
         card("pwaits", "Waits on you", waits.length || "",
           waits.length ? h("ul", { class: "lines" }, waits.map((x) => needItem(x, { compact: true, project: false }))) : ov.waits ? h("p", { class: "st-empty ok" }, "Nothing waits on you.") : null,
           ov.waits ? null : h("p", { class: "muted" }, boardError() ? "What waits on you couldn't be read." : "Reading the board…"),
@@ -3607,10 +3661,10 @@ function viewProject() {
         card("pci", "CI", "", ci?.length ? h("ul", { class: "ci-list" }, ci.map((wf) => ciRow(wf, null)))
           : h("p", { class: "muted" }, ci ? "No CI run on the board yet." : ov.error ? "CI couldn't be read." : "Reading the board…")),
         card("puse", "Usage", series ? `${fmtTokens(usageFigures(series, u.reply.days).total)} ${tokensWord()}, ${PAGE_DAYS} days` : "",
-          series ? [usageBars(key, series, u.reply.days, W, true, asideId), usageDayLine(key, series, u.reply.days, weights, asideId)] : h("p", { class: "muted" }, u.error ? "Usage couldn't be read." : "Reading usage…"),
+          series ? [usageBars(key, series, u.reply.days, W, true, asideId), usageDayLine(key, series, u.reply.days, weights, asideId)] : u.error ? [h("p", { class: "warn-t" }, `Usage couldn't be read. ${u.error}`), button("Retry", "u-retry", () => { usageRead(key, PAGE_DAYS, true); render(); })] : h("p", { class: "muted" }, "Reading usage…"),
           weighSwitch(),
           h("a", { class: "more-t", href: "#usage" }, "Usage, every project →")),
-        card("pback", "Backlog health", "", page ? backlogHealth(key, page) : reading("Its backlog")))),
+        card("pback", "Backlog health", "", page ? backlogHealth(key, page) : reading("Its backlog"))),
   ];
 }
 

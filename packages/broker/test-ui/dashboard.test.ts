@@ -3803,10 +3803,24 @@ describe("Needs you is never stale (BOB-176; BOB-121 AC4, AC15, AC16)", () => {
     });
 
     it("turns only a running run's mark, and not at all under reduced motion", () => {
-      expect([...$("ci").querySelectorAll(".ci-mark.spin")].map((m) => m.nextElementSibling!.textContent)).toEqual(["ci", "lint"]);
+      expect([...$("ci").querySelectorAll(".ci-mark.spin")].map((m) => m.nextElementSibling!.textContent)).toEqual(["ci on main", "lint on main"]);
       const css = readFileSync(join(import.meta.dirname, "../public/style.css"), "utf8");
       const rules = css.split("\n").filter((l) => l.includes(".ci-mark.spin"));
       expect(rules).toEqual(["@media (prefers-reduced-motion: no-preference) { .ci-mark.spin { animation: spin 1.6s linear infinite; } }"]);
+    });
+
+    it("has the four kinds in --text, 4.5:1 or more in light and dark, their colour a square before them (BOB-200 c4)", () => {
+      const css = readFileSync(join(import.meta.dirname, "../public/style.css"), "utf8");
+      const [light, dark] = [css.split("@media (prefers-color-scheme: dark)")[0]!, css.split("@media (prefers-color-scheme: dark)")[1]!];
+      const colour = (scheme: string, name: string) => new RegExp(`--${name}: (#[0-9a-f]{6})`).exec(scheme)![1]!;
+      const lum = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)).reduce((n, c, i) => n + c * [0.2126, 0.7152, 0.0722][i]!, 0);
+      const ratio = (a: string, b: string) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x! + 0.05) / (y! + 0.05); };
+      for (const scheme of [light, dark]) expect(ratio(colour(scheme, "text"), colour(scheme, "surface"))).toBeGreaterThanOrEqual(4.5);
+      expect(css).toMatch(/^\.kind \{[^}]*color: var\(--text\)/m);
+      expect(css).toMatch(/^\.kind::before \{[^}]*background: var\(--k, /m);
+      // No rule colours a kind's word by its kind.
+      expect(css).not.toMatch(/\.kind[^{,]*\{[^}]*[^-]color: var\(--k/);
+      for (const k of ["design", "build", "review", "retro"]) expect(css).toContain(`.lt-h .kind[data-kind="${k}"] { --k: var(--k-${k}); }`);
     });
 
     it("says a queued and a cancelled run in words that read: 4.5:1 or more in light and dark, its mark and dots in --idle (c5)", () => {

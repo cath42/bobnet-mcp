@@ -126,6 +126,47 @@ describe("the Overview (BOB-179)", () => {
     expect([...view().querySelectorAll(".ov-side > *")].map((x) => x.className)).toEqual(["ov-now", "ov-ci"]);
   });
 
+  it("on a phone says who runs and CI under the Status line, each opening its section; not over 600 px (BOB-200 c5; AC3)", async () => {
+    const width = window.innerWidth, at = (n: number) => Object.defineProperty(window, "innerWidth", { value: n, configurable: true, writable: true });
+    world.laptops = [{ laptop: "mbp-1", at: iso(0), snapshot: helixLive() }];
+    waits = Array.from({ length: 8 }, (_, i) => wait(`Q-${i}`, { blocking: true }));
+    rows["bobnet"]!["ci"] = ciOf("failed", "passed");
+    rows["helix"]!["ci"] = ciOf("running");
+    const scrolled: number[] = [];
+    const by = window.scrollBy;
+    window.scrollBy = ((_x: number, y: number) => scrolled.push(y)) as typeof window.scrollBy;
+    try {
+      at(390);
+      await open("#overview");
+      expect([...view().querySelectorAll(".ov > *")].map((x) => x.className.replace(" banner", "").replace("banner ", ""))).toEqual(["st-two", "ov-needs", "ov-side", "ov-proj"]);
+      expect([...view().querySelectorAll(".st-two > *")].map((x) => x.className.split(" ").find((c) => c.startsWith("st-")))).toEqual(["st-line", "st-now"]);
+      expect(text(".st-now")).toBe("3 running · CI failed on BobNet");
+      for (const b of view().querySelectorAll(".st-now button")) await click(b);
+      expect(scrolled).toHaveLength(2);
+      // CI green says so; nobody running too; no CI at all leaves it out.
+      rows["bobnet"]!["ci"] = ciOf("passed");
+      rows["helix"]!["ci"] = ciOf("passed");
+      report("mbp-1", snapshot([]));
+      changed("helix");
+      await settle();
+      expect(text(".st-now")).toBe("nobody running · CI passed");
+      rows["helix"]!["ci"] = ciOf("running");
+      changed("helix");
+      await settle();
+      expect(text(".st-now")).toBe("nobody running · CI running on Helix");
+      for (const k of Object.keys(rows)) rows[k]!["ci"] = [];
+      changed("helix");
+      await settle();
+      expect(text(".st-now")).toBe("nobody running");
+      at(1024);
+      await open("#overview");
+      expect(view().querySelector(".st-now")).toBeNull();
+    } finally {
+      at(width);
+      window.scrollBy = by;
+    }
+  });
+
   it("has no 'show other states' panel anywhere (c5)", () => {
     for (const f of ["app.js", "style.css", "index.html"]) expect(readFileSync(join(import.meta.dirname, "../public", f), "utf8")).not.toMatch(/proto-states|show other states/i);
   });
