@@ -610,7 +610,7 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     const open = r1.querySelector("tr.is-open")!;
     expect(open.textContent).toContain("BOB-7");
     expect(open.textContent).toContain("open · nobody on it now");
-    expect(open.textContent).toContain("3 of 10");
+    expect(open.querySelector(".stands")!.textContent).toBe("7 of 10 criteria left");
     expect(sections[2]!.querySelector(".badge")!.textContent).toBe("closed");
     expect(sections[2]!.textContent).toContain("Closed, folded: 1 feature. Show them");
     expect(sections[2]!.textContent).not.toContain("BOB-6");
@@ -661,7 +661,7 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     await go("#roadmap/bobnet");
   });
 
-  it("shows a Done feature with unticked criteria as Done, its real count, and 'Done, criteria not ticked' (BOB-3 #3)", async () => {
+  it("shows a Done feature with unticked criteria as Done on the Roadmap, with no count (BOB-184 c1)", async () => {
     const land22 = feat("BOB-22", "R1", "Done", { title: "Tracts through the write path", progress: { checked: 3, total: 138 } });
     FakeSocket.last.frame({ t: "board_changed", project: "bobnet", seq: 73, refs: [] });
     await lists(releases, [...features, land22]);
@@ -669,11 +669,8 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     await settle();
     const row = [...view().querySelectorAll("#rel-R1 tr")].find((tr) => tr.querySelector("a.id")?.textContent === "BOB-22")!;
     expect(row.querySelector(".badge")!.textContent).toBe("done");
-    expect(row.textContent).toContain("3 of 138");
-    expect(row.querySelector(".sub-note")!.textContent).toBe("Done, criteria not ticked");
-    // A Done feature with every criterion ticked has no note.
-    const ticked = [...view().querySelectorAll("#rel-R1 tr")].find((tr) => tr.querySelector("a.id")?.textContent === "BOB-1")!;
-    expect(ticked.querySelector(".sub-note")).toBeNull();
+    expect(row.querySelector(".stands")!.textContent).toBe("done");
+    expect(row.textContent).not.toContain("138");
     await go("#feature/bobnet/BOB-22");
     await opened([...features, land22]);
     expect($("feature-head").textContent).toContain("3 of 138 criteria");
@@ -816,8 +813,10 @@ describe("the roadmap from the board, and Casper's gates (BOB-7)", () => {
     expect(view().querySelector("#rel-R2 .rel-goal")!.textContent).toBe(goal);
     expect(view().querySelector("#rel-R1 .rel-goal")).toBeNull();
     expect(view().querySelector("#rel-R4 .empty-card")!.textContent).toBe("Closed, with no features");
-    expect(view().querySelector(".banner.editing")!.textContent).toContain("close or reopen a release: yours, and Peach's.");
-    expect(view().querySelector(".note")!.textContent).toContain("the order of releases is yours, and Peach's.");
+    expect(view().querySelector(".banner.editing")!.textContent).toContain("close or reopen a release: these gates are yours and Peach's. Changes save as you make them and go in the board's history as yours; each has Undo but a reopen (close it again instead). Anything else is a request to Peach.");
+    expect(view().querySelector(".note")!.textContent).toContain("the order of releases is yours and Peach's.");
+    // The goal is in the head, so a phone puts it above the gates (BOB-184 c5).
+    expect(view().querySelector("#rel-R2 .rel-h > .rel-goal")).not.toBeNull();
 
     const gate = view().querySelector("#rel-R3 .rel-h .gate")!;
     expect(gate.textContent).not.toContain("Close release");

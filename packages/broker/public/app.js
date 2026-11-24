@@ -656,8 +656,7 @@ function nextOf(p, f, sessions) {
 }
 
 function viewServiceFeature(p, ref) {
-  const data = svc.roadmaps.get(p.key);
-  if (!data && !svc.loading.has(p.key)) loadRoadmap(p.key);
+  const data = roadmapOf(p.key);
   const id = `${p.key}/${ref}`, fd = feats.get(id);
   if (!fd && !featLoading.has(id)) loadFeature(p.key, ref);
   if (!ov.waits && !ov.loading && !ov.error) loadOverview();
@@ -1034,7 +1033,7 @@ async function loadProjects() {
     // Every view lists by it: a failed read keeps the last list, never an empty one (ADR 0012 §2).
     svc.error = err.message;
   }
-  for (const key of svc.roadmaps.keys()) loadRoadmap(key);
+  roadmapsChanged();
   for (const key of backlogs.keys()) loadBacklog(key);
   if (rules.rows || rules.error) loadRules();
   // What waits on Casper counts on the tab, on every view (waiting-on-casper 3).
@@ -1048,16 +1047,38 @@ async function loadProjects() {
   scheduleRender();
 }
 
+/** Whether the page that shows draws a project's roadmap. */
+function roadmapShown(key) {
+  const v = viewName();
+  return v === "roadmap" ? roadmapRoute()?.key === key : v === "project" ? projectRoute() === key : v === "feature" ? featureRoute()?.p.key === key : false;
+}
+/** A project's releases and features, read once and kept: again when a page that draws them shows and they have changed since. */
+function roadmapOf(key) {
+  const d = svc.roadmaps.get(key);
+  // Only the Roadmap draws the counts in no release and the current release: the overview they are in is a long read (Toad, review D minor 2).
+  if (!svc.loading.has(key) && (!d || d.stale || (viewName() === "roadmap" && !d.counted))) loadRoadmap(key);
+  return d;
+}
+/** The board changed (one project's, or any after a reconnect): what shows is read again now, the rest when it next shows. */
+function roadmapsChanged(project = null) {
+  for (const [key, d] of svc.roadmaps) {
+    if (project !== null && key !== project) continue;
+    if (roadmapShown(key)) loadRoadmap(key);
+    else d.stale = true;
+  }
+}
 async function loadRoadmap(key) {
   // A change while it reads: read again once it is done.
   if (svc.loading.has(key)) return void svc.again.add(key);
   svc.loading.add(key);
+  const counted = viewName() === "roadmap";
   try {
-    const [releases, features, o] = await Promise.all([listAll({ op: "list", project: key, of: "releases" }, "releases"), listAll({ op: "list", project: key, of: "features" }, "items"), boardOp({ op: "overview", project: key })]);
+    const [releases, features, o] = await Promise.all([listAll({ op: "list", project: key, of: "releases" }, "releases"), listAll({ op: "list", project: key, of: "features" }, "items"), counted ? boardOp({ op: "overview", project: key }) : null]);
+    const row = o?.projects[0];
     // Backlog items in no release: a broker before BOB-3 doesn't count them, and the line is left out (spec: Roadmap).
-    svc.roadmaps.set(key, { releases, features, none: o.projects[0]?.no_release ?? null, error: null });
+    svc.roadmaps.set(key, { releases, features, none: row?.no_release ?? null, current: row?.release?.ref ?? null, counted, stale: false, error: null });
   } catch (err) {
-    svc.roadmaps.set(key, { ...(svc.roadmaps.get(key) ?? { releases: [], features: [] }), error: err.message });
+    svc.roadmaps.set(key, { ...(svc.roadmaps.get(key) ?? { releases: [], features: [] }), counted, stale: false, error: err.message });
   } finally {
     svc.loading.delete(key);
   }
@@ -1101,8 +1122,7 @@ const poOf = (p) => (p?.po ? shortName(p.po) : "the project's PO");
 
 function viewBoardRoadmap(key, edit) {
   const p = svc.projects.find((x) => x.key === key);
-  const data = svc.roadmaps.get(key);
-  if (!data && !svc.loading.has(key)) loadRoadmap(key);
+  const data = roadmapOf(key);
   const to = (k, e) => `#roadmap/${k}${e ? "/edit" : ""}`;
   const rels = data?.releases ?? [];
   const bar = h("div", { class: "bar-row" },
@@ -1114,13 +1134,13 @@ function viewBoardRoadmap(key, edit) {
   if (data.error) out.push(h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, data.error)));
   if (edit) {
     out.push(h("div", { class: "banner editing" }, h("b", null, "Your gates"),
-      h("span", null, `Move a feature into or out of a release, change the order of releases, close or reopen a release: yours, and ${poOf(p)}'s. Changes save as you make them, each with Undo, and go in the board's history as yours. Anything else is a request to ${poOf(p)}.`)));
+      h("span", null, `Move a feature into or out of a release, change the order of releases, close or reopen a release: these gates are yours and ${poOf(p)}'s. Changes save as you make them and go in the board's history as yours; each has Undo but a reopen (close it again instead). Anything else is a request to ${poOf(p)}.`)));
   }
   if (!rels.length) out.push(h("div", { class: "empty-card" }, `${p.name} has no releases yet. Its PO makes the first one.`));
   rels.forEach((r, i) => out.push(releaseSection(key, data, r, i, edit)));
   const none = data.features.filter((f) => f.release === null);
   if (none.length || data.none?.items) out.push(releaseSection(key, data, null, null, edit));
-  out.push(h("p", { class: "note" }, `Order inside a release is ${poOf(p)}'s; the order of releases is yours, and ${poOf(p)}'s. A number in italics: the board has no order for it, so it follows the ordered ones by id. Criteria: acceptance criteria ticked, the feature's own and its tasks'.`));
+  out.push(h("p", { class: "note" }, `Order inside a release is ${poOf(p)}'s; the order of releases is yours and ${poOf(p)}'s. A number in italics: the board has no order for it, so it follows the ordered ones by id. Where it stands: a feature not done says how many of its own criteria and tasks are left; a done one says when it was done. The feature's page lists any criteria it closed without.`));
   return out;
 }
 
@@ -1132,7 +1152,7 @@ function releaseSection(key, data, r, i, edit) {
   // A closed release stays on the roadmap, folded (notes 21); more than three done features fold into one row (notes 10).
   const shut = closed && !state.open.has(`rel:${key}:${r.ref}`);
   const folded = !closed && done.length > 3 && !state.open.has(`done:${key}:${r?.ref ?? "-"}`);
-  const cols = edit ? 5 : 4;
+  const cols = edit ? 4 : 3;
   const rows = [];
   if (folded) {
     rows.push(h("tr", { class: "fold" }, h("td", { colspan: cols, class: "full" },
@@ -1141,6 +1161,8 @@ function releaseSection(key, data, r, i, edit) {
   fs.forEach((f, j) => { if (!(folded && f.status === "Done")) rows.push(featureRow(key, data, r, f, j + 1, edit)); });
   const relState = !r ? null : closed ? "closed" : fs.length && done.length === fs.length ? "all done" : r.status;
   const rels = data.releases;
+  // All done and not closed: his close is all it waits for, so it is at hand without the gates (spec 2.6).
+  const waits = relState === "all done" ? h("span", { class: "warn-t" }, "All done: waiting for your close") : null;
   const b = r ? r.backlog : data.none;
   return h("section", { class: "release", id: r ? `rel-${r.ref}` : "rel-none" },
     h("div", { class: "rel-h" },
@@ -1148,11 +1170,14 @@ function releaseSection(key, data, r, i, edit) {
       h("b", null, r ? r.title : "Not in a release"),
       relState ? badge(relState === "all done" ? "done" : relState, relState) : null,
       h("span", { class: "muted" }, r ? releaseCount(r) : plural(fs.length, "feature")),
-      edit && r ? h("span", { class: "gate" },
+      // The board's current release; a planned one hasn't started.
+      r && r.ref === data.current && r.status === "open" ? h("span", { class: "cur-tag" }, "current") : null,
+      !edit && waits ? h("span", { class: "gate" }, waits, button(`Close ${r.ref}`, "primary", () => closeRelease(key, data, r))) : null,
+      edit && r ? h("span", { class: "gate" }, waits,
         h("button", { type: "button", disabled: i === 0 || null, "aria-label": `Move ${r.title} earlier`, onclick: () => moveRelease(key, rels, i, -1) }, "↑ Earlier"),
         h("button", { type: "button", disabled: i === rels.length - 1 || null, "aria-label": `Move ${r.title} later`, onclick: () => moveRelease(key, rels, i, 1) }, "↓ Later"),
-        closed ? button("Reopen", "", () => reopenRelease(key, r)) : button("Close release", "danger", () => closeRelease(key, data, r))) : null),
-    r?.goal ? h("p", { class: "rel-goal" }, r.goal) : null,
+        closed ? button("Reopen", "", () => reopenRelease(key, r)) : button("Close release", "danger", () => closeRelease(key, data, r))) : null,
+      r?.goal ? h("p", { class: "rel-goal" }, r.goal) : null),
     b ? countsLine(key, b, r?.ref ?? "none") : null,
     shut
       ? fs.length
@@ -1160,8 +1185,8 @@ function releaseSection(key, data, r, i, edit) {
             button(`Closed, folded: ${plural(fs.length, "feature")}. Show them`, "", () => { state.open.add(`rel:${key}:${r.ref}`); render(); }))))))
         : h("div", { class: "empty-card" }, "Closed, with no features")
       : fs.length
-        ? h("div", { class: "table-wrap" }, h("table", { class: "stack" },
-            h("thead", null, h("tr", null, h("th", null, "# Feature"), h("th", null, "State"), h("th", null, "Criteria"), h("th", null, "Tasks"), edit ? h("th", null, "Release") : null)),
+        ? h("div", { class: "table-wrap" }, h("table", { class: "stack rm" },
+            h("thead", null, h("tr", null, h("th", null, "# Feature"), h("th", null, "State"), h("th", null, "Where it stands"), edit ? h("th", null, "Release") : null)),
             h("tbody", null, rows)))
         : h("div", { class: "empty-card" }, r ? "No features in this release yet." : "No features out of a release."));
 }
@@ -1182,8 +1207,7 @@ function releaseCount(r) {
 function featureRow(key, data, r, f, n, edit) {
   const st = featureState(f);
   const on = onFeature(key, f.ref);
-  const unticked = f.status === "Done" && f.progress.total && f.progress.checked < f.progress.total;
-  const { checked, total } = f.progress;
+  const own = f.own ?? f.progress;
   // A closed release drops out of the move selects (notes 21), except as where a feature in it is now.
   const options = [...data.releases.filter((x) => x.status !== "closed" || x.ref === r?.ref).map((x) => [x.ref, x.title]), ["", "No release"]];
   return h("tr", { class: `${st === "done" ? "done" : ""}${st === "open" ? " is-open" : ""}` },
@@ -1191,9 +1215,8 @@ function featureRow(key, data, r, f, n, edit) {
       h("span", { class: `ord${f.ord === null ? " unset" : ""}`, title: f.ord === null ? "No order on the board: after the ordered ones, by id" : `Order ${n}` }, r ? n : "·"),
       h("a", { class: "id", href: featureHref(key, f.ref) }, f.ref), h("span", { class: "title" }, f.title),
       on.length ? h("div", { class: "now" }, "● ", whoNames(on), " on it now") : st === "open" ? h("div", { class: "now idle" }, "open · nobody on it now") : null),
-    h("td", { "data-label": "State" }, badge(st), unticked ? h("div", { class: "sub-note" }, "Done, criteria not ticked") : null),
-    h("td", { "data-label": "Criteria" }, total ? h("div", { class: "crit" }, meterOf(checked, total, st === "done" ? "idle" : "ok"), h("span", { class: "m" }, `${checked} of ${total}`)) : h("span", { class: "muted" }, "none yet")),
-    h("td", { "data-label": "Tasks" }, f.tasks?.total ? `${f.tasks.done} of ${f.tasks.total} done` : h("span", { class: "muted" }, "none yet")),
+    h("td", { "data-label": "State" }, badge(st)),
+    h("td", { class: "stands", "data-label": "Where it stands" }, whereStands(f), st === "open" && own.total ? meterOf(own.checked, own.total) : null),
     edit ? h("td", { "data-label": "Release" }, h("select", { class: "move", "aria-label": `Release of ${f.ref}`, onchange: (e) => moveFeature(key, data, f, e.target.value || null, e.target) },
       options.map(([v, label]) => h("option", { value: v, selected: v === (r?.ref ?? "") || null }, label)))) : null);
 }
@@ -3444,7 +3467,7 @@ const releaseName = (r) => (r.title.startsWith(r.ref) ? r.title : `${r.ref} ${r.
 function whereStands(f) {
   const c = f.own ?? f.progress, t = f.tasks ?? { done: 0, total: 0 }, left = c.total - c.checked, tasks = t.total - t.done;
   if (f.status === "Done") return h("span", { class: "muted" }, f.done_at ? `done ${day(f.done_at)}` : "done");
-  if (f.status === "Draft" && !f.open_since) {
+  if (f.status === "Draft") {
     return h("span", { class: "muted" }, "draft · ", !c.total ? "no criteria yet" : c.checked ? `${left} of ${plural(c.total, "criterion", "criteria")} left` : `${plural(c.total, "criterion", "criteria")} written`);
   }
   if (f.status === "Ready" && !f.open_since) return h("span", { class: "muted" }, `ready · ${c.total ? `${plural(left, "criterion", "criteria")} to meet` : "no criteria yet"}`);
@@ -3563,8 +3586,7 @@ function viewProject() {
   // Not one this page knows of: what the board says about it, or that it is being read.
   if (!p) return [head, r.error ? h("div", { class: "banner down" }, h("b", null, `${name} couldn't be read`), h("span", null, r.error), retry()) : h("div", { class: "empty-card" }, "Reading the board…")];
 
-  const road = svc.roadmaps.get(key);
-  if (!road && !svc.loading.has(key)) loadRoadmap(key);
+  const road = roadmapOf(key);
   const u = usageRead(key, PAGE_DAYS), weights = u.reply?.weights, series = u.reply && usageSoFar(u.reply, key);
   const reading = (part) => h("p", { class: "muted" }, r.error ? `${part} couldn't be read.` : "Reading the board…");
   const rel = page?.release, feats = rel && road && !road.error ? road.features.filter((f) => f.release === rel.ref) : null;
@@ -3955,7 +3977,7 @@ function connect() {
       case "board_changed":
         if (!svc.projects?.some((p) => p.key === f.project)) loadProjects();
         else {
-          if (svc.roadmaps.has(f.project)) loadRoadmap(f.project);
+          roadmapsChanged(f.project);
           if (backlogs.has(f.project)) loadBacklog(f.project);
           for (const id of feats.keys()) if (id.startsWith(`${f.project}/`)) loadFeature(f.project, id.slice(f.project.length + 1));
         }
