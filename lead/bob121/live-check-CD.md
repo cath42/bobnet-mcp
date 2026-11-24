@@ -22,3 +22,10 @@ Commits: 176 c16 is 93311ab (with tests, inside 8630fe4).
   from here today, from mbp-1's real report) need a person. Queued; Casper isn't asked.
 - A run of rc.55 that ended with `models` (BOB-173): no read gives `run_models`.
 - 195 c4: `callsOf` isn't in rc.55. It rides rc.56, with the broker already live.
+
+## From poe (m_673bf51b, 19:15 CST)
+
+- wrangler for 3b7252ed: "Uploaded 3 files". Their names weren't kept, and the served files can't be compared here (sign-in).
+- mbp-1's supervisor.log after "supervisor ready": nothing about models or a refused frame. At 01:12:50Z, before it, two
+  "board reports wait" (run_end, not_hosted: the old Bob's and Mario's ends, seq 7099 and 7100), as at earlier restarts;
+  whether they were delivered later isn't known. ubu1's log wasn't read.
