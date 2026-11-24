@@ -765,6 +765,7 @@ main.wide .st { max-width: 1320px; }
 .back { color: var(--accent); text-decoration: none; font-size: 14px; }
 .p-name { margin: 0; font-size: 22px; text-transform: none; letter-spacing: 0; color: var(--text); }
 .p-name .muted { font-size: 13px; font-weight: 400; }
+.p-head .p-link { justify-self: start; }
 
 /* The lead's note, above the facts; old when newer facts follow it. */
 .lead-note { border-left: 3px solid var(--accent); gap: 4px; }

@@ -2631,7 +2631,7 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
     await settle();
     expect(view().querySelector(".st-line")).toBeNull();
     await go("#status");
-    expect(view().querySelector(".banner.down")!.textContent).toMatch(/^Board unavailableShowing what it said at \d\d:\d\d\.$/);
+    expect(view().querySelector(".banner.down")!.textContent).toMatch(/^Board unavailableShowing what it said at \d\d:\d\d\.Retry$/);
     expect(view().querySelector(".pcard")).not.toBeNull();
   }, 10_000);
 

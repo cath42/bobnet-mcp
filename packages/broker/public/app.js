@@ -2142,10 +2142,16 @@ async function loadStatus() {
   stv.last = Date.now();
   const mark = markOf(), span = stSpan();
   try {
-    const base = await boardOp({ op: "status", since: mark ?? new Date(brokerNow() - SPAN_MS["24h"]).toISOString() });
-    if (!Array.isArray(base?.projects)) throw new Error("The board's answer has no status in it.");
-    const wide = onBase() ? null : await boardOp({ op: "status", since: new Date(Date.parse(base.at) - SPAN_MS[span]).toISOString() });
-    Object.assign(stv, { base, baseFor: mark, wide: wide ? { span, reply: wide } : null, error: null });
+    const read = async (since) => {
+      const r = await boardOp({ op: "status", since: new Date(since).toISOString() });
+      if (!Array.isArray(r?.projects)) throw new Error("The board's answer has no status in it.");
+      return r;
+    };
+    const base = await read(mark ?? brokerNow() - SPAN_MS["24h"]);
+    // Kept before the wider read, which may fail alone (a week of every project): the visit and the dot stay true.
+    Object.assign(stv, { base, baseFor: mark });
+    const wide = span === "visit" || onBase() ? null : await read(Date.parse(base.at) - SPAN_MS[span]);
+    Object.assign(stv, { wide: wide ? { span, reply: wide } : null, error: null });
   } catch (err) {
     Object.assign(stv, { error: err.message, errorAt: new Date(brokerNow()).toISOString() });
   } finally {
@@ -2274,14 +2280,14 @@ function spanBar(reply, caught) {
   const fresh = mark && brokerNow() - Date.parse(mark) < 60_000;
   const [head, sub] = span === "visit" ? ["Since your last visit", fresh ? `${stClock(mark)}, just now` : `${stClock(mark)}, ${stAgo(mark)}`]
     : [span === "week" ? "The last week" : "The last 24 hours", `since ${stClock(since)}`];
-  const chipBtn = (key, text) => h("button", { type: "button", "aria-pressed": String(span === key), onclick: () => { stv.span = key; stv.showAll.clear(); render(); if (!onBase()) loadStatus(); } }, text);
+  const chipBtn = (key, text) => h("button", { type: "button", "aria-pressed": String(span === key), "data-fk": `status-span/${key}`, onclick: () => { stv.span = key; stv.showAll.clear(); render(); if (!onBase()) loadStatus(); } }, text);
   const asked = mark && span === "visit" ? Date.parse(mark) : null;
   const clamped = reply && asked !== null && Date.parse(reply.since) > asked + 60_000;
   return h("div", { class: "span-bar" },
     h("div", { class: "when" }, h("b", null, head), h("span", null, sub)),
     h("div", { class: "seg span-chips", role: "group", "aria-label": "Look back over" },
       mark ? chipBtn("visit", fresh ? "Since now" : `Since ${stClock(mark)}`) : null, chipBtn("24h", "24 h"), chipBtn("week", "A week")),
-    caught ? h("button", { type: "button", class: "primary caught", disabled: !(stReply() ?? stv.base) || null, onclick: caughtUp }, "I'm caught up") : null,
+    caught ? h("button", { type: "button", class: "primary caught", "data-fk": "caught", disabled: !(stReply() ?? stv.base) || null, onclick: caughtUp }, "I'm caught up") : null,
     clamped ? h("p", { class: "span-note" }, `Your last visit was ${stAge(mark)} ago; this shows the last 31 days.`)
       : !mark ? h("p", { class: "span-note" }, "First visit on this device, so the last 24 hours. From now on it starts at your last “I'm caught up”.")
       : span !== "visit" ? h("p", { class: "span-note" }, `Widened. Your last visit stays at ${stClock(mark)}.`)
@@ -2290,9 +2296,9 @@ function spanBar(reply, caught) {
 
 function answers(rows, needsHref, okHref, all) {
   if (!rows) {
-    return h("div", { class: "answers" },
-      h("div", { class: "ans", dataset: { tone: "none" } }, h("span", { class: "lab" }, "Needs you"), h("b", null, "…"), h("span", { class: "sub" }, "Reading the board…")),
-      h("div", { class: "ans", dataset: { tone: "none" } }, h("span", { class: "lab" }, "Is it going OK?"), h("b", null, "…"), h("span", { class: "sub" }, "Reading the board…")));
+    const [mark, sub] = stv.error && !stv.loading ? ["–", "The board couldn't be read"] : ["…", "Reading the board…"];
+    return h("div", { class: "answers" }, ["Needs you", "Is it going OK?"].map((lab) =>
+      h("div", { class: "ans", dataset: { tone: "none" } }, h("span", { class: "lab" }, lab), h("b", null, mark), h("span", { class: "sub" }, sub))));
   }
   const n = needsOf(rows, all), v = verdict(rows);
   const ntone = n.blocking ? "bad" : n.count ? "warn" : "ok";
@@ -2315,8 +2321,11 @@ function statusBanners(reply) {
     return h("div", { class: "banner down" }, `Can't reach the broker since ${stClock(connDownAt ?? new Date().toISOString())}. This is what this device read then; I'm caught up still works.`);
   }
   if (!stv.error) return null;
-  return h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, reply ? `Showing what it said at ${stClock(reply.at)}.` : stv.error));
+  return h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, reply ? `Showing what it said at ${stClock(reply.at)}.` : stv.error),
+    button("Retry", "", () => { loadStatus(); render(); }));
 }
+/** No reply to draw: it is being read, or it couldn't be and the banner says why. */
+const stUnread = () => h("div", { class: "empty-card" }, stv.error && !stv.loading ? "The board couldn't be read. It is tried again each minute." : "Reading the board…");
 
 function viewStatus() {
   if (svc.projects && !stv.base && !stv.loading && !stv.error) loadStatus();
@@ -2330,7 +2339,7 @@ function viewStatus() {
     h("div", { class: "st" },
       spanBar(reply, true),
       answers(rows, "#status/needs", "#status", true),
-      !rows ? h("div", { class: "empty-card" }, "Reading the board…")
+      !rows ? stUnread()
         : [
           h("section", null, h("h2", null, "Projects ", h("span", { class: "count" }, String(rows.length))),
             rows.length ? h("div", { class: "pcards" }, rows.map(pcard)) : h("div", { class: "empty-card" }, "No project's board on BobNet yet.")),
@@ -2377,11 +2386,12 @@ function statusProject(k, focus, reply) {
   return [
     statusBanners(reply),
     h("div", { class: "st" },
-      h("div", { class: "p-head" }, back, h("h2", { class: "p-name" }, row?.name ?? p?.name ?? k, who ? [" ", h("span", { class: "muted" }, who)] : null)),
+      h("div", { class: "p-head" }, back, h("h2", { class: "p-name" }, row?.name ?? p?.name ?? k, who ? [" ", h("span", { class: "muted" }, who)] : null),
+        h("a", { class: "more-t p-link", href: projectHref(k) }, `${row?.name ?? p?.name ?? k}'s page →`)),
       spanBar(reply, false),
       answers(row ? [row] : null, `#status/${k}/needs`, `#status/${k}/stuck`, false),
       row ? h("div", { class: "secs" }, SECTIONS.map((s) => statusSection(k, s, SECTION[s](row, reply), opened[`${k}/${s}`], focus === s || wide)))
-        : h("div", { class: "empty-card" }, "Reading the board…"),
+        : stUnread(),
       h("p", { class: "note foot-note" }, "I'm caught up is on ", h("a", { href: "#status" }, "All projects"), ": this device keeps one last visit for every project.")),
   ];
 }
@@ -2389,7 +2399,7 @@ function statusProject(k, focus, reply) {
 /** A section's card: open as he left it, else by width (open from 700 px) or because the route names it. */
 function statusSection(k, sec, body, kept, dflt) {
   const d = h("details", { class: "sec card", id: `sec-${sec}`, open: (kept ?? dflt) || null, dataset: { sec, tone: body.tone ?? null } },
-    h("summary", { class: "sec-h" },
+    h("summary", { class: "sec-h", "data-fk": `sec/${k}/${sec}` },
       h("span", { class: "t" }, body.title),
       h("span", { class: "n", dataset: { tone: body.tone ?? null } }, body.count),
       h("span", { class: "scope" }, body.scope),
@@ -2413,7 +2423,7 @@ const SECTION = {
       headline: n.count ? `${n.blocking} hold${n.blocking === 1 ? "s" : ""} work up · oldest ${stAge(n.list[0].since)}` : "Nothing waits on you",
       el: n.count ? [h("ul", { class: "lines st-needs" }, n.list.map((x) => needItem(x, { compact: true, before: reply.since, project: false }))),
         n.more ? cutLine(n.more, true, h("a", { href: "#needs" }, "on Needs you")) : null,
-        h("a", { class: "more-t sec-link", href: "#needs" }, "Answer on Needs you →")] : stEmpty("Nothing waits on you.", true),
+        h("a", { class: "more-t sec-link", href: "#needs" }, "Answer them on Needs you →")] : stEmpty("Nothing waits on you.", true),
     };
   },
   done(row, reply) {
@@ -2453,7 +2463,8 @@ const SECTION = {
           h("span", { class: "what" }, h("span", null, x.ref ? featLink(row.project, x.ref) : null, x.text), x.meta ? h("span", { class: "m" }, x.meta) : null),
           h("time", null, `since ${stClock(x.at)}`, x.at < reply.since ? h("span", { class: "before" }, `before ${from}`) : null)))) : stEmpty("Nothing stuck.", true),
         cut > 0 ? cutLine(cut, false, null) : null,
-        settled.length ? h("details", { class: "settled" }, h("summary", null, `Settled since ${from}: ${whole(row, "stuck.settled", settled)}`),
+        // Kept as he left it: a live report redraws the page every few seconds, and shut it under him.
+        settled.length ? details(`settled:${row.project}`, { class: "settled" }, h("summary", null, `Settled since ${from}: ${whole(row, "stuck.settled", settled)}`),
           h("ul", { class: "rows" }, settled.map((x) => { const e = settledOf(x); return h("li", null, badge("done", "settled"), h("span", null, e.ref ? featLink(row.project, e.ref) : null, e.text), h("time", null, stClock(x.settled_at))); })),
           row.more?.["stuck.settled"] ? cutLine(row.more["stuck.settled"], false, null) : null) : null,
       ],
