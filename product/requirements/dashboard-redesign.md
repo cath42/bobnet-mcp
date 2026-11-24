@@ -17,7 +17,7 @@ the build waves are [`../bob121-waves.md`](../bob121-waves.md).
   model; the Sessions tab goes.
 - From Q-13: on Usage, tapping a day's bar opens that day's **context per call** and **calls** line
   graphs, **in total and by agent**, with a **baseline**: the median over the chosen period (14 or 30
-  days), as a dashed line. The prototype's "show other states" panel is **not built**.
+  days), as a dashed line (R1, 2026-11-23, ADR 0014 §3a: the median is over the days with work, so a young project isn't all spikes; under 3 such days it reads "–"). The prototype's "show other states" panel is **not built**.
 
 ## Settled by Peach
 
