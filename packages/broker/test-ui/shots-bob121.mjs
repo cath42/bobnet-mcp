@@ -1,6 +1,7 @@
-// Screenshots of BOB-121's builds C and D (design/BOB-121/spec.md) at phone, tablet and desktop widths, against a fake broker
+// Screenshots of BOB-121's builds C, D and E (design/BOB-121/spec.md) at phone, tablet and desktop widths, against a fake broker
 // in the page: the header and Triage (BOB-174), Laptops (BOB-175), Needs you (BOB-176), an agent's ask (BOB-177), CI (BOB-178),
-// Usage (BOB-180), a day's detail (BOB-181), a project's page (BOB-182), the Overview (BOB-179).
+// Usage (BOB-180), a day's detail (BOB-181), a project's page (BOB-182), the Overview (BOB-179), Status (BOB-183), the Roadmap
+// (BOB-184), Features (BOB-185), a feature's page (BOB-186).
 //   node test-ui/shots-bob121.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob121-*.png)
 // Prints any page error, any page wider than its viewport, a CI row whose words run into what is beside them, and at 390
 // the tap targets under 44 px, by what they say (BOB-176 c12, c13).
@@ -48,6 +49,45 @@ function fakeBroker(scene) {
       feat("LAND-51", "Ready", "An audit trail on every record: who changed what, when, and why", own(0, 8)), feat("LAND-53", "Draft", "Undo a change within a day", own(0, 0)), feat("LAND-55", "Draft", "Rehearsal 3 pick-up: what Casper finds rehearsing the edit flow", own(0, 0))];
     features.bobnet = [feat("BOB-6", "Draft", "Start a session from the UI, as a request to poe", { release: "R3", ...own(0, 0) }), ...features.bobnet.map((f) => ({ ...f, release: "R4" }))];
   }
+  // Build E: BobNet's and Helix's boards as production has them, whole.
+  const boardE = scene === "e" || scene === "efail";
+  let releasesE = null, sessionsE = {};
+  if (boardE) {
+    const f = (ref, release, status, title, own, over = {}) => feat(ref, status, title, { release, own: { checked: own[0], total: own[1] }, tasks: { done: over.status === "Done" ? 3 : 0, total: 0 }, ...over });
+    features.bobnet = [
+      f("BOB-1", "R1", "Done", "Prototype the central backlog view, for Casper to accept before building", [11, 13], { done_at: iso(9 * D) }),
+      f("BOB-2", "R1", "Done", "The board service: a database with API and MCP tools", [16, 16], { done_at: iso(7 * D) }),
+      f("BOB-9", "R1", "Done", "Move Helix's board off Backlog.md into the service", [12, 12], { done_at: iso(6 * D) }),
+      f("BOB-44", "R2", "Done", "One orchestrator across laptops: spawn, follow, answer and stop workers on another laptop's supervisor", [7, 7], { done_at: iso(2 * D), tasks: { done: 39, total: 39 } }),
+      f("BOB-51", "R2", "Done", "A permission question reaches the dashboard whole, and a note sent with Allow is delivered", [4, 7], { done_at: iso(D), tasks: { done: 6, total: 7 } }),
+      f("BOB-121", "R2", "Ready", "Dashboard redesign, use case first: a full prototype of every view for Casper, then the build", [6, 20], { open_since: iso(300), tasks: { done: 20, total: 27 } }),
+      f("BOB-33", "R2", "Draft", "Status tab: catch up after hours away", [6, 11], { open_since: iso(7 * D) }),
+      f("BOB-49", "R2", "Ready", "Waits on you is never stale, and a lead's question shows", [0, 8]),
+      f("BOB-52", "R2", "Draft", "Status shows broker deploys, and its scale test covers answered questions", [0, 6]),
+      f("BOB-6", "R3", "Ready", "Start a session from the UI, as a request to poe", [0, 10], { tasks: { done: 0, total: 18 } }),
+      f("BOB-188", "R3", "Draft", "Resume work by itself after a usage limit resets, without anyone awake", [0, 0]),
+      f("BOB-35", null, "Draft", "Status: recurring problems and theme tags at session close", [0, 4]),
+    ];
+    features.helix = [f("LAND-40", "R1", "Done", "Build and CI", [8, 8], { done_at: iso(9 * D) }), f("LAND-45", "R2", "Done", "Build and CI in R2: cheaper and safer, and how we work", [9, 12], { done_at: iso(2 * D) }),
+      f("LAND-50", "R2", "In Progress", "A person edits a recorded tract: the edit is proposed, approved and audited", [5, 11], { open_since: iso(400), tasks: { done: 9, total: 14 } }), f("LAND-38", "R2", "Ready", "Partner audit view of a tract's changes", [0, 6])];
+    const r = (ref, title, status, over = {}) => ({ ref, title, goal: null, status, ord: 1, spec_url: null, closed_at: null, closed_by: null, backlog: { items: 2, bugs: 1, oldest: iso(6 * D) }, ...over });
+    const counted = (key, rs) => rs.map((x) => { const fs = features[key].filter((y) => y.release === x.ref); return { ...x, features: { done: fs.filter((y) => y.status === "Done").length, total: fs.length } }; });
+    releasesE = {
+      bobnet: counted("bobnet", [r("R1", "R1 Central backlog view", "open"), r("R2", "R2 One orchestrator across laptops", "open", { goal: "Casper runs any laptop's work from one place" }), r("R3", "R3 Start a session from the UI", "planned", { goal: "Start a session from the roadmap, the brief written for you" }), r("R0", "R0 First broker", "closed", { closed_at: iso(20 * D) })]),
+      helix: counted("helix", [r("R1", "R1 Partner demo", "closed", { closed_at: iso(5 * D) }), r("R2", "R2 Edit and audit", "open")]),
+    };
+    const er = (id, agent, role, model, effort, m, from, took, over = {}) => ({ id, agent, role, laptop: "mbp-1", model, effort, started_at: iso(from), ended_at: took === null ? null : iso(from - took), resumed: false, tokens: { input: 0, output: 0, cache_write: 0, cache_read: Math.round((took === null ? 0 : m) * 1e6) }, weighted: Math.round((took === null ? 0 : m) * 1e6 * ({ opus: 2, sonnet: 1, haiku: 0.1, fable: 5 }[model] ?? 1)), unknown: 0,
+      calls: took === null ? 0 : 160, ctx: took === null ? [] : Array.from({ length: 160 }, (_, i) => Math.round(28_000 + 900 * i)), remote_url: null, tasks: [], outcome: took === null ? null : "done", outcome_reason: null, ...over });
+    const es = (feature, kind, label, from, took, c, runs) => ({ feature, kind, label, started_at: iso(from), ended_at: took === null ? null : iso(from - took), imported: false, close: c && { need: c[0], summary: c[1], waits_on: [], blockers: [], majors: c[2] ?? [], sent_back: c[2] ?? [], minors_fixed: c[3] ?? 0, handoff_path: "handoffs/w_1.md", handoff_text: c[4] ?? "Built as the spec says.", commit: "4be01c77aa01", closed_by: "Mario@mbp-1" },
+      tasks_moved: [], tokens: runs.reduce((n, x) => ({ ...n, cache_read: n.cache_read + x.tokens.cache_read }), { input: 0, output: 0, cache_write: 0, cache_read: 0 }), weighted: runs.reduce((n, x) => n + x.weighted, 0), unknown: 0, runs, ci_runs: [] });
+    sessionsE = {
+      "LAND-50": [es("LAND-50", "design", "A", 4400, 360, ["casper", "Spec and prototype of the edit flow; Casper accepted it (Q-255)."], [er("e1", "Riker", "designer", "opus", "high", 5.2, 4400, 300), er("e2", "Data", "architect", "fable", "high", 9.8, 4390, 200)]),
+        es("LAND-50", "build", "1", 3000, 480, ["none", "Propose an edit; the change set holds it."], [er("e3", "Howard", "engineer", "opus", "high", 21.5, 3000, 470), er("e4", "Bender", "devops", "haiku", "low", 0.3, 2900, 20, { outcome: "failed", outcome_reason: "land refused: CI red on main" }), er("e5", "Scotty", "engineer", null, null, 0, 2800, 60, { outcome: "lost", outcome_reason: "ubu1 restarted mid-run", laptop: "ubu1" })]),
+        es("LAND-50", "review", "1", 500, 110, ["answer", "Two majors: an edit under review is lost; the audit row misses the reason. Sent back to a Fixes build.", ["LAND-50.2"], 3, "design/LAND-50/review-1.md has the findings, design/LAND-50/shots-review-1/edit-390.png the worst one."], [er("e6", "Bill", "reviewer", "sonnet", "high", 3.3, 500, 100)]),
+        es("LAND-50", "build", "2", 300, null, null, [er("w_h", "Howard", "engineer", "opus", "high", 0, 120, null), er("w_m", "Marvin", "engineer", "opus", "high", 0, 60, null)])],
+      "BOB-51": [es("BOB-51", "build", "A", 2600, 300, ["none", "Protocol, supervisor and broker: a request's whole ask, today's decided list, a note delivered."], [er("e7", "Luigi", "luigi", "opus", "high", 18.1, 2600, 290)])],
+    };
+  }
   const release = (ref, title, done, total) => ({ ref, title, goal: null, status: "open", ord: 1000, spec_url: null, closed_at: null, closed_by: null, features: { done, total }, backlog: { items: 2, bugs: 1, oldest: iso(6 * D) } });
   const run = (status, startMin, tookMin, sha, agent = null, over = {}) => ({ name: "ci", branch: "main", status, sha, url: `https://github.com/example/repo/actions/runs/${sha}`, started_at: iso(startMin), ended_at: tookMin === null ? null : iso(startMin - tookMin), agent, ...over });
   const passed = (n, from) => Array.from({ length: n }, (_, i) => run("passed", from + i * 180, 9, `${(0xa1b2c3 + i * 4097).toString(16)}d4`));
@@ -62,7 +102,7 @@ function fakeBroker(scene) {
   };
   if (long) Object.assign(ci.helix[0], { name: "release_and_publish_every_package_to_the_registry" }, { runs: [{ ...ci.helix[0].runs[0], agent: "TheLandServiceEndToEndEngineerOnTheNightShift" }, ...ci.helix[0].runs.slice(1)] });
   const overview = (p) => ({
-    project: p, release: p.key === "helix" ? release("R2", "R2 Edit and audit", 1, 6) : release("R3", "R3 Vitals", 2, 9), release_number: p.key === "helix" ? 2 : 3,
+    project: p, release: boardE ? { ...releasesE[p.key][1], number: 2 } : p.key === "helix" ? release("R2", "R2 Edit and audit", 1, 6) : release("R3", "R3 Vitals", 2, 9), release_number: p.key === "helix" ? 2 : 3,
     open: features[p.key].filter((x) => x.open_since), next_ready: features[p.key].find((x) => x.status === "Ready"), waits_on_you: p.key === "helix" ? "Q-261" : null, done_unclosed: p.key === "bobnet" ? [{ ref: "R1", title: "R1 Central backlog view" }] : [],
     backlog: { items: p.key === "helix" ? 9 : 12, bugs: 3, oldest: iso(14 * D) }, no_release: { items: 4, bugs: 1, oldest: iso(9 * D) }, ci: scene === "oldboard" ? undefined : ci[p.key],
   });
@@ -141,9 +181,21 @@ function fakeBroker(scene) {
 
   const bl = (key) => Array.from({ length: key === "helix" ? 9 : 12 }, (_, i) => ({ ref: `DRAFT-${100 + i}`, kind: "backlog", type: i < 3 ? "bug" : ["task", "chore", "spike"][i % 3], status: null, title: ["The map drops a tract's east line when its lease is edited twice", "The audit view shows the proposer's id, not the name", "A retried import writes the instrument twice", "Export a tract's changes as a PDF for the partner", "Sort the lease list by its recorded date", "Say which account a change was made in", "A shortcut to the last tract looked at", "The e2e's seed takes four minutes", "Rename 'grantee' where the partner reads it", "One look for every empty page", "A run that ended while the laptop slept", "Keep the filter when the project changes"][i], description: null,
     release: i % 4 === 0 ? (key === "helix" ? "R2" : "R3") : null, labels: [], created_at: iso((14 - i) * D + 30), casper_words: i === 3 ? "the partner wants to take it to the bank" : null, parent_hint: null, blocks_use: i === 0, bug_where: null, found_in: null, archived_at: null }));
-  const status = (p) => ({ project: p.key, name: p.name, waits: waits.filter((w) => w.project === p.key), stuck: { runs: [], ci: [], idle_sessions: [], idle_features: [], answered_holding: [], settled: [] }, recurring: null,
+  const idle = (l) => ({ session: { feature: "BOB-33", kind: "design", label: l }, since: iso(7 * D) });
+  const status = (p) => boardE ? statusE(p) : ({ project: p.key, name: p.name, waits: waits.filter((w) => w.project === p.key), stuck: { runs: [], ci: [], idle_sessions: [], idle_features: [], answered_holding: [], settled: [] }, recurring: null,
     done: { counts: { features: 1, sessions: 4, lands: 3, releases: 0 }, features: [], sessions: [], releases: [] }, backlog: { ready: [], sessions_estimate: null, no_criteria: [], triage: { count: 0, oldest: null }, release: null, thin: false },
     usage: { tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, by_agent: [], heavy: [], lost: 0 }, more: {} });
+  // Status as production has it: BobNet with work and sessions nobody closed, Helix with a quiet night.
+  const statusE = (p) => {
+    const toks = (n) => ({ input: 0, output: 0, cache_write: 0, cache_read: n }), bob = p.key === "bobnet";
+    const done = (feature, kind, label, m, majors, summary, n) => ({ session: { feature, kind, label }, ended_at: iso(m), need: "none", summary, closed_by: "Peach@mbp-1", tokens: toks(n), lost: 0, counts: { blockers: 0, majors, sent_back: 0 } });
+    return { project: p.key, name: p.name, note: null, recurring: null, waits: waits.filter((w) => w.project === p.key),
+      done: bob ? { counts: { features: 1, sessions: 2, lands: 12, releases: 0 }, features: [{ ref: "BOB-111", title: "An answer to a board question wakes whoever it holds up", type: "increment", release: "R2", at: iso(300) }], sessions: [done("BOB-121", "review", "D", 60, 1, "Passed once M1 is fixed.", 4_000_000), done("BOB-121", "build", "D", 120, 0, "The Overview, Usage and a project's page.", 41_000_000)], releases: [] } : { counts: { features: 0, sessions: 0, lands: 0, releases: 0 }, features: [], sessions: [], releases: [] },
+      stuck: { runs: bob ? [{ id: "w_x", agent: "Luigi", role: "luigi", session: { feature: "BOB-121", kind: "build", label: "D" }, outcome: "failed", reason: "pnpm test exited 1", ended_at: iso(150), laptop: "mbp-1" }] : [], ci: [], idle_sessions: bob ? ["reqs", "proto", "arch", "spec", "adr-amend", "ready"].map(idle) : [], idle_features: [], answered_holding: [],
+        settled: bob ? [{ kind: "ci", entry: { source: "github-actions", name: "test", branch: "v2", sha: "4be01c77aa", url: null, worker: null, session: null, ended_at: iso(200) }, settled_at: iso(170) }] : [] },
+      backlog: { ready: bob ? [{ ref: "BOB-49", title: "x", release: "R2", criteria: 8 }] : [], sessions_estimate: bob ? 3 : null, no_criteria: bob ? [{ ref: "BOB-188", title: "Resume work by itself after a usage limit resets" }] : [], triage: { count: bob ? 12 : 9, oldest: { ref: "BOB-11", at: iso(14 * D) } }, release: { ref: "R2", todo: 4, ready: bob ? 1 : 0 }, thin: bob },
+      usage: { tokens: toks(bob ? 45_000_000 : 0), by_agent: bob ? [{ agent: "Luigi", role: "luigi", tokens: toks(41_000_000), runs: 3, lost: 0 }, { agent: "Daisy", role: "daisy", tokens: toks(4_000_000), runs: 1, lost: 0 }] : [], heavy: [], lost: 0 }, more: {} };
+  };
   const rule = (agent, over = {}) => ({ project: "*", agent, laptop: "mbp-1", role: "backup", read: true, items: "none", fields: [], sessions: false, questions: false, admin: false, ...over });
   // Usage: each project's days, deterministic, the last one today's; a spike on two of them.
   const two = (n) => String(n).padStart(2, "0");
@@ -213,12 +265,21 @@ function fakeBroker(scene) {
       case "status": return { at: iso(0), since: iso(7 * H), projects: projects.map(status) };
       case "grants": return { grants: [rule("poe", { role: "admin", admin: true }), rule("Mario")] };
       case "list": {
+        if (boardE && op.of === "releases") return { releases: releasesE[op.project], total: 4, cursor: null };
+        if (boardE && op.of === "tasks") { const items = op.feature === "LAND-50" ? [["LAND-50.1", "Done", "Propose an edit"], ["LAND-50.2", "In Progress", "Keep an edit under review"], ["LAND-50.3", "Ready", "The audit row's reason"]].map(([ref, st, title]) => feat(ref, st, title, { kind: "task", tasks: null, progress: { checked: 1, total: 2 } })) : []; return { items, total: items.length, cursor: null }; }
         if (op.of === "releases") return { releases: [release(op.project === "helix" ? "R2" : "R3", op.project === "helix" ? "R2 Edit and audit" : "R3 Vitals", 1, 6)], total: 1, cursor: null };
         const items = op.of === "features" ? features[op.project] : op.of === "backlog" ? bl(op.project) : [];
         return { items, total: items.length, cursor: null };
       }
       case "get": {
         if (/^[QA]-/.test(op.ref ?? "")) return { question: question(op.ref) };
+        if (boardE) {
+          const ss = op.session && sessionsE[op.session.feature]?.find((x) => x.kind === op.session.kind && x.label === op.session.label);
+          if (ss) return { session: ss };
+          const x = features[op.project]?.find((y) => y.ref === op.ref), words = { "LAND-50": ["An agent proposes an edit; the change set holds it (e2e)", "A person approves or refuses it", "The tract page shows the edit and who approved it", "An edit to a tract under review replaces the proposal", "The audit row has who, when and why"], "BOB-51": ["The dashboard half: a worker's AskUserQuestion shown whole. Moved to BOB-121 criterion 14", "The dashboard half: Answered from here today. Moved to BOB-121 criterion 15", "The dashboard half: the note field sent with Allow. Moved to BOB-121 criterion 16", "The supervisor sends a request's whole ask", "The broker hands it on", "A credential never crosses"] }[op.ref] ?? ["It holds."];
+          const crits = words.map((text, i) => ({ section: i === words.length - 1 && words.length > 1 ? "dod" : "ac", n: i === words.length - 1 && words.length > 1 ? 1 : i + 1, text, evidence: null, state: op.ref === "BOB-51" ? (i < 3 ? "open" : "checked") : i < 3 ? "checked" : "open" }));
+          return { item: { ...x, description: null, criteria: crits, sessions: (sessionsE[op.ref] ?? []).map(({ feature, kind, label, started_at, ended_at }) => ({ feature, kind, label, started_at, ended_at })), bug_where: null, found_in: null, casper_words: null }, history: [], item_titles: {} };
+        }
         const item = features[op.project]?.find((x) => x.ref === op.ref);
         return { item: { ...item, description: null, criteria: [{ section: "ac", n: 1, text: "It holds.", evidence: null, state: "open" }], sessions: [], bug_where: null, found_in: null, casper_words: null }, history: [], item_titles: {} };
       }
@@ -227,7 +288,7 @@ function fakeBroker(scene) {
     }
   };
 
-  const fails = (op) => (scene === "down" ? true : scene === "listdown" ? op.op === "projects" : scene === "failday" ? op.op === "usage_day" : scene === "failpage" || scene === "forbidden" ? op.op === "project" : false);
+  const fails = (op) => (scene === "down" ? true : scene === "listdown" ? op.op === "projects" : scene === "failday" ? op.op === "usage_day" : scene === "failpage" || scene === "forbidden" ? op.op === "project" : scene === "efail" ? op.op === "status" : false);
   class FakeSocket extends EventTarget {
     static OPEN = 1;
     readyState = 1;
@@ -330,6 +391,28 @@ const all = [
   ["bob121-status-tap", "live", "status", "#status-needs li", [tap("Q-261"), tap("DRAFT-119")], "#status-needs", [390, 1440]],
 ];
 
+const review = (p) => p.locator(".step[data-kind=review] .links button", { hasText: "Review evidence" }).click();
+all.push(
+  ["bob121-status", "e", "status", ".pcard", []],
+  ["bob121-status-bobnet", "e", "status/bobnet", "#sec-stuck", [(p) => p.locator("#sec-stuck").evaluate((d) => (d.open = true)), (p) => p.locator(".settled > summary").click()]],
+  ["bob121-status-helix", "e", "status/helix", "#sec-stuck", []],
+  ["bob121-status-failed", "efail", "status", ".banner.down", [], null, [390, 1440]],
+  ["bob121-roadmap-bobnet", "e", "roadmap/bobnet", "#rel-R2", []],
+  ["bob121-roadmap-done", "e", "roadmap/bobnet", "#rel-R2", [(p) => p.locator("#rel-R1").scrollIntoViewIfNeeded()], "#rel-R2", [390, 1440]],
+  ["bob121-roadmap-edit", "e", "roadmap/bobnet/edit", "#rel-R2", []],
+  ["bob121-roadmap-helix", "e", "roadmap/helix", "#rel-R2", [(p) => p.locator("#rel-R1 .fold button").click()]],
+  ["bob121-roadmap-dark", "e", "roadmap/bobnet", "#rel-R2", [], null, [390, 1440]],
+  ["bob121-features-bobnet", "e", "features/bobnet", ".flist", []],
+  ["bob121-features-helix", "e", "features/helix", ".flist", []],
+  ["bob121-features-find", "e", "features/bobnet", ".flist", [(p) => p.fill("#find", "status")], null, [390, 1440]],
+  ["bob121-features-none", "e", "features/helix", ".flist", [(p) => p.locator(".filters button", { hasText: "Draft" }).click()], null, [390, 1440]],
+  ["bob121-features-dark", "e", "features/bobnet", ".flist", [], null, [390, 1440]],
+  ["bob121-feature-open", "e", "feature/helix/LAND-50", "#feature-head", [review]],
+  ["bob121-feature-done", "e", "feature/bobnet/BOB-51", "#feature-head", [(p) => p.locator(".unticked > summary").click()]],
+  ["bob121-feature-ticked", "e", "feature/bobnet/BOB-44", "#feature-head", [], null, [390, 1440]],
+  ["bob121-feature-weighed", "e", "feature/helix/LAND-50?weigh=1", "#feature-head", [], ".chain", [390, 1440]],
+  ["bob121-feature-dark", "e", "feature/helix/LAND-50", "#feature-head", [review], null, [390, 1440]],
+);
 const shots = all.filter(([name]) => name.startsWith(process.argv[2] ?? ""));
 const taps = new Map();
 const browser = await chromium.launch();
