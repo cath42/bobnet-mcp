@@ -315,16 +315,12 @@ one at ef29e56.
 | 09-review-e-dark | Dark scheme, Toad picked | 3 |
 | 10-helix-fixes-running | Helix's LAND-50 Fixes: three agents running across two days | 2, 4 |
 
-## 7. Open questions
+## 7. Rulings (Peach, 2026-11-26; Casper's Q-17 "Build it as shown" for the prototype)
 
-**For Peach**
+1. **Busy days keep a big "rest": out of BOB-211.** Its criteria ask which session a bar is, not every one. Build keeps `top`'s
+   three named parts and the rest. Backlog: BOB-213 (broker `top` 3 → N).
+2. **The feature page's session card: no change in BOB-211.** No criterion asks for it. Backlog: BOB-214, after this ships.
+3. **The project page's small graph: parts and the tip, no panel** (§2.9 as written). Its day line links to `#usage/…`,
+   which opens the panel. Enough for AC1 and AC5.
 
-1. **Busy days keep a big "rest".** On BobNet's 23 Nov the three named sessions are 56M of 124M. I'd ask Toad for `top` to
-   name more, e.g. the top 6 by each figure (store.ts:1140). The bar would still stack only three, but the day line would list
-   six, with the rest after them. Is that in BOB-211's scope, or a follow-up? The design works either way: the list is as
-   long as `top`.
-2. **The feature page's session card** has the same "Context per call" panel as a table (agent, model, runs, calls, peak,
-   tokens). Should it get the spend bar chart and the coloured All agents line too, so the two places match? I'd say yes,
-   in a later task, not in this one.
-3. **The project page's small Usage graph** gets the parts and the tip (§2.9) but no panel, and its day line links to Usage.
-   Is that enough, or should the panel open there too?
+Build: BOB-211 is split into BOB-215 to BOB-221, all build A; there is no build B.
