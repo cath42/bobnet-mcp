@@ -18,7 +18,7 @@
   - Besides pages, `coming` lists placeholders.
 - **How build.py reads and renders.** It reads every file with `git show <sha>:<path>` after a
   `git fetch`, never from a worktree (`:101-102`). It renders with python-markdown, raw HTML shown as
-  text (`:59-67`). Links are rewritten (`:73-89`): one to another library page stays in the site; one
+  text (`:62-70`). Links are rewritten (`:73-89`): one to another library page stays in the site; one
   to any other file goes to `github.com/<repo>/blob/<sha>/<path>`; anything but http(s) or `#` goes dead.
 - **Sizes at today's main.** Helix (`5474afabb`): about 180 KB over 16 files, 145 KB of it the
   taxonomy. Vitals (`62e475d`): about 136 KB over 7 files, the largest 45 KB.
