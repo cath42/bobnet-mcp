@@ -3,6 +3,11 @@
 - **Status:** accepted (Toad, 2026-11-26), for BOB-212 (R9, session `BOB-212 design A`), ACs 1, 2, 4
   and 5. Line numbers are at `6a2b96b` (origin/v2). Daisy designs the screens and the project menu
   (AC3, `design/BOB-212/`). §5 and §6 are what my answer to her consult c_820aa69f gave her.
+- **Amended by ADR 0016** (2026-11-26, Casper's go for a fixed skeleton and zoomable diagrams):
+  - §3's manifest shape, §6's route and the build tasks are replaced by 0016's.
+  - §4's `library_page` and §6's rendering are extended: `likec4` and `erd` pages, drawn in
+    sandboxed viewers.
+  - Mermaid is pinned to 11.x, not 10.x.
 
 ## Context
 
@@ -260,7 +265,7 @@ It cannot know whether main has moved since: only that same fetch could tell it.
 - **Mermaid as code only.** It is the fallback, not the plan: Vitals' data model is a diagram, and the
   artifact draws it today.
 
-## Build tasks (build A, Luigi)
+## Build tasks (build A, Luigi): replaced by ADR 0016's
 
 1. **Protocol.**
    - The `library_blob` and `library` supervisor ops, and the `library` and `library_page` reads, with

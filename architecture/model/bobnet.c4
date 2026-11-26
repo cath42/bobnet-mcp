@@ -1,0 +1,281 @@
+// BobNet's architecture as a LikeC4 model (C4: context, containers, components).
+// BOB-212 spike (Toad, 2026-11-26). The parts and who owns what are ADR 0004; this
+// draws them. Build: `npx likec4@1.61.1 build -o <dir> architecture/model`.
+
+specification {
+  element person {
+    style {
+      shape person
+      color green
+    }
+  }
+  element system
+  element external {
+    style {
+      color gray
+    }
+  }
+  element container
+  element component {
+    style {
+      color sky
+    }
+  }
+  element store {
+    style {
+      shape storage
+      color amber
+    }
+  }
+  element browser {
+    style {
+      shape browser
+    }
+  }
+  tag planned
+}
+
+model {
+  casper = person 'Casper' {
+    description 'The owner: reads the dashboard, decides the gates, answers questions'
+  }
+
+  claude = external 'Claude Code' {
+    technology 'claude CLI, Max subscription'
+    description 'Runs every agent: headless role workers and interactive sessions'
+  }
+
+  github = external 'GitHub' {
+    description 'Each project repo: code, docs, decisions, CI runs. main is the source'
+  }
+
+  access = external 'Cloudflare Access' {
+    description 'Owner JWTs and per-laptop service tokens'
+  }
+
+  bobnet = system 'BobNet' {
+    description 'Connects Claude Code agents across Casper\'s laptops and runs project teams on them'
+
+    dashboard = browser 'Dashboard' {
+      technology 'Static JS, no build step'
+      description 'The owner\'s page: projects, boards, Waits, workers, usage in tokens'
+      link https://github.com/cath42/bobnet-mcp/tree/v2/packages/broker/public 'packages/broker/public'
+    }
+
+    broker = container 'Broker' {
+      technology 'Cloudflare Worker + Durable Objects'
+      description 'Routes messages and holds the boards. Production: a deploy drops every socket'
+      link https://github.com/cath42/bobnet-mcp/tree/v2/packages/broker 'packages/broker'
+
+      entry = component 'Worker entry' {
+        technology 'index.ts, auth.ts'
+        description 'Authenticates every request (Access JWT or service token), sets the CSP, serves the dashboard, routes to the objects'
+      }
+
+      network = component 'Broker object' {
+        technology 'Durable Object "network", broker.ts'
+        description 'The roster, presence, messages and deliveries, the broker audit, each laptop\'s latest report'
+      }
+
+      board = component 'Board object' {
+        technology 'Durable Object "board", board/*'
+        description 'Every project\'s board: records, events, grants, finished runs, CI runs, pushes (ADR 0001)'
+
+        ops = component 'Operations' {
+          technology 'board.ts'
+          description 'Applies board ops and reads; sends board_changed'
+        }
+        rules = component 'Rules' {
+          technology 'rules.ts'
+          description 'Grants and per-field rights: who may write what'
+        }
+        boardStore = store 'Board store' {
+          technology 'store.ts, schema.ts, SQLite in the object'
+          description 'Typed records, events, sessions, runs'
+        }
+        usage = component 'Usage' {
+          technology 'usage.ts'
+          description 'Token weighting per run and session (ADR 0014)'
+        }
+        export = component 'Export' {
+          technology 'export.ts'
+          description 'The nightly board export, a backup never read back'
+        }
+        library = store 'Library cache' {
+          #planned
+          technology 'ADR 0015'
+          description 'Blobs of each project\'s main, keyed by git blob id; a cache, never the record'
+        }
+      }
+    }
+
+    protocol = container 'Protocol' {
+      technology 'TypeScript, zod'
+      description 'Every frame and op that crosses a part. Changes additively'
+      link https://github.com/cath42/bobnet-mcp/tree/v2/packages/protocol 'packages/protocol'
+    }
+
+    client = container 'Channel client' {
+      technology 'Node, MCP server'
+      description 'One per interactive Claude Code session: its name, inbox and board tools'
+      link https://github.com/cath42/bobnet-mcp/tree/v2/packages/client 'packages/client'
+    }
+
+    supervisor = container 'Supervisor' {
+      technology 'Node, launchd or systemd, SQLite'
+      description 'One per laptop: runs role workers headless, holds their live state, lands their work'
+      link https://github.com/cath42/bobnet-mcp/tree/v2/packages/supervisor 'packages/supervisor'
+
+      core = component 'Supervisor core' {
+        technology 'supervisor.ts'
+        description 'The broker socket, the lead\'s session, spawning and stopping workers, landing'
+      }
+      config = component 'Config' {
+        technology 'config.ts'
+        description 'Casper\'s ~/.config/bobnet: projects, roles, refs. Read only'
+      }
+      sqlite = store 'Supervisor store' {
+        technology 'store.ts, SQLite'
+        description 'Workers and runs, permission requests, inbox and outbox, audit, owner keys'
+      }
+      runner = component 'Worker runner' {
+        technology 'worker.ts, events.ts'
+        description 'Starts claude headless in the role\'s worktree, strips credentials, reads its events'
+      }
+      tools = component 'In-process MCP tools' {
+        technology 'mcp.ts, worker-tools.ts, lead-tools.ts'
+        description 'send_message, board_*, land, rebase, consult; identity stamped by the supervisor'
+      }
+      policy = component 'Policy' {
+        technology 'policy.ts'
+        description 'policy.yaml and built-in guards, judged before each tool call'
+      }
+      slots = component 'Run slots' {
+        technology 'slots.ts'
+        description 'One heavy run at a time on the laptop: tests, lands, probes'
+      }
+      router = component 'Router' {
+        technology 'router.ts'
+        description 'Routes inbound messages to the right worker or the lead'
+      }
+      remote = component 'Remote requests' {
+        technology 'remote.ts, owner.ts'
+        description 'Spawns from another laptop\'s orchestrator; owner actions checked against Access'
+      }
+      ci = component 'CI poll' {
+        technology 'ci-poll.ts'
+        description 'Reads CI runs with gh and reports them as board ops'
+      }
+      backup = component 'Board backup' {
+        technology 'board-backup.ts'
+        description 'The nightly export of each board into git'
+      }
+      upgrade = component 'Upgrade' {
+        technology 'upgrade.ts'
+        description 'Installs a release tag and restarts the service'
+      }
+      librarySync = component 'Library sync' {
+        #planned
+        technology 'ADR 0015'
+        description 'Reads .bobnet/library.json and its sources at main, sends blobs and the manifest'
+      }
+    }
+  }
+
+  // Context
+  casper -> bobnet.dashboard 'reads and decides'
+  casper -> claude 'talks to the lead'
+  claude -> bobnet.client 'loads as an MCP server'
+  bobnet.supervisor -> claude 'runs workers headless'
+  bobnet.supervisor -> github 'fetches, lands, polls CI'
+  bobnet.broker.entry -> access 'checks tokens'
+
+  // Containers
+  bobnet.dashboard -> bobnet.broker.entry 'owner socket, Access JWT'
+  bobnet.client -> bobnet.broker.entry 'socket, laptop token'
+  bobnet.supervisor.core -> bobnet.broker.entry 'socket, laptop token'
+  bobnet.broker.entry -> bobnet.broker.network 'routes sockets'
+  bobnet.broker.network -> bobnet.broker.board.ops 'board ops with the caller'
+  bobnet.broker.network -> bobnet.supervisor.core 'deliveries, actions, remote requests'
+  bobnet.broker -> bobnet.protocol 'validates frames'
+  bobnet.supervisor -> bobnet.protocol 'validates frames'
+  bobnet.client -> bobnet.protocol 'validates frames'
+
+  // Board
+  bobnet.broker.board.ops -> bobnet.broker.board.rules 'checks rights'
+  bobnet.broker.board.ops -> bobnet.broker.board.boardStore 'reads and writes'
+  bobnet.broker.board.ops -> bobnet.broker.board.usage 'weights runs'
+  bobnet.broker.board.export -> bobnet.broker.board.boardStore 'reads'
+  bobnet.broker.board.ops -> bobnet.broker.board.library 'caches blobs'
+
+  // Supervisor
+  bobnet.supervisor.core -> bobnet.supervisor.config 'reads'
+  bobnet.supervisor.core -> bobnet.supervisor.sqlite 'keeps live state'
+  bobnet.supervisor.core -> bobnet.supervisor.runner 'spawns and stops'
+  bobnet.supervisor.runner -> claude 'claude -p, stream-json'
+  bobnet.supervisor.runner -> bobnet.supervisor.tools 'serves tools to the worker'
+  bobnet.supervisor.tools -> bobnet.supervisor.policy 'judges each call'
+  bobnet.supervisor.tools -> bobnet.supervisor.slots 'land, rebase, tests'
+  bobnet.supervisor.tools -> bobnet.supervisor.core 'sends as the worker'
+  bobnet.supervisor.core -> bobnet.supervisor.router 'inbound messages'
+  bobnet.supervisor.router -> bobnet.supervisor.runner 'resumes the worker'
+  bobnet.supervisor.core -> bobnet.supervisor.remote 'remote and owner requests'
+  bobnet.supervisor.ci -> github 'gh run list'
+  bobnet.supervisor.ci -> bobnet.supervisor.core 'CI runs as board ops'
+  bobnet.supervisor.backup -> github 'commits the export'
+  bobnet.supervisor.upgrade -> github 'fetches the release tag'
+  bobnet.supervisor.librarySync -> github 'git fetch, git show at main'
+  bobnet.supervisor.librarySync -> bobnet.supervisor.core 'library_blob, library'
+}
+
+views {
+  view index {
+    title 'BobNet: context'
+    description 'Who and what BobNet talks to. Click BobNet to open its containers'
+    include *
+  }
+
+  view containers of bobnet {
+    title 'BobNet: containers'
+    description 'The deployables and the shared protocol. Click the broker or the supervisor to drill in'
+    include *
+    include casper, claude, github, access
+  }
+
+  view brokerComponents of bobnet.broker {
+    title 'Broker: components'
+    description 'One Worker, two Durable Objects. Click the Board object to drill in'
+    include *
+  }
+
+  view boardComponents of bobnet.broker.board {
+    title 'Board object: components'
+    description 'Dashed: planned (ADR 0015)'
+    include *
+    style element.tag = #planned {
+      border dashed
+      opacity 60%
+    }
+  }
+
+  view supervisorComponents of bobnet.supervisor {
+    title 'Supervisor: components'
+    description 'Dashed: planned (ADR 0015)'
+    include *
+    style element.tag = #planned {
+      border dashed
+      opacity 60%
+    }
+  }
+
+  dynamic view land {
+    title 'A land'
+    description 'A worker calls land: the supervisor runs the hook in a run slot and pushes'
+    bobnet.supervisor.runner -> bobnet.supervisor.tools 'land'
+    bobnet.supervisor.tools -> bobnet.supervisor.policy 'allowed?'
+    bobnet.supervisor.tools -> bobnet.supervisor.slots 'wait for a slot, run typecheck and tests'
+    bobnet.supervisor.core -> github 'push to the line'
+    bobnet.supervisor.core -> bobnet.broker.entry 'push and fixes as board ops'
+    bobnet.broker.network -> bobnet.broker.board.ops 'record the push'
+  }
+}
