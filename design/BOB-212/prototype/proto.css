@@ -1,0 +1,233 @@
+/* BOB-212: the Projects menu, a project's tabs (Work · Library) and the library. New rules on style.css's tokens;
+   they move into style.css. .proto-* is the prototype's own (the state switch, the stand-ins) and stays out. */
+
+/* ---------- Header: the Projects menu, first in the tabs ---------- */
+.pm { position: relative; display: inline-flex; }
+.pm-btn { min-height: 0; padding: 4px 10px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font-size: 14px; }
+.pm-btn:hover { color: var(--text); }
+.pm-btn[aria-current] { color: var(--text); background: var(--surface); border-color: var(--line); font-weight: 600; }
+.pm-btn[aria-expanded="true"] { color: var(--text); border-color: var(--line); }
+.pm-btn .caret { font-size: 10px; margin-left: 4px; vertical-align: 1px; }
+.pm-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; width: 340px; max-width: calc(100vw - 24px);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 6px 24px rgb(0 0 0 / .12); padding: 6px; }
+.pm-pop[hidden] { display: none; }
+.pm-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.pm-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; padding: 8px 10px; border-radius: 8px; }
+.pm-row:hover, .pm-row:focus-within { background: var(--bg); }
+.pm-row.here { box-shadow: inset 3px 0 0 var(--accent); }
+.pm-row .pm-name { color: var(--text); text-decoration: none; font-weight: 600; font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
+.pm-row .pm-name::after { content: ""; position: absolute; inset: 0; }
+.pm-row { position: relative; }
+.pm-row .pm-sub { grid-column: 1; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.pm-row .pm-lib { grid-column: 2; grid-row: 1 / span 2; position: relative; z-index: 1; font-size: 13px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; color: var(--accent); white-space: nowrap; }
+.pm-row .pm-lib:hover { border-color: var(--accent); }
+.pm-row .pm-nolib { grid-column: 2; grid-row: 1 / span 2; font-size: 12.5px; color: var(--muted); }
+.pm-need { color: var(--warn); }
+.pm-foot { border-top: 1px solid var(--line); margin-top: 6px; padding: 8px 10px 4px; font-size: 13px; }
+@media (max-width: 860px) {
+  /* The tabs are their own rows here: the menu drops full width under the header. */
+  .pm { position: static; }
+  .pm-pop { position: absolute; left: 8px; right: 8px; width: auto; max-width: none; top: 100%; }
+  header { position: sticky; }
+  .pm-btn { padding: 6px 10px; }
+  .pm-row { min-height: 52px; }
+  .pm-row .pm-lib { min-height: 40px; display: inline-flex; align-items: center; }
+}
+
+/* ---------- A project's tabs: Work · Library, and the library's freshness at their right ---------- */
+.p-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; border-bottom: 1px solid var(--line); margin-top: -8px; }
+.p-tabs nav { margin: 0; gap: 0; }
+.p-tabs nav a { border-radius: 0; padding: 8px 12px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 14.5px; }
+.p-tabs nav a[aria-current] { background: none; border: 0; border-bottom: 2px solid var(--accent); color: var(--text); font-weight: 600; }
+.p-tabs .fresh { margin-left: auto; padding: 4px 0; }
+@media (max-width: 860px) { .p-tabs nav { width: auto; order: 0; } }
+@media (max-width: 600px) { .p-tabs .fresh { margin-left: 0; width: 100%; padding: 0 0 8px; } .p-tabs nav a { padding: 10px 14px; } }
+
+/* As of main at <sha>, <date> · checked <ago> from <laptop>; warn when it may be behind. */
+.fresh { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.fresh code, .doc-meta code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.fresh a { color: inherit; }
+.fresh.warn { color: var(--warn); }
+.fresh.warn::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); margin-right: 6px; vertical-align: 1px; }
+
+/* ---------- The library: sections | the page | on this page ---------- */
+.lib { display: grid; gap: 24px; grid-template-columns: 220px minmax(0, 1fr); align-items: start; }
+@media (min-width: 1280px) { .lib.has-toc { grid-template-columns: 220px minmax(0, 1fr) 200px; } }
+.lib-rail, .lib-toc { position: sticky; top: 70px; max-height: calc(100vh - 90px); overflow-y: auto; display: grid; gap: 14px; align-content: start; }
+.lib-rail .lab, .lib-toc .lab { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; padding: 0 10px; }
+.secs-nav { display: grid; gap: 1px; }
+.secs-nav a, .secs-nav .soon { display: flex; justify-content: space-between; gap: 8px; padding: 6px 10px; border-radius: 6px; color: var(--text); text-decoration: none; font-size: 14px; }
+.secs-nav a:hover { background: var(--surface); }
+.secs-nav a[aria-current] { background: var(--surface); box-shadow: inset 3px 0 0 var(--accent); font-weight: 600; }
+.secs-nav a.sub { padding-left: 24px; font-size: 13.5px; }
+.secs-nav small { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; align-self: center; font-weight: 400; }
+.secs-nav .soon { color: var(--muted); }
+.secs-nav a.missing { color: var(--muted); }
+.secs-nav a.missing small { color: var(--warn); }
+.lib-rail .foot { font-size: 12.5px; color: var(--muted); padding: 10px 10px 0; border-top: 1px solid var(--line); display: grid; gap: 4px; }
+.lib-rail .foot a { color: var(--accent); }
+.lib-toc { font-size: 13px; }
+.lib-toc ul { list-style: none; margin: 0; padding: 0 0 0 10px; display: grid; gap: 2px; border-left: 1px solid var(--line); }
+.lib-toc a { color: var(--muted); text-decoration: none; display: block; padding: 3px 8px; }
+.lib-toc a:hover { color: var(--text); }
+.lib-toc a.on { color: var(--text); box-shadow: -1px 0 0 var(--accent); margin-left: -1px; }
+.lib-toc li.h3 a { padding-left: 20px; }
+
+/* The phone's and the tablet's: sections behind one button, on this page folded under the title. */
+.secs-pick { display: none; }
+.toc-fold { display: none; }
+@media (max-width: 1279px) { .toc-fold { display: block; } }
+@media (max-width: 760px) {
+  .lib { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .lib-rail { position: static; max-height: none; overflow: visible; }
+  .lib-rail .lab, .lib-rail .foot { display: none; }
+  .secs-pick { display: flex; width: 100%; justify-content: space-between; align-items: center; min-height: 44px; text-align: left; font-weight: 600; }
+  .secs-pick .muted { font-weight: 400; }
+  .lib-rail .secs-nav { display: none; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px; }
+  .lib-rail.open .secs-nav { display: grid; }
+  .secs-nav a, .secs-nav .soon { min-height: 44px; align-items: center; }
+}
+.toc-fold > summary { margin: 0; padding: 8px 0; min-height: 40px; display: flex; align-items: center; }
+.toc-fold ul { list-style: none; margin: 0 0 8px; padding: 0 0 0 12px; display: grid; gap: 0; border-left: 1px solid var(--line); font-size: 14px; }
+.toc-fold a { display: block; padding: 6px 8px; color: var(--text); text-decoration: none; }
+.toc-fold li.h3 a { padding-left: 20px; color: var(--muted); }
+
+/* ---------- A page: its head, then the markdown ---------- */
+.doc-page { min-width: 0; max-width: 780px; display: grid; gap: 14px; align-content: start; }
+.doc-page.wide { max-width: none; }
+.doc-head { display: grid; gap: 4px; }
+.eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); font-weight: 600; }
+.doc-title { margin: 0; font-size: 26px; line-height: 1.2; text-transform: none; letter-spacing: -.01em; color: var(--text); font-weight: 650; text-wrap: balance; overflow-wrap: anywhere; }
+.doc-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.doc-meta a { color: var(--accent); overflow-wrap: anywhere; }
+@media (max-width: 600px) { .doc-title { font-size: 22px; } }
+
+.doc { font-size: 15.5px; line-height: 1.6; min-width: 0; overflow-wrap: break-word; }
+.doc > :first-child { margin-top: 0; }
+.doc h1 { display: none; } /* the page's own title is the head's */
+.doc h2, .doc h3, .doc h4 { color: var(--text); text-transform: none; letter-spacing: -.005em; line-height: 1.3; text-wrap: balance; scroll-margin-top: 80px; position: relative; }
+.doc h2 { font-size: 20px; font-weight: 650; margin: 36px 0 8px; }
+.doc h3 { font-size: 16.5px; font-weight: 650; margin: 26px 0 6px; }
+.doc h4 { font-size: 15px; font-weight: 650; margin: 20px 0 4px; }
+.doc .hl { margin-left: 8px; color: var(--muted); text-decoration: none; font-weight: 400; opacity: 0; }
+.doc h2:hover .hl, .doc h3:hover .hl, .doc .hl:focus-visible { opacity: 1; }
+@media (hover: none) { .doc .hl { display: none; } }
+.doc p, .doc li { max-width: 72ch; }
+.doc p { margin: 0 0 12px; }
+.doc ul, .doc ol { margin: 0 0 12px; padding-left: 22px; }
+.doc li { margin: 3px 0; }
+.doc li > ul, .doc li > ol { margin: 4px 0; }
+.doc a { color: var(--accent); text-underline-offset: 2px; }
+.doc a.ext::after { content: "↗"; font-size: .8em; margin-left: 2px; text-decoration: none; display: inline-block; }
+.doc .dead { color: var(--muted); }
+.doc code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .86em; background: var(--surface); border: 1px solid var(--line); padding: 0 4px; border-radius: 4px; overflow-wrap: anywhere; }
+.doc pre { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; line-height: 1.5; margin: 0 0 14px; }
+.doc pre code { background: none; border: 0; padding: 0; overflow-wrap: normal; font-size: inherit; }
+.doc blockquote { margin: 0 0 12px; padding: 2px 14px; border-left: 3px solid var(--line); color: var(--muted); }
+.doc hr { border: 0; border-top: 1px solid var(--line); margin: 28px 0; }
+.doc strong { font-weight: 650; }
+@media (max-width: 600px) { .doc { font-size: 15px; } .doc pre { font-size: 11.5px; padding: 10px 12px; } .doc h2 { font-size: 18.5px; margin-top: 30px; } }
+
+/* A table in its own frame: it scrolls sideways inside it, never the page; an edge shadow says there is more. */
+.tw { position: relative; overflow-x: auto; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  background-image: linear-gradient(to right, var(--surface), var(--surface)), linear-gradient(to left, var(--surface), var(--surface)),
+    linear-gradient(to right, rgb(0 0 0 / .12), transparent), linear-gradient(to left, rgb(0 0 0 / .12), transparent);
+  background-position: left center, right center, left center, right center; background-repeat: no-repeat;
+  background-size: 20px 100%, 20px 100%, 10px 100%, 10px 100%; background-attachment: local, local, scroll, scroll; }
+.tw table { width: 100%; border-collapse: collapse; font-size: 13.5px; line-height: 1.45; background: transparent; }
+.tw th, .tw td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: normal; }
+.tw th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--bg); white-space: nowrap; position: sticky; top: 0; }
+.tw td { min-width: 7em; max-width: 46ch; }
+.tw tr:last-child td { border-bottom: 0; }
+.doc .tw th:nth-child(3), .doc .tw td:nth-child(3) { white-space: normal; } /* style.css nowraps every 3rd cell */
+
+/* A diagram: drawn fitted to the column; Full size lets it scroll; Source shows its text. */
+.dia { margin: 0 0 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); display: grid; }
+.dia-bar { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.dia-bar .actions { margin: 0; gap: 6px; }
+.dia-bar button { min-height: 32px; padding: 4px 10px; font-size: 13px; }
+.dia-view { overflow: auto; padding: 12px; text-align: center; }
+.dia-view img { max-width: 100%; height: auto; }
+.dia.full .dia-view { max-height: 80vh; text-align: left; }
+.dia.full .dia-view img { max-width: none; }
+.dia pre { margin: 0; border: 0; border-radius: 0 0 8px 8px; }
+.dia .dia-note { padding: 8px 12px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.dia .dia-note.warn { color: var(--warn); }
+@media (max-width: 600px) { .dia-bar button { min-height: 40px; } }
+
+/* ---------- The library's home: a card per section ---------- */
+.lib-home .lede { font-size: 16px; color: var(--muted); max-width: 62ch; margin: 0; }
+.lib-cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.lib-card { text-decoration: none; color: var(--text); align-content: start; }
+a.lib-card:hover { border-color: var(--accent); }
+.lib-card b { font-size: 15px; }
+.lib-card .what { font-size: 13.5px; color: var(--muted); line-height: 1.4; overflow-wrap: anywhere; }
+.lib-card .by { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.lib-card.soon { border-style: dashed; background: transparent; }
+.lib-card.soon .pill { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: .05em; }
+.lib-card.missing .pill { color: var(--warn); text-transform: uppercase; font-size: 11px; letter-spacing: .05em; }
+.lib-how { font-size: 13.5px; color: var(--muted); max-width: 72ch; margin: 4px 0 0; }
+.lib-how code { font-size: 12.5px; }
+
+/* ---------- Helix's taxonomy: every element, found and filtered ---------- */
+.tax-bar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.tax-bar input[type="search"] { flex: 1 1 260px; min-width: 0; font: inherit; font-size: 16px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+.tax-bar select { font: inherit; font-size: 14px; padding: 6px 8px; min-height: 36px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+.tax-bar .count { font-size: 13px; font-variant-numeric: tabular-nums; }
+.tax td.k { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; white-space: normal; overflow-wrap: anywhere; min-width: 16ch; max-width: 30ch; }
+.tax td.ty { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
+.tax td.calc { min-width: 200px; }
+.tax td.src { min-width: 170px; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.tax .sd { display: inline-block; font-size: 11.5px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+.tax .sd.d { border-color: var(--accent); color: var(--accent); }
+.tax-more { justify-self: start; }
+@media (max-width: 760px) {
+  /* A row is a card here (style.css's table.stack): key and its kind first, then what it is. */
+  .tw.tax-w { background-image: none; }
+  .tax tr { grid-template-columns: minmax(0, 1fr) auto; }
+  .tax td.k { grid-column: 1; white-space: normal; overflow-wrap: anywhere; font-weight: 600; }
+  .tax td.kd { grid-column: 2; grid-row: 1; }
+  .tax td.ar, .tax td.ty, .tax td.un { grid-column: auto; }
+  .tax td.calc, .tax td.src { grid-column: 1 / -1; min-width: 0; }
+  .tw td { max-width: none; }
+}
+
+/* ---------- Library states ---------- */
+.lib-empty { display: grid; gap: 8px; justify-items: center; text-align: center; }
+.lib-empty b { color: var(--text); font-size: 15px; }
+.lib-empty p { margin: 0; max-width: 60ch; }
+.skel { display: grid; gap: 10px; }
+.skel i { display: block; height: 12px; border-radius: 6px; background: var(--line); opacity: .6; }
+.skel i:nth-child(3n) { width: 70%; } .skel i:nth-child(3n+1) { width: 92%; }
+@media (prefers-reduced-motion: no-preference) { .skel i { animation: pulse 1.4s ease-in-out infinite; } }
+@keyframes pulse { 50% { opacity: .25; } }
+
+/* ---------- The Overview's project rows: a Library link beside the name ---------- */
+.prow .pname .plib { font-size: 13px; font-weight: 400; color: var(--accent); position: relative; z-index: 1; }
+
+/* ---------- Prototype only (not built) ---------- */
+.proto-asis { border-style: dashed; }
+.proto-asis h3 { margin: 0; }
+.proto-states { position: fixed; right: 12px; bottom: 12px; z-index: 9; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 0 12px; font-size: 13px; box-shadow: 0 6px 24px rgb(0 0 0 / .12); max-width: calc(100vw - 24px); }
+.proto-states summary { margin: 8px 0; }
+.proto-states label { display: flex; gap: 8px; align-items: center; padding: 3px 0; }
+.proto-states fieldset { border: 0; margin: 0 0 10px; padding: 0; display: grid; }
+/* The menu sits in the tabs (it wraps with them on a phone): its links are not tabs. */
+.pm-pop a { padding: 0; border-radius: 0; font-size: inherit; }
+.pm-foot a { color: var(--accent); }
+/* style.css's nav rules are the header's: the library's rail and the project's tabs are navs too. */
+.lib-rail { order: 0; margin: 0; width: auto; flex-wrap: nowrap; }
+.secs-nav a[aria-current] { border: 0; }
+.pm-btn .caret { font-size: 12px; vertical-align: 0; }
+/* A heading the route names lands under the sticky header (two rows of tabs on a phone). */
+.doc h2, .doc h3, #h-all-elements { scroll-margin-top: 80px; }
+@media (max-width: 860px) { .doc h2, .doc h3, #h-all-elements { scroll-margin-top: 140px; } }
+/* A wide page (the taxonomy) keeps its whole width: its On this page folds under the title at every width. */
+.toc-fold.always { display: block; }
+.lib-empty a { color: var(--accent); }
+/* The taxonomy's columns by share, not by content: a long key gets room, an empty Calculation doesn't take it. */
+.tax { table-layout: fixed; min-width: 960px; }
+.tax th:nth-child(1) { width: 23%; } .tax th:nth-child(2) { width: 9%; } .tax th:nth-child(3) { width: 14%; } .tax th:nth-child(4) { width: 8%; }
+.tax th:nth-child(5) { width: 9%; white-space: normal; } .tax th:nth-child(6) { width: 21%; } .tax th:nth-child(7) { width: 16%; }
+.tax td.k, .tax td.calc, .tax td.src { min-width: 0; max-width: none; }
+@media (max-width: 760px) { .tax { min-width: 0; table-layout: auto; } }

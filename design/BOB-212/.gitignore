@@ -1,0 +1,4 @@
+# Helix's and Vitals' repos are private; this repo is public. Their library text stays off it:
+# make data.js with tools/gen_data.py and the shots with tools/shots.mjs, on a laptop with the clones.
+prototype/data.js
+shots/

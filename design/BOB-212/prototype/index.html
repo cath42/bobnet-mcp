@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex">
+  <title>BobNet · BOB-212 prototype · Library</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="proto.css">
+  <script defer src="data.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header>
+    <h1><a href="#overview">BobNet</a></h1>
+    <nav id="tabs" aria-label="Views">
+      <span class="pm">
+        <button type="button" class="pm-btn" id="pm-btn" aria-haspopup="true" aria-expanded="false" aria-controls="pm-pop">Projects<span class="caret" aria-hidden="true">▾</span></button>
+        <div class="pm-pop" id="pm-pop" hidden>
+          <ul class="pm-list" id="pm-list"></ul>
+          <div class="pm-foot"><a href="#overview">Every project at a glance, on the Overview</a></div>
+        </div>
+      </span>
+      <a href="#overview">Overview</a>
+      <a href="#needs">Needs you <span class="count">3</span></a>
+      <a href="#status">Status</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="#features">Features</a>
+      <a href="#triage">Triage</a>
+      <a href="#usage">Usage</a>
+    </nav>
+    <a id="conn" class="conn" href="#laptops" data-state="live">live<span class="lap-n"> · 2 laptops</span></a>
+  </header>
+  <main id="view"></main>
+</body>
+</html>
