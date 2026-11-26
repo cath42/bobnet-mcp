@@ -48,6 +48,12 @@ hand install on each laptop (`lead/bob44/rc42-notes.md`). After it, tell
 poe the tag; poe rolls it to each laptop with `upgrade_supervisor` (`restart: now` once you've left
 your handoff: a live lead holds `when_idle` for ever). Any later hand install is poe's or Casper's.
 
+**Release gate** (Casper, 2026-11-25, via poe m_a93a8652): when a release completes, nothing in the next
+release starts until Casper has seen and approved it and reviewed the next release's scope and goals; poe
+brings him that question. A PO closing a release on the board is not his approval. In the close that
+completes a release, give a plain-words summary of what it delivered (a link he can open) and the next
+release's goal and features, with a recommendation. Wait for poe's go. Put this line in workers' briefs.
+
 ## Broker deploys
 
 A broker deploy of reviewed work (Toad signed off) never goes to Casper: ask poe for a window between
