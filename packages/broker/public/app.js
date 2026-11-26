@@ -3342,14 +3342,20 @@ function lightParts(graph, pid) {
   for (const el of graph.querySelectorAll(".sg")) el.classList.toggle("hl", pid !== null && el.getAttribute("data-sid") === pid);
   graph.classList.toggle("dim", pid !== null);
 }
-/** A session's figure over the period, as the bars have it, or as its runs do once its feature is read; its days, and whether it runs. */
+/** A session's figure over the period, as the bars have it (on the days they name it), or as its runs do once its feature is read; its days, and whether it runs. */
 function wholeSession(key, series, days, ref) {
   const rec = sessionRecord(key, ref), id = partId(ref);
   const on = days.filter((d, i) => series.points[i].top.some((t) => t.session && partId(t.session) === id));
   const live = liveWorkers(key).some((w) => w.session === sessionKey(ref)) || series.points.at(-1).top.some((t) => t.live && t.session && partId(t.session) === id);
-  if (!rec) return { v: series.points.reduce((n, pt) => n + pt.top.filter((t) => t.session && partId(t.session) === id).reduce((m, t) => m + usageFigure(t), 0), 0), from: on[0], to: on.at(-1), n: on.length, running: live };
+  if (!rec) return { v: series.points.reduce((n, pt) => n + pt.top.filter((t) => t.session && partId(t.session) === id).reduce((m, t) => m + usageFigure(t), 0), 0), on, running: live, read: false };
   const from = localDay(Date.parse(rec.started_at)), to = localDay(rec.ended_at ? Date.parse(rec.ended_at) : brokerNow());
-  return { v: sessionSpend(key, rec).total, from, to, n: Math.round((dayStart(to) - dayStart(from)) / DAY) + 1, running: live || !rec.ended_at };
+  return { v: sessionSpend(key, rec).total, from, to, n: Math.round((dayStart(to) - dayStart(from)) / DAY) + 1, running: live || !rec.ended_at, read: true };
+}
+/** The days the bars name a session on, before its runs are read: "25 Nov", "25–26 Nov", or "23, 25 Nov" with a gap; no count (BOB-222). */
+function namedSaid(on) {
+  const run = on.every((d, i) => !i || Math.round((dayStart(d) - dayStart(on[i - 1])) / DAY) === 1);
+  if (on.length > 1 && run) return ranSaid({ from: on[0], to: on.at(-1), n: on.length }).replace(/^ran /, "").replace(/, \d+ days$/, "");
+  return on.map((d, i) => (i < on.length - 1 && dayDate(d).getMonth() === dayDate(on[i + 1]).getMonth() ? String(dayDate(d).getDate()) : shortDay(d))).join(", ");
 }
 /** "ran 23 Nov", "ran 23–26 Nov, 3 days", "ran 30 Nov–2 Dec, 3 days". */
 function ranSaid({ from, to, n }) {
@@ -3369,7 +3375,8 @@ function partTip(key, series, days, p, i, small) {
     h("b", null, sessName(p.session), w.running ? h("span", { class: "t-run" }, " · running") : null),
     title ? h("span", { class: "t-title" }, title) : null,
     line,
-    h("span", null, `Whole session: ${fmtTokens(w.v)}${w.running ? " so far" : ""} · ${ranSaid(w)}`),
+    // Before the feature is read the bars' sum can miss a day the session fell out of the top six: not the whole session.
+    h("span", null, w.read ? `Whole session: ${fmtTokens(w.v)}${w.running ? " so far" : ""} · ${ranSaid(w)}` : `Named on ${namedSaid(w.on)}: ${fmtTokens(w.v)}${small ? "" : " · click for the whole session"}`),
     small ? null : h("span", { class: "muted" }, "Click for its agents"),
   ];
 }
@@ -3626,8 +3633,8 @@ function sessionPanel(key, series, days, W) {
   const open = rec ? !rec.ended_at : !!part?.live, H = window.innerWidth <= 600 ? 190 : 220;
   const head = h("div", { class: "sp-h" },
     h("span", { class: "kind", dataset: { kind: ref.kind } }, ref.kind),
-    h("h3", null, h("a", { class: "id", href: featureHref(key, ref.feature), onclick: () => (scrollAfter = stepId(ref)) }, ref.feature), " ", stepName(ref)),
-    open ? h("span", { class: "badge", dataset: { state: "running" } }, "running") : null,
+    h("h3", null, h("a", { class: "id", href: featureHref(key, ref.feature), onclick: () => (scrollAfter = stepId(ref)) }, ref.feature), " ", h("span", { class: "lb" }, stepName(ref)),
+      open ? h("span", { class: "badge", dataset: { state: "running" } }, "running") : null),
     h("button", { type: "button", class: "ud-x", "aria-label": `Close ${name}`, "data-fk": `sp-x/${key}`, onclick: () => closeSession(key) }, "×"));
   const box = (...kids) => h("section", { class: "sp", "aria-label": `${name}: spend per agent and context per call`, dataset: { session: partId(ref) } }, head, ...kids);
   if (!rec) {

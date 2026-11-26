@@ -1085,7 +1085,10 @@ button.u-s[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--accent); }
 .sp-h .kind[data-kind="design"] { --k: var(--k-design); } .sp-h .kind[data-kind="build"] { --k: var(--k-build); }
 .sp-h .kind[data-kind="review"] { --k: var(--k-review); } .sp-h .kind[data-kind="retro"] { --k: var(--k-retro); }
 .sp-h h3 { margin: 0; font-size: 15px; font-weight: 600; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.sp-h h3 .id { font-size: 15px; margin-right: 5px; }
+.sp-h h3 .id { font-size: 15px; }
+/* "running" flows after the name, so a narrow head breaks before it, never inside the name, × staying at the top (BOB-223). */
+.sp-h h3 .lb { white-space: nowrap; }
+.sp-h h3 .badge { display: inline-block; margin-left: 8px; font-weight: 400; vertical-align: 1px; }
 .sp-h .ud-x { flex: none; margin-left: auto; }
 .sp-m { display: grid; gap: 2px; }
 .sp-m p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
@@ -1137,6 +1140,8 @@ button.sp-row:hover { background: color-mix(in srgb, var(--k) 8%, var(--surface)
   .sp-pick button { min-height: 44px; }
   .sp-foot a { display: inline-flex; min-height: 44px; align-items: center; }
 }
+/* A finger on any width, a tablet's too: the day's rows, and the day's and the panel's ×, are 44 px; the rows stay one line (BOB-223). */
+@media (pointer: coarse) { .u-s, .ud-x { min-height: 44px; } .ud-x { min-width: 44px; } }
 
 /* A project's page (BOB-121 spec 2.3): what it is doing on the left, what it needs and uses on the right; one column under 1000 px. */
 .p-top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }

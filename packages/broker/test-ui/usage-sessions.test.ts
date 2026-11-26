@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { changed, click, go, iso, key, open, project, refuse, reply, report, sent, settle, snapshot, text, texts, tok, view, worker, world, type Op } from "./page.ts";
 
@@ -199,7 +201,7 @@ describe("pointing at a part, tapping a day, the keyboard through the parts (BOB
     fire(hit(3, "BOB-121/review/E"), "pointerenter");
     const tip = card("bobnet").querySelector(".u-tip") as HTMLElement;
     expect(tip.hidden).toBe(false);
-    expect([...tip.children].map((c) => c.textContent)).toEqual(["BOB-121 review E", "BOB-121's title", `${word(dayOf(3))}: 16.3M tokens · 22% of the day`, `Whole session: 24.3M · ran ${ran(dayOf(4), dayOf(3))}, 2 days`, "Click for its agents"]);
+    expect([...tip.children].map((c) => c.textContent)).toEqual(["BOB-121 review E", "BOB-121's title", `${word(dayOf(3))}: 16.3M tokens · 22% of the day`, `Named on ${ran(dayOf(4), dayOf(3))}: 24.3M · click for the whole session`, "Click for its agents"]);
     const lit = [...card("bobnet").querySelectorAll(".sg.hl")].map((r) => [r.closest(".bar")!.getAttribute("data-day"), r.getAttribute("data-sid")]);
     expect(lit).toEqual([[dayOf(4), "BOB-121/review/E"], [dayOf(3), "BOB-121/review/E"]]);
     expect(card("bobnet").querySelector(".ugraph")!.classList.contains("dim")).toBe(true);
@@ -217,6 +219,23 @@ describe("pointing at a part, tapping a day, the keyboard through the parts (BOB
     expect(texts(".u-tip > *", card("bobnet"))).toEqual(["Outside any session", `${word(dayOf(5))}: 4.0M tokens · 40% of the day`, "Runs that declared no session: fix passes, board moves, consults."]);
   });
 
+  it("before its feature is read it says only what the bars name, a day it fell out of the top missing; once read, the whole session from its runs (BOB-222)", async () => {
+    pointing(true);
+    // Review E on 5 days back, not in 4 days back's top six, and on 3 days back.
+    data["bobnet"]![5] = day(20, 40, [entry(RE, 2, 4)]);
+    data["bobnet"]![4] = day(20, 40, [entry(C, 8, 16)]);
+    await open("#usage");
+    const hit = () => bar("bobnet", 3).querySelector('.shit[data-sid="BOB-121/review/E"]');
+    fire(hit(), "pointerenter");
+    const named = date(dayOf(5)).getMonth() === date(dayOf(3)).getMonth() ? `${date(dayOf(5)).getDate()}, ${short(dayOf(3))}` : `${short(dayOf(5))}, ${short(dayOf(3))}`;
+    expect(texts(".u-tip > *", card("bobnet"))[3]).toBe(`Named on ${named}: 18.3M · click for the whole session`);
+    expect(texts(".u-tip > *", card("bobnet")).join(" ")).not.toMatch(/Whole session|days/);
+    await click(hit());
+    await settle();
+    fire(hit(), "pointerenter");
+    expect(texts(".u-tip > *", card("bobnet"))[3]).toMatch(/^Whole session: 16\.0M · ran /);
+  });
+
   it("says the whole session as its runs have it once its feature is read, and that it runs", async () => {
     pointing(true);
     sessions[3] = { ...reviewE(), ended_at: null };
@@ -226,6 +245,12 @@ describe("pointing at a part, tapping a day, the keyboard through the parts (BOB
     const lines = texts(".u-tip > *", card("bobnet"));
     expect(lines[0]).toBe("BOB-121 review E · running");
     expect(lines[3]).toMatch(/^Whole session: 16\.0M so far · ran /);
+  });
+
+  it("with a finger on any width, a tablet's too, the day's rows and the panel's × are 44 px (BOB-223)", () => {
+    const css = readFileSync(join(import.meta.dirname, "../public/style.css"), "utf8");
+    expect(css).toContain("@media (pointer: coarse) { .u-s, .ud-x { min-height: 44px; } .ud-x { min-width: 44px; } }");
+    expect(css).toContain(".sp-h h3 .lb { white-space: nowrap; }");
   });
 
   it("a click on a session's part opens its agents; on the rest it picks the day, as before (AC1)", async () => {
@@ -272,7 +297,7 @@ describe("pointing at a part, tapping a day, the keyboard through the parts (BOB
     await open("#project/bobnet");
     const small = view().querySelector(".puse")!;
     fire(bar("bobnet", 3, small).querySelector('.shit[data-sid="BOB-121/build/C"]'), "pointerenter");
-    expect(texts(".u-tip > *", small)).toEqual(["BOB-121 build C", "BOB-121's title", `${word(dayOf(3))}: 21.6M tokens · 29% of the day`, `Whole session: 21.6M · ran ${short(dayOf(3))}`]);
+    expect(texts(".u-tip > *", small)).toEqual(["BOB-121 build C", "BOB-121's title", `${word(dayOf(3))}: 21.6M tokens · 29% of the day`, `Named on ${short(dayOf(3))}: 21.6M`]);
     await click(bar("bobnet", 3, small).querySelector('.shit[data-sid="BOB-121/build/C"]'));
     expect([view().querySelector(".puse .uday") !== null, view().querySelector(".sp")]).toEqual([true, null]);
   });
@@ -332,6 +357,8 @@ describe("a session's panel: spend per agent (BOB-218)", () => {
     expect(sent("get").filter((f) => f.op!["ref"]).map((f) => f.op!["ref"])).toEqual(["BOB-121"]);
     expect([text(".sp-h .kind", card("bobnet")), text(".sp-h h3", card("bobnet")), card("bobnet").querySelector(".sp-h .ud-x")!.getAttribute("aria-label")]).toEqual(["review", "BOB-121 review E", "Close BOB-121 review E"]);
     expect(card("bobnet").querySelector(".sp-h h3 a")!.getAttribute("href")).toBe("#feature/bobnet/BOB-121");
+    // The kind and label kept together, so a phone breaks the head before "running", not inside the name (BOB-223).
+    expect(text(".sp-h h3 .lb", card("bobnet"))).toBe("review E");
     expect(texts(".sp-m p", card("bobnet"))).toEqual(["BOB-121's title", expect.stringMatching(/^\w{3} \d+ \w{3} \d\d:\d\d – \w{3} \d+ \w{3} \d\d:\d\d · 3 agents · 5 runs · 1 run lost · 14 calls$/), `16.0M tokens, whole session · ${word(dayOf(3))}: 16.3M of it`]);
     expect(spend()).toEqual([["Daisy opus · 2 runs, 1 stopped", "7.2M"], ["Mario opus · 1 run", "6.3M"], ["Toad fable · 2 runs · tokens unknown for 1 run", "2.5M"]]);
     expect([...card("bobnet").querySelectorAll(".sp-row")].map((r) => r.querySelectorAll(".sp-bar i").length)).toEqual([2, 1, 1]);

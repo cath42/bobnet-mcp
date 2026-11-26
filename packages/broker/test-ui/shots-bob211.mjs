@@ -3,7 +3,7 @@
 // (design/BOB-211/prototype/data.js) in the reads' own shapes: `usage`, a feature's `get` and its sessions' `get` with `ctx`,
 // and the laptop's report for what runs now. The clock is held at 26 Nov 2026 12:30 in Casper's zone, the data's today.
 //   node test-ui/shots-bob211.mjs [prefix]   (from packages/broker; writes test-ui/shots/bob211-*.png)
-// Prints any page error, any page wider than its viewport, and at 390 the tap targets under 44 px in the Usage cards.
+// Prints any page error, any page wider than its viewport, and at 390 and 1024 (touch) the tap targets under 44 px in the Usage cards.
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, extname, join } from "node:path";
@@ -205,10 +205,10 @@ try {
       for (const step of after) { await step(p, w); await p.waitForTimeout(300); }
       const over = (await p.evaluate(() => document.documentElement.scrollWidth)) - width;
       if (over > 0) console.log(`${file}-${w}: ${over} px wider than its viewport`);
-      if (w === "390") {
+      if (touch) {
         const under = await p.evaluate(() => [...document.querySelectorAll(".ucard a, .ucard button, .puse a, .puse button")].filter((x) => { const b = x.getBoundingClientRect(); return b.height > 0 && b.height < 43.5; })
           .map((x) => `${x.textContent.trim().slice(0, 28)} (${x.className || x.tagName.toLowerCase()} ${Math.round(x.getBoundingClientRect().height)})`));
-        for (const t of under) taps.set(t, [...(taps.get(t) ?? []), file]);
+        for (const t of under) taps.set(`${w}: ${t}`, [...(taps.get(`${w}: ${t}`) ?? []), file]);
       }
       await p.addStyleTag({ content: "header { position: static !important; } #toast { display: none !important; }" });
       const path = join(out, `bob211-${file}-${w}.png`);
@@ -218,7 +218,7 @@ try {
     }
     console.log(file);
   }
-  console.log(`Under 44 px at 390:\n${[...taps].map(([t, names]) => `  ${t}: ${names.length === 1 ? names[0] : `${names.length} scenes`}`).join("\n")}`);
+  console.log(`Under 44 px by touch:\n${[...taps].map(([t, names]) => `  ${t}: ${names.length === 1 ? names[0] : `${names.length} scenes`}`).join("\n")}`);
 } finally {
   await browser.close();
   server.close();
