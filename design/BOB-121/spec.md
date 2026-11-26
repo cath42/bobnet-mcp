@@ -323,14 +323,14 @@ As today (release heads, the order, Edit your gates, Close), with one change: th
 | Feature | Where it stands |
 |---|---|
 | Done | `done 21 Nov` (muted). No count, ever. |
-| Open (a session on it) | `6 of 11 criteria and 5 of 14 tasks left`, with the criteria meter under it |
+| Open (a session on it), whatever its status | `6 of 11 criteria and 5 of 14 tasks left`, with the criteria meter under it. Never `draft ·` or `ready ·` beside an open badge (review E m2) |
 | Ready | `ready · 8 criteria to meet` |
 | Draft | `draft · no criteria yet`, or `draft · 4 criteria written`; a draft with some ticked (BOB-33) reads `draft · 5 of 11 criteria left` |
 
 - Criteria here are the feature's **own** acceptance and DoD criteria, not its tasks' (a data point
   for Toad, §6).
 - A release whose features are all done and that isn't closed: "All done: waiting for your close"
-  beside **Close R1**.
+  beside **Close R1**. Close is on the release's head, one tap, not behind Edit your gates (review E).
 - The current release has a small "CURRENT" tag.
 - From BOB-189 (keep them): a planned release has the badge "planned" (idle colour, dashed); its goal, if it
   has one, is a muted line under the head, above the counts line; behind Edit your gates a closed release has
