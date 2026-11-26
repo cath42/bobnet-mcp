@@ -6,7 +6,7 @@ and review R4's scope. poe asks you.
 
 Goal: the dashboard looked at whole, use case first, as the prototype you approved with changes (Q-13).
 
-**See it:** the live dashboard, https://bobnet-broker.cath42.workers.dev (broker version e2188d27, 2026-11-26;
+**See it:** the live dashboard, https://bobnet-broker.casper-cth.workers.dev (broker version e2188d27, 2026-11-26;
 sign in as usual). Specs and shots open on GitHub (branch `v2`): https://github.com/cath42/bobnet-mcp/blob/v2/
 
 ## What R3 delivered
