@@ -2991,17 +2991,29 @@ function beforeToday(w, today) {
   return at > start ? Math.min(1, Math.max(0, (midnight - start) / (at - start))) : start < midnight ? 1 : 0;
 }
 
+/** A worker's declared session as a session ref, null with none or one that names no kind ("<feature> <kind> <label>"). */
+function declaredRef(w) {
+  const ss = sessionOf(w), [kind, ...label] = ss?.label.split(" ") ?? [];
+  return ss && label.length ? { feature: ss.feature, kind, label: label.join(" ") } : null;
+}
+/** A feature's title, from what the page has read: a usage day's `top`, the feature's own read, its roadmap; else null. */
+function featureTitle(key, ref, series = null) {
+  const top = series?.points.flatMap((pt) => pt.top).find((t) => t.session?.feature === ref && t.feature_title);
+  return top?.feature_title ?? feats.get(`${key}/${ref}`)?.item?.title ?? svc.roadmaps.get(key)?.features?.find((f) => f.ref === ref)?.title ?? null;
+}
+
 /**
  * A project's series with what runs now in today's point (`so_far`): each worker's share of today, by
- * wall time, weighed with the read's own table. `top` stays the board's, of runs that ended. A reply
- * from before midnight has no today in it, and takes none.
+ * wall time, weighed with the read's own table. `top` keeps the board's, of runs that ended, and a
+ * worker's declared session takes its share too (`live`); work that declared none is the bar's rest
+ * (BOB-211 §3). A reply from before midnight has no today in it, and takes none.
  */
 function usageSoFar(reply, key) {
   const series = reply.projects.find((p) => p.project === key);
   const today = reply.days.at(-1);
   if (!series || today !== localDay(brokerNow())) return series ?? null;
   const last = series.points.at(-1);
-  const pt = { ...last, raw: { ...last.raw }, by_model: last.by_model.map((m) => ({ ...m })), by_role: last.by_role.map((r) => ({ ...r })), so_far: true };
+  const pt = { ...last, raw: { ...last.raw }, by_model: last.by_model.map((m) => ({ ...m })), by_role: last.by_role.map((r) => ({ ...r })), top: last.top.map((t) => ({ ...t })), so_far: true };
   const add = (list, field, name, row) => {
     const e = list.find((x) => x[field] === name) ?? list[list.push({ [field]: name, raw: 0, weighted: 0, ...(field === "role" ? { calls: 0 } : {}) }) - 1];
     for (const [k, v] of Object.entries(row)) e[k] += v;
@@ -3020,8 +3032,12 @@ function usageSoFar(reply, key) {
     pt.calls += calls;
     if (raw) add(pt.by_model, "model", weightRow(w.model, reply.weights.rows)?.model ?? (w.model || "unknown"), { raw, weighted });
     if (raw || calls) add(pt.by_role, "role", w.role, { raw, weighted, calls });
+    const ref = declaredRef(w);
+    if (!ref || !raw) continue;
+    const e = pt.top.find((t) => t.session && partId(t.session) === partId(ref)) ?? pt.top[pt.top.push({ session: ref, feature_title: featureTitle(key, ref.feature, series), raw: 0, weighted: 0 }) - 1];
+    Object.assign(e, { raw: e.raw + raw, weighted: e.weighted + weighted, live: true });
   }
-  for (const x of [pt, ...pt.by_model, ...pt.by_role]) x.weighted = Math.round(x.weighted);
+  for (const x of [pt, ...pt.by_model, ...pt.by_role, ...pt.top]) x.weighted = Math.round(x.weighted);
   for (const list of [pt.by_model, pt.by_role]) list.sort((a, b) => b.raw - a.raw || b.weighted - a.weighted);
   return { ...series, points: [...series.points.slice(0, -1), pt] };
 }
@@ -3147,7 +3163,21 @@ function stepDay(id, key, days, by) {
   // At an end its own button is off: the other keeps the keyboard.
   if (!days[days.indexOf(day) + by]) focusKey(`step/${id}/${-by}`);
 }
-/** One project's days as bars, on its own scale: a spike in warn with its value, today's lighter, the picked one outlined. */
+/** A session's id in a day's parts and in Usage's link: "<feature>/<kind>/<label>". */
+const partId = (ss) => `${ss.feature}/${ss.kind}/${ss.label}`;
+/** The strength of a bar's parts: its three sessions, biggest first, and the rest (BOB-211 §2.1). */
+const PART_SHADE = { 0: 1, 1: 0.68, 2: 0.46, rest: 0.26 };
+/**
+ * A day's bar in parts, bottom up (BOB-211 §2.1): the 3 biggest of `top` by the figure shown, then the
+ * rest of the day, clamped at 0 (the read rounds each entry). Work outside any session among the three
+ * is its own part, never the rest's.
+ */
+function dayParts(pt) {
+  const named = pt.top.map((e) => ({ ...e, v: usageFigure(e) })).filter((e) => e.v > 0).sort((a, b) => b.v - a.v).slice(0, 3);
+  const rest = Math.max(0, usageFigure(pt) - named.reduce((n, e) => n + e.v, 0));
+  return [...named.map((e, rank) => ({ ...e, rank, id: e.session ? partId(e.session) : "none" })), ...(rest > 0 ? [{ session: null, rest: true, v: rest, rank: 3, id: "rest" }] : [])];
+}
+/** One project's days as bars, on its own scale, each in its sessions' parts: a spike in warn with its value, today's lighter, the picked one outlined. */
 function usageBars(key, series, days, W, small = false, id = key) {
   const { vals, spikes } = usageFigures(series, days);
   const max = Math.max(1, ...vals) * 1.12, step = niceStep(max, small ? 3 : 4), top = Math.ceil(max / step) * step;
@@ -3166,11 +3196,19 @@ function usageBars(key, series, days, W, small = false, id = key) {
   // A graph is one tab stop: the day last on, else the picked one, else the last.
   const stop = [state.usageStop.get(id), picked, days.at(-1)].find((d) => days.includes(d));
   const bars = days.map((d, i) => {
-    const v = vals[i], spike = spikes.some((sp) => sp.day === d), so = d === today;
-    const said = `${wordDay(d)}${so ? ", so far" : ""}: ${fmtTokens(v)} ${tokensWord()}${spike ? ", a spike" : ""}`;
+    const v = vals[i], spike = spikes.some((sp) => sp.day === d), so = d === today, parts = dayParts(series.points[i]);
+    const named = parts.filter((p) => !p.rest).map((p) => `${p.session ? sessName(p.session) : "outside any session"} ${fmtTokens(p.v)}`);
+    const said = `${wordDay(d)}${so ? ", so far" : ""}: ${fmtTokens(v)} ${tokensWord()}${spike ? ", a spike" : ""}${named.length ? `; ${named.join(", ")}` : ""}`;
+    // The parts bottom up, the biggest at the foot; they fill the bar and no more (the read rounds each).
+    let base = 0;
+    const segs = parts.map((p) => {
+      const lo = Math.min(base, v), hi = Math.min((base += p.v), v);
+      return s("rect", { class: `sg ${p.rest ? "rest" : p.session ? `r${p.rank}` : "none"}`, x: x(i) + bw * 0.15, y: y(hi), width: bw * 0.7, height: Math.max(0, y(lo) - y(hi)), "data-sid": p.id, "fill-opacity": p.rest ? PART_SHADE.rest : p.session ? PART_SHADE[p.rank] : null });
+    });
     const g = s("g", { class: ["bar", spike && "spike", so && "today", picked === d && "sel"].filter(Boolean).join(" "), tabindex: d === stop ? "0" : "-1", role: "button", "aria-label": said, "aria-pressed": String(picked === d), "data-day": d, "data-fk": `bar/${id}/${d}` },
       s("title", null, said),
       s("rect", { class: "hit", x: x(i), y: 0, width: bw, height: H }),
+      ...segs,
       s("rect", { class: "b", x: x(i) + bw * 0.15, y: y(v), width: bw * 0.7, height: Math.max(v > 0 ? 1 : 0, y(0) - y(v)), rx: Math.min(2, bw * 0.2) }));
     g.addEventListener("click", () => { state.usageStop.set(id, d); pickDay(id, d); });
     g.addEventListener("keydown", (e) => {
@@ -4097,4 +4135,4 @@ setInterval(() => { for (const e of reads.values()) if (e.error && e.shown() && 
 setInterval(() => ws?.readyState === WebSocket.OPEN && svc.projects && loadOverview(), 60 * 60_000);
 
 // For the tests: what the views read that has no screen of its own yet.
-export { state, usageFigure, setWeigh, usageRead, weighTokens, usageSoFar, usageDay, dayRuns, callAt, totalLine, oldLink };
+export { state, usageFigure, setWeigh, usageRead, weighTokens, usageSoFar, usageDay, dayRuns, callAt, totalLine, oldLink, dayParts };

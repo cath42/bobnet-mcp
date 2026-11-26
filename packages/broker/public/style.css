@@ -978,12 +978,16 @@ form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width
 .ugraph .grid line { stroke: var(--line); }
 .ugraph text { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
 .ugraph .bar { cursor: pointer; outline: none; }
-.ugraph .bar .b { fill: var(--accent); fill-opacity: .85; }
-.ugraph .bar.spike .b { fill: var(--warn); fill-opacity: 1; }
-.ugraph .bar.today .b { fill-opacity: .45; }
+/* A day's bar in its sessions' parts (BOB-211 §2.1): the biggest at the foot, the day's colour at falling strength, a hairline
+   between; `.b` is the whole bar's outline, drawn when it is picked. */
+.ugraph { position: relative; }
+.ugraph .bar .sg { fill: var(--accent); stroke: var(--surface); stroke-width: 1; }
+.ugraph .bar.spike .sg { fill: var(--warn); }
+.ugraph .bar .sg.none { fill: var(--idle); fill-opacity: .55; }
+.ugraph .bar.today .sg { opacity: .5; }
+.ugraph .bar .b { fill: none; pointer-events: none; }
 .ugraph .bar.sel .b { stroke: var(--text); stroke-width: 1.5; }
 .ugraph .bar .hit { fill: transparent; }
-.ugraph .bar:hover .b { fill-opacity: 1; }
 .ugraph .bar:focus-visible .hit { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); }
 .ugraph .bar.sel .hit { fill: color-mix(in srgb, var(--line) 55%, transparent); }
 .ugraph .spike-lab { fill: var(--warn); font-weight: 600; pointer-events: none; }
