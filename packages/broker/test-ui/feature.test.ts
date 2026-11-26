@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { click, go, iso, open, project, report, settle, snapshot, text, texts, tok, view, worker, world, type Op } from "./page.ts";
+import { changed, click, go, iso, open, project, refuse, reply, report, sent, settle, snapshot, text, texts, tok, view, worker, world, type Op } from "./page.ts";
 
 // A feature's page (BOB-186; BOB-121 AC8, AC13): where it stands, what it closed without, its sessions with their runs.
 // Its chain, history and who is on it are BOB-4's, in dashboard.test.ts.
@@ -179,5 +179,54 @@ describe("a live run's calls on its card (BOB-186 c5; Toad, review D minor 3)", 
     expect(text(".ud-approx", step(1))).toBe("The session's line is approximate while Luigi runs: its laptop's supervisor reports only the last 400 calls.");
     report("mbp-1", snapshot([]));
     await settle();
+  });
+});
+
+describe("what it says when the board's list isn't fresh (Toad, review E minor 2)", () => {
+  it("says no such feature only when the list is read without error; else the error with Retry", async () => {
+    const list = world.reads.list!;
+    world.reads.list = (op: Op) => (op["of"] === "tasks" ? list(op) : refuse("D1 is down"));
+    await open("#feature/bobnet/BOB-121");
+    await settle(300);
+    expect(view().textContent).not.toContain("No feature");
+    expect(text(".banner.down")).toContain("D1 is down");
+    world.reads.list = list;
+    await click([...view().querySelectorAll(".banner.down button")].find((b) => b.textContent === "Retry"));
+    await settle(300);
+    expect(text("#feature-head h2")).toBe("Dashboard redesign");
+    await go("#feature/bobnet/BOB-999");
+    expect(text(".empty-card")).toBe("No feature BOB-999 in BobNet.");
+  });
+
+  it("a feature made while another page showed is read, not \"not found\"", async () => {
+    await open("#feature/bobnet/BOB-121");
+    await go("#overview");
+    features.push(feat("BOB-99", "Draft", "Made a moment ago"));
+    criteria["BOB-99"] = [];
+    changed("bobnet");
+    await settle(300);
+    const list = world.reads.list!;
+    delete (world.reads as Record<string, unknown>).list;
+    const before = sent("list").length;
+    await go("#feature/bobnet/BOB-99");
+    expect(text(".empty-card")).toBe("Reading the board…");
+    for (const f of sent("list").slice(before)) reply(f, list);
+    world.reads.list = list;
+    await settle(300);
+    expect(text("#feature-head h2")).toBe("Made a moment ago");
+  });
+});
+
+describe("its times and who is on it (Daisy, review E minors 1, 5)", () => {
+  it("says a session's times on the 24-hour clock", async () => {
+    await open("#feature/bobnet/BOB-51");
+    expect(view().textContent).not.toMatch(/\d\d:\d\d\s?[AP]M/);
+    expect(view().textContent).toMatch(/\d\d:\d\d/);
+  });
+
+  it("has no › after the step of an agent on no task", async () => {
+    world.laptops = [{ laptop: "mbp-1", at: iso(0), snapshot: snapshot([worker({ id: "w_9", name: "Marvin", project: "bobnet", role: "luigi", session: "BOB-51 build A", task_ref: "BOB-51", task_refs: [] })]) }];
+    await open("#feature/bobnet/BOB-51");
+    expect(text("#on-now .l-m")).toBe("build A");
   });
 });

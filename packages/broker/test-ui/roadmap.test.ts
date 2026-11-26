@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { $, changed, click, go, iso, open, project, sent, settle, text, texts, view, world, type Op } from "./page.ts";
+import { $, changed, click, go, iso, open, project, refuse, reply, sent, settle, text, texts, view, world, type Op } from "./page.ts";
 
 // The Roadmap's Where it stands, its current release and what it reads (BOB-184; BOB-121 AC8). Its gates are in dashboard.test.ts.
 
@@ -30,6 +30,7 @@ const lists = (key: string) => sent("list").filter((f) => f.op!["project"] === k
 const overviews = () => sent("overview").filter((f) => f.op!["project"]).length;
 
 beforeEach(() => {
+  features[10] = feat("BOB-60", "R3", "Draft");
   localStorage.clear();
   sessionStorage.clear();
   world.laptops = [];
@@ -55,7 +56,8 @@ describe("where a feature stands on the Roadmap (BOB-184)", () => {
     expect(stands("BOB-51")).toBe("6 of 11 criteria and 5 of 14 tasks left");
     expect([...view().querySelectorAll("#rel-R2 .stands .meter")].map((m) => m.getAttribute("aria-label"))).toEqual(["5 of 11", "6 of 11"]);
     expect([stands("BOB-49"), stands("BOB-54")]).toEqual(["ready · 8 criteria to meet", "ready · 1 criterion to meet"]);
-    expect([stands("BOB-33"), stands("BOB-52"), stands("BOB-53")]).toEqual(["draft · 5 of 11 criteria left", "draft · 4 criteria written", "draft · no criteria yet"]);
+    // BOB-33, a Draft with a session open, reads as open, as its badge says (spec 2.6; Daisy, review E minor 2).
+    expect([stands("BOB-33"), stands("BOB-52"), stands("BOB-53")]).toEqual(["5 of 11 criteria left", "draft · 4 criteria written", "draft · no criteria yet"]);
     expect(text(".note:last-child")).toContain("Where it stands: a feature not done says how many of its own criteria and tasks are left; a done one says when it was done. The feature's page lists any criteria it closed without.");
   });
 
@@ -118,5 +120,63 @@ describe("what a roadmap reads (BOB-184 c6; Toad, review D minor 2)", () => {
     await settle(600);
     expect(lists("bobnet")).toBe(n + 2);
     expect(stands("BOB-60")).toBe("ready · 3 criteria to meet");
+  });
+
+  // Toad's probe, review E minor 1: the read in flight answers with the copy from before the change.
+  it("a change while a read is in flight is read again, shown or not", async () => {
+    await open("#roadmap/bobnet");
+    await settle(600);
+    const list = world.reads.list!;
+    const old = JSON.parse(JSON.stringify(features));
+    const before = sent("list").length;
+    delete (world.reads as Record<string, unknown>).list;
+    changed("bobnet");
+    await settle(100);
+    const held = sent("list").slice(before);
+    expect(held.length).toBe(2);
+    await go("#overview");
+    features[10] = feat("BOB-60", "R3", "Ready", { own: { checked: 0, total: 3 } });
+    changed("bobnet");
+    await settle(100);
+    for (const f of held) reply(f, (op) => (op["of"] === "releases" ? { releases, total: releases.length, cursor: null } : { items: old, total: old.length, cursor: null }));
+    world.reads.list = list;
+    await settle(300);
+    await go("#roadmap/bobnet");
+    await settle(600);
+    expect(stands("BOB-60")).toBe("ready · 3 criteria to meet");
+  });
+
+  it("a change during a project's first read is read again", async () => {
+    const list = world.reads.list!;
+    delete (world.reads as Record<string, unknown>).list;
+    await open("#roadmap/bobnet");
+    const held = sent("list").filter((f) => f.op!["project"] === "bobnet");
+    expect(held.length).toBe(2);
+    const old = JSON.parse(JSON.stringify(features));
+    features[10] = feat("BOB-60", "R3", "Ready", { own: { checked: 0, total: 3 } });
+    changed("bobnet");
+    await settle(100);
+    world.reads.list = list;
+    for (const f of held) reply(f, (op) => (op["of"] === "releases" ? { releases, total: releases.length, cursor: null } : { items: old, total: old.length, cursor: null }));
+    await settle(600);
+    expect(lists("bobnet")).toBe(4);
+    expect(stands("BOB-60")).toBe("ready · 3 criteria to meet");
+  });
+});
+
+describe("a Roadmap whose first read failed (Daisy, review E minor 18)", () => {
+  it("has the error and Retry only: no counts, no \"no releases yet\"", async () => {
+    const list = world.reads.list!;
+    world.reads.list = () => refuse("D1 is down");
+    await open("#roadmap/bobnet");
+    await settle(300);
+    expect(view().textContent).not.toMatch(/0 releases|no releases yet/);
+    expect(view().querySelector(".gates-btn")).toBeNull();
+    expect(text(".banner.down")).toBe("Board unavailableD1 is downRetry");
+    world.reads.list = list;
+    await click([...view().querySelectorAll(".banner.down button")].find((b) => b.textContent === "Retry"));
+    await settle(600);
+    expect(view().querySelector(".banner.down")).toBeNull();
+    expect(text(".bar-row .muted")).toBe("3 releases · 11 features");
   });
 });

@@ -52,7 +52,7 @@ describe("Features (BOB-185)", () => {
     await open("#features/bobnet");
     expect(refs()).toEqual(["BOB-33", "BOB-121", "BOB-6", "BOB-49", "BOB-35", "BOB-1", "BOB-9"]);
     expect(texts(".flist.big .fs")).toEqual([
-      "open draft · 1 criterion written · R2 One orchestrator",
+      "open 1 of 1 criterion left · R2 One orchestrator",
       "open 14 of 20 criteria left · Luigi on it · R2 One orchestrator",
       "ready ready · 10 criteria to meet · R1 Central backlog view",
       "ready ready · 8 criteria to meet · R2 One orchestrator · waits on you: Q-6",

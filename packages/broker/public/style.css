@@ -6,7 +6,7 @@
   --line: #e3e2dc;
   --accent: #2f5d50;
   --ok: #2e7d4f;
-  --warn: #a86400;
+  --warn: #9a5b00; /* 5:1 on --bg (review E, m19) */
   --bad: #b3261e;
   --idle: #8a8983;
   --radius: 10px;
@@ -144,7 +144,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
 header { flex-wrap: wrap; gap: 8px; }
 nav { flex-wrap: wrap; }
 .badge[data-state="ready"] { color: var(--muted); }
-.badge[data-state="draft"] { color: var(--idle); border-style: dashed; }
+.badge[data-state="draft"] { color: var(--muted); border-style: dashed; }
 .badge[data-state="blocked"] { color: var(--bad); }
 tr.pick { cursor: pointer; }
 tr.pick:hover td { background: var(--bg); }
@@ -252,7 +252,7 @@ main > .bar-row:has(+ .bar-row) { margin-bottom: -10px; }
 .badge[data-state="in review"] { color: var(--accent); border-style: dotted; }
 .badge[data-state="in progress"] { color: var(--accent); }
 .badge[data-state="closed"] { color: var(--muted); }
-.badge[data-state="planned"] { color: var(--idle); border-style: dashed; }
+.badge[data-state="planned"] { color: var(--muted); border-style: dashed; }
 .sub-note { font-size: 12px; color: var(--muted); font-style: italic; }
 .release { display: grid; gap: 8px; }
 .rel-h { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
@@ -1178,3 +1178,11 @@ li.need > .n-links { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 2
 @media (max-width: 600px) { .now-list .a-btn, .ov .st-line { min-height: 44px; align-content: center; } .ov a.more { min-height: 44px; display: flex; align-items: center; } }
 .ov .prow { padding: 12px 14px; column-gap: 22px; }
 @media (min-width: 1100px) { .ov .prow { row-gap: 8px; } }
+/* Phone taps are 44 px; Features' filters keep one row (Daisy, review E m3, m22). */
+@media (max-width: 520px) {
+  .seg.projects button, .seg.filters button, .gates-btn, tr.fold button, .hist-btn, .span-bar .seg button { min-height: 44px; }
+  .seg.filters { display: flex; flex-wrap: nowrap; width: 100%; }
+  .seg.filters button { flex: 1 1 auto; padding: 4px 8px; }
+  .rel-h .gate button, .on-now .a-btn { min-height: 44px; }
+  .settled > summary, .moved > summary, #all-tasks > summary { padding: 13px 0; }
+}

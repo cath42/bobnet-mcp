@@ -51,7 +51,7 @@ function fakeBroker(scene) {
     features.bobnet = [feat("BOB-6", "Draft", "Start a session from the UI, as a request to poe", { release: "R3", ...own(0, 0) }), ...features.bobnet.map((f) => ({ ...f, release: "R4" }))];
   }
   // Build E: BobNet's and Helix's boards as production has them, whole.
-  const boardE = scene === "e" || scene === "efail";
+  const boardE = scene === "e" || scene === "efail" || scene === "listfail";
   let releasesE = null, sessionsE = {};
   if (boardE) {
     const f = (ref, release, status, title, own, over = {}) => feat(ref, status, title, { release, own: { checked: own[0], total: own[1] }, tasks: { done: over.status === "Done" ? 3 : 0, total: 0 }, ...over });
@@ -300,7 +300,7 @@ function fakeBroker(scene) {
     }
   };
 
-  const fails = (op) => (scene === "down" ? true : scene === "listdown" ? op.op === "projects" : scene === "failday" ? op.op === "usage_day" : scene === "failpage" || scene === "forbidden" ? op.op === "project" : scene === "efail" ? op.op === "status" : scene === "usagedown" ? op.op === "usage" : false);
+  const fails = (op) => (scene === "down" ? true : scene === "listdown" ? op.op === "projects" : scene === "failday" ? op.op === "usage_day" : scene === "failpage" || scene === "forbidden" ? op.op === "project" : scene === "efail" ? op.op === "status" : scene === "listfail" ? op.op === "list" && op.of !== "tasks" : scene === "usagedown" ? op.op === "usage" : /-999$/.test(op.ref ?? op.feature ?? ""));
   class FakeSocket extends EventTarget {
     static OPEN = 1;
     readyState = 1;
@@ -440,6 +440,21 @@ all.push(
   ["bob121-m-usage-dark", "odd", "usage", ".ugrid", [], null, [390, 1440]],
   ["bob121-m-usage-quiet14", "quiet14", "usage", ".ugrid", [], null, [390, 1440]],
 );
+// BOB-202, review E's fix pass: Features' filters in one row, a Roadmap and a feature whose list failed, an unknown feature.
+all.push(
+  ["bob202-features", "e", "features/bobnet", ".flist", [], "top", [390]],
+  ["bob202-features-dark", "e", "features/helix", ".flist", [], "top", [390]],
+  ["bob202-roadmap", "e", "roadmap/bobnet", "#rel-R2", [], null, [390, 1440]],
+  ["bob202-roadmap-dark", "e", "roadmap/bobnet", "#rel-R2", [], null, [390, 1440]],
+  ["bob202-roadmap-failed", "listfail", "roadmap/bobnet", ".banner.down", [], null, [390, 1440]],
+  ["bob202-feature-failed", "listfail", "feature/bobnet/BOB-51", ".banner.down", [], null, [390, 1440]],
+  ["bob202-feature-none", "e", "feature/bobnet/BOB-999", ".empty-card", [], null, [390, 1440]],
+  ["bob202-feature-open", "e", "feature/helix/LAND-50", "#feature-head", [], "top", [390, 1440]],
+  ["bob202-feature-history", "e", "feature/helix/LAND-50", "#feature-head", [], null, [390]],
+  ["bob202-roadmap-helix", "e", "roadmap/helix", "#rel-R2", [], null, [390]],
+  ["bob202-roadmap-edit", "e", "roadmap/bobnet/edit", "#rel-R2", [], null, [390]],
+  ["bob202-status", "e", "status/bobnet", "#sec-stuck", [(p) => p.locator("#sec-stuck").evaluate((d) => (d.open = true))], null, [390]],
+);
 const shots = all.filter(([name]) => name.startsWith(process.argv[2] ?? ""));
 const taps = new Map();
 const browser = await chromium.launch();
@@ -469,6 +484,22 @@ try {
         const small = await page.evaluate(() => [...document.querySelectorAll("a, button, summary, [role=button]")].filter((el) => { const b = el.getBoundingClientRect(); return b.height > 0 && b.height < 43.5; })
           .map((el) => `${el.textContent.trim().slice(0, 28)} (${el.className || el.tagName.toLowerCase()} ${Math.round(el.getBoundingClientRect().height)})`));
         for (const t of small) taps.set(t, [...(taps.get(t) ?? []), name]);
+      }
+      // Review E m19: each badge and the warn line against what is behind it.
+      if (name.startsWith("bob202-roadmap") || name.startsWith("bob202-features")) {
+        const pairs = await page.evaluate(() => {
+          const rgb = (c) => c.match(/[\d.]+/g).map(Number);
+          const lum = ([r, g, b]) => [r, g, b].map((x) => { x /= 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; }).reduce((a, x, i) => a + x * [0.2126, 0.7152, 0.0722][i], 0);
+          const behind = (el) => { for (let e = el; e; e = e.parentElement) { const c = getComputedStyle(e).backgroundColor; if (rgb(c)[3] !== 0 && c !== "rgba(0, 0, 0, 0)") return c; } return getComputedStyle(document.body).backgroundColor; };
+          const seen = new Map();
+          for (const el of document.querySelectorAll(".badge, .warn-t")) {
+            const what = el.classList.contains("badge") ? `badge ${el.dataset.state}` : `warn "${el.textContent.trim().slice(0, 32)}"`;
+            const a = lum(rgb(getComputedStyle(el).color)), b = lum(rgb(behind(el)));
+            seen.set(what, ((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)).toFixed(2));
+          }
+          return [...seen].map(([k, v]) => `${k} ${v}:1`);
+        });
+        console.log(`${name}-${w} contrast: ${pairs.join(", ")}`);
       }
       // A full page reads top to bottom: the header not stuck mid-page, the toast left out.
       await page.addStyleTag({ content: `header { position: static !important; } ${name.includes("toast") ? "" : "#toast { display: none !important; }"}` });

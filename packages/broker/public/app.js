@@ -156,7 +156,8 @@ function duration(ms) {
   return `${Math.floor(hr / 24)}d ${hr % 24}h`;
 }
 const since = (iso) => (iso ? duration(Date.now() - Date.parse(iso)) : "–");
-const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// One clock, 24-hour as the spec has it, whatever the browser's locale (Daisy, review E minor 1).
+const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 const shortName = (address) => address.split("@")[0];
 const fmtModel = (w) => `${w.model ?? "default"} · ${w.effort ?? "default"}`;
 /** A brief's own headline, when it opens with one ("Bob's brief: red main, fix first (ADR 0060 §4). …"). */
@@ -174,7 +175,7 @@ const OUTBOX_STUCK_MS = 5 * 60_000;
 /** A laptop's board reports it couldn't send (BOB-28; design/BOB-48/spec.md §2b): only when stuck, never "0", nothing from an older supervisor. */
 function outboxLine(o) {
   if (!o || !o.count || !o.oldest_at || brokerNow() - Date.parse(o.oldest_at) <= OUTBOX_STUCK_MS) return null;
-  return h("div", { class: "outbox", title: `This laptop's supervisor has board reports it couldn't send since ${new Date(o.oldest_at).toLocaleString()}. It retries every minute; the board on the dashboard is behind until they go through.` },
+  return h("div", { class: "outbox", title: `This laptop's supervisor has board reports it couldn't send since ${stamp(o.oldest_at)}. It retries every minute; the board on the dashboard is behind until they go through.` },
     h("b", null, "Board reports stuck"), ` · ${o.count} waiting · oldest `, ago(o.oldest_at), o.code ? ` · last error ${o.code}` : null);
 }
 
@@ -548,6 +549,9 @@ function viewServiceFeature(p, ref) {
   if (!ov.waits && !ov.loading && !ov.error) loadOverview();
   if (!data || (!fd?.item && !fd?.error)) return [h("div", { class: "empty-card" }, "Reading the board…")];
   const f = data.features.find((x) => x.ref === ref || x.ref === fd?.item?.ref);
+  // There is no such feature only when the board's list is fresh and read without error (Toad, review E minor 2).
+  if (!f && data.error) return [roadmapDown(p.key, data)];
+  if (!f && (data.stale || svc.loading.has(p.key))) return [h("div", { class: "empty-card" }, "Reading the board…")];
   if (!f) return [h("div", { class: "empty-card" }, `No feature ${ref} in ${p.name}.`)];
   if (!fd.item) return [h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, fd.error))];
   const r = data.releases.find((x) => x.ref === f.release);
@@ -577,8 +581,10 @@ function viewServiceFeature(p, ref) {
       on.length ? h("section", { class: "card on-now", id: "on-now" }, h("h2", { style: "margin:0" }, "On it now"),
         h("ul", { class: "lines" }, on.map((w) => {
           const ss = sessions.find((x) => sessionKey(x) === w.session), run = runOf(w);
+          const refs = taskRefs(w, f, tasks);
+          // The › only before the tasks it is on: an agent on none has its step alone (Daisy, review E minor 5).
           return agentLine(w, agentWho(w, agentState(w, run)),
-            [h("span", { class: "l-m" }, ss ? `${stepName(ss)} › ` : "", taskRefs(w, f, tasks)), run ? runLine(run) : null],
+            [h("span", { class: "l-m" }, ss ? `${stepName(ss)}${refs.length ? " › " : ""}` : "", refs), run ? runLine(run) : null],
             ss ? () => openCtx(p.key, f.ref, sessionKey(ss), w.name) : null);
         }))) : null,
       h("div", { class: "two" },
@@ -989,10 +995,13 @@ function roadmapOf(key) {
 }
 /** The board changed (one project's, or any after a reconnect): what shows is read again now, the rest when it next shows. */
 function roadmapsChanged(project = null) {
-  for (const [key, d] of svc.roadmaps) {
+  // A read in flight, a project's first among them, answers with what was before the change: it reads again once done (Toad, review E minor 1).
+  const keys = new Set([...svc.roadmaps.keys(), ...[...svc.loading].filter((k) => !k.startsWith("triage:"))]);
+  for (const key of keys) {
     if (project !== null && key !== project) continue;
-    if (roadmapShown(key)) loadRoadmap(key);
-    else d.stale = true;
+    if (svc.loading.has(key)) svc.again.add(key);
+    else if (roadmapShown(key)) loadRoadmap(key);
+    else svc.roadmaps.get(key).stale = true;
   }
 }
 async function loadRoadmap(key) {
@@ -1045,6 +1054,10 @@ function ranges(ns) {
   return out.join(", ");
 }
 /** open: a session is on it (the board's open feature) and it isn't Done (notes 15). */
+/** A roadmap's read failed: what shows is what it last said, if anything, and Retry. */
+const roadmapDown = (key, data) => (data.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, data.features.length ? `Showing what it last said. ${data.error}` : data.error), button("Retry", "", () => { loadRoadmap(key); render(); })) : null);
+/** Nothing read yet but an error: no counts and no empty box, which would say the board has none (Daisy, review E minor 18). */
+const nothingRead = (data) => data.error && !data.releases.length && !data.features.length;
 const featureState = (f) => (f.status === "Done" ? "done" : f.open_since ? "open" : f.status.toLowerCase());
 const poOf = (p) => (p?.po ? shortName(p.po) : "the project's PO");
 
@@ -1055,11 +1068,12 @@ function viewBoardRoadmap(key, edit) {
   const rels = data?.releases ?? [];
   const bar = h("div", { class: "bar-row" },
     svc.projects.length > 1 ? projectSwitch(key, (k) => to(k, edit)) : h("b", null, p.name),
-    data ? h("span", { class: "muted" }, `${plural(rels.length, "release")} · ${plural(data.features.length, "feature")}`) : null,
+    data && !nothingRead(data) ? h("span", { class: "muted" }, `${plural(rels.length, "release")} · ${plural(data.features.length, "feature")}`) : null,
     rels.length || data?.features.length ? h("button", { type: "button", class: `gates-btn${edit ? " primary" : ""}`, onclick: () => (location.hash = to(key, !edit)) }, edit ? "Done" : "Edit your gates") : null);
   if (!data) return [bar, h("div", { class: "empty-card" }, "Reading the board…")];
+  if (nothingRead(data)) return [bar, roadmapDown(key, data)];
   const out = [bar];
-  if (data.error) out.push(h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, data.error)));
+  if (data.error) out.push(roadmapDown(key, data));
   if (edit) {
     out.push(h("div", { class: "banner editing" }, h("b", null, "Your gates"),
       h("span", null, `Move a feature into or out of a release, change the order of releases, close or reopen a release: these gates are yours and ${poOf(p)}'s. Changes save as you make them and go in the board's history as yours; each has Undo but a reopen (close it again instead). Anything else is a request to ${poOf(p)}.`)));
@@ -1106,7 +1120,7 @@ function viewFeatures() {
   const bar = h("div", { class: "bar-row" }, svc.projects.length > 1 ? projectSwitch(key, (k) => `#features/${k}`) : h("b", null, name), find);
   const list = (...kids) => [bar, h("div", { id: "features-list" }, ...kids)];
   if (!data) return list(h("div", { class: "empty-card" }, "Reading the board…"));
-  const down = data.error ? h("div", { class: "banner down" }, h("b", null, "Board unavailable"), h("span", null, data.features.length ? `Showing what it last said. ${data.error}` : data.error), button("Retry", "", () => { loadRoadmap(key); render(); })) : null;
+  const down = roadmapDown(key, data);
   if (data.error && !data.features.length) return list(down);
   const found = featuresInOrder(data).filter((f) => !words || featureHas(f, words));
   const [, label, match] = FEATURE_FILTERS.find(([k]) => k === fx.filter) ?? FEATURE_FILTERS[0];
@@ -1510,7 +1524,7 @@ function staleBanners() {
   const forYou = (l) => livePending(l).filter((p) => p.tier === "human").length;
   const waits = (n, one) => (n ? h("span", null, `${plural(n, "request")} for you from ${one ? "it" : "them"} wait${n === 1 ? "s" : ""} until ${one ? "it reports" : "they report"} again`) : null);
   const link = () => h("a", { href: "#laptops" }, "Laptops →");
-  const when = (l) => new Date(l.at).toLocaleString();
+  const when = (l) => stamp(l.at);
   const banners = quiet.length < 3
     ? quiet.map((l) => h("div", { class: "banner", title: `No report from ${l.laptop}'s supervisor since ${when(l)}. Its requests are not offered here until it reports; nothing is lost.` },
       h("b", null, `${l.laptop} stopped reporting`), h("span", null, "last report ", ago(l.at), " ago"), waits(forYou(l), true), link()))
@@ -3489,7 +3503,8 @@ const releaseName = (r) => (r.title.startsWith(r.ref) ? r.title : `${r.ref} ${r.
 function whereStands(f) {
   const c = f.own ?? f.progress, t = f.tasks ?? { done: 0, total: 0 }, left = c.total - c.checked, tasks = t.total - t.done;
   if (f.status === "Done") return h("span", { class: "muted" }, f.done_at ? `done ${day(f.done_at)}` : "done");
-  if (f.status === "Draft") {
+  // An open feature reads as open whatever its status (spec 2.6; Daisy, review E minor 2).
+  if (f.status === "Draft" && !f.open_since) {
     return h("span", { class: "muted" }, "draft · ", !c.total ? "no criteria yet" : c.checked ? `${left} of ${plural(c.total, "criterion", "criteria")} left` : `${plural(c.total, "criterion", "criteria")} written`);
   }
   if (f.status === "Ready" && !f.open_since) return h("span", { class: "muted" }, `ready · ${c.total ? `${plural(left, "criterion", "criteria")} to meet` : "no criteria yet"}`);
