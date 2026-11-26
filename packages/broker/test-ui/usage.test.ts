@@ -44,6 +44,8 @@ const overviewRow = (p: unknown) => ({ project: p, release: null, release_number
 const card = (k: string) => view().querySelector(`.ucard[data-project="${k}"]`)!;
 const bar = (k: string, back: number) => card(k).querySelector(`.bar[data-day="${dayOf(back)}"]`)!;
 const figures = (k: string) => ({ total: text(".u-tot", card(k)), today: text(".u-today", card(k)), bars: [...card(k).querySelectorAll(".bar")].map((b) => b.getAttribute("aria-label")), spikes: text(".u-spike", card(k)), day: text(".uday b", card(k)) });
+/** The picked day's sessions, as its list has them: name · title · figure. */
+const rows = (k: string) => [...card(k).querySelectorAll(".u-ss li")].map((li) => [...li.querySelectorAll(".n, .t, .v")].map((x) => x.textContent!.trim()).join(" · "));
 const weigh = (label: string) => click([...view().querySelectorAll(".seg.weigh button")].find((b) => b.textContent === label));
 const spanOf = (label: string) => click([...view().querySelectorAll(".u-bar .seg button")].find((b) => b.textContent === label));
 
@@ -148,11 +150,11 @@ describe("the Usage page (BOB-180)", () => {
     await key(bar("helix", 4), "Enter");
     expect(text(".uday b", card("helix"))).toBe(`${word(dayOf(4))}: 3.0M tokens`);
     expect(text(".uday .muted", card("helix"))).toBe("opus 2.4M · haiku 500k · unnamed model 100k");
-    expect(text(".biggest", card("helix"))).toBe("Biggest: LAND-49 build 2 1.4M, LAND-49 review 1 900k, work outside any session 400k");
-    expect([...card("helix").querySelectorAll(".biggest a")].map((a) => a.getAttribute("href"))).toEqual(["#feature/helix/LAND-49", "#feature/helix/LAND-49"]);
+    expect(rows("helix")).toEqual(["LAND-49 build 2 · Audit · 1.4M", "LAND-49 review 1 · Audit · 900k", "Outside any session · runs that declared no session · 400k", "The rest · smaller sessions, and work outside any · 300k"]);
+    expect(card("helix").querySelectorAll(".u-ss button.u-s")).toHaveLength(2);
     await weigh("Sonnet-equivalent");
     expect(text(".uday .muted", card("helix"))).toBe("opus 4.8M · unnamed model 100k · haiku 25k");
-    expect(text(".biggest", card("helix"))).toBe("Biggest: LAND-49 review 1 1.8M, work outside any session 800k, LAND-50 design A 200k");
+    expect(rows("helix")).toEqual(["LAND-49 review 1 · Audit · 1.8M", "Outside any session · runs that declared no session · 800k", "LAND-50 design A · Edit · 200k", "The rest · smaller sessions, and work outside any · 3.2M"]);
     // Again lets it go.
     await click(bar("helix", 4));
     expect(card("helix").querySelector(".uday")).toBeNull();

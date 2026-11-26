@@ -2708,7 +2708,8 @@ describe("usage data (BOB-172)", () => {
         { role: "luigi", calls: 9, raw: 440, weighted: 1680 },
         { role: "toad", calls: 4, raw: 400, weighted: 400 },
       ],
-      top: [],
+      // Each worker's declared session takes its share of today, named on today's bar (BOB-211 §3).
+      top: [{ session: { feature: "BOB-1", kind: "build", label: "2" }, feature_title: null, raw: 800, weighted: 2000, live: true }],
     });
     report(live({ id: "w_run", state: "done", ended_at: iso(0) }));
     expect(app.usageSoFar(reply([zero(), ended, ended]), "usage-x").points[2]).toEqual({ ...ended, so_far: true });

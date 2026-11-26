@@ -32,8 +32,12 @@ const state = {
   /** Usage's span in days, and each project's day picked on its graph ("YYYY-MM-DD"). */
   span: 30,
   usageDay: new Map(),
-  /** Each graph's one tab stop: the day the keyboard was last on. */
+  /** Each graph's one tab stop: the day the keyboard was last on, and the part of it it is on ({ day, at }, bottom up). */
   usageStop: new Map(),
+  usagePart: new Map(),
+  /** The session open in a Usage card, by project ({ feature, kind, label }), and the agent picked in it (BOB-211). */
+  usageSession: new Map(),
+  usageAgent: new Map(),
   /** The opened days' details, by project: Total, or By agent and which role; and the card a link's day is scrolled to. */
   detail: new Map(),
   usageScroll: null,
@@ -334,7 +338,8 @@ async function loadFeature(key, ref) {
   } finally {
     featLoading.delete(id);
   }
-  if (viewName() === "feature") scheduleRender();
+  // Usage's session panel reads its feature the same way (BOB-211 §3).
+  if (viewName() === "feature" || viewName() === "usage") scheduleRender();
   if (featAgain.delete(id)) await loadFeature(key, ref);
 }
 
@@ -2920,11 +2925,22 @@ function hashFilters() {
   const of = hashFilter("weigh"), span = Number(hashFilter("days"));
   if (of !== null) state.weigh = of === "1";
   if (SPANS.includes(span)) state.span = span;
-  // `#usage/<project>/<day>` opens that day's detail, and the card it is in is scrolled to.
-  const [v, key, d] = hashPath();
+  // `#usage/<project>/<day>` opens that day's detail, and the card it is in is scrolled to; with
+  // `/<feature>/<kind>/<label>[/<agent>]`, each part encoded, that session's panel and agent (BOB-211 §2.8).
+  const [v, key, d, feature, kind, label, agent] = hashPath().map((x) => { try { return decodeURIComponent(x); } catch { return x; } });
   if (v !== "usage" || !key) return;
   state.usageScroll = key;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(d ?? "")) state.usageDay.set(key, d);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d ?? "")) return;
+  state.usageDay.set(key, d);
+  if (feature && kind && label) state.usageSession.set(key, { feature, kind, label });
+  else state.usageSession.delete(key);
+  if (feature && kind && label && agent) state.usageAgent.set(key, agent);
+  else state.usageAgent.delete(key);
+}
+/** Usage's path for a project's card as it stands: its day, the session open and the agent picked, each part encoded. */
+function usagePath(key) {
+  const day = state.usageDay.get(key), ss = day && state.usageSession.get(key), agent = ss && state.usageAgent.get(key);
+  return ["usage", ...(day ? [key, day] : []), ...(ss ? [ss.feature, ss.kind, ss.label] : []), ...(agent ? [agent] : [])].map(encodeURIComponent).join("/");
 }
 /** Sets one of the hash's filters, in place, and keeps the others and the path. */
 function setFilter(name, value) {
@@ -2951,6 +2967,8 @@ function setSpan(days) {
   for (const [key, day] of state.usageDay) {
     if (day >= localDay(first)) continue;
     state.usageDay.delete(key);
+    state.usageSession.delete(key);
+    state.usageAgent.delete(key);
     if (hashPath()[1] === key) setPath("usage");
   }
   setFilter("days", days);
@@ -3128,18 +3146,52 @@ function usageWidth(cols, aside = null) {
 }
 /** Picks a day on a project's graph, or lets it go: a tap or Enter on its bar, or its spike's button. On Usage the day is in the link. */
 function pickDay(key, day) {
-  if (state.usageDay.get(key) === day) return letDayGo(key);
+  // Its bar again lets the day go; with a session open, it closes that and keeps the day.
+  if (state.usageDay.get(key) === day && !state.usageSession.has(key)) return letDayGo(key);
   state.usageDay.set(key, day);
-  if (viewName() === "usage") setPath(`usage/${key}/${day}`);
+  state.usageSession.delete(key);
+  state.usageAgent.delete(key);
+  if (viewName() === "usage") setPath(usagePath(key));
   render();
 }
 /** Lets a project's picked day go, its detail with it; the keyboard goes back to its bar. */
 function letDayGo(key) {
   const day = state.usageDay.get(key);
   state.usageDay.delete(key);
+  state.usageSession.delete(key);
+  state.usageAgent.delete(key);
   if (viewName() === "usage" && hashPath()[1] === key) setPath("usage");
   render();
   focusKey(`bar/${key}/${day}`);
+}
+/** Opens a session's panel in a Usage card, on its day (BOB-211 §2.3): the keyboard goes to its ×, or stays on the bar it came from. */
+function openSession(key, day, ref, keys = false) {
+  state.usageDay.set(key, day);
+  state.usageStop.set(key, day);
+  state.usageSession.set(key, { feature: ref.feature, kind: ref.kind, label: ref.label });
+  state.usageAgent.delete(key);
+  setPath(usagePath(key));
+  render();
+  if (keys) return focusKey(`bar/${key}/${day}`);
+  focusKey(`sp-x/${key}`);
+  $("view").querySelector(`.ucard[data-project="${CSS.escape(key)}"] .sp`)?.scrollIntoView?.({ block: "nearest" });
+}
+/** Closes a card's session panel, the day's detail back in its place; the keyboard goes to the session's row. */
+function closeSession(key) {
+  const ref = state.usageSession.get(key);
+  state.usageSession.delete(key);
+  state.usageAgent.delete(key);
+  setPath(usagePath(key));
+  render();
+  if (ref) focusKey(`ss/${key}/${partId(ref)}`);
+}
+/** Picks an agent in a session's panel, or All agents (null, or the picked one again); `fk` keeps the keyboard where it was. */
+function pickAgent(key, name, fk) {
+  if (name && name !== state.usageAgent.get(key)) state.usageAgent.set(key, name);
+  else state.usageAgent.delete(key);
+  setPath(usagePath(key));
+  render();
+  focusKey(fk);
 }
 /** Brings a link's card into view, once it is drawn. */
 function usageScroll() {
@@ -3158,7 +3210,9 @@ function stepDay(id, key, days, by) {
   if (!day) return;
   state.usageDay.set(id, day);
   state.usageStop.set(id, day);
-  if (viewName() === "usage") setPath(`usage/${key}/${day}`);
+  state.usageSession.delete(id);
+  state.usageAgent.delete(id);
+  if (viewName() === "usage") setPath(usagePath(key));
   render();
   // At an end its own button is off: the other keeps the keyboard.
   if (!days[days.indexOf(day) + by]) focusKey(`step/${id}/${-by}`);
@@ -3195,59 +3249,160 @@ function usageBars(key, series, days, W, small = false, id = key) {
   }
   // A graph is one tab stop: the day last on, else the picked one, else the last.
   const stop = [state.usageStop.get(id), picked, days.at(-1)].find((d) => days.includes(d));
+  // With a mouse each part is its own target, the column's width, and names its session in a tip; on a touch screen
+  // the bar is one target (a phone's is 9 px wide), and a tap lists the day's sessions under it (BOB-211 §2.1).
+  const fine = finePointer(), open = small ? null : state.usageSession.get(id);
+  const wrap = h("div", { class: "ugraph" }), tip = h("div", { class: "tip u-tip", role: "status", hidden: true });
+  const showTip = (p, i, yTop) => {
+    tip.replaceChildren(...partTip(key, series, days, p, i, small));
+    tip.hidden = false;
+    // Beside the bar, never over it: to its right, else to its left; level with the part, inside the graph.
+    const cw = wrap.clientWidth || W, k = cw / W, tw = Math.min(240, cw), right = (x(i) + bw * 0.85) * k + 8, left = (x(i) + bw * 0.15) * k - 8 - tw;
+    tip.style.left = `${right + tw <= cw ? right : Math.max(0, left)}px`;
+    tip.style.top = `${Math.max(0, Math.min(yTop * k - 20, H * k - 130))}px`;
+    lightParts(wrap, p.session ? p.id : null);
+  };
+  const hideTip = () => { tip.hidden = true; lightParts(wrap, null); };
   const bars = days.map((d, i) => {
     const v = vals[i], spike = spikes.some((sp) => sp.day === d), so = d === today, parts = dayParts(series.points[i]);
     const named = parts.filter((p) => !p.rest).map((p) => `${p.session ? sessName(p.session) : "outside any session"} ${fmtTokens(p.v)}`);
     const said = `${wordDay(d)}${so ? ", so far" : ""}: ${fmtTokens(v)} ${tokensWord()}${spike ? ", a spike" : ""}${named.length ? `; ${named.join(", ")}` : ""}`;
     // The parts bottom up, the biggest at the foot; they fill the bar and no more (the read rounds each).
     let base = 0;
-    const segs = parts.map((p) => {
+    const tops = [], segs = [], hits = [];
+    for (const p of parts) {
       const lo = Math.min(base, v), hi = Math.min((base += p.v), v);
-      return s("rect", { class: `sg ${p.rest ? "rest" : p.session ? `r${p.rank}` : "none"}`, x: x(i) + bw * 0.15, y: y(hi), width: bw * 0.7, height: Math.max(0, y(lo) - y(hi)), "data-sid": p.id, "fill-opacity": p.rest ? PART_SHADE.rest : p.session ? PART_SHADE[p.rank] : null });
-    });
+      tops.push(y(hi));
+      segs.push(s("rect", { class: ["sg", p.rest ? "rest" : p.session ? `r${p.rank}` : "none", open && p.session && p.id === partId(open) && "open"].filter(Boolean).join(" "), x: x(i) + bw * 0.15, y: y(hi), width: bw * 0.7, height: Math.max(0, y(lo) - y(hi)), "data-sid": p.id, "fill-opacity": p.rest ? PART_SHADE.rest : p.session ? PART_SHADE[p.rank] : null }));
+      if (!fine) continue;
+      const hit = s("rect", { class: "shit", x: x(i), y: y(hi), width: bw, height: Math.max(0, y(lo) - y(hi)), "data-sid": p.id });
+      hit.addEventListener("pointerenter", () => { holdRender = true; showTip(p, i, y(hi)); });
+      hit.addEventListener("pointerleave", () => { holdRender = false; hideTip(); });
+      // A session's part opens its agents (on Usage); the rest, outside any session and above the bar pick the day, as before.
+      hit.addEventListener("click", (e) => {
+        e.stopPropagation();
+        state.usageStop.set(id, d);
+        if (p.session && !small) openSession(key, d, p.session);
+        else pickDay(id, d);
+      });
+      hits.push(hit);
+    }
     const g = s("g", { class: ["bar", spike && "spike", so && "today", picked === d && "sel"].filter(Boolean).join(" "), tabindex: d === stop ? "0" : "-1", role: "button", "aria-label": said, "aria-pressed": String(picked === d), "data-day": d, "data-fk": `bar/${id}/${d}` },
-      s("title", null, said),
+      ...(fine ? [] : [s("title", null, said)]),
       s("rect", { class: "hit", x: x(i), y: 0, width: bw, height: H }),
       ...segs,
-      s("rect", { class: "b", x: x(i) + bw * 0.15, y: y(v), width: bw * 0.7, height: Math.max(v > 0 ? 1 : 0, y(0) - y(v)), rx: Math.min(2, bw * 0.2) }));
+      s("rect", { class: "b", x: x(i) + bw * 0.15, y: y(v), width: bw * 0.7, height: Math.max(v > 0 ? 1 : 0, y(0) - y(v)), rx: Math.min(2, bw * 0.2) }),
+      ...hits);
+    // Up and Down go through the day's parts, bottom up, the tip naming each; the part the keyboard is on.
+    const onPart = () => { const at = state.usagePart.get(id); return at?.day === d ? at.at : -1; };
+    const markPart = (k) => { segs.forEach((r, j) => r.classList.toggle("kf", j === k)); if (k >= 0) showTip(parts[k], i, tops[k]); };
     g.addEventListener("click", () => { state.usageStop.set(id, d); pickDay(id, d); });
+    g.addEventListener("blur", () => { if (g.isConnected) { state.usagePart.delete(id); markPart(-1); hideTip(); } });
     g.addEventListener("keydown", (e) => {
       const by = { ArrowLeft: -1, ArrowRight: 1 }[e.key], to = by && bars[i + by];
       if (by) e.preventDefault();
       if (to) {
         state.usageStop.set(id, days[i + by]);
+        state.usagePart.delete(id);
         g.setAttribute("tabindex", "-1");
         to.setAttribute("tabindex", "0");
         to.focus();
       }
+      const up = { ArrowUp: 1, ArrowDown: -1 }[e.key];
+      if (up && parts.length) {
+        e.preventDefault();
+        const k = Math.max(0, Math.min(parts.length - 1, onPart() + up));
+        state.usagePart.set(id, { day: d, at: k });
+        markPart(k);
+        return;
+      }
       if (e.key !== "Enter" && e.key !== " ") return;
       e.preventDefault();
-      pickDay(id, d);
+      // Enter on a session's part opens its agents, the keyboard staying on the bar; elsewhere it picks the day.
+      const p = parts[onPart()];
+      if (p?.session && !small) openSession(key, d, p.session, true);
+      else pickDay(id, d);
     });
     return g;
   });
   const every = Math.ceil(days.length / (W < 420 ? 4 : 6));
-  return h("div", { class: "ugraph" }, s("svg", { viewBox: `0 0 ${W} ${H}`, role: "group", "aria-label": `${series.name}: ${tokensWord()} per day, the last ${days.length} days` },
+  wrap.append(s("svg", { viewBox: `0 0 ${W} ${H}`, role: "group", "aria-label": `${series.name}: ${tokensWord()} per day, the last ${days.length} days, each day in its sessions` },
     s("g", { class: "grid" }, ...ticks.map((v) => s("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }))),
     ...bars,
     s("g", { class: "axis" }, ...ticks.map((v) => s("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, fmtTick(v))),
       ...days.map((d, i) => ((days.length - 1 - i) % every ? "" : s("text", { x: Math.min(W - 18, x(i) + bw / 2), y: H - 5, "text-anchor": "middle" }, d === today ? "today" : shortDay(d))))),
-    ...labelled.map((l) => s("text", { class: "spike-lab", x: l.cx, y: y(l.v) - 4, "text-anchor": "middle" }, fmtTokens(l.v)))));
+    ...labelled.map((l) => s("text", { class: "spike-lab", x: l.cx, y: y(l.v) - 4, "text-anchor": "middle" }, fmtTokens(l.v)))), tip);
+  return wrap;
+}
+/** Whether this device points finely, with hover: a mouse or a trackpad, not a finger (BOB-211 §2.1). */
+const finePointer = () => window.matchMedia?.("(hover: hover) and (pointer: fine)").matches ?? false;
+/** Lights a session's parts on every day of a graph, and dims the rest; null lets them go. */
+function lightParts(graph, pid) {
+  if (!graph) return;
+  for (const el of graph.querySelectorAll(".sg")) el.classList.toggle("hl", pid !== null && el.getAttribute("data-sid") === pid);
+  graph.classList.toggle("dim", pid !== null);
+}
+/** A session's figure over the period, as the bars have it, or as its runs do once its feature is read; its days, and whether it runs. */
+function wholeSession(key, series, days, ref) {
+  const rec = sessionRecord(key, ref), id = partId(ref);
+  const on = days.filter((d, i) => series.points[i].top.some((t) => t.session && partId(t.session) === id));
+  const live = liveWorkers(key).some((w) => w.session === sessionKey(ref)) || series.points.at(-1).top.some((t) => t.live && t.session && partId(t.session) === id);
+  if (!rec) return { v: series.points.reduce((n, pt) => n + pt.top.filter((t) => t.session && partId(t.session) === id).reduce((m, t) => m + usageFigure(t), 0), 0), from: on[0], to: on.at(-1), n: on.length, running: live };
+  const from = localDay(Date.parse(rec.started_at)), to = localDay(rec.ended_at ? Date.parse(rec.ended_at) : brokerNow());
+  return { v: sessionSpend(key, rec).total, from, to, n: Math.round((dayStart(to) - dayStart(from)) / DAY) + 1, running: live || !rec.ended_at };
+}
+/** "ran 23 Nov", "ran 23–26 Nov, 3 days", "ran 30 Nov–2 Dec, 3 days". */
+function ranSaid({ from, to, n }) {
+  if (!from) return "";
+  if (from === to) return `ran ${shortDay(from)}`;
+  const a = dayDate(from), b = dayDate(to);
+  return `ran ${a.getMonth() === b.getMonth() ? a.getDate() : shortDay(from)}–${shortDay(to)}, ${n} days`;
+}
+/** A part's tip (BOB-211 §2.1): which session, its title, that day's share, the whole session; the rest's and outside any's say what they are. */
+function partTip(key, series, days, p, i, small) {
+  const d = days[i], pt = series.points[i], all = usageFigure(pt), share = all ? Math.round((p.v / all) * 100) : 0;
+  const line = h("span", null, `${wordDay(d)}${pt.so_far ? ", so far" : ""}: ${fmtTokens(p.v)} ${tokensWord()} · ${share}% of the day`);
+  if (p.rest) return [h("b", null, "The rest"), line, h("span", { class: "muted" }, "Smaller sessions, and work outside any. The day's three biggest are named.")];
+  if (!p.session) return [h("b", null, "Outside any session"), line, h("span", { class: "muted" }, "Runs that declared no session: fix passes, board moves, consults.")];
+  const w = wholeSession(key, series, days, p.session), title = p.feature_title ?? featureTitle(key, p.session.feature, series);
+  return [
+    h("b", null, sessName(p.session), w.running ? h("span", { class: "t-run" }, " · running") : null),
+    title ? h("span", { class: "t-title" }, title) : null,
+    line,
+    h("span", null, `Whole session: ${fmtTokens(w.v)}${w.running ? " so far" : ""} · ${ranSaid(w)}`),
+    small ? null : h("span", { class: "muted" }, "Click for its agents"),
+  ];
 }
 
-/** Under a graph: the picked day's total, its split by model and its biggest sessions. */
+/**
+ * Under a graph: the picked day's total, its split by model, and its sessions as a list in the bar's order, the
+ * bar's key (BOB-211 §2.2): on Usage a session's row opens its panel; on a project's page it links to Usage's.
+ */
 function usageDayLine(key, series, days, weights, id = key) {
   const day = state.usageDay.get(id), pt = series.points[days.indexOf(day)];
   if (!pt) return null;
   const models = pt.by_model.map((m) => [modelShort(m.model, weights.rows), usageFigure(m)]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
-  const top = [...pt.top].sort((a, b) => usageFigure(b) - usageFigure(a)).slice(0, 3);
+  const parts = dayParts(pt), page = id !== key, open = page ? null : state.usageSession.get(key);
   const at = days.indexOf(day), go = (by, mark, word) => h("button", { type: "button", class: "u-step", "aria-label": `The day ${word}`, "data-fk": `step/${id}/${by}`, disabled: !days[at + by] || null, onclick: () => stepDay(id, key, days, by) }, mark);
+  // Pointing at a row, or the keyboard on it, lights its parts on the graph above.
+  const light = (pid) => (e) => lightParts(e.currentTarget.closest(".card")?.querySelector(".ugraph"), pid);
+  const row = (p) => {
+    const sw = h("i", { class: `sw ${p.rest ? "rest" : p.session ? `r${p.rank}` : "none"}`, "aria-hidden": "true" }), v = h("span", { class: "v" }, fmtTokens(p.v));
+    if (!p.session) return h("li", { class: "u-s quiet" }, sw, h("span", { class: "n" }, p.rest ? "The rest" : "Outside any session"), h("span", { class: "t" }, p.rest ? "smaller sessions, and work outside any" : "runs that declared no session"), v);
+    const on = open && partId(open) === p.id, title = p.feature_title ?? featureTitle(key, p.session.feature, series);
+    const kids = [sw, h("span", { class: "n" }, h("span", { class: "id" }, p.session.feature), " ", stepName(p.session), p.live ? h("span", { class: "run-dot", title: "running" }, " ●") : null),
+      h("span", { class: "t" }, title ?? ""), v, h("span", { class: "go", "aria-hidden": "true" }, "›")];
+    const hover = { onpointerenter: light(p.id), onpointerleave: light(null), onfocus: light(p.id), onblur: light(null) };
+    if (page) {
+      const href = `#${["usage", key, day, p.session.feature, p.session.kind, p.session.label].map(encodeURIComponent).join("/")}`;
+      return h("li", null, h("a", { class: "u-s", href, "data-fk": `ss/${id}/${p.id}`, ...hover }, kids));
+    }
+    return h("li", null, h("button", { type: "button", class: "u-s", "aria-pressed": String(!!on), "aria-label": `${sessName(p.session)}${title ? `, ${title}` : ""}: ${fmtTokens(p.v)} ${tokensWord()}${p.live ? ", running" : ""}`, "data-fk": `ss/${key}/${p.id}`, onclick: () => (on ? closeSession(key) : openSession(key, day, p.session)), ...hover }, kids));
+  };
   return h("div", { class: "uday" },
     h("div", { class: "u-day-h" }, go(-1, "‹", "before"), go(1, "›", "after"), h("b", null, `${wordDay(day)}${pt.so_far ? ", so far" : ""}: ${fmtTokens(usageFigure(pt))} ${tokensWord()}`)),
     models.length ? h("span", { class: "muted" }, models.map(([m, v]) => `${m} ${fmtTokens(v)}`).join(" · ")) : null,
-    top.length ? h("span", { class: "biggest" }, pt.so_far ? "Biggest, of the runs that ended: " : "Biggest: ", top.map((t, i) => h("span", { class: "big-s" },
-      t.session ? h("a", { class: "id", href: featureHref(key, t.session.feature), title: t.feature_title, onclick: () => (scrollAfter = stepId(t.session)) }, sessName(t.session)) : "work outside any session",
-      ` ${fmtTokens(usageFigure(t))}`, i < top.length - 1 ? h("span", { class: "sep" }, ", ") : null))) : null);
+    parts.length ? h("ul", { class: "u-ss", "aria-label": `${wordDay(day)}'s sessions, biggest first` }, parts.map(row)) : null);
 }
 /** Under a graph: its spikes, each a button that picks its day, and what isn't counted or is counted at ×1. */
 function usageNotes(key, series, days) {
@@ -3415,6 +3570,234 @@ function dayDetail(key, series, days, W) {
     lostNote);
 }
 
+// ---------- A session's panel on Usage: spend per agent, and context per call, all agents or one (BOB-211 §2.3-2.6) ----------
+
+/** A session's record from its feature's read (the feature page's), or null before that is read. */
+const sessionRecord = (key, ref) => feats.get(`${key}/${ref.feature}`)?.sessions?.find((x) => x.kind === ref.kind && x.label === ref.label) ?? null;
+/** An agent's colour in a session's panel, by its place in the spend chart (biggest first); a 7th and on are idle. */
+const agentColor = (i) => (i < 6 ? `var(--ag-${i + 1})` : "var(--idle)");
+/** A run's figure as the switch shows it, a running one's weighed from its laptop's report; null for a lost run, whose tokens are unknown. */
+function spendFigure(key, r, raw) {
+  if (r.outcome === "lost") return null;
+  if (!state.weigh || raw) return r.tokens;
+  const w = r.ended_at ? null : workers().find((x) => x.id === r.id && x.project === key), rows = weightsNow(key)?.rows;
+  if (w && rows) return Math.round(weighTokens(typeof w.tokens === "number" ? { input: w.tokens, output: 0, cache_read: 0, cache_write: 0 } : w.tokens, w.model, rows).weighted);
+  return typeof r.weighted === "number" ? r.weighted : r.tokens;
+}
+/**
+ * A session's spend by agent: its runs (the board's, and its laptops' live ones, as its card has them), summed by
+ * agent, biggest first, each with its colour. `total` is their sum, the session's tokens (`ss.weighted` weighed);
+ * a lost run is in no sum. `raw`: an older broker's runs carry no weighted figure, so raw shows.
+ */
+function sessionSpend(key, rec) {
+  const runs = runsOf(key, rec), raw = runs.some((r) => r.ended_at && r.outcome !== "lost" && typeof r.weighted !== "number");
+  const by = new Map();
+  for (const r of runs) {
+    const a = by.get(r.name) ?? by.set(r.name, { name: r.name, role: r.role, model: null, runs: [], v: 0, calls: 0 }).get(r.name), v = spendFigure(key, r, raw);
+    a.runs.push({ ...r, v });
+    a.v += v ?? 0;
+    a.calls += r.calls ?? 0;
+    a.model = r.model ?? a.model;
+  }
+  const agents = [...by.values()].sort((a, b) => b.v - a.v || a.name.localeCompare(b.name)).map((a, i) => ({ ...a, color: agentColor(i), known: a.runs.some((r) => r.v !== null) }));
+  return { runs, agents, raw, total: agents.reduce((n, a) => n + a.v, 0), lost: runs.filter((r) => r.outcome === "lost").length };
+}
+/** "Mon 23 Nov 20:13". */
+const dayClock = (iso) => `${wordDay(localDay(Date.parse(iso)))} ${clock(iso)}`;
+/** A run in words, for its part of an agent's bar: "20:13–20:16 · stopped: by the orchestrator · 1.4M · 13 calls". */
+function runSaid(r) {
+  const how = !r.ended_at ? "running" : r.outcome === "stopped" ? `stopped${r.outcome_reason ? `: ${r.outcome_reason}` : ""}` : r.outcome === "failed" ? `failed${r.outcome_reason ? `: ${r.outcome_reason}` : ""}` : "done";
+  return [r.started_at ? `${clock(r.started_at)}${r.ended_at ? `–${clock(r.ended_at)}` : ""}` : null, how, fmtTokens(r.v), callsSaid(r.calls ?? 0)].filter(Boolean).join(" · ");
+}
+const ORDINAL = ["first", "second", "third", "fourth", "fifth"];
+
+/** A Usage card's open session, in the place of the day's detail: its head, what it spent by agent, and its context per call. */
+function sessionPanel(key, series, days, W) {
+  const ref = state.usageSession.get(key), day = state.usageDay.get(key);
+  if (!ref || !days.includes(day)) return null;
+  const name = sessName(ref), fid = `${key}/${ref.feature}`, fd = feats.get(fid), reading = featLoading.has(fid);
+  // One read of its feature, as its page reads it, kept and read again when the board changes; never before it is opened.
+  if (!fd && !reading) loadFeature(key, ref.feature);
+  const part = series.points[days.indexOf(day)].top.find((t) => t.session && partId(t.session) === partId(ref));
+  const onDay = part ? usageFigure(part) : null, title = fd?.item?.title ?? part?.feature_title ?? featureTitle(key, ref.feature, series);
+  // A session only running now, that the board's read hasn't yet, is its laptops' workers.
+  const live = liveWorkers(key).filter((w) => w.session === sessionKey(ref) && w.started_at);
+  const rec = sessionRecord(key, ref) ?? (fd?.item && live.length ? { ...ref, started_at: live.map((w) => w.started_at).sort()[0], ended_at: null, close: null, runs: [], tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } } : null);
+  const open = rec ? !rec.ended_at : !!part?.live, H = window.innerWidth <= 600 ? 190 : 220;
+  const head = h("div", { class: "sp-h" },
+    h("span", { class: "kind", dataset: { kind: ref.kind } }, ref.kind),
+    h("h3", null, h("a", { class: "id", href: featureHref(key, ref.feature), onclick: () => (scrollAfter = stepId(ref)) }, ref.feature), " ", stepName(ref)),
+    open ? h("span", { class: "badge", dataset: { state: "running" } }, "running") : null,
+    h("button", { type: "button", class: "ud-x", "aria-label": `Close ${name}`, "data-fk": `sp-x/${key}`, onclick: () => closeSession(key) }, "×"));
+  const box = (...kids) => h("section", { class: "sp", "aria-label": `${name}: spend per agent and context per call`, dataset: { session: partId(ref) } }, head, ...kids);
+  if (!rec) {
+    // What the bar knows shows at once; the rest in a frame as tall as the graph, so nothing jumps.
+    const frame = (...kids) => h("div", { class: "ud-frame sp-frame", style: `min-height:${H + 60}px` }, ...kids);
+    const meta = h("div", { class: "sp-m" }, title ? h("p", { class: "sp-title" }, title) : null, onDay !== null ? h("p", { class: "muted" }, `${wordDay(day)}: ${fmtTokens(onDay)} of it`) : null);
+    if (reading || !fd) return box(meta, frame(h("p", { class: "muted" }, `Reading ${name}'s agents…`)));
+    if (fd.error) return box(meta, frame(h("p", null, `Couldn't read ${name}'s agents.`), button("Retry", "", () => { loadFeature(key, ref.feature); render(); })));
+    return box(meta, frame(h("p", null, `${ref.feature}'s board has no ${stepName(ref)}.`)));
+  }
+  const sp = sessionSpend(key, rec), pick = sp.agents.find((a) => a.known && a.name === state.usageAgent.get(key)) ?? null;
+  const calls = sp.runs.reduce((n, r) => n + (r.calls ?? 0), 0), end = rec.ended_at ? Date.parse(rec.ended_at) : brokerNow();
+  const many = open || localDay(Date.parse(rec.started_at)) !== localDay(end);
+  const meta = h("div", { class: "sp-m" },
+    title ? h("p", { class: "sp-title" }, title) : null,
+    h("p", { class: "muted" }, `${dayClock(rec.started_at)} – ${rec.ended_at ? dayClock(rec.ended_at) : "now"} · ${plural(sp.agents.length, "agent")} · ${plural(sp.runs.length, "run")}${sp.lost ? ` · ${plural(sp.lost, "run")} lost` : ""} · ${callsSaid(calls)}`),
+    h("p", { class: "sp-tot" }, h("b", null, `${fmtTokens(sp.total)} ${sp.raw ? "tokens" : tokensWord()}`), open ? " so far" : "", ", whole session",
+      many && onDay !== null ? h("span", { class: "muted" }, ` · ${wordDay(day)}: ${fmtTokens(onDay)} of it`) : null),
+    state.weigh && sp.raw ? h("p", { class: "note" }, "This session's runs aren't weighed: raw tokens.") : null);
+  const side = W >= 820, set = (nm, fk) => pickAgent(key, nm, fk);
+  return box(meta,
+    h("div", { class: `sp-body${side ? " side" : ""}` }, spendChart(key, sp, pick, set), sessionCtx(key, ref, rec, fd, sp, pick, set, side ? Math.round((W - 20) * 0.58) : W, H)),
+    h("p", { class: "note sp-foot" }, `Tokens are the whole session's, every run's, as its card on ${ref.feature}'s page has them. `,
+      h("a", { href: featureHref(key, ref.feature), onclick: () => (scrollAfter = stepId(ref)) }, `${ref.feature}'s page ›`)));
+}
+
+/** Spend per agent: a row each, biggest first, its bar's parts the agent's runs in start order; the rows add up to the session. */
+function spendChart(key, sp, pick, set) {
+  const max = Math.max(1, ...sp.agents.map((a) => a.v)), rows = weightsNow(key)?.rows ?? [];
+  return h("div", { class: "sp-spend" },
+    h("h4", null, "Spend per agent"),
+    h("ul", { class: "sp-rows" }, sp.agents.map((a) => {
+      const known = a.runs.filter((r) => r.v !== null), lost = a.runs.length - known.length, stopped = a.runs.filter((r) => r.outcome === "stopped").length;
+      const live = a.runs.some((r) => !r.ended_at), n = a.runs.length, model = a.model ? weightRow(a.model, rows)?.alias ?? a.model : null;
+      const runsSaid = `${plural(n, "run")}${stopped ? (n === 1 ? ", stopped" : `, ${stopped} stopped`) : ""}`;
+      const fk = `ag/${key}/${a.name}`, figure = known.length ? fmtTokens(a.v) : "tokens unknown";
+      const kids = [
+        h("span", { class: "who" }, h("i", { class: "sw", "aria-hidden": "true" }), h("b", null, a.name), h("span", { class: "muted" }, ` ${[model, runsSaid].filter(Boolean).join(" · ")}${live ? " · running" : ""}`),
+          lost && known.length ? h("span", { class: "warn-t" }, ` · tokens unknown for ${plural(lost, "run")}`) : null),
+        h("span", { class: "sp-bar", "aria-hidden": "true" }, known.map((r) => h("i", { style: `width:${(r.v / max) * 100}%`, title: runSaid(r) }))),
+        h("span", { class: known.length ? "v" : "v warn-t" }, figure, live && known.length ? h("small", null, " so far") : null)];
+      // An agent whose every run was lost has its row, and nothing to pick.
+      if (!known.length) return h("li", null, h("div", { class: "sp-row", style: `--k:${a.color}` }, kids));
+      return h("li", null, h("button", { type: "button", class: "sp-row", "aria-pressed": String(pick?.name === a.name), "aria-label": `${a.name}: ${figure} ${tokensWord()}, ${runsSaid}, ${callsSaid(a.calls)}`, "data-fk": fk, style: `--k:${a.color}`, onclick: () => set(a.name, fk) }, kids));
+    })),
+    h("div", { class: "sp-sum" }, h("span", null, "Session"), h("b", null, fmtTokens(sp.total))),
+    h("p", { class: "note" }, sp.agents.length > 1 ? "Pick an agent for its own context per call; pick it again for all of them." : "Pick the agent for its own context per call, against its earlier runs."));
+}
+
+/**
+ * A session's context per call (BOB-211 §2.4). All agents: every call, its runs in start order, context summed as
+ * they go (the feature page's Whole session), each run's stretch in its agent's colour, the session of the same kind
+ * before it dashed. One agent: its runs one after another, each call's own context, against the middle half and
+ * median of its role's earlier runs on the feature while three reach the call.
+ */
+function sessionCtx(key, ref, rec, fd, sp, pick, set, W, H) {
+  const L = 46, R = 10, T = 10, B = 22, color = new Map(sp.agents.map((a) => [a.name, a.color]));
+  const earlierOf = (x) => x.started_at < rec.started_at && !(x.kind === ref.kind && x.label === ref.label);
+  const sessions = (fd?.sessions ?? []).filter(earlierOf);
+  const runs = sp.runs.filter((r) => r.outcome !== "lost" && (!pick || r.name === pick.name));
+  let lines = [], base = [], band = null, resets = [], who = [], keyItems, note, prevName = null;
+  if (!pick) {
+    let t = 0, done = 0, last = null;
+    for (const r of runs) {
+      const { pts, k } = callLine(r), ps = [];
+      pts.forEach((v, j) => { if (v !== null) ps.push([done + j + 1, (t += v * k)]); });
+      if (pts.length) who.push({ from: done + 1, to: done + pts.length, agent: r.name });
+      if (ps.length) { lines.push({ pts: last ? [last, ...ps] : ps, color: color.get(r.name), agent: r.name }); last = ps.at(-1); }
+      done += pts.length;
+    }
+    const prev = sessions.filter((x) => x.kind === ref.kind).at(-1);
+    if (prev) { let u = 0; runsOf(key, prev).map(callLine).flatMap(({ pts, k }) => pts.map((v) => (v === null ? null : (u += v * k)))).forEach((v, i) => v !== null && base.push([i + 1, v])); }
+    keyItems = [...sp.agents.filter((a) => a.known).map((a) => h("span", null, h("i", { style: `--k:${a.color}` }), `${a.name} · ${callsSaid(a.calls)}`)),
+      prev ? h("span", null, h("i", { class: "dash", style: "--k:var(--muted)" }), `${stepName(prev)} · ${callsSaid(base.length)}`) : null];
+    note = `Every call in the session, its runs in the order they started, with context summed as they go; each stretch is the agent whose call it was. ${prev ? `Dashed: ${stepName(prev)}, the ${ref.kind} before it.` : `No dashed line: no ${ref.kind} on ${ref.feature} before it.`}`;
+    prevName = prev ? stepName(prev) : null;
+  } else {
+    const line = roleLine(runs), cuts = [1, ...line.resets.map((r) => r.at), Infinity];
+    resets = line.resets.map((r) => r.at);
+    for (let k = 0; k < cuts.length - 1; k++) {
+      const ps = [];
+      for (let c = cuts[k]; c < Math.min(cuts[k + 1], line.pts.length + 1); c++) if (line.pts[c - 1] !== null) ps.push([c, line.pts[c - 1]]);
+      if (ps.length) lines.push({ pts: ps, color: pick.color, agent: pick.name });
+    }
+    // Its role's earlier runs on the feature: their middle half and median at each call, while three reach it.
+    const earlier = sessions.flatMap((x) => runsOf(key, x)).filter((r) => r.role === pick.role && r.ctx?.length), ls = earlier.map((r) => callLine(r).pts);
+    const b = [];
+    for (let i = 0; ; i++) { const v = ls.map((p) => p[i] ?? undefined).filter((x) => x !== undefined && x !== null); if (v.length < 3) break; b.push([quantile(v, 0.25), quantile(v, 0.5), quantile(v, 0.75)]); }
+    if (b.length) { band = b; base = b.map((q, i) => [i + 1, q[1]]); }
+    keyItems = [h("span", null, h("i", { style: `--k:${pick.color}` }), `${pick.name} · ${callsSaid(pick.calls)}`),
+      band ? h("span", null, h("i", { class: "band", style: "--k:var(--idle)" }), `earlier ${pick.name} runs on ${ref.feature}, middle half`) : null,
+      band ? h("span", null, h("i", { class: "dash", style: "--k:var(--muted)" }), "their median") : null,
+      resets.length ? h("span", null, h("i", { class: "dot", style: `--k:${pick.color}` }), "a new run starts") : null];
+    const n = runs.length;
+    note = `${pick.name}'s ${n > 1 ? `${n} runs in the session, one after another; each new run starts again from a small context (dotted)` : "run in the session"}. ${band ? `The grey band is the middle half of ${earlier.length} earlier ${pick.name} runs on ${ref.feature} at the same call, dashed their median. A line above it carried more context per call than usual.` : `No band: fewer than 3 earlier ${pick.name} runs on ${ref.feature}.`}`;
+  }
+  const flat = lines.flatMap((l) => l.pts.map(([c, v]) => ({ c, v, agent: l.agent })));
+  const xMax = Math.max(2, ...flat.map((p) => p.c), base.length ? base.at(-1)[0] : 0);
+  const yMax0 = Math.max(1, ...flat.map((p) => p.v), ...base.map((p) => p[1]), ...(band ?? []).map((q) => q[2]));
+  const step = niceStep(yMax0, 2), top = Math.ceil(yMax0 / step) * step;
+  const x = (c) => L + ((c - 1) / (xMax - 1)) * (W - L - R), y = (v) => T + (1 - v / top) * (H - T - B);
+  const at = (ps) => thin(ps).map(([c, v]) => `${x(c).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const said = pick ? `${pick.name}'s context per call in ${sessName(ref)}, ${callsSaid(pick.calls)}` : `${sessName(ref)}: context summed call by call, every agent, ${callsSaid(who.at(-1)?.to ?? 0)}`;
+  const fk = `ctx/${key}/${pick?.name ?? ""}`;
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": said, tabindex: "0", "data-fk": fk });
+  svg.append(threeTicks(top, L, W - R, y), s("g", { class: "axis" },
+    s("text", { x: L, y: H - 5, "text-anchor": "start" }, "1"), s("text", { x: W - R, y: H - 5, "text-anchor": "end" }, `${fmtInt.format(xMax)} calls`)));
+  if (band) svg.append(s("polygon", { class: "band", points: `${at(band.map((q, i) => [i + 1, q[2]]))} ${at(band.map((q, i) => [i + 1, q[0]]).reverse())}`, fill: "var(--idle)", "fill-opacity": 0.18 }));
+  if (base.length) svg.append(s("polyline", { class: "base", points: at(base), fill: "none", stroke: "var(--muted)", "stroke-width": 2, "stroke-dasharray": "6 4" }));
+  for (const l of lines) svg.append(s("polyline", { class: "ln", "data-agent": l.agent, points: at(l.pts), fill: "none", stroke: l.color, "stroke-width": 2.5, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  for (const r of resets) svg.append(s("line", { class: "reset", x1: x(r - 0.5), x2: x(r - 0.5), y1: T, y2: H - B, stroke: pick.color, "stroke-dasharray": "2 3", "stroke-opacity": 0.7 }));
+  const cross = s("line", { class: "cross", y1: T, y2: H - B, stroke: "var(--muted)", visibility: "hidden" });
+  const hit = s("rect", { class: "hit", x: L, y: 0, width: W - L - R, height: H, fill: "transparent", style: pick ? null : "cursor:pointer" });
+  svg.append(cross, hit);
+  const tip = h("div", { class: "tip", role: "status", hidden: true }), wrap = h("div", { class: "ud-plot" }, svg, tip);
+  const near = (ps, c) => ps.reduce((a, p) => (Math.abs(p[0] - c) < Math.abs(a[0] - c) ? p : a), ps[0]);
+  const show = (call) => {
+    const c = Math.round(Math.min(xMax, Math.max(1, call)));
+    const own = flat.length && c <= flat.at(-1).c ? flat.reduce((a, p) => (Math.abs(p.c - c) < Math.abs(a.c - c) ? p : a), flat[0]) : null;
+    const med = base.length && c <= base.at(-1)[0] ? near(base, c) : null;
+    if (!own && !med) return hide();
+    tip.textContent = [`call ${fmtInt.format(c)}`, own && !pick ? own.agent : null, own ? `${fmtTokens(Math.round(own.v))} context${pick ? "" : " summed"}` : null, med ? `${pick ? "median" : prevName} ${fmtTokens(Math.round(med[1]))}` : null].filter(Boolean).join(" · ");
+    cross.setAttribute("x1", x(c)); cross.setAttribute("x2", x(c)); cross.setAttribute("visibility", "visible");
+    tip.hidden = false;
+    const cw = wrap.clientWidth || W;
+    tip.style.left = `${Math.max(0, Math.min(cw - 220, (x(c) / W) * cw + 10))}px`;
+    tip.style.top = `${T}px`;
+    svg.dataset.call = String(c);
+  };
+  const hide = () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); };
+  const callOf = (ev) => { const r = svg.getBoundingClientRect(); return 1 + ((((ev.clientX - r.left) / (r.width || W)) * W - L) / (W - L - R)) * (xMax - 1); };
+  // All agents: a click on a stretch, or Enter at a call, picks the agent whose call it was.
+  const pickAt = (c) => { const w = who.find((x) => c >= x.from && c <= x.to); if (w) set(w.agent, `ctx/${key}/${w.agent}`); };
+  hit.addEventListener("pointermove", (ev) => { holdRender = true; show(callOf(ev)); });
+  hit.addEventListener("pointerdown", (ev) => show(callOf(ev)));
+  hit.addEventListener("pointerleave", () => { holdRender = false; hide(); });
+  if (!pick) hit.addEventListener("click", (ev) => pickAt(Math.round(Math.min(xMax, Math.max(1, callOf(ev))))));
+  svg.addEventListener("focus", () => show(Number(svg.dataset.call ?? detailCall.get(fk) ?? xMax)));
+  svg.addEventListener("blur", hide);
+  svg.addEventListener("keydown", (e) => {
+    const c = Number(svg.dataset.call ?? xMax), far = Math.max(1, Math.round(xMax / 40));
+    if (e.key === "Enter" && !pick) { e.preventDefault(); return pickAt(c); }
+    const to = { ArrowLeft: c - far, ArrowRight: c + far, Home: 1, End: xMax }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    show(to);
+    detailCall.set(fk, Number(svg.dataset.call));
+  });
+  // What the line leaves out, and why: a run with no context, an older supervisor's last 400 calls, the calls running now.
+  const blank = runs.filter((r) => r.ended_at && (r.calls ?? 0) > 0 && !r.ctx?.length).map((r) => {
+    const mine = sp.runs.filter((x) => x.name === r.name);
+    const i = mine.findIndex((x) => x.id === r.id);
+    return mine.length === 1 ? `${r.name}'s run` : ORDINAL[i] ? `${r.name}'s ${ORDINAL[i]} run` : `${r.name}'s run ${i + 1}`;
+  });
+  const cut = [...new Set(runs.filter((r) => r.line?.known).map((r) => r.name))], live = runs.filter((r) => !r.ended_at);
+  const laps = [...new Set(live.map((r) => r.laptop).filter(Boolean))];
+  const picker = h("span", { class: "seg sp-pick", role: "group", "aria-label": "Context per call of" },
+    h("button", { type: "button", "aria-pressed": String(!pick), "data-fk": `pick/${key}/`, onclick: () => set(null, `pick/${key}/`) }, "All agents"),
+    sp.agents.filter((a) => a.known).map((a) => h("button", { type: "button", "aria-pressed": String(pick?.name === a.name), "data-fk": `pick/${key}/${a.name}`, style: `--k:${a.color}`, onclick: () => set(a.name, `pick/${key}/${a.name}`) }, h("i", { class: "sw", "aria-hidden": "true" }), a.name)));
+  return h("div", { class: "sp-ctx" },
+    h("div", { class: "sp-ctx-h" }, h("h4", null, pick ? `${pick.name}'s context per call` : "Context, summed call by call"), picker),
+    h("figure", null, wrap),
+    h("div", { class: "key" }, keyItems),
+    h("p", { class: "note sp-note" }, note),
+    blank.length ? h("p", { class: "note sp-blank" }, `${blank.join(", ")} ${blank.length === 1 ? "has" : "have"} no context recorded.`) : null,
+    state.weigh ? h("p", { class: "note ud-raw" }, "Context is raw tokens: weighing applies to the bars.") : null,
+    cut.length ? h("p", { class: "note ud-approx" }, `The session's line is approximate while ${andList(cut)} ${cut.length === 1 ? "runs" : "run"}: ${cut.length === 1 ? "its" : "their"} laptop's supervisor reports only the last 400 calls.`) : null,
+    live.length ? h("p", { class: "note sp-live" }, `Running: ${andList([...new Set(live.map((r) => r.name))])}'s calls so far, from ${laps.length ? laps.join(" and ") : "its laptop"}'s last report.`) : null);
+}
+
 /** Today's figure is short by what a quiet laptop's workers used since it last reported: which laptop's, and as of when (review D; Peach). */
 function quietSince(key) {
   const on = new Set(liveWorkers(key).filter((w) => w.started_at).map((w) => w.laptop));
@@ -3424,15 +3807,19 @@ function quietSince(key) {
 function usageCard(reply, p, W) {
   const series = usageSoFar(reply, p.project), days = reply.days, { vals, median, total } = usageFigures(series, days);
   const runsToday = days.at(-1) === localDay(brokerNow());
-  // Escape in the card closes the day that is open in it.
-  const esc = (e) => { if (e.key === "Escape" && state.usageDay.has(p.project)) letDayGo(p.project); };
+  // Escape in the card closes what is open in it, the innermost first: a session's panel, then the day.
+  const esc = (e) => {
+    if (e.key !== "Escape") return;
+    if (state.usageSession.has(p.project)) closeSession(p.project);
+    else if (state.usageDay.has(p.project)) letDayGo(p.project);
+  };
   return h("section", { class: "card ucard", dataset: { project: p.project }, onkeydown: esc },
     h("div", { class: "u-h" }, h("a", { class: "u-name", href: projectHref(p.project) }, p.name),
       h("span", { class: "u-tot" }, h("b", null, fmtTokens(total)), h("span", { class: "muted" }, ` ${tokensWord()}, ${days.length} days`)),
       h("span", { class: "muted u-today" }, runsToday ? [`today so far ${fmtTokens(vals.at(-1))}`, quietSince(p.project), " · "] : null, `median day ${median === null ? "–" : fmtTokens(median)}`)),
     usageBars(p.project, series, days, W),
     usageDayLine(p.project, series, days, reply.weights),
-    dayDetail(p.project, series, days, W),
+    state.usageSession.has(p.project) ? sessionPanel(p.project, series, days, W) : dayDetail(p.project, series, days, W),
     usageNotes(p.project, series, days));
 }
 
@@ -3449,7 +3836,7 @@ function viewUsage() {
     weights ? h("div", { class: "u-says" }, h("p", null, weighSays(weights)), whatsFactored(weights)) : null,
     r.reply ? h("div", { class: "ugrid" }, r.reply.projects.map((p) => usageCard(r.reply, p, usageWidth(window.innerWidth >= 1200 ? 2 : 1)))) : r.error ? null : h("div", { class: "empty-card" }, "Reading usage…"),
     r.reply && !r.reply.projects.length ? h("div", { class: "empty-card" }, "No project's board is in the service yet.") : null,
-    r.reply ? h("p", { class: "note" }, "Tap a day for what made it and its context per call. A run's tokens are spread over the days it ran; today's include the workers running now, so far. A session's own context per call is on its card, on the feature's page.") : null,
+    r.reply ? h("p", { class: "note" }, "Each bar is its day's sessions, the biggest at its foot: point at a part, or tap the day, to see which session it is; open one for its agents. A run's tokens are spread over the days it ran; today's include the workers running now, so far.") : null,
   ];
 }
 

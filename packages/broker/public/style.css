@@ -1009,13 +1009,12 @@ form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width
 @media (max-width: 600px) {
   .factored > summary, .puse .u-retry { min-height: 44px; display: inline-flex; align-items: center; }
   .u-step { min-width: 44px; min-height: 44px; }
-  /* A spike, and each of the biggest, has a row of its own: the row is the tap. */
+  /* A spike has a row of its own: the row is the tap. */
   .big-s { min-height: 44px; display: flex; gap: 6px; align-items: center; min-width: 0; }
   .big-s .sep { display: none; }
   .big-s a, .big-s .more-t { min-height: 44px; display: inline-flex; align-items: center; min-width: 0; }
   .u-name { padding: 12px 0; margin: -12px 0; }
   .banner button { min-height: 44px; }
-  .biggest { display: grid; }
   .factored th, .factored td { padding-left: 8px; padding-right: 8px; }
 }
 /* A day's detail under its line: two graphs against the period's median (Casper's Q-13) */
@@ -1044,6 +1043,100 @@ form.rule-form input { font: inherit; font-size: 16px; flex: 1 1 12em; min-width
 .ud .tip { min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ud .note { margin: 0; }
 @media (max-width: 600px) { .ud-x { min-width: 44px; min-height: 44px; } .ud-frame button { min-height: 44px; } .ud-roles { width: 100%; } }
+
+/* Usage, from a session's bar to its agents (BOB-211, design/BOB-211/spec.md §4). */
+/* An agent's colour in a session's panel, by its place in the spend chart (biggest first); a 7th and on are --idle.
+   Each is ≥ 3:1 on --surface, light and dark; the first is --accent's. */
+:root { --ag-1: #2f5d50; --ag-2: #7c3aed; --ag-3: #2a6fdb; --ag-4: #be185d; --ag-5: #0e7490; --ag-6: #c2410c; }
+@media (prefers-color-scheme: dark) { :root { --ag-1: #7fbfa9; --ag-2: #a78bfa; --ag-3: #6ea8fe; --ag-4: #f472b6; --ag-5: #22d3ee; --ag-6: #fb923c; } }
+/* With a mouse, a part is its own target; pointing at a session lights its parts on every day it ran, and dims the rest. */
+.ugraph .bar .shit { fill: transparent; cursor: pointer; }
+.ugraph.dim .sg:not(.hl) { opacity: .35; }
+.ugraph .sg.hl { stroke: var(--text); stroke-width: 1.5; opacity: 1; fill-opacity: 1; }
+.ugraph .sg.open { stroke: var(--text); stroke-width: 2; }
+.ugraph .bar:focus-visible .sg.kf { stroke: var(--text); stroke-width: 2; }
+.u-tip { min-width: 0; max-width: 240px; white-space: normal; font-size: 12.5px; z-index: 3; }
+.u-tip b { font-weight: 600; }
+.u-tip .t-title { color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.u-tip .t-run, .u-s .run-dot { color: var(--ok); }
+
+/* The picked day's sessions, biggest first: the key to the bar's parts, each a button to its panel. */
+.u-ss { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 0; }
+.u-s { display: grid; grid-template-columns: 12px auto minmax(0, 1fr) auto 14px; gap: 8px; align-items: center; width: 100%; min-height: 32px; padding: 2px 4px;
+  border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; font-size: 13px; font-variant-numeric: tabular-nums; text-decoration: none; }
+button.u-s:hover, a.u-s:hover, button.u-s[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 9%, var(--surface)); }
+button.u-s[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--accent); }
+.uday a.u-s:hover { text-decoration: none; }
+.u-s.quiet { color: var(--muted); }
+.u-s .n { white-space: nowrap; }
+.u-s .n .id { margin-right: 5px; }
+.u-s .t { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.u-s .v { font-weight: 600; }
+.u-s.quiet .v { font-weight: 400; }
+.u-s .go { color: var(--accent); font-size: 16px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--k, var(--accent)); }
+.u-s .sw.r0 { background: var(--accent); } .u-s .sw.r1 { background: color-mix(in srgb, var(--accent) 68%, var(--surface)); }
+.u-s .sw.r2 { background: color-mix(in srgb, var(--accent) 46%, var(--surface)); } .u-s .sw.rest { background: color-mix(in srgb, var(--accent) 26%, var(--surface)); }
+.u-s .sw.none { background: color-mix(in srgb, var(--idle) 55%, var(--surface)); }
+
+/* A session's panel, in the place of the day's detail, the card's full width. */
+.sp { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; border-top: 1px solid var(--line); padding-top: 10px; margin-top: 4px; }
+.sp-h { display: flex; gap: 8px 10px; align-items: center; }
+.sp-h .kind[data-kind="design"] { --k: var(--k-design); } .sp-h .kind[data-kind="build"] { --k: var(--k-build); }
+.sp-h .kind[data-kind="review"] { --k: var(--k-review); } .sp-h .kind[data-kind="retro"] { --k: var(--k-retro); }
+.sp-h h3 { margin: 0; font-size: 15px; font-weight: 600; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.sp-h h3 .id { font-size: 15px; margin-right: 5px; }
+.sp-h .ud-x { flex: none; margin-left: auto; }
+.sp-m { display: grid; gap: 2px; }
+.sp-m p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.sp-m .sp-title { font-size: 13.5px; }
+.sp-tot b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.sp-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.sp-body.side { grid-template-columns: minmax(0, 42fr) minmax(0, 58fr); gap: 20px; align-items: start; }
+.sp h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+
+/* Spend per agent: a row each, the row is the button; the bar's parts are the agent's runs. */
+.sp-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.sp-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "who v" "bar bar"; gap: 3px 10px; width: 100%; min-height: 44px; padding: 5px 8px;
+  border: 0; border-radius: 8px; background: transparent; color: var(--text); text-align: left; font-size: 13px; font-variant-numeric: tabular-nums; }
+button.sp-row:hover { background: color-mix(in srgb, var(--k) 8%, var(--surface)); }
+.sp-row[aria-pressed="true"] { background: color-mix(in srgb, var(--k) 11%, var(--surface)); box-shadow: inset 3px 0 0 var(--k); }
+.sp-row .who { grid-area: who; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-row .who .sw { margin-right: 6px; vertical-align: 0; }
+.sp-row .v { grid-area: v; font-weight: 600; }
+.sp-row .v small { font-weight: 400; color: var(--muted); font-size: 12px; }
+.sp-bar { grid-area: bar; display: flex; gap: 2px; height: 10px; }
+.sp-bar i { display: block; height: 100%; background: var(--k); border-radius: 2px; min-width: 2px; }
+.sp-sum { display: flex; justify-content: space-between; padding: 6px 8px; border-top: 1px solid var(--line); font-size: 13px; font-variant-numeric: tabular-nums; }
+.sp-spend .note { margin-top: 4px; }
+
+/* Context per call: All agents or one; the picker is the same choice as the rows. */
+.sp-ctx { display: grid; gap: 6px; min-width: 0; }
+.sp-ctx figure { margin: 0; }
+.sp-ctx-h { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; }
+.sp-ctx-h h4 { margin: 0; }
+.sp-pick { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; }
+.sp-pick button { white-space: nowrap; flex: none; }
+.sp-pick button .sw { width: 8px; height: 8px; margin-right: 6px; vertical-align: 1px; }
+.sp-pick button[aria-pressed="true"] .sw { outline: 1px solid var(--bg); }
+.sp svg { width: 100%; height: auto; display: block; touch-action: pan-y; outline: none; }
+.sp svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.sp svg text { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.sp svg .gl { stroke: var(--line); }
+.sp .tip { min-width: 0; white-space: nowrap; }
+.sp .note { margin: 0; }
+.sp-foot a { color: var(--accent); }
+
+@media (max-width: 600px) {
+  .u-s { min-height: 44px; grid-template-columns: 12px minmax(0, 1fr) auto 14px; grid-template-areas: "sw n v go" ". t t t"; padding: 6px 4px; row-gap: 0; }
+  .u-s .sw { grid-area: sw; } .u-s .n { grid-area: n; } .u-s .v { grid-area: v; } .u-s .go { grid-area: go; }
+  .u-s .t { grid-area: t; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 12.5px; }
+  .sp-h .ud-x { min-width: 44px; min-height: 44px; }
+  .sp-h h3 .id { display: inline-flex; min-height: 44px; align-items: center; }
+  .sp-pick { width: 100%; }
+  .sp-pick button { min-height: 44px; }
+  .sp-foot a { display: inline-flex; min-height: 44px; align-items: center; }
+}
 
 /* A project's page (BOB-121 spec 2.3): what it is doing on the left, what it needs and uses on the right; one column under 1000 px. */
 .p-top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
