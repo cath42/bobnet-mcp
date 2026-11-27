@@ -486,7 +486,7 @@ describe("the project read (ADR 0014 §3, BOB-171)", () => {
     expect([...new Set([...page.sessions[0]!.runs, ...page.other_runs].map((r) => r.weighted))]).toEqual([49]);
     expect(page.sessions[0]!.runs.map((r) => r.id)).toContain("w_old");
     expect(page.sessions[0]!.weighted).toBe(52 * 49);
-  });
+  }, 30_000); // 100+ runs written one by one: seconds alone, over 5 s under a busy land (BOB-210)
 
   it("weighs a session and its runs on get, an undeclared model as unknown", async () => {
     await project();
