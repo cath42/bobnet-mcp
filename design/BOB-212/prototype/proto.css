@@ -503,11 +503,14 @@ body.vf-lock { overflow: hidden; }
 .vf-where .vf-title a:hover { text-decoration: underline; }
 .vf-btns { display: inline-flex; gap: 6px; }
 .vf-pick optgroup { font-style: normal; color: var(--muted); }
-/* The toggle per diagram: Liam's three show modes. */
-.vf-show { align-items: center; }
-.vf-show-l { font-size: 12.5px; color: var(--muted); padding: 0 6px 0 2px; }
-.vf-show button { min-height: 34px; padding: 4px 11px; font-size: 13.5px; }
-@media (pointer: coarse) { .vf-show button { min-height: 40px; } }
+/* Version 5: each table opens on its own node (in the frame). The bar keeps only a small extra: every table at once,
+   as two quiet text buttons, not a mode. */
+.vf-all { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; }
+.vf-act .vf-all button { min-height: 34px; padding: 4px 8px; border: 0; background: none; color: var(--accent); font-size: 13px; }
+.vf-act .vf-all button:hover:not(:disabled) { text-decoration: underline; }
+.vf-act .vf-all button:disabled { color: var(--muted); opacity: .6; cursor: default; }
+.vf-all button + button::before { content: "·"; display: inline-block; color: var(--muted); margin-right: 10px; }
+@media (pointer: coarse) { .vf-act .vf-all button { min-height: 44px; } }
 /* The diagrams as tabs, with their table counts. */
 .dia-tabs .n { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 .dia-tabs .skel-t { flex: none; align-self: center; width: 9em; height: 12px; margin: 0 12px; border-radius: 6px; background: var(--line); }
@@ -516,7 +519,7 @@ body.vf-lock { overflow: hidden; }
   .vf-act { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; width: 100%; }
   .vf-act .vf-pick { grid-column: 1 / -1; order: -1; }
   .vf-act .vf-back { justify-self: start; }
-  .vf-show { justify-self: start; }
+  .vf-all { justify-self: start; }
   .vf-btns { justify-self: end; }
 }
 /* The entity card, version 4: where the table is drawn, keys, nullability, defaults and an enum's values. */
@@ -574,9 +577,9 @@ body.vf-lock { overflow: hidden; }
 .term.on { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: -10px 0 0 color-mix(in srgb, var(--accent) 8%, transparent), inset 3px 0 0 var(--accent); padding-left: 10px; }
 .pm-name .proto-tag, .p-h .proto-tag { margin-left: 8px; vertical-align: middle; }
 @media (max-width: 760px) {
-  /* A phone: the toggle and the buttons share one row; the group keeps its "Show" name for a screen reader. */
-  .vf-show-l { display: none; }
-  .vf-show button { padding: 4px 9px; }
+  /* A phone: the extra and the buttons share one row. */
+  .vf-act .vf-all button { padding: 4px 3px; font-size: 12.5px; white-space: nowrap; }
+  .vf-all button + button::before { margin-right: 6px; }
   .vf-btns button { padding: 4px 10px; }
 }
 .lib-how a { color: var(--accent); }

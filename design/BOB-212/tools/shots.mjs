@@ -1,6 +1,6 @@
-// Shots of the BOB-212 prototype (version 4, Toolshed) at 390 (phone, touch), 1024 (tablet, touch) and 1440 (desktop), light,
+// Shots of the BOB-212 prototype (version 5, Toolshed) at 390 (phone, touch), 1024 (tablet, touch) and 1440 (desktop), light,
 // and some dark. The viewers are served with their own CSP (ADR 0016 §6), the page with frame-src 'self'.
-//   node design/BOB-212/tools/shots.mjs [name-filter]   (writes design/BOB-212/shots/v4/*.png)
+//   node design/BOB-212/tools/shots.mjs [name-filter]   (writes design/BOB-212/shots/v5/*.png)
 // Prints any page error, any page wider than its viewport, and each viewer's ready.
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -9,7 +9,7 @@ import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const { chromium } = await import(join(here, "../../../packages/broker/node_modules/playwright-core/index.mjs"));
-const pub = join(here, "../prototype"), out = join(here, "../shots/v4");
+const pub = join(here, "../prototype"), out = join(here, "../shots/v5");
 (await import("node:fs")).mkdirSync(out, { recursive: true });
 const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 const hash = (n) => readFileSync(join(pub, "vendor", `${n}.hash`), "utf8").trim();
@@ -48,9 +48,7 @@ const shots = [
   ["07-c4-flow", `${T}/architecture/uc0001`, [390, 1440], async (p) => { await ready(p); await p.waitForTimeout(1500); }, false],
   ["08-c4-fullscreen", `${T}/architecture/containers`, [390, 1024], async (p) => { await ready(p); await p.click(".vf-full-b"); await p.waitForTimeout(1500); }, false],
   ["09-erd-all", `${T}/data`, [390, 1024, 1440], async (p) => { await ready(p); await p.waitForTimeout(1500); }, false, true],
-  ["10-erd-all-columns", `${T}/data`, [1440], async (p) => { await ready(p); await p.waitForTimeout(1200); await p.click('.vf-show button[data-v="columns"]'); await p.waitForTimeout(1500); }, false],
   ["11-erd-lending", `${T}/data/lending`, [390, 1024, 1440], async (p) => { await ready(p); await p.waitForTimeout(1500); }, false, true],
-  ["12-erd-lending-keys", `${T}/data/lending`, [1440], async (p) => { await ready(p); await p.waitForTimeout(1200); await p.click('.vf-show button[data-v="keys"]'); await p.waitForTimeout(1500); }, false],
   ["13-erd-card", `${T}/data/lending/loan`, [390, 1024, 1440], async (p) => { await ready(p); await p.waitForTimeout(2500); }, false, true],
   ["14-erd-card-all", `${T}/data/all/reservation`, [1440], async (p) => { await ready(p); await p.waitForTimeout(2500); await p.click(".ent-all summary").catch(() => {}); await p.waitForTimeout(300); }, false],
   ["15-erd-hover", `${T}/data/catalogue`, [1440], async (p) => {
@@ -79,7 +77,7 @@ const shots = [
   ["35-loading", T, [390, 1440], async (p) => { await state(p, "loading"); }, false],
   ["36-sections-folded", `${T}/data`, [390, 1440], async (p) => { await ready(p); await p.click(".secs-pick"); await p.waitForTimeout(300); }, false],
   ["37-work-tab", "#project/toolshed", [390, 1440], null, false],
-  // A click on a table in the frame opens its card; a click on another moves the card. The toggle stays per diagram.
+  // A click on a table in the frame opens its card; a click on another moves the card. Each table's open state stays per diagram.
   ["38-erd-click", `${T}/data/lending`, [1440], async (p) => {
     await ready(p); await p.waitForTimeout(1500);
     const nodes = p.frameLocator(".vf-box iframe").locator(".react-flow__node");

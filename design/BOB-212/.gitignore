@@ -1,5 +1,5 @@
 # The prototype draws Toolshed, the library standard's sample (public): prototype/data.js is committed, made by
-# tools/gen_data.mjs. The two viewers (ADR 0016 §6, 0017 §7), packed by tools/pack-erd.mjs and from
-# tools/likec4-viewer.jsx, are about 10 MB: made, not kept. So are the shots (tools/shots.mjs).
+# tools/gen_data.mjs. The two viewers (ADR 0016 §6, 0017 §7), packed by tools/pack-erd.mjs (Toad's viewer, BOB-212 v5) and from
+# tools/likec4-viewer.jsx, are about 10 MB: made, not kept. So are the shots (tools/shots.mjs); shots-v5/ (Q-22's evidence) is kept.
 prototype/vendor/
 shots/

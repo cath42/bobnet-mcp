@@ -1,0 +1,20 @@
+/* BOB-212 prototype v5 (spec §11): the table node's look and its own control, after Toad's erd-viewer.css.
+   One size of node on every device (HEAD 40, TOG 52: pack-erd.mjs sets size() to match), so a closed node stays a
+   slim name chip on a phone too. The control's tap target is not its drawn size: on a coarse pointer an invisible
+   ::before around the chip is at least 44 px on screen at the zoom the reader is at (--z, from the viewport),
+   up to 88 x 88 in the diagram (44 px down to 50 %), so it never reaches the next node across the gaps (28, 56). */
+.tbl { overflow: visible; }
+.tbl .head { height: 40px; border-radius: 7px 7px 0 0; }
+.tbl:not(.open) .head { border-radius: 7px; }
+.cols { border-radius: 0 0 7px 7px; overflow: hidden; }
+.tog { position: relative; width: 52px; height: 28px; font-size: 12px; }
+.tog .n { font-variant-numeric: tabular-nums; }
+.tog[aria-expanded="true"] { background: color-mix(in srgb, var(--bn-accent) 10%, var(--bn-surface)); }
+.tog::before { content: ""; position: absolute; left: 50%; top: 50%; width: 100%; height: 100%; transform: translate(-50%, -50%); border-radius: 50%; }
+@media (pointer: coarse) {
+  .head { height: 40px; }
+  .tog { width: 52px; height: 28px; font-size: 12px; }
+  .tog::before { width: clamp(52px, calc(46px / var(--z, 1)), 88px); height: clamp(28px, calc(46px / var(--z, 1)), 88px); }
+  /* The press shows the target the finger hit, then the node opens. */
+  .tog:active::before { background: color-mix(in srgb, var(--bn-accent) 16%, transparent); }
+}

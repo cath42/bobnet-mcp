@@ -309,12 +309,11 @@
   }
 
 
-  // ---------- zoomable diagrams: LikeC4 and Liam ERD in a sandboxed frame (ADR 0016 §6, 0017 §7; spec §9, §10) ----------
+  // ---------- zoomable diagrams: LikeC4 and BobNet's own ERD viewer in a sandboxed frame (ADR 0016 §6, 0017 §7; spec §9, §10) ----------
   const FRAMES = new Set();
   addEventListener("message", (e) => { for (const f of FRAMES) if (e.source === f.win()) f.on(e.data || {}); });
   const coarse = matchMedia("(pointer: coarse)");
   const phoneQ = matchMedia("(max-width: 760px)");
-  const SHOWS = [["tables", "Tables", "Each table's name"], ["keys", "Keys", "Names, keys and foreign keys"], ["columns", "Columns", "Every column"]];
   const diagramLabel = (id) => (id === "all" ? "All tables" : cap(id.replace(/[_-]+/g, " ")));
   // ADR 0017 §2's fixed view ids, grouped for the picker; any other id is a deployment view.
   const viewKind = (id) => (id === "index" || id === "containers" || /Components$/.test(id) ? "c4" : /^uc\d{4}$/.test(id) ? "flow" : "deploy");
@@ -324,10 +323,11 @@
     const diagram = c4 ? null : item || "all";
     const dbml = c4 ? null : filesOf(lib, "data")[0];
     const files = c4 ? filesOf(lib, "architecture").map((f) => ({ path: f.path, text: lib.texts[f.path] })) : [{ path: dbml.path, text: lib.texts[dbml.path] }];
-    const showKey = c4 ? null : `show.${lib.key}.${diagram}`;
+    // Version 5: which tables are open, per diagram, kept on the device (ADR 0017 §7, Q-22). None, the first time.
+    const openKey = c4 ? null : `expanded.${lib.key}.${diagram}`;
     const cachedViews = c4 ? [] : JSON.parse(store.get(`views.${dbml.blob}`) || "null");
     const st = { ready: false, views: c4 ? [] : cachedViews || [], tables: [], enums: new Map(), note: "", shown: new Set(), errors: [], timer: 0,
-      focus: c4 ? item || "index" : focus || "", show: c4 ? null : store.get(showKey) || (diagram === "all" ? "tables" : "columns") };
+      focus: c4 ? item || "index" : focus || "", open: c4 ? [] : JSON.parse(store.get(openKey) || "[]") };
     const post = (m) => iframe.contentWindow?.postMessage(m, "*");
     const go = (f) => {
       if (c4) { nav(libHref(ctx.key, "architecture", f || "index")); setFocus(f || "index"); return; }
@@ -341,9 +341,10 @@
       go(e.target.value);
       if (box.getBoundingClientRect().bottom > innerHeight) wrap.scrollIntoView({ block: "start" }); // a phone: bring the frame up
     } });
-    // Version 4: the toggle per diagram (ADR 0017 §7), Liam's own three show modes, kept on the device.
-    const seg = c4 ? null : h("span", { class: "seg vf-show", role: "group", "aria-label": "Show" }, h("span", { class: "vf-show-l", "aria-hidden": "true" }, "Show"),
-      SHOWS.map(([v, t, tip]) => h("button", { type: "button", title: tip, "aria-pressed": String(v === st.show), dataset: { v }, onclick: () => setShow(v, true) }, t)));
+    // Version 5: each table opens on its own node, in the frame. The bar has only a small extra: open or close them all.
+    const expAll = h("button", { type: "button", class: "lnk", disabled: true, onclick: () => setOpen([...st.shown], true) }, "Expand all");
+    const colAll = h("button", { type: "button", class: "lnk", disabled: true, onclick: () => setOpen([], true) }, "Collapse all");
+    const seg = c4 ? null : h("span", { class: "vf-all", role: "group", "aria-label": "Every table in this diagram" }, expAll, colAll);
     const fit = h("button", { type: "button", onclick: () => post({ t: "fit" }) }, "Fit");
     const fullB = h("button", { type: "button", class: "vf-full-b", onclick: () => full(!wrap.classList.contains("full")) }, "Full screen");
     const done = h("button", { type: "button", class: "vf-done", onclick: () => wrap.classList.remove("exploring") }, "Done");
@@ -351,7 +352,7 @@
     const veil = h("div", { class: "vf-veil" }, h("div", { class: "vf-load" }, h("b", null, c4 ? "Drawing the model…" : "Drawing the data model…"),
       h("span", null, `The first time on this device, the viewer downloads (${c4 ? "2.4" : "0.9"} MB).`), h("div", { class: "skel" }, h("i"), h("i"), h("i"))));
     const touch = h("button", { type: "button", class: "vf-touch", onclick: () => wrap.classList.add("exploring") },
-      h("b", null, "Tap to explore"), h("span", null, c4 ? "Then pinch to zoom, drag to move, tap a box to open it" : "Then pinch to zoom, drag to move, tap a table to open it"));
+      h("b", null, "Tap to explore"), h("span", null, c4 ? "Then pinch to zoom, drag to move, tap a box to open it" : "Then tap ▸ on a table for its columns, tap its name for its card"));
     const peek = h("div", { class: "ent-peek", hidden: true, "aria-hidden": "true" });
     const ent = h("div", { class: "ent-slot" });
     const box = h("div", { class: "vf-box" }, iframe, veil, touch, peek, ent);
@@ -362,7 +363,7 @@
     };
     const foot = h("div", { class: "vf-foot" }, c4
       ? ["Model: ", h("a", { href: ghTree(lib, "library/architecture"), target: "_blank", rel: "noopener" }, "library/architecture/ ↗"), ` · LikeC4 · ${lib.ref} at ${sha7(lib.commit)}`]
-      : ["Model: ", h("a", { href: ghBlob(lib, dbml.path), target: "_blank", rel: "noopener" }, "data-model.dbml ↗"), ` · DBML · Liam ERD · ${lib.ref} at ${sha7(lib.commit)}`]);
+      : ["Model: ", h("a", { href: ghBlob(lib, dbml.path), target: "_blank", rel: "noopener" }, "data-model.dbml ↗"), ` · DBML · ${lib.ref} at ${sha7(lib.commit)}`]);
     const wrap = h("div", { class: `vf vf-${kind}` },
       h("div", { class: "vf-bar" }, h("div", { class: "vf-where" }, crumb, sub), h("span", { class: "vf-act" }, c4 ? back : seg, pick, h("span", { class: "vf-btns" }, fit, fullB, done))),
       warnLine, box, foot);
@@ -449,11 +450,12 @@
       peek.style.left = `${Math.max(8, Math.min(r.x, W - pw - 8))}px`;
       peek.style.top = `${r.y + r.h + 8 + ph < H ? r.y + r.h + 8 : Math.max(8, r.y - ph - 8)}px`;
     }
-    function setShow(v, mine) {
-      st.show = v;
-      store.set(showKey, v);
-      seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
-      if (mine) post({ t: "show", show: v });
+    function setOpen(names, mine) {
+      st.open = [...names].sort();
+      store.set(openKey, JSON.stringify(st.open));
+      expAll.disabled = !st.ready || st.open.length >= st.shown.size;
+      colAll.disabled = !st.ready || !st.open.length;
+      if (mine) post({ t: "expand", tables: st.open });
     }
 
     const viewOf = (id) => st.views.find((v) => v.id === id);
@@ -539,7 +541,7 @@
       on(d) {
         if (d.t === "hello") {
           if (proto.state === "slow") return; // the viewer never answers: loading, then the fallback at 15 s
-          post(c4 ? { t: "files", kind, files, focus: st.focus } : { t: "files", kind: "erd", files, view: diagram === "all" ? null : diagram, show: st.show, focus: st.focus });
+          post(c4 ? { t: "files", kind, files, focus: st.focus } : { t: "files", kind: "erd", files, view: diagram === "all" ? null : diagram, expanded: st.open, focus: st.focus });
         }
         if (d.t === "ready") {
           clearTimeout(st.timer);
@@ -550,7 +552,10 @@
             if (!viewOf(st.focus)) st.focus = "index";
           } else {
             if (!d.tables?.length) return fail("The viewer found errors in it:", st.errors);
-            st.views = d.views || []; st.tables = d.tables; st.note = d.note || ""; st.shown = new Set(d.shown || []);
+            st.views = d.views || []; st.note = d.note || ""; st.shown = new Set(d.shown || []);
+            // The viewer's model calls a note `note`; the card reads `comment`.
+            st.tables = d.tables.map((t) => ({ ...t, comment: t.note, columns: t.columns.map((c) => ({ ...c, comment: c.note })) }));
+            setOpen(d.expanded || [], false);
             st.enums = new Map((d.enums || []).map((x) => [x.name, x]));
             store.set(`views.${dbml.blob}`, JSON.stringify(st.views));
             if (diagram !== "all" && !st.views.some((v) => v.id === diagram)) return fail(`It has no diagram "${diagram}". `, []);
@@ -570,7 +575,7 @@
           nav(c4 ? libHref(ctx.key, "architecture", st.focus) : libHref(ctx.key, "data", diagram, d.focus || null));
           draw();
         }
-        if (d.t === "show" && !c4) setShow(d.show, false); // Liam's own show menu
+        if (d.t === "expanded" && !c4) setOpen(d.tables || [], false); // the reader opened or closed one on its node
         if (d.t === "hover" && !c4) hover(d.table, d.rect);
       },
     };
