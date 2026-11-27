@@ -1,16 +1,27 @@
-// BOB-212 prototype: the Projects menu, a project's Work · Library tabs, and each project's library from its repo's main.
-// The libraries are real (data.js, from origin/main). Everything else on the page is a stand-in for what is built.
+// BOB-212 prototype, version 2: the Projects menu, a project's Work · Library tabs, and each project's library in
+// ADR 0016's seven fixed sections: cards and diagrams first, the prose behind them. The libraries are real (data.js,
+// from each repo's main); everything else on the page is a stand-in for what is built.
 (function () {
   "use strict";
   const LIBS = window.LIBS;
   const PROJECTS = [
-    { key: "bobnet", name: "BobNet", sub: "Agents across Casper's laptops", repo: "cath42/bobnet", lead: "Mario", po: "Peach" },
-    { key: "helix", name: "Helix", sub: LIBS.helix.tagline, repo: "cath42/helix-navigator", lead: "Bob", po: "Picard" },
-    { key: "vitals", name: "Vitals", sub: LIBS.vitals.tagline, repo: "cath42/vitals" },
+    { key: "bobnet", name: "BobNet", repo: "cath42/bobnet-mcp", lead: "Mario", po: "Peach" },
+    { key: "helix", name: "Helix", repo: "cath42/helix-navigator", lead: "Bob", po: "Picard" },
+    { key: "vitals", name: "Vitals", repo: "cath42/vitals" },
+  ];
+  // ADR 0016 §1: the skeleton. Ids fixed; the labels and the "what it holds" lines are the page's wording.
+  const SECTIONS = [
+    { id: "overview", label: "Overview", role: "product owner", holds: "Goals, scope, constraints and quality goals." },
+    { id: "architecture", label: "Architecture", role: "architect", holds: "The C4 model, from context to containers to components, and how the parts run and deploy." },
+    { id: "data", label: "Data model", role: "architect", holds: "The schema as a diagram, the data dictionary and the taxonomy." },
+    { id: "decisions", label: "Decisions", role: "architect", holds: "One record per decision: its context, the options, the decision, its consequences and its status." },
+    { id: "usecases", label: "Use cases", role: "product owner", holds: "One card per use case, with its scenarios under it." },
+    { id: "ux", label: "UX design", role: "designer", holds: "One card per feature: its spec, its prototype, and Casper's verdict with its date." },
+    { id: "glossary", label: "Glossary", role: "product owner", holds: "Terms in users' words." },
   ];
   const $ = (id) => document.getElementById(id);
   const NOW = Date.now();
-  // The prototype's switch: what the read says (spec §5). Not built.
+  // The prototype's switch: what the read says (spec §11). Not built.
   const proto = { state: "ok" };
 
   // ---------- helpers ----------
@@ -30,6 +41,7 @@
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const dayOf = (iso) => { const d = new Date(iso.length === 10 ? iso + "T12:00:00" : iso); return `${d.getDate()} ${MONTHS[d.getMonth()]}`; };
+  const dayYear = (iso) => { const d = new Date(iso + "T12:00:00"); return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`; };
   const clock = (iso) => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
   function ago(ms) {
     const m = Math.round(ms / 60000);
@@ -40,34 +52,48 @@
   }
   const slug = (s) => s.toLowerCase().replace(/<[^>]+>/g, "").replace(/&[a-z]+;/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const sha7 = (s) => s.slice(0, 7);
+  const iso = (ms) => new Date(ms).toISOString();
+  const unesc = (s) => s.replace(/&(amp|lt|gt|quot|#39);/g, (_, e) => ({ amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" })[e]);
+  const plain = (s) => s.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\*\*|__/g, "").replace(/`/g, "");
+  const clip = (s, n) => (s.length > n ? s.slice(0, s.lastIndexOf(" ", n - 1) > n * 0.6 ? s.lastIndexOf(" ", n - 1) : n - 1) + "…" : s);
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const kb = (s) => `${Math.max(1, Math.round(new Blob([s]).size / 1024))} KB`;
 
   // ---------- the route ----------
-  // #overview · #project/<key> (Work) · #project/<key>/library[/<page>[/<heading>]]
+  // #overview · #project/<key> (Work) · #project/<key>/library[/<section>[/<page>[/<focus>]]]
+  // <focus>: a heading (a page), a card or a child (cards), a C4 view (likec4), a table (erd).
   function route() {
-    const parts = (location.hash || "#overview").slice(1).split("/").map(decodeURIComponent);
+    const parts = (location.hash || "#project/bobnet/library").slice(1).split("/").map(decodeURIComponent);
     if (parts[0] === "project" && PROJECTS.some((p) => p.key === parts[1])) {
-      return { view: "project", key: parts[1], tab: parts[2] === "library" ? "library" : "work", page: parts[3] || null, heading: parts[4] || null };
+      const lib = parts[2] === "library";
+      return { view: "project", key: parts[1], tab: lib ? "library" : "work", section: lib ? parts[3] || null : null, page: lib ? parts[4] || null : null, focus: lib ? parts[5] || null : null };
     }
     return { view: parts[0] || "overview" };
   }
-  const libHref = (key, page, heading) => `#project/${key}/library${page ? `/${page}` : ""}${heading ? `/${heading}` : ""}`;
+  const libHref = (key, sec, page, focus) =>
+    `#project/${key}/library${sec ? `/${sec}` : ""}${sec && page ? `/${page}` : ""}${sec && page && focus ? `/${encodeURIComponent(focus)}` : ""}`;
 
-  // ---------- what the broker would answer (Toad, consult c_820aa69f; ADR 0015) ----------
-  /** The library manifest as the read gives it, under the prototype's state. null: the project has none. */
+  // ---------- what the broker would answer (ADR 0015 §4, 0016 §2) ----------
+  /** The library as the read gives it, under the prototype's state. null: the project has none. */
   function libraryOf(key) {
     const lib = LIBS[key];
     if (!lib || proto.state === "none") return null;
-    const checked = { ok: 4, behind: 5 * 60, failed: 3 * 60 }[proto.state] ?? 4;
-    const m = { ...lib, checked_at: new Date(NOW - checked * 60000).toISOString(), problems: [] };
-    if (proto.state === "failed") m.problems = [{ at: new Date(NOW - 12 * 60000).toISOString(), what: "fetch", text: "git fetch origin: Could not resolve host: github.com" }];
+    const checked = { behind: 5 * 60, failed: 3 * 60 }[proto.state] ?? 4;
+    const m = { ...lib, checked_at: iso(NOW - checked * 60000), problems: [] };
+    if (proto.state === "failed") m.problems = [{ what: "fetch", at: iso(NOW - 12 * 60000), text: "git fetch origin: Could not resolve host: github.com" }];
     if (proto.state === "missing") {
-      m.pages = m.pages.map((p) => (p.id === "decisions" ? { ...p, missing: true, text: null } : p));
-      m.problems = [{ what: "missing", page: "decisions", text: `${m.pages.find((p) => p.id === "decisions").src} is not on main at ${sha7(m.commit)}` }];
+      const sid = ["decisions", "overview", "architecture"].find((s) => m.sections[s]?.pages.some((p) => p.kind === "md"));
+      const sec = m.sections[sid], pg = sec.pages.find((p) => p.kind === "md");
+      m.sections = { ...m.sections, [sid]: { ...sec, pages: sec.pages.map((p) => (p === pg ? { ...p, missing: true, text: null } : p)) } };
+      m.problems = [{ what: "missing", section: sid, page: pg.id, text: `${pg.src} is not on main at ${sha7(m.commit)}` }];
     }
     return m;
   }
+  const pagesOf = (lib, sid) => lib.sections[sid]?.pages ?? [];
   const behind = (m) => NOW - Date.parse(m.checked_at) > 2 * 3600e3;
   const ghBlob = (m, path, frag) => `${m.github}/blob/${m.commit}/${path}${frag ? `#${frag}` : ""}`;
+  const ghTree = (m, path) => `${m.github}/tree/${m.commit}/${path}`;
+  const secOf = (id) => SECTIONS.find((s) => s.id === id);
 
   // ---------- markdown: blocks, then inline. Raw HTML in a file shows as text, never runs. ----------
   function md(text, ctx) {
@@ -94,8 +120,9 @@
       }
       if ((m = l.match(/^ {0,3}(#{1,6}) +(.*?)#*\s*$/))) {
         const n = m[1].length, inner = inline(m[2], ctx), id = slug(m[2]);
-        if (n === 2 || n === 3) ctx.toc.push({ n, id, text: inner.replace(/<[^>]+>/g, "") });
-        out += `<h${n} id="h-${id}">${inner}${n === 2 || n === 3 ? `<a class="hl" href="${libHref(ctx.key, ctx.page.id, id)}" aria-label="Link to this section">#</a>` : ""}</h${n}>`;
+        if (n === 2 || n === 3) ctx.toc.push({ n, id, text: unesc(inner.replace(/<[^>]+>/g, "")) });
+        const hl = (n === 2 || n === 3) && ctx.headHref ? `<a class="hl" href="${ctx.headHref(id)}" aria-label="Link to this section">#</a>` : "";
+        out += `<h${n} id="h-${id}">${inner}${hl}</h${n}>`;
         i++;
         continue;
       }
@@ -141,7 +168,7 @@
       const ind = l.match(/^ */)[0].length;
       if (ind > indent) { cur.push(l.slice(Math.min(ind, indent + 2))); i++; continue; }
       if (m || startsBlock(l, lines[i + 1])) break;
-      cur.push(l.trim()); // a lazy continuation of the item's text
+      cur.push(l.trim());
       i++;
     }
     const lis = items.map((it) => {
@@ -172,15 +199,24 @@
     s = s.replace(/ {2,}\n/g, "<br>").replace(/\n/g, " ");
     return s.replace(/\u0000(\d+)\u0000/g, (_, n) => keep[+n]);
   }
+  /** Where a repo path is in the library: a page, or a child of a children page. */
+  function findInLib(lib, path) {
+    for (const [sid, sec] of Object.entries(lib.sections)) for (const p of sec.pages) {
+      if (p.src === path) return { sid, page: p.id };
+      const c = p.children?.find((x) => x.src === path);
+      if (c) return { sid, page: p.id, child: c.id };
+    }
+    return null;
+  }
   /** A link in a page: to a library page in place, to any other repo file on GitHub at the commit shown, http(s) out; anything else is dead text. */
   function link(href, label, ctx) {
-    if (href.startsWith("#")) return `<a href="${libHref(ctx.key, ctx.page.id, slug(href.slice(1)))}">${label}</a>`;
+    if (href.startsWith("#")) return ctx.headHref ? `<a href="${ctx.headHref(slug(href.slice(1)))}">${label}</a>` : `<a href="#h-${slug(href.slice(1))}" data-scroll>${label}</a>`;
     if (/^https?:\/\//.test(href)) return `<a class="ext" href="${esc(href)}" target="_blank" rel="noopener">${label}</a>`;
     if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return `<span class="dead" title="Not a web link">${label}</span>`;
     const [path, frag] = href.split("#");
-    const target = path ? normPath(ctx.page.src.replace(/[^/]*$/, "") + path) : ctx.page.src;
-    const hit = ctx.lib.pages.find((p) => p.src === target);
-    if (hit) return `<a href="${libHref(ctx.key, hit.id, frag ? slug(frag) : null)}">${label}</a>`;
+    const target = path ? normPath(ctx.base.replace(/[^/]*$/, "") + path) : ctx.base;
+    const hit = findInLib(ctx.lib, target);
+    if (hit) return `<a href="${libHref(ctx.key, hit.sid, hit.page, hit.child || (frag ? slug(frag) : null))}">${label}</a>`;
     return `<a class="ext" href="${esc(ghBlob(ctx.lib, target, frag))}" target="_blank" rel="noopener" title="${esc(target)} on GitHub at ${sha7(ctx.lib.commit)}">${label}</a>`;
   }
   function normPath(p) {
@@ -188,15 +224,16 @@
     for (const s of p.split("/")) { if (s === "..") out.pop(); else if (s && s !== ".") out.push(s); }
     return out.join("/");
   }
+  const mdCtx = (key, lib, sid, page, base, headHref) => ({ key, lib, sid, page, base, headHref, toc: [], diagrams: [] });
 
-  // ---------- diagrams: drawn as an image (the CSP stays as it is, ADR 0015), the source while drawing or when it can't be ----------
+  // ---------- small diagrams (mermaid): an image fitted to the column; Full size; Source ----------
   let mermaidP = null, dn = 0;
   function diagramSlot(code, ctx) {
     ctx.diagrams.push(code);
     return `<div class="dia" data-dia="${ctx.diagrams.length - 1}"></div>`;
   }
   function loadMermaid() {
-    // Prototype: from a CDN. The build vendors a pinned copy in public/vendor/ and loads it only for a page with a diagram.
+    // Prototype: from a CDN. The build vendors mermaid 11.x in public/vendor/ and loads it only for a page with a diagram.
     return (mermaidP ||= new Promise((ok, no) => {
       const s = document.createElement("script");
       s.src = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js";
@@ -210,11 +247,9 @@
       const code = ctx.diagrams[+box.dataset.dia];
       const src = h("pre", null, h("code", null, code));
       const bar = (status, ...btns) => h("div", { class: "dia-bar" }, h("span", null, status), h("span", { class: "actions" }, btns));
-      const srcLink = h("a", { href: ghBlob(ctx.lib, ctx.page.src), target: "_blank", rel: "noopener" }, "On GitHub ↗");
-      const fallback = (why) => box.replaceChildren(bar("Diagram", srcLink),
-        h("div", { class: "dia-note warn" }, why), src);
+      const srcLink = h("a", { href: ghBlob(ctx.lib, ctx.base), target: "_blank", rel: "noopener" }, "On GitHub ↗");
+      const fallback = (why) => box.replaceChildren(bar("Diagram", srcLink), h("div", { class: "dia-note warn" }, why), src);
       box.replaceChildren(bar("Diagram"), h("div", { class: "dia-note" }, "Drawing the diagram…"), src);
-      if (proto.state === "nodiagram") return fallback("This diagram couldn't be drawn here. Its source is below.");
       loadMermaid().then(async (mm) => {
         const css = getComputedStyle(document.documentElement), v = (n) => css.getPropertyValue(n).trim();
         mm.initialize({ startOnLoad: false, securityLevel: "strict", theme: "base", htmlLabels: false, flowchart: { htmlLabels: false },
@@ -230,8 +265,241 @@
         const sb = h("button", { type: "button", "aria-pressed": "false", onclick: () => { showSrc = !showSrc; sb.setAttribute("aria-pressed", String(showSrc)); src.hidden = !showSrc; } }, "Source");
         src.hidden = true;
         box.replaceChildren(bar("Diagram", full, sb), view, src);
-      }).catch((e) => { console.warn("diagram", e); fallback("This diagram couldn't be drawn here. Its source is below."); });
+      }).catch(() => fallback("This diagram couldn't be drawn here. Its source is below."));
     });
+  }
+
+  // ---------- zoomable diagrams: LikeC4 and Liam ERD in a sandboxed frame (ADR 0016 §6; spec §9, §10) ----------
+  const FRAMES = new Set();
+  addEventListener("message", (e) => { for (const f of FRAMES) if (e.source === f.win()) f.on(e.data || {}); });
+  const coarse = matchMedia("(pointer: coarse)");
+
+  function viewerFrame(kind, page, ctx, focus) {
+    const c4 = kind === "likec4";
+    const st = { ready: false, views: [], tables: [], errors: [], focus: focus || (c4 ? page.view : ""), timer: 0 };
+    const files = c4 ? page.files : [{ path: page.src, text: page.text, changed: page.changed }];
+    const post = (m) => iframe.contentWindow?.postMessage(m, "*");
+    const go = (f) => { nav(libHref(ctx.key, ctx.sid, page.id, f || null)); setFocus(f || ""); };
+    const crumb = h("div", { class: "vf-crumb", "aria-label": c4 ? "Level" : "Table" });
+    const back = h("button", { type: "button", class: "vf-back", title: "One level out", "aria-label": "One level out", onclick: () => go(parentOf()) }, "↑ Out");
+    const fit = h("button", { type: "button", onclick: () => post({ t: "fit" }) }, "Fit");
+    const fullB = h("button", { type: "button", class: "vf-full-b", onclick: () => full(!wrap.classList.contains("full")) }, "Full screen");
+    const done = h("button", { type: "button", class: "vf-done", onclick: () => wrap.classList.remove("exploring") }, "Done");
+    const iframe = h("iframe", { sandbox: "allow-scripts", src: c4 ? "vendor/likec4-viewer.html" : "vendor/erd-viewer.html", title: c4 ? `${page.title}: an architecture diagram you can zoom and open` : `${page.title}: the tables and their relations` });
+    const veil = h("div", { class: "vf-veil" }, h("div", { class: "vf-load" }, h("b", null, c4 ? "Drawing the model…" : "Drawing the schema…"),
+      h("span", null, `The first time on this device, the viewer downloads (${c4 ? "2.4" : "1.3"} MB).`), h("div", { class: "skel" }, h("i"), h("i"), h("i"))));
+    const touch = h("button", { type: "button", class: "vf-touch", onclick: () => wrap.classList.add("exploring") },
+      h("b", null, "Tap to explore"), h("span", null, c4 ? "Then pinch to zoom, drag to move, tap a box to open it" : "Then pinch to zoom, drag to move, tap a table to focus it"));
+    const box = h("div", { class: "vf-box" }, iframe, veil, touch);
+    const warnLine = h("div", { class: "vf-warn", hidden: true });
+    const jump = h("div", { class: "vf-jump" });
+    const foot = h("div", { class: "vf-foot" }, c4 ? "Model: " : "Schema: ",
+      files.map((f, i) => [i ? ", " : "", h("a", { href: ghBlob(ctx.lib, f.path), target: "_blank", rel: "noopener" }, `${f.path} ↗`)]),
+      ` · drawn here by ${c4 ? "LikeC4" : "Liam ERD"}, from main at ${sha7(ctx.lib.commit)}`);
+    const wrap = h("div", { class: `vf vf-${kind}` }, h("div", { class: "vf-bar" }, crumb, h("span", { class: "vf-act" }, c4 ? back : null, fit, fullB, done)), warnLine, box, jump, foot);
+
+    const viewOf = (id) => st.views.find((v) => v.id === id);
+    function parentOf() {
+      if (!c4) return "";
+      const cr = viewOf(st.focus)?.crumb ?? [];
+      return cr.length > 1 ? cr[cr.length - 2] : null;
+    }
+    function draw() {
+      if (c4) {
+        const v = viewOf(st.focus), cr = v?.crumb ?? [st.focus];
+        crumb.replaceChildren(...cr.flatMap((id, i) => {
+          const lab = viewOf(id)?.label ?? id, last = i === cr.length - 1;
+          return [i ? h("span", { class: "sep", "aria-hidden": "true" }, "›") : null,
+            last ? h("b", { "aria-current": "location" }, lab) : h("a", { href: libHref(ctx.key, ctx.sid, page.id, id), onclick: (e) => { e.preventDefault(); go(id); } }, lab)].filter(Boolean);
+        }), ...(v && v.title !== v.label ? [h("span", { class: "vf-title" }, v.title)] : []));
+        back.disabled = cr.length < 2;
+        jump.replaceChildren(...(st.views.length ? [h("span", { class: "lab" }, `${st.views.length} views`)] : []),
+          ...st.views.map((x) => h("button", { type: "button", class: "chip-b", "aria-pressed": String(x.id === st.focus), onclick: () => go(x.id) }, x.title, x.dynamic ? h("small", null, " · steps") : null)));
+      } else {
+        crumb.replaceChildren(st.focus ? h("a", { href: libHref(ctx.key, ctx.sid, page.id), onclick: (e) => { e.preventDefault(); go(""); } }, `All ${st.tables.length} tables`) : h("b", null, `All ${st.tables.length} tables`),
+          ...(st.focus ? [h("span", { class: "sep", "aria-hidden": "true" }, "›"), h("b", { "aria-current": "location" }, st.focus)] : []));
+        jump.replaceChildren(...(st.tables.length ? [h("span", { class: "lab" }, "Focus a table")] : []),
+          ...st.tables.map((t) => h("button", { type: "button", class: "chip-b mono", "aria-pressed": String(t === st.focus), onclick: () => go(t === st.focus ? "" : t) }, t)));
+      }
+    }
+    function setFocus(f) {
+      f = f || (c4 ? page.view : "");
+      if (f === st.focus) return;
+      st.focus = f;
+      post({ t: "focus", focus: f });
+      draw();
+    }
+    function fail(why, errors) {
+      clearTimeout(st.timer);
+      const what = c4 ? "This model" : "This schema";
+      box.replaceWith(h("div", { class: "vf-fail" }, h("b", null, `${what} couldn't be drawn here.`), h("p", null, why),
+        errors?.length ? h("ul", { class: "errs" }, errors.map((x) => h("li", null, h("code", null, x.path), x.line ? ` line ${x.line}: ` : ": ", x.message))) : null,
+        h("p", { class: "muted" }, `Its ${files.length === 1 ? "file" : `${files.length} files`} on GitHub at ${sha7(ctx.lib.commit)}:`),
+        h("ul", { class: "files" }, files.map((f) => h("li", null, h("a", { href: ghBlob(ctx.lib, f.path), target: "_blank", rel: "noopener" }, `${f.path} ↗`), h("span", { class: "muted" }, ` ${kb(f.text)}`)))),
+        h("div", { class: "actions" }, h("button", { type: "button", onclick: () => render(true) }, "Try again"))));
+      jump.replaceChildren();
+      back.disabled = true; fit.disabled = true; fullB.disabled = true;
+    }
+    function full(on) {
+      wrap.classList.toggle("full", on);
+      document.body.classList.toggle("vf-lock", on);
+      fullB.textContent = on ? "Close" : "Full screen";
+      if (on) fullB.focus();
+    }
+    wrap.addEventListener("keydown", (e) => { if (e.key === "Escape" && wrap.classList.contains("full")) full(false); });
+
+    const me = {
+      win: () => iframe.contentWindow,
+      setFocus,
+      on(d) {
+        if (d.t === "hello") {
+          if (proto.state === "slow") return; // the viewer never answers: loading, then the fallback at 15 s
+          if (proto.state === "nodiagram") return fail("The viewer found errors in it:", c4
+            ? [{ path: "bobnet.c4", line: 54, message: "Could not resolve reference to Element named 'bobnet.brokr'" }]
+            : [{ path: "schema.sql", line: 12, message: 'syntax error at or near "CONSTRAINT"' }]);
+          post(c4 ? { t: "files", kind, files: files.map(({ path, text }) => ({ path, text })), focus: st.focus }
+            : { t: "files", kind, format: page.format, files: files.map(({ path, text }) => ({ path, text })), schema: page.schema, focus: st.focus });
+        }
+        if (d.t === "ready") {
+          clearTimeout(st.timer);
+          st.ready = true; st.views = d.views || []; st.tables = d.tables || []; st.errors = d.errors || [];
+          if (c4 && !st.views.length) return fail("The viewer found no views in it.", st.errors);
+          if (c4 && !viewOf(st.focus)) st.focus = page.view;
+          veil.hidden = true;
+          if (st.errors.length) {
+            warnLine.hidden = false;
+            warnLine.replaceChildren(h("details", null, h("summary", null, `${st.errors.length} problem${st.errors.length > 1 ? "s" : ""} in the model: what they touch may be missing`),
+              h("ul", { class: "errs" }, st.errors.map((x) => h("li", null, h("code", null, x.path), ` line ${x.line}: ${x.message}`)))));
+          }
+          draw();
+        }
+        if (d.t === "focus") {
+          st.focus = d.focus || (c4 ? page.view : "");
+          nav(libHref(ctx.key, ctx.sid, page.id, d.focus || null));
+          draw();
+        }
+      },
+    };
+    st.timer = setTimeout(() => { if (!st.ready) fail("The viewer didn't answer within 15 seconds."); }, 15000);
+    FRAMES.add(me);
+    draw();
+    wrap.frame = me;
+    return wrap;
+  }
+
+  // ---------- card heads: front matter, or the Key: value lines under the title (spec §8) ----------
+  const reKey = /^(?:- )?(?:\*\*)?([A-Z][A-Za-z0-9 ]{1,28}?)(?::\*\*|\*\*:|:)(?:\s+(.*)|\s*$)/;
+  /** {fields: [[key, value]], rest: the text without them}. */
+  function headOf(text) {
+    const lines = text.replace(/\r\n?/g, "\n").split("\n");
+    const fm = text.match(/^---\n([\s\S]*?)\n---\n/);
+    if (fm) return { fields: fm[1].split("\n").map((l) => l.match(/^([\w ]+):\s*(.*)$/)).filter(Boolean).map((m) => [m[1], m[2]]), rest: text.slice(fm[0].length) };
+    let i = lines.findIndex((l) => l.startsWith("# "));
+    if (i < 0) return { fields: [], rest: text };
+    const top = i;
+    i++;
+    while (i < lines.length && !lines[i].trim()) i++;
+    const fields = [];
+    let j = i;
+    for (; j < lines.length && lines[j].trim(); j++) {
+      const m = lines[j].match(reKey);
+      if (m && !/^\s/.test(lines[j])) fields.push([m[1].trim(), (m[2] ?? "").trim()]);
+      else if (fields.length) fields[fields.length - 1][1] += " " + lines[j].trim();
+      else break;
+    }
+    if (!fields.length) return { fields, rest: text };
+    return { fields, rest: [...lines.slice(0, top + 1), ...lines.slice(j)].join("\n") };
+  }
+  const field = (fs, ...names) => fs.find(([k]) => names.includes(k.toLowerCase()))?.[1] ?? "";
+  const STATUS = /^(handled|partly|not yet|accepted|proposed|superseded|rejected|deprecated|draft|built|approved|waiting|designing|done|open)\b/i;
+  const TONE = { handled: "ok", accepted: "ok", built: "ok", approved: "ok", done: "ok", partly: "warn", proposed: "warn", waiting: "warn", draft: "warn", designing: "warn" };
+  const statusWord = (v) => { const m = plain(v).trim().match(STATUS); return m ? m[1].toLowerCase() : plain(v).trim().split(/[\s(;,.]/)[0].toLowerCase(); };
+  const pill = (word) => (word ? h("span", { class: `st ${TONE[word] ?? "mute"}` }, STATUS.test(word) ? word : clip(word, 12)) : null);
+
+  // ---------- cards from a markdown page: each h3 a card under its h2 (Vitals' use cases, Helix's scenarios) ----------
+  function splitMd(text) {
+    const out = { intro: [], groups: [] };
+    let g = null, c = null, fence = false;
+    for (const l of text.replace(/\r\n?/g, "\n").split("\n")) {
+      if (/^ {0,3}(```|~~~)/.test(l)) fence = !fence;
+      let m;
+      if (!fence && /^# /.test(l)) continue;
+      if (!fence && (m = l.match(/^## +(.*?)\s*#*$/))) { g = { title: m[1], body: [], cards: [] }; c = null; out.groups.push(g); continue; }
+      if (!fence && g && (m = l.match(/^### +(.*?)\s*#*$/))) { c = { title: m[1], body: [] }; g.cards.push(c); continue; }
+      (c ? c.body : g ? g.body : out.intro).push(l);
+    }
+    return out;
+  }
+  const cardCount = (text) => splitMd(text).groups.reduce((n, g) => n + g.cards.length, 0);
+  /** The leading "- **Key:** value · **Key:** value" lines of a card. */
+  function cardFields(body) {
+    const fs = [];
+    let i = 0;
+    while (i < body.length && !body[i].trim()) i++;
+    for (; i < body.length; i++) {
+      const l = body[i];
+      if (/^- \*\*[^*]+:\*\*/.test(l)) {
+        for (const part of l.slice(2).split(/\s+·\s+(?=\*\*[^*]+:\*\*)/)) { const m = part.match(/^\*\*([^*]+?):\*\*\s*(.*)$/); if (m) fs.push([m[1], m[2], false]); }
+      } else if (/^\s{2,}\S/.test(l) && fs.length) {
+        if (/^\s+(\d+[.)]|-)\s/.test(l)) fs[fs.length - 1][2] = true; else if (!fs[fs.length - 1][2]) fs[fs.length - 1][1] += " " + l.trim();
+      } else if (l.trim()) break;
+    }
+    return fs;
+  }
+  const FACE = ["actor", "door", "goal", "case", "expected", "who", "trigger"];
+  function mdCards(text, ctx, focus, noun) {
+    const doc = splitMd(text);
+    const all = [];
+    const st = { q: "", status: "" };
+    const groups = doc.groups.map((g) => {
+      if (!g.cards.length) {
+        const ps = h("details", { class: "ucg-prose" }, h("summary", null, g.title), h("div", { class: "doc", html: md(g.body.join("\n"), ctx) }));
+        return { el: ps, cards: [] };
+      }
+      const cards = g.cards.map((c) => {
+        const fs = cardFields(c.body), id = slug(c.title);
+        const status = statusWord(field(fs.map(([k, v]) => [k, v]), "status"));
+        const face = fs.filter(([k]) => FACE.includes(k.toLowerCase()));
+        const shown = (face.length ? face : fs.filter(([k]) => k.toLowerCase() !== "status")).slice(0, 3);
+        const more = fs.map(([k]) => k).filter((k) => !shown.some(([s]) => s === k) && k.toLowerCase() !== "status");
+        const det = h("details", { class: "uc-more", ontoggle: (e) => { if (e.target.open && !ctx.child) nav(libHref(ctx.key, ctx.sid, ctx.page.id, id), true); } },
+          h("summary", null, more.length ? more.slice(0, 4).join(" · ") : "Read it"), h("div", { class: "doc", html: md(c.body.join("\n"), ctx) }));
+        const el = h("article", { class: "card ucard", id: `c-${id}` },
+          h("div", { class: "uc-h" }, h("b", null, c.title), fs.some(([k]) => k.toLowerCase() === "status") ? pill(status) : null),
+          shown.length ? h("dl", { class: "uc-f" }, shown.map(([k, v]) => h("div", null, h("dt", null, k), h("dd", null, clip(plain(v), 150))))) : null,
+          det);
+        const card = { el, det, id, status, hay: (c.title + " " + c.body.join(" ")).toLowerCase() };
+        all.push(card);
+        return card;
+      });
+      const count = h("span", { class: "muted" });
+      const el = h("section", { class: "ucg" }, h("h3", { class: "ucg-h" }, g.title, " ", count), h("div", { class: "uc-grid" }, cards.map((c) => c.el)));
+      return { el, cards, count };
+    });
+    const statuses = [...new Set(all.map((c) => c.status).filter((s) => s && STATUS.test(s)))];
+    const n = all.length, areas = groups.filter((g) => g.cards.length).length;
+    const count = h("span", { class: "count muted", "aria-live": "polite" });
+    const q = h("input", { type: "search", placeholder: `Find ${noun.one === "case" ? "a case" : `a ${noun.one}`}`, "aria-label": `Find ${noun.one === "case" ? "a case" : `a ${noun.one}`}`, oninput: () => { st.q = q.value.trim().toLowerCase(); apply(); } });
+    const seg = statuses.length > 1 ? h("span", { class: "seg filters" }, [["", "All"], ...statuses.map((s) => [s, s])].map(([v, t]) =>
+      h("button", { type: "button", "aria-pressed": String(v === ""), onclick: (e) => { st.status = v; seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === e.currentTarget))); apply(); } },
+        t, v ? h("span", { class: "count" }, ` ${all.filter((c) => c.status === v).length}`) : null))) : null;
+    function apply() {
+      let shown = 0;
+      for (const g of groups) {
+        if (!g.cards.length) { g.el.hidden = !!(st.q || st.status); continue; }
+        let k = 0;
+        for (const c of g.cards) { const on = (!st.q || c.hay.includes(st.q)) && (!st.status || c.status === st.status); c.el.hidden = !on; k += on; }
+        g.el.hidden = !k; g.count.textContent = String(k); shown += k;
+      }
+      count.textContent = st.q || st.status ? `${shown} of ${n} ${noun.many}` : `${n} ${noun.many}${areas > 1 ? ` in ${areas} groups` : ""}`;
+      none.hidden = shown > 0;
+    }
+    const none = h("p", { class: "muted", hidden: true }, `No ${noun.one} matches. Clear the find${seg ? " or pick All" : ""}.`);
+    const intro = doc.intro.join("\n").trim() ? h("details", { class: "intro" }, h("summary", null, "About this page"), h("div", { class: "doc", html: md(doc.intro.join("\n"), ctx) })) : null;
+    const el = h("div", { class: "cards-page" }, h("div", { class: "tax-bar" }, q, seg, count), intro, groups.map((g) => g.el), none);
+    apply();
+    el.open = (f) => { const c = all.find((x) => x.id === f); if (c) { c.det.open = true; c.el.scrollIntoView({ block: "start" }); } };
+    return el;
   }
 
   // ---------- header: the Projects menu ----------
@@ -247,7 +515,7 @@
       const lib = libraryOf(p.key);
       return h("li", { class: `pm-row${here?.key === p.key ? " here" : ""}` },
         h("a", { class: "pm-name", href: `#project/${p.key}` }, p.name),
-        h("span", { class: "pm-sub" }, p.sub),
+        h("span", { class: "pm-sub" }, LIBS[p.key]?.tagline ?? ""),
         lib ? h("a", { class: "pm-lib", href: libHref(p.key) }, "Library") : h("span", { class: "pm-nolib" }, "no library"));
     }));
   }
@@ -259,7 +527,11 @@
   }
   $("pm-btn").addEventListener("click", () => menu($("pm-pop").hidden));
   $("pm-pop").addEventListener("click", (e) => { if (e.target.closest("a")) menu(false); });
-  document.addEventListener("click", (e) => { if (!e.target.closest(".pm")) menu(false); });
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".pm")) menu(false);
+    const a = e.target.closest("a[data-scroll]");
+    if (a) { e.preventDefault(); document.getElementById(a.getAttribute("href").slice(1))?.scrollIntoView({ block: "start", behavior: "smooth" }); }
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !$("pm-pop").hidden) { menu(false); $("pm-btn").focus(); }
     if (!$("pm-pop").hidden && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
@@ -290,9 +562,9 @@
       h("div", { class: "p-title" }, h("a", { class: "back", href: "#overview" }, "‹ Overview"), h("h2", { class: "p-h" }, p.name),
         h("span", { class: "muted" }, [p.lead && `lead ${p.lead}`, p.po && `PO ${p.po}`, "mbp-1", p.repo].filter(Boolean).join(" · "))),
       h("span", { class: "seg projects" }, PROJECTS.map((q) => h("button", { type: "button", "aria-pressed": String(q.key === p.key), onclick: () => {
-        // Picking another project stays on the tab, and on the same section when it has one.
+        // Another project keeps the tab, and the section.
         if (r.tab === "work") location.hash = `#project/${q.key}`;
-        else { const lib = libraryOf(q.key); location.hash = libHref(q.key, lib?.pages.some((x) => x.id === r.page) ? r.page : null); }
+        else location.hash = libHref(q.key, r.section);
       } }, q.name))));
     const lib = libraryOf(p.key);
     const tabs = h("div", { class: "p-tabs" },
@@ -302,10 +574,10 @@
       r.tab === "library" && lib && proto.state !== "loading" ? fresh(lib) : null);
     return [head, tabs];
   }
-  /** As of main at <sha>, <date> · checked <ago> from <laptop>. */
+  /** As of <ref> at <sha>, <date> · checked <ago> from <laptop>. */
   function fresh(m) {
     const late = behind(m) || m.problems.some((x) => x.what === "fetch");
-    return h("span", { class: `fresh${late ? " warn" : ""}` }, "As of main at ",
+    return h("span", { class: `fresh${late ? " warn" : ""}` }, `As of ${m.ref} at `,
       h("a", { href: `${m.github}/commit/${m.commit}`, target: "_blank", rel: "noopener", title: "This commit on GitHub" }, h("code", null, sha7(m.commit))),
       `, ${dayOf(m.committed_at)} ${clock(m.committed_at)} · checked ${ago(NOW - Date.parse(m.checked_at))} from ${m.laptop}`);
   }
@@ -315,52 +587,52 @@
       h("p", { class: "muted" }, "Current release, Running now, Who ran lately, Waits on you, CI, Usage and Backlog health, unchanged. It is the Work tab now; Library is beside it."));
   }
 
-  function library(p, r) {
-    const lib = libraryOf(p.key);
-    if (proto.state === "loading") {
-      return h("div", { class: "lib" }, h("div", { class: "lib-rail" }, h("div", { class: "skel" }, h("i"), h("i"), h("i"), h("i"))),
-        h("div", { class: "doc-page" }, h("p", { class: "muted" }, "Reading the library…"), h("div", { class: "skel" }, h("i"), h("i"), h("i"), h("i"), h("i"), h("i"))));
-    }
-    if (!lib) {
-      return h("div", { class: "empty-card lib-empty" }, h("b", null, `${p.name} has no library yet.`),
-        h("p", null, "A library is the pages a project lists in ", h("code", null, ".bobnet/library.json"), " on its main: architecture, data model, decisions and the like. Its architect writes the file; the supervisor on its laptop sends the pages here."),
-        h("p", null, "A laptop whose supervisor is older than the release with libraries sends none."));
-    }
-    const page = r.page ? lib.pages.find((x) => x.id === r.page) : null;
-    if (r.page && !page) {
-      return libFrame(p, lib, null, h("div", { class: "empty-card lib-empty" }, h("b", null, `${lib.title} has no page "${r.page}".`),
-        h("p", null, "It may have been renamed in ", h("code", null, ".bobnet/library.json"), ". ", h("a", { href: libHref(p.key) }, "The library's sections"))));
-    }
-    return page ? libFrame(p, lib, page, null) : libFrame(p, lib, null, home(p, lib));
-  }
-
   function banners(m) {
     const out = [];
     const fail = m.problems.find((x) => x.what === "fetch");
     if (fail) out.push(h("div", { class: "banner" }, h("b", null, `${m.laptop} couldn't fetch ${m.github.split("/").pop()} ${ago(NOW - Date.parse(fail.at))}`),
-      h("span", null, `${fail.text}. The pages are main at ${sha7(m.commit)} (${dayOf(m.committed_at)}), last checked ${ago(NOW - Date.parse(m.checked_at))}. They update at its next fetch.`)));
-    else if (behind(m)) out.push(h("div", { class: "banner" }, h("b", null, "This may be behind main"),
-      h("span", null, `${m.laptop} last checked ${ago(NOW - Date.parse(m.checked_at))}; it checks every 10 minutes while it runs. The pages are main at ${sha7(m.commit)} (${dayOf(m.committed_at)}).`)));
+      h("span", null, `${fail.text}. The pages are ${m.ref} at ${sha7(m.commit)} (${dayOf(m.committed_at)}), last checked ${ago(NOW - Date.parse(m.checked_at))}. They update at its next fetch.`)));
+    else if (behind(m)) out.push(h("div", { class: "banner" }, h("b", null, `This may be behind ${m.ref}`),
+      h("span", null, `${m.laptop} last checked ${ago(NOW - Date.parse(m.checked_at))}; it checks every 10 minutes while it runs. The pages are ${m.ref} at ${sha7(m.commit)} (${dayOf(m.committed_at)}).`)));
+    const miss = m.problems.filter((x) => x.what === "missing");
+    if (miss.length) out.push(h("div", { class: "banner" }, h("b", null, `${miss.length === 1 ? "A page is" : `${miss.length} pages are`} missing on ${m.ref}`), h("span", null, miss.map((x) => x.text).join("; "), ".")));
     return out;
   }
 
-  function libFrame(p, lib, page, body) {
-    const ctx = { key: p.key, lib, page, toc: [], diagrams: [] };
-    let content;
-    if (page && page.missing) {
-      content = h("div", { class: "empty-card lib-empty" }, h("b", null, `${page.src} isn't on main at ${sha7(lib.commit)}.`),
-        h("p", null, `The library still lists it. Its owner (${page.owner}) moves the entry in `, h("code", null, ".bobnet/library.json"), " or puts the file back."),
-        h("p", null, h("a", { href: `${lib.github}/commits/${lib.commit}/${page.src}`, target: "_blank", rel: "noopener" }, "Its history on GitHub ↗")));
-    } else if (page) {
-      content = pageBody(page, ctx);
-    } else content = body;
+  function library(p, r) {
+    const lib = libraryOf(p.key);
+    if (proto.state === "loading") {
+      return h("div", { class: "lib" }, h("div", { class: "lib-rail" }, h("div", { class: "skel" }, h("i"), h("i"), h("i"), h("i"), h("i"), h("i"), h("i"))),
+        h("div", { class: "doc-page" }, h("p", { class: "muted" }, "Reading the library…"), h("div", { class: "lib-tiles" }, [1, 2, 3, 4, 5, 6].map(() => h("div", { class: "card lib-tile skel" }, h("i"), h("i"))))));
+    }
+    if (!lib) {
+      return h("div", { class: "empty-card lib-empty" }, h("b", null, `${p.name} has no library yet.`),
+        h("p", null, "A library is a project's architecture, data model, decisions, use cases, UX design and glossary, from files on its main that ", h("code", null, ".bobnet/library.json"), " lists. Its architect writes that file; the supervisor on its laptop sends them here."),
+        h("p", null, "A laptop whose supervisor is older than the release with libraries sends none."));
+    }
+    if (!r.section) return libFrame(p, lib, r, null, home(p, lib));
+    const sec = secOf(r.section);
+    if (!sec) return libFrame(p, lib, r, null, h("div", { class: "empty-card lib-empty" }, h("b", null, `A library has no section "${r.section}".`), h("p", null, h("a", { href: libHref(p.key) }, `${lib.title}'s sections`))));
+    const pages = pagesOf(lib, sec.id);
+    if (!pages.length) return libFrame(p, lib, r, sec, notWritten(p, lib, sec));
+    const page = r.page ? pages.find((x) => x.id === r.page) : pages[0];
+    if (!page) return libFrame(p, lib, r, sec, h("div", { class: "empty-card lib-empty" }, h("b", null, `${sec.label} has no page "${r.page}".`),
+      h("p", null, "It may have been renamed in ", h("code", null, ".bobnet/library.json"), ". ", h("a", { href: libHref(p.key, sec.id) }, `${sec.label}'s pages`))));
+    return libFrame(p, lib, r, sec, sectionView(p, lib, sec, page, r));
+  }
 
-    const cur = page ? page.id : r0().page ? null : "home";
-    const navLinks = [h("a", { href: libHref(p.key), "aria-current": cur === "home" ? "page" : null }, h("span", null, "Home")),
-      ...lib.pages.map((x) => h("a", { href: libHref(p.key, x.id), class: [x.parent ? "sub" : "", x.missing ? "missing" : ""].join(" ").trim() || null, "aria-current": cur === x.id ? "page" : null },
-        h("span", null, x.nav), x.missing ? h("small", null, "missing") : x.group ? h("small", null, x.group) : null)),
-      ...lib.coming.map((c) => h("span", { class: "soon" }, c.nav, h("small", null, "soon")))];
-    const curName = page ? page.nav : "Home";
+  /** The rail: the seven sections in their fixed order, a missing one muted with who writes it. */
+  function libFrame(p, lib, r, sec, content) {
+    const owner = (s) => lib.sections[s.id]?.owner;
+    const navLinks = [h("a", { href: libHref(p.key), "aria-current": !sec ? "page" : null }, h("span", null, "Home")),
+      ...SECTIONS.flatMap((s) => {
+        const pages = pagesOf(lib, s.id), cur = sec?.id === s.id;
+        const row = h("a", { href: libHref(p.key, s.id), class: pages.length ? null : "missing", "aria-current": cur && (!r.page || pages.length < 2) ? "page" : cur ? "true" : null },
+          h("span", null, s.label), pages.length ? null : h("small", null, `not written yet · ${s.role}`));
+        const subs = cur && pages.length > 1 ? pages.map((x, i) => h("a", { class: "sub", href: libHref(p.key, s.id, x.id), "aria-current": (r.page ? r.page === x.id : i === 0) ? "page" : null }, h("span", null, pageLabel(x)))) : [];
+        return [row, ...subs];
+      })];
+    const curName = sec ? sec.label : "Home";
     const rail = h("nav", { class: "lib-rail", "aria-label": `${lib.title} sections` },
       h("button", { type: "button", class: "secs-pick", "aria-expanded": "false", onclick: (e) => {
         const on = rail.classList.toggle("open"); e.currentTarget.setAttribute("aria-expanded", String(on));
@@ -369,41 +641,234 @@
       h("div", { class: "secs-nav" }, navLinks),
       h("div", { class: "foot" }, h("a", { href: lib.github, target: "_blank", rel: "noopener" }, "Repository ↗"),
         h("span", null, "Sections from ", h("a", { href: ghBlob(lib, ".bobnet/library.json"), target: "_blank", rel: "noopener" }, h("code", null, ".bobnet/library.json")))));
-
-    const toc = ctx.toc.length >= 3 ? ctx.toc : [];
-    const tocList = (cls) => h("ul", null, toc.map((t) => h("li", { class: `h${t.n}` }, h("a", { href: libHref(p.key, page.id, t.id), dataset: { h: t.id } }, t.text))));
-    const aside = toc.length && page.kind !== "table" ? h("aside", { class: "lib-toc", "aria-label": "On this page" }, h("div", { class: "lab" }, "On this page"), tocList()) : null;
-    if (toc.length && content.querySelector) {
-      const fold = h("details", { class: `toc-fold${aside ? "" : " always"}` }, h("summary", null, `On this page · ${toc.filter((t) => t.n === 2).length} sections`), tocList());
-      content.querySelector(".doc-head")?.after(fold);
-    }
-    const wrap = h("div", { class: `lib${aside ? " has-toc" : ""}` }, rail, h("div", { class: "doc-col", style: "min-width:0;display:grid;gap:14px;align-content:start" }, banners(lib), content), aside);
-    if (ctx.diagrams.length) queueMicrotask(() => drawDiagrams(wrap, ctx));
+    const aside = content.toc?.length >= 3 ? h("aside", { class: "lib-toc", "aria-label": "On this page" }, h("div", { class: "lab" }, "On this page"), tocList(content.toc, content.tocHref)) : null;
+    const wrap = h("div", { class: `lib${aside ? " has-toc" : ""}` }, rail, h("div", { class: "doc-col" }, banners(lib), content), aside);
     if (aside && window.innerWidth >= 1280) queueMicrotask(() => spy(wrap));
     return wrap;
   }
-  const r0 = () => route();
+  const tocList = (toc, href) => h("ul", null, toc.map((t) => h("li", { class: `h${t.n}` }, href ? h("a", { href: href(t.id), dataset: { h: t.id } }, t.text) : h("a", { href: `#h-${t.id}`, "data-scroll": "", dataset: { h: t.id } }, t.text))));
+  function pageLabel(x) {
+    return { likec4: x.title, erd: x.title, children: x.title }[x.kind] ?? x.title;
+  }
 
-  function pageBody(page, ctx) {
-    const parent = page.parent ? ctx.lib.pages.find((x) => x.id === page.parent) : null;
-    const head = h("div", { class: "doc-head" },
-      h("div", { class: "eyebrow" }, parent ? `${parent.nav}${page.group ? ` · ${page.group}` : ""}` : page.nav),
-      h("h1", { class: "doc-title" }, page.title),
-      h("div", { class: "doc-meta" }, h("span", null, `owner ${page.owner}`),
-        h("span", null, "changed ", h("code", null, sha7(page.changed.sha)), `, ${dayOf(page.changed.date)}`),
-        h("a", { href: ghBlob(ctx.lib, page.src), target: "_blank", rel: "noopener" }, `${page.src} ↗`)));
+  /** The library's home: the seven sections as tiles, each with what is in it at a glance. */
+  function home(p, lib) {
+    const tiles = SECTIONS.map((s) => {
+      const pages = pagesOf(lib, s.id), owner = lib.sections[s.id]?.owner;
+      if (!pages.length) return h("a", { class: "card lib-tile missing", href: libHref(p.key, s.id) }, h("b", null, s.label),
+        h("span", { class: "nw" }, "Not written yet"), h("span", { class: "by" }, `the ${s.role} writes it`));
+      return h("a", { class: "card lib-tile", href: libHref(p.key, s.id) }, h("b", null, s.label),
+        h("ul", { class: "gl" }, pages.slice(0, 3).map((x) => h("li", null, glance(x, s)))),
+        h("span", { class: "by" }, h("span", null, owner ?? s.role), h("span", null, `changed ${dayOf(latest(pages))}`)));
+    });
+    const written = SECTIONS.filter((s) => pagesOf(lib, s.id).length).length;
+    return h("div", { class: "doc-page wide lib-home" },
+      h("div", { class: "doc-head" }, h("h1", { class: "doc-title" }, lib.title), h("p", { class: "lede" }, lib.tagline)),
+      h("div", { class: "lib-tiles" }, tiles),
+      h("p", { class: "lib-how" }, `${written} of 7 sections written. Each is files on ${lib.ref} in ${lib.github.replace("https://github.com/", "")}; to change one, ask its owner.`));
+  }
+  const latest = (pages) => pages.map((x) => x.changed?.date).filter(Boolean).sort().pop() ?? "";
+  const NOUN = { decisions: ["decision", "decisions"], ux: ["feature", "features"] };
+  function glance(x, s) {
+    const tag = (t) => h("span", { class: "k" }, t);
+    if (x.kind === "likec4") return [tag("C4 diagram"), ` ${x.title}`];
+    if (x.kind === "erd") return [tag("ERD"), ` ${x.title}`];
+    if (x.kind === "mermaid") return [tag("diagram"), ` ${x.title}`];
+    if (x.kind === "table") return [tag("table"), ` ${x.title}`];
+    if (x.kind === "children") {
+      const n = x.children.length, [one, many] = NOUN[s.id] ?? ["file", x.title.toLowerCase()];
+      const newest = [...x.children].sort((a, b) => (b.changed?.date ?? "").localeCompare(a.changed?.date ?? "") || b.src.localeCompare(a.src, "en", { numeric: true }))[0];
+      return [tag(`${n} ${n === 1 ? one : many}`), h("span", { class: "nw-s" }, ` latest: ${clip(cap(newest.title.replace(/^(?:ADR\s*)?\d{4}[.:]?\s*(?:[—–-]\s*)?|^BOB-\d+(?: design [A-Z])?:\s*/, "")), 64)}`)];
+    }
+    return [tag("page"), ` ${x.title}`];
+  }
+
+  /** A section with no pages: what it holds and who writes it (ADR 0016 §3). */
+  function notWritten(p, lib, s) {
+    return h("div", { class: "doc-page" },
+      h("div", { class: "doc-head" }, h("h1", { class: "doc-title" }, s.label)),
+      h("div", { class: "empty-card lib-empty nw-card" }, h("b", null, `${s.label} isn't written yet.`),
+        h("p", null, `It holds: ${s.holds.charAt(0).toLowerCase()}${s.holds.slice(1)}`),
+        h("p", null, `The ${s.role} writes it${lib.sections[s.id]?.owner ? ` (${lib.sections[s.id].owner})` : ""}, as files on ${lib.ref}, and lists them under `, h("code", null, `sections.${s.id}`), " in ",
+          h("a", { href: ghBlob(lib, ".bobnet/library.json"), target: "_blank", rel: "noopener" }, h("code", null, ".bobnet/library.json"), " ↗"), ".")));
+  }
+
+  /** A section: its title, its pages as tabs when it has more than one, then the page. */
+  function sectionView(p, lib, sec, page, r) {
+    const pages = pagesOf(lib, sec.id);
+    const owner = page.owner ?? lib.sections[sec.id].owner;
+    const head = h("div", { class: "sec-head" }, h("h1", { class: "doc-title" }, sec.label), h("span", { class: "muted" }, `owner ${owner}`));
+    const tabs = pages.length > 1 ? h("nav", { class: "sec-tabs", "aria-label": `${sec.label} pages` }, pages.map((x) =>
+      h("a", { href: libHref(p.key, sec.id, x.id), "aria-current": x === page ? "page" : null }, pageLabel(x), x.missing ? h("small", null, " missing") : null))) : null;
+    const body = pageBody(p, lib, sec, page, r);
+    const el = h("div", { class: `doc-page${["likec4", "erd", "table", "children"].includes(page.kind) || body.wide ? " wide" : ""}` }, head, tabs, body);
+    el.toc = body.toc; el.tocHref = body.tocHref; el.frame = body.frame; el.cards = body.cards;
+    return el;
+  }
+
+  function pageBody(p, lib, sec, page, r) {
+    if (page.missing) {
+      return h("div", { class: "empty-card lib-empty" }, h("b", null, `${page.src} isn't on ${lib.ref} at ${sha7(lib.commit)}.`),
+        h("p", null, `The library still lists it. Its owner (${page.owner ?? lib.sections[sec.id].owner}) moves the entry in `, h("code", null, ".bobnet/library.json"), " or puts the file back."),
+        h("p", null, h("a", { href: `${lib.github}/commits/${lib.commit}/${page.src}`, target: "_blank", rel: "noopener" }, "Its history on GitHub ↗")));
+    }
+    if (page.kind === "likec4" || page.kind === "erd") {
+      const ctx = { key: p.key, lib, sid: sec.id };
+      const f = viewerFrame(page.kind, page, ctx, r.focus);
+      const el = h("div", { class: "page-diagram" }, f);
+      el.frame = f.frame;
+      return el;
+    }
+    if (page.kind === "children") {
+      if (r.focus) {
+        const child = page.children.find((c) => c.id === r.focus);
+        if (child) return childPage(p, lib, sec, page, child, r);
+      }
+      return childList(p, lib, sec, page);
+    }
+    const ctx = mdCtx(p.key, lib, sec.id, page, page.src, (id) => libHref(p.key, sec.id, page.id, id));
+    const meta = h("div", { class: "doc-meta" },
+      page.title ? h("b", { class: "pt" }, page.title) : null,
+      page.changed ? h("span", null, "changed ", h("code", null, page.changed.sha), `, ${dayOf(page.changed.date)}`) : null,
+      h("a", { href: ghBlob(lib, page.src), target: "_blank", rel: "noopener" }, `${page.src} ↗`));
+    // A use-case page whose cases are h3s reads as cards, the prose behind each (spec §8).
+    if (page.kind === "md" && sec.id === "usecases" && cardCount(page.text) >= 3) {
+      ctx.headHref = null;
+      const cards = mdCards(page.text, ctx, r.focus, { one: "use case", many: "use cases" });
+      const el = h("div", { class: "doc-page wide" }, meta, cards);
+      el.cards = cards; el.wide = true;
+      return el;
+    }
     let html;
     if (page.kind === "mermaid") html = md(`${page.intro}\n\n\`\`\`mermaid\n${page.text.trim()}\n\`\`\`\n`, ctx);
     else html = md(page.text, ctx);
     const doc = h("div", { class: "doc", html });
-    const el = h("article", { class: `doc-page${page.kind === "table" ? " wide" : ""}` }, head, doc);
-    if (page.kind === "table") el.append(taxonomy(page, ctx));
+    const el = h("article", { class: "doc-body" }, meta, doc);
+    if (ctx.toc.length >= 3) meta.after(h("details", { class: "toc-fold" }, h("summary", null, `On this page · ${ctx.toc.filter((t) => t.n === 2).length} sections`), tocList(ctx.toc, ctx.headHref)));
+    if (page.kind === "table") { el.append(taxonomy(page)); el.wide = true; }
+    if (ctx.diagrams.length) queueMicrotask(() => drawDiagrams(el, ctx));
+    el.toc = page.kind === "table" ? null : ctx.toc; el.tocHref = ctx.headHref;
+    return el;
+  }
+
+  // ---------- children: ADRs as a list, UX cards, use-case files (spec §8) ----------
+  function childList(p, lib, sec, page) {
+    const href = (c) => libHref(p.key, sec.id, page.id, c.id);
+    if (sec.id === "decisions") return adrList(page, lib, href);
+    if (sec.id === "ux") return uxCards(page, href);
+    // Use cases: a card per file, its count of cases; the folder's README behind "About".
+    const ctx = mdCtx(p.key, lib, sec.id, page, page.dir + "/README.md", null);
+    const groups = [...new Set(page.children.map((c) => c.group))];
+    return h("div", { class: "cards-page" },
+      page.intro ? h("details", { class: "intro" }, h("summary", null, `About ${page.title.toLowerCase()}`), h("div", { class: "doc", html: md(page.intro, ctx) })) : null,
+      groups.map((g) => h("section", { class: "ucg" }, g ? h("h3", { class: "ucg-h" }, g, " ", h("span", { class: "muted" }, String(page.children.filter((c) => c.group === g).length))) : null,
+        h("div", { class: "uc-grid" }, page.children.filter((c) => c.group === g).map((c) => {
+          const n = cardCount(c.text), crit = criteriaCount(c.text);
+          return h("a", { class: "card ucard file", href: href(c) }, h("div", { class: "uc-h" }, h("b", null, c.title)),
+            h("p", { class: "lede-s" }, clip(plain(ledeOf(c.text)), 170)),
+            h("span", { class: "by" }, h("span", null, n >= 3 ? `${n} cases` : crit ? `${crit} criteria` : "a page"), c.owner ? h("span", null, c.owner) : null, h("span", null, `changed ${dayOf(c.changed.date)}`)));
+        })))));
+  }
+  function ledeOf(text) {
+    const { rest } = headOf(text);
+    const para = [];
+    for (const l of rest.split("\n")) {
+      if (/^#/.test(l) || /^\s*[|>-]/.test(l) || /^\*\*[^*]+\*\*$/.test(l.trim())) { if (para.length) break; continue; }
+      if (!l.trim()) { if (para.length) break; continue; }
+      para.push(l.trim());
+    }
+    return para.join(" ").split(/(?<=[.!?])\s/)[0] ?? "";
+  }
+  function criteriaCount(text) {
+    const m = text.match(/\n## Criteria[^\n]*\n([\s\S]*?)(\n## |$)/);
+    return m ? (m[1].match(/^(?:\d+[.)]|-) /gm) || []).length : 0;
+  }
+
+  const SHOW_ADR = 40;
+  function adrList(page, lib, href) {
+    const rows = page.children.map((c) => {
+      const { fields } = headOf(c.text);
+      const status = field(fields, "status");
+      const date = field(fields, "date").match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? status.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? "";
+      const by = plain(field(fields, "decided by")).split(/[(,;]/)[0].trim() || plain(status).match(/\(([A-Z][a-z]+)[,)]/)?.[1] || "";
+      return { c, num: c.src.match(/(\d{4})[-.][^/]*$/)?.[1] ?? "", title: c.title.replace(/^(?:ADR\s*)?\d{4}[.:]?\s*(?:[—–-]\s*)?/, ""), word: statusWord(status), date, by };
+    }).sort((a, b) => b.num.localeCompare(a.num));
+    const st = { q: "", status: "", all: false };
+    const words = [...new Set(rows.map((r) => r.word))].filter((w) => w && STATUS.test(w));
+    const q = h("input", { type: "search", placeholder: "Find a decision", "aria-label": "Find a decision", oninput: () => { st.q = q.value.trim().toLowerCase(); st.all = false; draw(); } });
+    const seg = words.length > 1 ? h("span", { class: "seg filters" }, [["", "All"], ...words.map((w) => [w, w])].map(([v, t]) =>
+      h("button", { type: "button", "aria-pressed": String(v === ""), onclick: (e) => { st.status = v; st.all = false; seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === e.currentTarget))); draw(); } },
+        t, h("span", { class: "count" }, ` ${v ? rows.filter((r) => r.word === v).length : rows.length}`)))) : null;
+    const count = h("span", { class: "count muted", "aria-live": "polite" });
+    const list = h("ol", { class: "adr-list" });
+    const more = h("button", { type: "button", class: "tax-more", onclick: () => { st.all = true; draw(); } });
+    const hay = rows.map((r) => `${r.num} ${r.title} ${r.word} ${r.by} ${r.c.text.slice(0, 4000)}`.toLowerCase());
+    function draw() {
+      const hit = rows.filter((r, i) => (!st.status || r.word === st.status) && (!st.q || hay[i].includes(st.q)));
+      const shown = st.all ? hit : hit.slice(0, SHOW_ADR);
+      count.textContent = st.q || st.status ? `${hit.length} of ${rows.length} decisions` : `${rows.length} decisions, newest first`;
+      list.replaceChildren(...(shown.length ? shown.map((r) => h("li", null, h("a", { class: "adr", href: href(r.c) },
+        h("span", { class: "n" }, r.num), h("span", { class: "t" }, r.title), h("span", { class: "s" }, pill(r.word)),
+        h("span", { class: "d" }, r.date ? dayYear(r.date) : ""), h("span", { class: "b" }, r.by)))) : [h("li", { class: "muted none" }, "No decision matches. Clear the find or pick All.")]));
+      more.hidden = hit.length <= shown.length;
+      more.textContent = `Show the other ${hit.length - shown.length}`;
+    }
+    draw();
+    return h("div", { class: "cards-page" }, h("div", { class: "tax-bar" }, q, seg, count), list, more);
+  }
+
+  function uxCards(page, href) {
+    const cards = page.children.map((c) => {
+      const f = c.head ?? Object.fromEntries(headOf(c.text).fields.map(([k, v]) => [k.toLowerCase(), v]));
+      return { c, f, n: +(f.feature || "").replace(/\D/g, "") || 0 };
+    }).sort((a, b) => b.n - a.n);
+    return h("div", { class: "cards-page" }, h("div", { class: "tax-bar" }, h("span", { class: "count muted" }, `${cards.length} features, newest first`)),
+      h("div", { class: "ux-grid" }, cards.map(({ c, f }) => {
+        const title = cap(c.title.replace(/^BOB-\d+(?: design [A-Z])?:\s*/, "").replace(/,\s*spec$/, ""));
+        const verdict = f.verdict ? h("div", { class: "ux-v" }, h("q", null, f.verdict), h("span", { class: "muted" }, [f["verdict by"], f["verdict date"] && dayOf(f["verdict date"])].filter(Boolean).join(" · ")))
+          : statusWord(f.status || "") === "waiting" ? h("div", { class: "ux-v wait" }, "Waiting on Casper's verdict")
+          : h("div", { class: "ux-v none" }, "No verdict on the card yet");
+        return h("article", { class: "card ux-card" },
+          h("div", { class: "ux-top" }, h("span", { class: "id" }, f.feature), pill(statusWord(f.status || ""))),
+          h("b", { class: "ux-t" }, title), verdict,
+          h("div", { class: "actions" }, h("a", { class: "btn", href: href(c) }, "Spec"),
+            f.prototype ? h("a", { class: "btn", href: f.prototype, target: "_blank", rel: "noopener" }, "Prototype ↗") : null));
+      })));
+  }
+
+  /** One child: its head as chips and fields, then the prose (or its cases as cards). */
+  function childPage(p, lib, sec, page, child, r) {
+    const { fields, rest } = headOf(child.text);
+    const ctx = mdCtx(p.key, lib, sec.id, page, child.src, null);
+    ctx.child = child.id;
+    const status = field(fields, "status");
+    const back = h("a", { class: "back", href: libHref(p.key, sec.id, page.id) }, `‹ ${page.title}`);
+    const f = child.head;
+    const chips = h("div", { class: "kv" },
+      f ? [pill(statusWord(f.status || "")), f.verdict ? h("span", null, h("q", null, f.verdict), f["verdict by"] ? ` · ${f["verdict by"]}` : "", f["verdict date"] ? ` · ${dayOf(f["verdict date"])}` : "") : null,
+        f.prototype ? h("a", { href: f.prototype, target: "_blank", rel: "noopener" }, "Prototype ↗") : null] : null,
+      fields.length ? h("dl", { class: "uc-f wide" }, fields.map(([k, v]) => h("div", null, h("dt", null, k), h("dd", { html: k.toLowerCase() === "status" ? `${pill(statusWord(v))?.outerHTML ?? ""} ${inline(v, ctx)}` : inline(v, ctx) })))) : null);
+    const meta = h("div", { class: "doc-meta" },
+      child.owner ? h("span", null, `owner ${child.owner}`) : null,
+      h("span", null, "changed ", h("code", null, child.changed.sha), `, ${dayOf(child.changed.date)}`),
+      h("a", { href: ghBlob(lib, child.src), target: "_blank", rel: "noopener" }, `${child.src} ↗`));
+    const head = h("div", { class: "child-head" }, back, h("h2", { class: "child-t" }, child.title), chips, meta);
+    if (sec.id === "usecases" && cardCount(child.text) >= 3) {
+      const cards = mdCards(rest, ctx, null, { one: "case", many: "cases" });
+      const el = h("div", { class: "doc-page wide" }, head, cards);
+      el.wide = true;
+      return el;
+    }
+    const html = md(rest, ctx);
+    const el = h("article", { class: "doc-body" }, head, h("div", { class: "doc", html }));
+    if (ctx.toc.length >= 3) meta.after(h("details", { class: "toc-fold" }, h("summary", null, `On this page · ${ctx.toc.filter((t) => t.n === 2).length} sections`), tocList(ctx.toc, null)));
+    el.toc = ctx.toc; el.tocHref = null;
     return el;
   }
 
   // ---------- Helix's taxonomy: one table of every area's elements (build.py's merge), found and filtered here ----------
   const SHOW = 200;
-  function taxonomy(page, ctx) {
+  function taxonomy(page) {
     const rows = [];
     for (const a of page.areas) {
       const lines = a.text.split("\n").filter((l) => l.trim().startsWith("|"));
@@ -441,20 +906,6 @@
       more);
   }
 
-  function home(p, lib) {
-    const missing = lib.problems.filter((x) => x.what === "missing");
-    return h("div", { class: "doc-page lib-home" },
-      h("div", { class: "doc-head" }, h("div", { class: "eyebrow" }, "Library"), h("h1", { class: "doc-title" }, lib.title)),
-      h("p", { class: "lede" }, lib.tagline, ": how it is built, what it stores, and the cases it has to get right."),
-      missing.length ? h("div", { class: "banner" }, h("b", null, `${missing.length === 1 ? "A page is" : `${missing.length} pages are`} missing on main`), h("span", null, missing.map((x) => x.text).join("; "), ".")) : null,
-      h("div", { class: "lib-cards" },
-        lib.pages.filter((x) => !x.parent).map((x) => h("a", { class: `card lib-card${x.missing ? " missing" : ""}`, href: libHref(p.key, x.id) },
-          h("b", null, x.nav), h("span", { class: "what" }, x.missing ? x.src : x.title),
-          h("span", { class: "by" }, h("span", null, x.owner), x.missing ? h("span", { class: "pill" }, "missing") : h("span", null, `changed ${dayOf(x.changed.date)}`)))),
-        lib.coming.map((c) => h("div", { class: "card lib-card soon" }, h("b", null, c.nav), h("span", { class: "what" }, c.what), h("span", { class: "by" }, h("span", null, c.owner), h("span", { class: "pill" }, "soon"))))),
-      h("p", { class: "lib-how" }, "Each page is a file on ", h("code", null, "main"), ` in ${lib.github.replace("https://github.com/", "")}, sent by ${lib.laptop}'s supervisor. The repository is the source: to change a page, ask its owner, who changes the file and lands it. It shows here at the next check.`));
-  }
-
   /** On a wide screen, On this page marks the section being read. */
   function spy(root) {
     const links = [...root.querySelectorAll(".lib-toc a")];
@@ -466,37 +917,63 @@
   }
 
   // ---------- draw ----------
-  let last = null;
-  function render() {
+  // The frame and the cards move the address themselves (a drill, a table, a card opened): nav() keeps render() from
+  // drawing that address again.
+  let last = null, cur = null, lastHref = null;
+  function nav(href, replace) {
+    if (location.hash === href) return;
+    history[replace ? "replaceState" : "pushState"](null, "", href);
+    lastHref = location.href;
+  }
+  function render(force) {
+    if (!force && location.href === lastHref) return;
+    lastHref = location.href;
     const r = route();
     header(r);
     const main = $("view");
     main.classList.add("wide");
-    // A heading on the same page only scrolls.
-    const same = last && r.view === "project" && last.view === "project" && last.key === r.key && last.tab === r.tab && last.page === r.page && last.state === proto.state;
+    // Only the focus changed: the frame, the card or the heading moves; the page stays (a diagram isn't redrawn).
+    // On a children page the focus is the child, so a new one is a new page.
+    const kids = r.view === "project" && isChildrenPage(r);
+    const same = !force && last && r.view === "project" && last.view === "project" && last.key === r.key && last.tab === r.tab && last.section === r.section && last.page === r.page && last.state === proto.state
+      && (!kids || r.focus === last.focus);
     last = { ...r, state: proto.state };
     if (!same) {
-      let kids;
-      if (r.view === "overview") kids = overview();
+      FRAMES.clear();
+      document.body.classList.remove("vf-lock");
+      let els;
+      cur = null;
+      if (r.view === "overview") els = overview();
       else if (r.view === "project") {
         const p = PROJECTS.find((x) => x.key === r.key);
-        kids = [...projectHead(p, r), r.tab === "work" ? work(p) : library(p, r)];
-        document.title = r.tab === "library" ? `${p.name} library · BobNet` : `${p.name} · BobNet`;
-      } else kids = [h("div", { class: "empty-card" }, "Not part of this prototype. ", h("a", { href: libHref("helix") }, "Helix's library"))];
-      main.replaceChildren(...kids);
+        const body = r.tab === "work" ? work(p) : library(p, r);
+        cur = body.querySelector?.(".doc-col > :last-child") ?? null;
+        els = [...projectHead(p, r), body];
+        document.title = r.tab === "library" ? `${p.name} library${r.section ? ` · ${secOf(r.section)?.label ?? ""}` : ""} · BobNet` : `${p.name} · BobNet`;
+      } else els = [h("div", { class: "empty-card" }, "Not part of this prototype. ", h("a", { href: libHref("bobnet") }, "BobNet's library"))];
+      main.replaceChildren(...els);
+      window.scrollTo(0, 0);
     }
-    if (r.heading) {
-      const el = document.getElementById(`h-${r.heading}`);
-      if (el) el.scrollIntoView({ block: "start", behavior: same ? "smooth" : "auto" });
-    } else if (!same) window.scrollTo(0, 0);
+    if (!cur) return;
+    if (cur.frame) cur.frame.setFocus(r.focus || "");
+    else if (r.focus && kids) return;
+    else if (r.focus && cur.cards) cur.cards.open(r.focus);
+    else if (r.focus) { const el = document.getElementById(`h-${r.focus}`); if (el) el.scrollIntoView({ block: "start", behavior: same ? "smooth" : "auto" }); }
+  }
+  function isChildrenPage(r) {
+    const lib = libraryOf(r.key);
+    if (!lib || r.tab !== "library" || !r.section) return false;
+    const pages = pagesOf(lib, r.section), page = r.page ? pages.find((x) => x.id === r.page) : pages[0];
+    return page?.kind === "children";
   }
 
   // ---------- the prototype's state switch (not built) ----------
   const STATES = [["ok", "Checked 4 min ago"], ["behind", "May be behind main (5h)"], ["failed", "Last fetch failed"], ["missing", "A page missing on main"],
-    ["nodiagram", "Diagram can't be drawn"], ["loading", "Reading the library"], ["none", "No library"]];
+    ["slow", "A diagram still drawing (15 s, then its files)"], ["nodiagram", "A diagram with errors"], ["loading", "Reading the library"], ["none", "No library"]];
   document.body.append(h("details", { class: "proto-states" }, h("summary", null, "Prototype: states"),
-    h("fieldset", null, STATES.map(([v, t]) => h("label", null, h("input", { type: "radio", name: "st", value: v, checked: v === "ok", onchange: () => { proto.state = v; render(); } }), t)))));
+    h("fieldset", null, STATES.map(([v, t]) => h("label", null, h("input", { type: "radio", name: "st", value: v, checked: v === "ok", onchange: () => { proto.state = v; render(true); } }), t)))));
 
-  window.addEventListener("hashchange", render);
+  window.addEventListener("hashchange", () => render());
+  window.addEventListener("popstate", () => render());
   render();
 })();

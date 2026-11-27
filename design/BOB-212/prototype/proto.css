@@ -63,7 +63,9 @@
 .secs-nav small { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; align-self: center; font-weight: 400; }
 .secs-nav .soon { color: var(--muted); }
 .secs-nav a.missing { color: var(--muted); }
-.secs-nav a.missing small { color: var(--warn); }
+.secs-nav a.missing { display: grid; gap: 0; }
+.secs-nav a.missing small { text-transform: none; letter-spacing: 0; font-size: 11.5px; align-self: start; }
+.secs-nav a[aria-current="true"] { font-weight: 600; }
 .lib-rail .foot { font-size: 12.5px; color: var(--muted); padding: 10px 10px 0; border-top: 1px solid var(--line); display: grid; gap: 4px; }
 .lib-rail .foot a { color: var(--accent); }
 .lib-toc { font-size: 13px; }
@@ -155,7 +157,7 @@
 .dia .dia-note.warn { color: var(--warn); }
 @media (max-width: 600px) { .dia-bar button { min-height: 40px; } }
 
-/* ---------- The library's home: a card per section ---------- */
+/* ---------- The library's home (version 1's cards; the tiles below replace them) ---------- */
 .lib-home .lede { font-size: 16px; color: var(--muted); max-width: 62ch; margin: 0; }
 .lib-cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
 .lib-card { text-decoration: none; color: var(--text); align-content: start; }
@@ -231,3 +233,174 @@ a.lib-card:hover { border-color: var(--accent); }
 .tax th:nth-child(5) { width: 9%; white-space: normal; } .tax th:nth-child(6) { width: 21%; } .tax th:nth-child(7) { width: 16%; }
 .tax td.k, .tax td.calc, .tax td.src { min-width: 0; max-width: none; }
 @media (max-width: 760px) { .tax { min-width: 0; table-layout: auto; } }
+
+/* =====================================================================================================================
+   Version 2 (ADR 0016): seven fixed sections, cards and diagrams first, the prose behind them. Spec §5-§10.
+   ===================================================================================================================== */
+.doc-col { min-width: 0; display: grid; gap: 14px; align-content: start; }
+.doc-body { min-width: 0; max-width: 780px; display: grid; gap: 14px; align-content: start; }
+.doc-meta .pt { color: var(--text); font-weight: 600; flex-basis: 100%; font-size: 15px; }
+
+/* The home: a tile per section, in the skeleton's order; a missing one dashed, with who writes it. */
+.lib-tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.lib-tile { text-decoration: none; color: var(--text); align-content: start; min-height: 128px; grid-template-rows: auto 1fr auto; }
+a.lib-tile:hover { border-color: var(--accent); }
+.lib-tile b { font-size: 16px; }
+.lib-tile .gl { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; align-content: start; font-size: 13.5px; line-height: 1.35; }
+.lib-tile .gl li { overflow-wrap: anywhere; }
+.k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); font-weight: 650; }
+.lib-tile .by { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.lib-tile.missing { border-style: dashed; background: transparent; }
+.lib-tile.missing b { color: var(--muted); font-weight: 600; }
+.lib-tile .nw { font-size: 13.5px; color: var(--muted); }
+.lib-tile.skel { min-height: 128px; }
+.nw-card { justify-items: start; text-align: left; padding: 18px; }
+.nw-card code { font-size: 12.5px; }
+
+/* A section's head and its pages as tabs (Data model: Schema · Entities · Data dictionary). */
+.sec-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+.sec-head .muted { font-size: 13px; }
+.sec-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); margin: -4px 0 0; order: 0; width: auto; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.sec-tabs a { flex: none; padding: 8px 12px; margin-bottom: -1px; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); font-size: 14px; text-decoration: none; white-space: nowrap; }
+.sec-tabs a:hover { color: var(--text); }
+.sec-tabs a[aria-current] { color: var(--text); border: 0; border-bottom: 2px solid var(--accent); background: none; font-weight: 600; }
+.sec-tabs small { color: var(--warn); font-size: 11px; text-transform: uppercase; }
+@media (pointer: coarse) { .sec-tabs a { padding: 11px 14px; } }
+
+/* Status: one word, coloured by what it means (accepted, handled, built: ok; proposed, partly, waiting: warn). */
+.st { display: inline-block; font-size: 11.5px; line-height: 1.55; padding: 0 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; font-weight: 600; }
+.st.ok { color: var(--ok); } .st.warn { color: var(--warn); } .st.mute { color: var(--muted); }
+
+/* Cards: use cases (each h3 of a use-case page, or a child file), their fields on the face, the rest folded. */
+.cards-page { display: grid; gap: 14px; min-width: 0; align-content: start; }
+.cards-page .tax-bar .seg button { text-transform: capitalize; }
+.ucg { display: grid; gap: 8px; }
+.ucg-h { margin: 6px 0 0; font-size: 15px; font-weight: 650; color: var(--text); text-transform: none; letter-spacing: 0; }
+.ucg-h .muted { font-weight: 400; font-size: 13px; margin-left: 4px; }
+.uc-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-items: start; }
+.ucard { gap: 8px; scroll-margin-top: 90px; }
+.uc-h { display: flex; gap: 8px; justify-content: space-between; align-items: baseline; }
+.uc-h b { font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
+.uc-f { margin: 0; display: grid; gap: 4px; font-size: 13.5px; line-height: 1.4; }
+.uc-f div { display: grid; grid-template-columns: 6.5em minmax(0, 1fr); gap: 8px; }
+.uc-f dt { color: var(--muted); font-size: 12.5px; }
+.uc-f dd { margin: 0; overflow-wrap: anywhere; }
+.uc-f.wide div { grid-template-columns: 8.5em minmax(0, 1fr); }
+.uc-f dd code { font-size: 12px; }
+.uc-f dd a { color: var(--accent); }
+.uc-more > summary { margin: 0; font-size: 13px; color: var(--accent); min-height: 32px; display: flex; align-items: center; }
+.uc-more[open] > summary { color: var(--muted); }
+.uc-more .doc { font-size: 14.5px; border-top: 1px solid var(--line); padding-top: 8px; }
+.uc-more .doc p, .uc-more .doc li { max-width: none; }
+a.ucard.file { text-decoration: none; color: var(--text); }
+a.ucard.file:hover { border-color: var(--accent); }
+.lede-s { margin: 0; font-size: 13.5px; color: var(--muted); line-height: 1.4; }
+.ucard .by { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12.5px; color: var(--muted); }
+.intro, .ucg-prose { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 0 14px; }
+.intro > summary, .ucg-prose > summary { margin: 0; min-height: 40px; display: flex; align-items: center; }
+.ucg-prose > summary { color: var(--text); font-weight: 600; font-size: 14px; }
+.intro .doc, .ucg-prose .doc { padding: 4px 0 12px; font-size: 14.5px; }
+@media (max-width: 760px) {
+  .uc-grid { grid-template-columns: minmax(0, 1fr); }
+  .uc-f div, .uc-f.wide div { grid-template-columns: 5.5em minmax(0, 1fr); }
+  .uc-more > summary { min-height: 40px; }
+}
+
+/* Decisions: one row each, newest first; its number, title, status, date, who decided. */
+.adr-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.adr-list li + li { border-top: 1px solid var(--line); }
+.adr-list li.none { padding: 14px; }
+.adr { display: grid; grid-template-columns: 3.2em minmax(0, 1fr) 7.5em 7.5em 6.5em; gap: 4px 14px; padding: 10px 14px; align-items: baseline; color: var(--text); text-decoration: none; font-size: 14px; }
+.adr:hover { background: var(--bg); }
+.adr .n { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; font-size: 13px; }
+.adr .t { line-height: 1.35; overflow-wrap: anywhere; }
+.adr .d, .adr .b { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 760px) {
+  .adr { grid-template-columns: auto auto minmax(0, 1fr); grid-template-areas: "n s d" "t t t"; gap: 4px 10px; min-height: 56px; }
+  .adr .n { grid-area: n; } .adr .s { grid-area: s; } .adr .d { grid-area: d; text-align: right; } .adr .t { grid-area: t; } .adr .b { display: none; }
+}
+
+/* UX design: a card per feature: its spec, its prototype, Casper's verdict and its date. */
+.ux-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); align-items: start; }
+.ux-card { gap: 8px; }
+.ux-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.ux-t { font-size: 15.5px; line-height: 1.3; }
+.ux-v { font-size: 13.5px; display: grid; gap: 2px; }
+.ux-v.none { color: var(--muted); }
+.ux-card .actions { margin-top: 2px; }
+.btn { display: inline-flex; align-items: center; min-height: 36px; padding: 6px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); text-decoration: none; font-size: 14px; }
+.btn:hover { border-color: var(--accent); }
+@media (pointer: coarse) { .btn { min-height: 44px; } }
+
+/* One child (an ADR, a spec, a capability): back to its list, its head as fields, then the prose. */
+.child-head { display: grid; gap: 8px; }
+.child-head .back { font-size: 13.5px; color: var(--accent); text-decoration: none; justify-self: start; padding: 4px 0; }
+.child-t { margin: 0; font-size: 21px; text-transform: none; letter-spacing: -.005em; color: var(--text); font-weight: 650; line-height: 1.25; text-wrap: balance; overflow-wrap: anywhere; }
+.kv { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; font-size: 13.5px; }
+.kv a { color: var(--accent); }
+.kv .uc-f { flex-basis: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+@media (max-width: 600px) { .child-t { font-size: 19px; } }
+
+/* ---------- The zoomable diagrams: BobNet's bar, then the sandboxed viewer (spec §9, §10) ---------- */
+.page-diagram { min-width: 0; }
+.vf { display: grid; gap: 8px; min-width: 0; }
+.vf-bar { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; }
+.vf-crumb { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 14.5px; min-width: 0; }
+.vf-crumb a { color: var(--accent); text-decoration: none; padding: 4px 0; }
+.vf-crumb a:hover { text-decoration: underline; }
+.vf-crumb .sep { color: var(--muted); }
+.vf-crumb b { font-weight: 650; }
+.vf-crumb .vf-title { flex-basis: 100%; color: var(--muted); font-size: 13px; }
+.vf-act { display: flex; flex-wrap: wrap; gap: 6px; }
+.vf-act button { min-height: 34px; padding: 4px 12px; font-size: 13.5px; }
+.vf-done { display: none; }
+.vf.exploring .vf-done { display: inline-flex; align-items: center; border-color: var(--accent); color: var(--accent); }
+.vf-box { position: relative; height: min(72vh, 720px); min-height: 360px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.vf-box iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+.vf-veil { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; background: var(--surface); }
+.vf-veil[hidden] { display: none; }
+.vf-load { display: grid; gap: 8px; text-align: center; width: min(340px, 82%); font-size: 13.5px; color: var(--muted); }
+.vf-load b { color: var(--text); font-size: 15px; }
+.vf-load .skel { margin-top: 6px; justify-items: center; }
+.vf-touch { display: none; }
+@media (pointer: coarse) {
+  /* A finger on the page scrolls the page; a tap hands the frame the finger until Done. */
+  .vf-touch { display: grid; position: absolute; inset: 0; z-index: 1; place-content: center; gap: 6px; text-align: center; width: 100%; height: 100%; min-height: 0;
+    padding: 0; border: 0; border-radius: 0; background: color-mix(in srgb, var(--surface) 30%, transparent); color: var(--text); }
+  .vf-touch b { justify-self: center; font-size: 16px; background: var(--surface); border: 1px solid var(--accent); color: var(--accent); border-radius: 999px; padding: 10px 20px; }
+  .vf-touch span { justify-self: center; font-size: 13px; color: var(--muted); background: var(--surface); padding: 2px 8px; border-radius: 6px; max-width: 80%; }
+  .vf.exploring .vf-touch, .vf.full .vf-touch { display: none; }
+  .vf-act button, .chip-b { min-height: 40px; }
+}
+.vf-jump { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.vf-jump .lab { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; margin-right: 4px; }
+.chip-b { min-height: 30px; padding: 2px 11px; font-size: 13px; border-radius: 999px; }
+.chip-b[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.chip-b small { color: var(--muted); font-weight: 400; }
+.chip-b.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.vf-foot { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.vf-foot a { color: var(--accent); }
+.vf-warn summary { color: var(--warn); margin: 0; font-size: 13px; }
+.vf-fail { border: 1px dashed var(--line); border-radius: var(--radius); padding: 16px; display: grid; gap: 8px; background: var(--surface); }
+.vf-fail b { font-size: 15px; }
+.vf-fail p { margin: 0; }
+.errs, .files { margin: 0; padding-left: 18px; font-size: 13.5px; display: grid; gap: 2px; }
+.errs { color: var(--warn); }
+.errs code, .files code { color: var(--text); font-size: 12.5px; }
+.files a { color: var(--accent); }
+.vf.full { position: fixed; inset: 0; z-index: 20; background: var(--bg); padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; }
+.vf.full .vf-box { flex: 1 1 auto; height: auto; min-height: 0; }
+.vf.full .vf-foot { display: none; }
+body.vf-lock { overflow: hidden; }
+@media (max-width: 1279px) { .vf-box { height: 62vh; } }
+@media (max-width: 760px) { .vf-box { height: 64vh; min-height: 380px; } .vf-crumb { font-size: 14px; } }
+.ux-v.wait { color: var(--warn); }
+.lib-tile .nw-s { color: var(--muted); }
+@media (min-width: 1280px) { .vf-box { height: clamp(420px, calc(100vh - 290px), 760px); } }
+@media (max-width: 760px) {
+  /* On a phone the section picker names the section: its head keeps only the owner; the frame's title line goes. */
+  .sec-head .doc-title { display: none; }
+  .vf-crumb .vf-title { display: none; }
+  .vf-bar { gap: 6px; }
+  .vf-act { margin-left: auto; }
+}

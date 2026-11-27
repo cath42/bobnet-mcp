@@ -1,0 +1,133 @@
+/* BOB-212: Liam ERD's look inside the library's frame, mapped to BobNet's style.css (spec §10, ADR 0016 §6).
+   The vendoring tool (tools/vendor/) appends this to the ERD viewer's <style>. The frame has an opaque origin and
+   can't read the dashboard's variables, so the first two blocks are style.css's :root tokens as literals, light then
+   dark; the tool writes them from style.css when it runs. The rest maps Liam's variables (Liam 0.7.24's app) to them.
+   Liam's class names are hashed per release (_wrapper_j2hiu_1), so nothing here selects by them. */
+:root {
+  --bn-bg: #f6f6f3; --bn-surface: #ffffff; --bn-text: #1c1c1a; --bn-muted: #6b6a64; --bn-line: #e3e2dc;
+  --bn-accent: #2f5d50; --bn-ok: #2e7d4f; --bn-warn: #9a5b00; --bn-bad: #b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bn-bg: #141413; --bn-surface: #1e1e1c; --bn-text: #ecebe6; --bn-muted: #9b9a93; --bn-line: #2e2e2b;
+    --bn-accent: #7fbfa9; --bn-ok: #6cc28f; --bn-warn: #e0a24a; --bn-bad: #ef7f76;
+  }
+}
+:root {
+  color-scheme: light dark;
+  --main-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --message-font: var(--main-font);
+  --code-font: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* The page and its panes */
+  --global-background: var(--bn-bg);
+  --global-muted-background: var(--bn-surface);
+  --global-foreground: var(--bn-text);
+  --global-body-text: var(--bn-text);
+  --global-mute-text: var(--bn-muted);
+  --global-border: var(--bn-line);
+  --pane-background: var(--bn-surface);
+  --pane-background-hover: var(--bn-bg);
+  --pane-background-active: var(--bn-bg);
+  --pane-muted-background: var(--bn-bg);
+  --pane-border: var(--bn-line);
+  --pane-border-hover: var(--bn-muted);
+  --pane-border-active: var(--bn-accent);
+  --scrollbar-thumb-background: var(--bn-line);
+  --scrollbar-track-background: transparent;
+  /* Tables, their columns, the relations */
+  --node-background: var(--bn-surface);
+  --node-foreground: var(--bn-text);
+  --node-border: var(--bn-line);
+  --node-muted-border: var(--bn-line);
+  --node-layout: var(--bn-accent); /* a focused table's relations */
+  --node-selected: var(--bn-accent);
+  --node-accent-background: color-mix(in srgb, var(--bn-accent) 12%, var(--bn-surface));
+  --node-accent-foreground: var(--bn-accent);
+  --node-action: var(--bn-muted);
+  /* Liam's green is BobNet's accent */
+  --primary-accent: var(--bn-accent);
+  --primary-color: var(--bn-accent);
+  --primary-hover: var(--bn-accent);
+  --primary-on-white-shape: var(--bn-accent);
+  --primary-on-white-text: var(--bn-accent);
+  --primary-accent-overlay: color-mix(in srgb, var(--bn-accent) 10%, transparent);
+  --primary-accent-overlay-hover: color-mix(in srgb, var(--bn-accent) 18%, transparent);
+  --primary-overlay-0: transparent;
+  --primary-overlay-5: color-mix(in srgb, var(--bn-accent) 5%, transparent);
+  --primary-overlay-10: color-mix(in srgb, var(--bn-accent) 10%, transparent);
+  --primary-overlay-12: color-mix(in srgb, var(--bn-accent) 12%, transparent);
+  --primary-overlay-15: color-mix(in srgb, var(--bn-accent) 15%, transparent);
+  --primary-overlay-20: color-mix(in srgb, var(--bn-accent) 20%, transparent);
+  --primary-overlay-35: color-mix(in srgb, var(--bn-accent) 35%, transparent);
+  --primary-overlay-40: color-mix(in srgb, var(--bn-accent) 40%, transparent);
+  --primary-overlay-50: color-mix(in srgb, var(--bn-accent) 50%, transparent);
+  --primary-overlay-60: color-mix(in srgb, var(--bn-accent) 60%, transparent);
+  --primary-overlay-70: color-mix(in srgb, var(--bn-accent) 70%, transparent);
+  --primary-overlay-80: color-mix(in srgb, var(--bn-accent) 80%, transparent);
+  --primary-overlay-90: color-mix(in srgb, var(--bn-accent) 90%, transparent);
+  --primary-overlay-100: var(--bn-accent);
+  --primary-gradation-default-start: var(--bn-accent);
+  --primary-gradation-default-middle: var(--bn-accent);
+  --primary-gradation-default-end: var(--bn-accent);
+  --primary-gradation-overlay-start: color-mix(in srgb, var(--bn-accent) 12%, transparent);
+  --primary-gradation-overlay-end: transparent;
+  /* Buttons and menus: style.css's plain buttons */
+  --button-background: var(--bn-surface);
+  --button-background-hover: var(--bn-bg);
+  --button-background-active: var(--bn-bg);
+  --button-border: var(--bn-line);
+  --button-foreground: var(--bn-text);
+  --button-secondary-foreground: var(--bn-text);
+  --button-secondary-background-hover: var(--bn-bg);
+  --button-ghost-secondary-background: transparent;
+  --button-primary-background: var(--bn-accent);
+  --button-primary-background-hover: var(--bn-accent);
+  --button-primary-foreground: var(--bn-surface);
+  --dropdown-background-active: var(--bn-bg);
+  --dropdown-background-hover: var(--bn-bg);
+  --dropdown-border: var(--bn-line);
+  --tooltip-background: var(--bn-text);
+  --tooltip-foreground: var(--bn-surface);
+  --tooltip-border: var(--bn-text);
+  /* Liam's overlays are white at an alpha, and its text uses them (a table's name is --overlay-70): the text colour. */
+  --overlay-5: color-mix(in srgb, var(--bn-text) 5%, transparent);
+  --overlay-10: color-mix(in srgb, var(--bn-text) 10%, transparent);
+  --overlay-20: color-mix(in srgb, var(--bn-text) 20%, transparent);
+  --overlay-30: color-mix(in srgb, var(--bn-text) 30%, transparent);
+  --overlay-40: color-mix(in srgb, var(--bn-text) 40%, transparent);
+  --overlay-50: color-mix(in srgb, var(--bn-text) 50%, transparent);
+  --overlay-60: color-mix(in srgb, var(--bn-text) 65%, transparent);
+  --overlay-70: color-mix(in srgb, var(--bn-text) 80%, transparent);
+  --overlay-100: var(--bn-text);
+  --overlay-30-revert: color-mix(in srgb, var(--bn-surface) 30%, transparent);
+  --color-white-alpha-70: color-mix(in srgb, var(--bn-text) 80%, transparent);
+  --shadow-basic-shadow: 0 1px 3px color-mix(in srgb, var(--bn-text) 12%, transparent);
+  --code-1: var(--bn-muted); --code-2: var(--bn-text); --code-3: var(--bn-accent); --code-4: var(--bn-warn);
+}
+/* React Flow's canvas: Liam runs it in its dark mode, which sets these on .react-flow.dark, so they are set there too. */
+.react-flow, .react-flow.dark {
+  --xy-background-color-default: var(--bn-bg);
+  --xy-background-pattern-dots-color-default: var(--bn-line);
+  --xy-edge-stroke-default: var(--bn-muted);
+  --xy-edge-stroke-selected-default: var(--bn-accent);
+  --xy-edge-label-background-color-default: var(--bn-surface);
+  --xy-edge-label-color-default: var(--bn-text);
+  --xy-attribution-background-color-default: transparent;
+  --xy-minimap-background-color-default: var(--bn-surface);
+  --xy-controls-button-background-color-default: var(--bn-surface);
+  --xy-controls-button-color-default: var(--bn-text);
+  --xy-node-color-default: var(--bn-text);
+  --xy-node-background-color-default: var(--bn-surface);
+  --xy-node-border-default: 1px solid var(--bn-line);
+}
+:root {
+  /* No app bar: BobNet's bar above the frame has the find, Fit and Full screen */
+  --layout-app-bar-height: 0px;
+  --default-header-height: 0px;
+}
+body { font-family: var(--main-font); background: var(--bn-bg); color: var(--bn-text); }
+/* Liam's header: its logo and title, Search, GitHub, release notes, help, Export and Copy Link. In a sandbox with
+   no network the links and Copy Link do nothing, and BobNet's bar has the table finder. Its one <header>. */
+header { display: none !important; }
+.react-flow__attribution { opacity: .6; }
+.react-flow__attribution a { color: var(--bn-muted); }
