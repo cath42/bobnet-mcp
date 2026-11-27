@@ -493,3 +493,93 @@ body.vf-lock { overflow: hidden; }
 .vf-box { isolation: isolate; }
 .lib-rail.folded { z-index: auto; }
 .lib-rail.folded .secs-nav { z-index: 2; }
+
+/* ---------- Version 4: the library standard (ADR 0017; spec §0) ---------- */
+/* The bar: where you are (the crumb, and under it the level or the model's note), then its controls. */
+.vf-where { display: grid; gap: 2px; min-width: 0; }
+.vf-where .vf-title { color: var(--muted); font-size: 13px; line-height: 1.35; }
+.vf-where .vf-title:empty { display: none; }
+.vf-where .vf-title a { color: var(--accent); text-decoration: none; }
+.vf-where .vf-title a:hover { text-decoration: underline; }
+.vf-btns { display: inline-flex; gap: 6px; }
+.vf-pick optgroup { font-style: normal; color: var(--muted); }
+/* The toggle per diagram: Liam's three show modes. */
+.vf-show { align-items: center; }
+.vf-show-l { font-size: 12.5px; color: var(--muted); padding: 0 6px 0 2px; }
+.vf-show button { min-height: 34px; padding: 4px 11px; font-size: 13.5px; }
+@media (pointer: coarse) { .vf-show button { min-height: 40px; } }
+/* The diagrams as tabs, with their table counts. */
+.dia-tabs .n { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+.dia-tabs .skel-t { flex: none; align-self: center; width: 9em; height: 12px; margin: 0 12px; border-radius: 6px; background: var(--line); }
+@media (max-width: 760px) {
+  .vf-where .vf-title { display: none; }
+  .vf-act { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; width: 100%; }
+  .vf-act .vf-pick { grid-column: 1 / -1; order: -1; }
+  .vf-act .vf-back { justify-self: start; }
+  .vf-show { justify-self: start; }
+  .vf-btns { justify-self: end; }
+}
+/* The entity card, version 4: where the table is drawn, keys, nullability, defaults and an enum's values. */
+.ent-in { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.ent-in .ent-sub { margin-right: 2px; }
+.ent-in .chip-b { min-height: 28px; font-size: 12.5px; display: inline-flex; align-items: center; text-decoration: none; color: var(--accent); border: 1px solid var(--line); background: var(--surface); }
+.ent-in .chip-b.here { color: var(--text); border-color: var(--accent); font-weight: 600; }
+.chip-b.out { border-style: dashed; color: var(--muted); }
+.chip-b .one { color: var(--muted); font-size: 11px; }
+.ent-cols .tag.u { color: var(--muted); }
+.ent-cols .tag.n { color: var(--muted); font-weight: 600; text-transform: none; letter-spacing: 0; }
+.ent-cols .dflt { color: var(--muted); }
+.ent-enum { flex-basis: 100%; list-style: none; margin: 2px 0 0; padding: 0 0 0 10px; border-left: 2px solid var(--line); display: grid; gap: 1px; font-size: 12.5px; color: var(--muted); }
+.ent-enum code { color: var(--text); font-size: 12px; }
+@media (max-width: 760px) { .ent-in .chip-b { min-height: 36px; } }
+/* A status outside the standard's values. */
+.st.odd { color: var(--warn); border-style: dashed; }
+/* Problems with the standard: on the home, in a section, on a card, and counted on the head. */
+.probs { border: 1px solid var(--warn); border-radius: var(--radius); background: var(--surface); padding: 10px 14px; font-size: 14px; }
+.probs > summary { margin: 0; color: var(--warn); font-weight: 600; cursor: pointer; }
+.probs ul { margin: 8px 0 6px; padding-left: 18px; display: grid; gap: 4px; }
+.probs a { color: var(--accent); }
+.probs code { font-size: 12.5px; color: var(--text); }
+.probs p { margin: 0; font-size: 13px; }
+.probs-in { margin: 0; padding: 8px 12px 8px 28px; border: 1px solid var(--warn); border-radius: 8px; color: var(--warn); font-size: 13.5px; display: grid; gap: 2px; }
+.pdot { color: var(--warn); font-size: 12px; font-weight: 600; }
+.fresh .probs-n { color: var(--warn); font-weight: 600; }
+.lib-home .who { margin: 0; font-size: 13.5px; }
+.lib-tile .sts { color: var(--muted); font-size: 12.5px; }
+/* Cards: a number, its status, a title that opens it, a face, and its links. */
+.num { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; font-size: 13px; }
+.uc-t, .ux-t { font-size: 15.5px; font-weight: 650; line-height: 1.3; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+.uc-t:hover, .ux-t:hover { color: var(--accent); text-decoration: underline; }
+.ucard .uc-h { justify-content: flex-start; }
+.ux-top { justify-content: flex-start; }
+.ux-top .id { color: var(--accent); font-size: 12.5px; font-weight: 600; margin-right: auto; }
+.uc-links { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.uc-links .chip-b { display: inline-flex; align-items: center; text-decoration: none; color: var(--accent); border: 1px solid var(--line); background: var(--surface); }
+.adr .t small { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.eyebrow { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.head-box { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px 24px; }
+.uc-f .num { margin-right: 4px; }
+/* The glossary: a find, the letters, then the terms. */
+.gloss { display: grid; gap: 12px; }
+.az { display: flex; flex-wrap: wrap; gap: 4px; order: 0; width: auto; border: 0; }
+.az a { min-width: 32px; min-height: 32px; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--accent); text-decoration: none; font-weight: 600; font-size: 13.5px; padding: 0; }
+@media (pointer: coarse) { .az a { min-width: 44px; min-height: 44px; } }
+.terms { margin: 0; display: grid; gap: 0; border-top: 1px solid var(--line); }
+.term { padding: 12px 0; border-bottom: 1px solid var(--line); scroll-margin-top: 90px; display: grid; gap: 4px; }
+.term dt a { font-weight: 650; font-size: 16px; color: var(--text); text-decoration: none; }
+.term dt a:hover { color: var(--accent); }
+.term .also { font-size: 13px; }
+.term dd { margin: 0; font-size: 15px; line-height: 1.55; max-width: 72ch; }
+.term dd p { margin: 0; }
+.term.on { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: -10px 0 0 color-mix(in srgb, var(--accent) 8%, transparent), inset 3px 0 0 var(--accent); padding-left: 10px; }
+.pm-name .proto-tag, .p-h .proto-tag { margin-left: 8px; vertical-align: middle; }
+@media (max-width: 760px) {
+  /* A phone: the toggle and the buttons share one row; the group keeps its "Show" name for a screen reader. */
+  .vf-show-l { display: none; }
+  .vf-show button { padding: 4px 9px; }
+  .vf-btns button { padding: 4px 10px; }
+}
+.lib-how a { color: var(--accent); }
+.lib-tile.missing code { font-size: 12px; }
+.errs a { color: var(--accent); }
+.doc-body > .lede { font-size: 17px; color: var(--muted); margin: 0; max-width: 62ch; }

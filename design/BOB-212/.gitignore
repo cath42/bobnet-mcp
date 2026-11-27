@@ -1,7 +1,5 @@
-# Helix's and Vitals' repos are private; this repo is public. Their library text stays off it:
-# make data.js with tools/gen_data.py and the shots with tools/shots.mjs, on a laptop with the clones.
-# data.js also carries Vitals' parsed schema (the ERD), from Toad's spike.
-prototype/data.js
-shots/
-# The two viewers (ADR 0016 §6), packed from tools/likec4-viewer.jsx and tools/pack-erd.mjs: about 9 MB, made, not kept.
+# The prototype draws Toolshed, the library standard's sample (public): prototype/data.js is committed, made by
+# tools/gen_data.mjs. The two viewers (ADR 0016 §6, 0017 §7), packed by tools/pack-erd.mjs and from
+# tools/likec4-viewer.jsx, are about 10 MB: made, not kept. So are the shots (tools/shots.mjs).
 prototype/vendor/
+shots/

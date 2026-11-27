@@ -1,63 +1,55 @@
 # BOB-212: each project's library on BobNet, and the project menu back
 
-Daisy, design session `BOB-212 design A`, version 3, 2026-11-26. For R9 (R3.1).
+Daisy, design session `BOB-212 design A`, version 4, 2026-11-26. For R9 (R3.1).
 
 **Sources:**
 
 - BOB-212's five criteria.
 - Casper's words, in `lead/bob212/frameworks-decision.md`: "some structure around architecture, data models,
   use cases, prototypes, ux design"; "Its a lot of text though"; diagrams one can "focus/zoom on details … or zoom
-  out and see bigger picture"; then "Yes agreee go ahead".
-- Casper on version 2 (to poe, 26 Nov): "The data model couldn't render for the helix project, was that a bug or
-  intentional? Still a lot of text on the side, id prefer entity context be something I can open or see on the
-  diagram somehow".
-- The data path and the skeleton: Toad's ADR 0015, as amended by ADR 0016
-  (`architecture/decisions/0016-library-skeleton-and-zoomable-diagrams.md`), and his spike
-  (`architecture/spikes/bob212/README.md`).
+  out and see bigger picture"; on version 2, "id prefer entity context be something I can open or see on the diagram
+  somehow".
+- **His verdict on version 3 (Q-21), the last section of that file:** the data model was all tables or all tables
+  with attributes, and he wanted "to toggle that by diagram"; and "make it consistent for all and prototype using a
+  sample … im looking for standards and frameworks not "work with what I've got" please".
+- **The standard:** Toad's ADR 0017 (`architecture/decisions/0017-library-standard.md`), its author's guide
+  (`architecture/library-standard.md`), and the sample project Toolshed (`architecture/spikes/bob212/sample/`). ADR
+  0015 and 0016 stand where 0017 says they do.
 
-This spec is the screens. Where it meets the ADRs, it cites them as 0015 §n and 0016 §n.
+This spec is the screens. Where it meets the ADRs, it cites them as 0015 §n, 0016 §n and 0017 §n.
 
-**The prototype** is `design/BOB-212/prototype/`. Open `index.html#project/bobnet/library`. It shows:
+**The prototype** is `design/BOB-212/prototype/`. Open `index.html#project/toolshed/library`. It shows **Toolshed
+only**: a fictional tool library written to the standard, every section filled. BobNet, Helix and Vitals are in the
+menu but have no `library/` yet, so their libraries show what an unconverted project shows (§7). No real project's
+content is in it, so its data (`prototype/data.js`, made by `tools/gen_data.mjs` from the sample) is committed. Its
+GitHub links open the sample's files in bobnet-mcp at `1c83f2b`.
 
-- BobNet's own library as the target: its LikeC4 model, its ADRs, its capabilities and its UX cards, from `v2`;
-- Helix's and Vitals' real library pages, from each repo's main, put into the sections as 0016 §4 maps them;
-- Vitals' schema as a zoomable ERD, and Helix's model as one (a stand-in until Helix's build writes its schema, §10.4).
+## 0. What changed since version 3
 
-**Helix and Vitals are private repos, and bobnet-mcp is public**, so `prototype/data.js`, `prototype/vendor/` and
-`shots/` are git-ignored. To make them on a laptop with the clones and Toad's spike cache, see §13. Casper allowed
-the deployed prototype on an open, unlisted link (Q-18, "an unlisted link is fine").
+- **One standard for every project** (0017 §1). Each section is one file or one folder under `library/` on main,
+  in one format, the same in every repo. So the page has no per-repo shapes:
+  - no section with several pages and page tabs;
+  - no `children` lists, no use cases cut out of a long page, no taxonomy table;
+  - no `.bobnet/library.json`, no "missing page" state;
+  - no `about` file: the descriptions are the DBML's notes.
+- **The data model has named diagrams, and a toggle per diagram** (§11). "All tables" comes first, then each
+  `DiagramView` in the DBML, as tabs. Each diagram has its own Tables · Keys · Columns toggle, kept on the device.
+- **The entity card stays** (§11.3), now from the DBML. It also shows:
+  - which diagrams draw the table;
+  - one-to-one relations;
+  - what may be null, and the defaults;
+  - an enum column's values with their notes;
+  - the table's line in the file.
+- **Cards are the standard's cards** (§9). Decisions, use cases and UX cards are numbered files with fixed front
+  matter, and are linked to each other:
+  - a decision to what it supersedes and what supersedes it;
+  - a use case to its flow in the architecture and to its UX cards;
+  - a UX card to its use cases.
+- **The architecture's views picker is grouped**: C4 levels, use-case flows, deployment (§10). On a phone it is the
+  way into a wide view, whose boxes are too small to tap (0017 §7).
+- **Problems with the standard** are listed and counted, never fatal (§8).
 
-## 0. What changed
-
-### Since version 2
-
-- **A table's context is on the diagram** (§10.2). A click on a table, or a tap on a phone, opens its card in the
-  frame: what it is, what it refers to and what refers to it, its key fields with their notes, and all its columns
-  folded. On a desktop, hovering over a table shows its one line first. Liam's own side pane is gone.
-- **Less text beside a diagram.** On a C4 or ERD page:
-  - the sections rail folds into the section's name, which opens the sections (§5);
-  - the section's tabs share its row;
-  - the view and table chips under the frame are one picker in the bar (§9, §10);
-  - the source line is one short line.
-- **Helix's data model draws** (§10.4). It "couldn't be drawn" because of a bug in Helix's `entities.md` (line 54,
-  LAND-189, Bill's to fix). Helix's model file has every table, its description and its keys. Once Helix's build
-  writes a `schema.sql` from it, it is a real ERD with nothing Helix-specific in BobNet. The prototype draws that
-  ERD now, from the model file.
-
-### Since the first prototype
-
-- **Seven fixed sections** (0016 §1): Overview, Architecture, Data model, Decisions, Use cases, UX design and
-  Glossary. They are in the same order in every project. A section not written yet stays in its place, muted, with
-  who writes it.
-- **Less text.** Each section opens on cards or a diagram, and the prose is one tap behind:
-  - the home is seven tiles;
-  - the decisions are a list with each one's status;
-  - the use cases are cards with their actor and goal;
-  - the UX design is one card per feature, with its prototype and Casper's verdict.
-- **Diagrams you can zoom.** The architecture is a LikeC4 model: click a box to drill in, and the crumb takes you
-  back out. The data model is Liam's ERD: tap a table to focus it and its relations. Both work on a phone (§9,
-  §10).
-- The Projects menu, the Work · Library tabs, the "As of main" line and the states are as in version 1.
+The project menu (§1) is unchanged, and still open.
 
 ## 1. "The project menu": what Casper likely means (AC3, to settle with him)
 
@@ -76,7 +68,7 @@ So Casper has project pages but no menu to them, and the library needs a home un
 
 | | Reading | What he'd see | For | Against |
 |---|---|---|---|---|
-| **A** (rec) | **A Projects menu in the header, to each project's page. The page gets Work and Library tabs** | "Projects ▾" first in the tabs. It lists BobNet, Helix and Vitals, each with a Library link. On Helix's page it reads "Helix ▾". | One place to go to a project, from any page. The library sits where the project is. The per-page switches stay. | One more control in the header. The tabs stay two rows on a phone, as now. |
+| **A** (rec) | **A Projects menu in the header, to each project's page. The page gets Work and Library tabs** | "Projects ▾" first in the tabs. It lists the projects, each with a Library link. On Helix's page it reads "Helix ▾". | One place to go to a project, from any page. The library sits where the project is. The per-page switches stay. | One more control in the header. The tabs stay two rows on a phone, as now. |
 | B | **The old dropdown back**: one project picked in the header scopes every tab, plus a Library tab | A select after the tabs: Roadmap, Features, Triage, Usage and Library show the picked project. | What he had before 23 Nov. | Overview and Needs you are across projects, so the dropdown means nothing there. It duplicates the page switches BOB-121 put in, or removes them. An 8th tab for Library. |
 | C | **A Projects tab**: an 8th tab with a card per project, each opening its page with Work and Library | "Projects" beside Overview: a card per project (release, who runs, Library). | A page to browse projects. | It duplicates the Overview's Projects rows. Switching takes two taps instead of one. |
 
@@ -86,53 +78,47 @@ verbatim, when Mario has it (AC3's evidence).
 
 > Casper (Q-…, date): _to come_
 
-## 2. Where the library lives, and its links
+## 2. Addresses
 
-| Address | Opens |
-|---|---|
-| `#project/<key>` | The Work tab, today's page |
-| `#project/<key>/library` | The library's home (§6) |
-| `#project/<key>/library/<section>` | A section's first page (§7) |
-| `#project/<key>/library/<section>/<page>` | One page of a section |
-| `#project/<key>/library/<section>/<page>/<focus>` | A page at a spot (0016 §6) |
+`#project/<key>/library[/<section>[/<item>[/<focus>]]]` (0017 build A task 4). What the item and the focus are
+depends on the section:
 
-What the focus is depends on the kind of page:
-
-| Page kind | The focus is | Example |
-|---|---|---|
-| `md` | a heading's slug | `…/architecture/overview/details-by-area` |
-| `md` with use-case cards (§8) | a card's slug; opening a card writes it | `…/usecases/catalogue/uc-7-<its-title>` |
-| `children` | a child, by its file name | `…/decisions/adrs/0016-library-skeleton-and-zoomable-diagrams` |
-| `likec4` | a C4 view id | `…/architecture/model/boardComponents` |
-| `erd` | a table name | `…/data/erd/<table>` |
-| `table` | `all-elements`, the taxonomy's table | `…/data/taxonomy/all-elements` |
+| Section | `<item>` | `<focus>` | Example |
+|---|---|---|---|
+| `overview` | a heading's slug | | `…/library/overview/quality-goals` |
+| `architecture` | a view id (0017 §2's fixed ids) | | `…/library/architecture/apiComponents`, `…/architecture/uc0001` |
+| `data` | the diagram: `all` or a `DiagramView`'s name | a table | `…/library/data/lending/loan` |
+| `decisions`, `usecases`, `ux` | the card's number | a heading's slug | `…/library/decisions/0003`, `…/usecases/0001/acceptance` |
+| `glossary` | a term's slug | | `…/library/glossary/hold` |
 
 - **A slug** is the text in lower case, with each run of anything but a-z and 0-9 turned into one `-`.
-- **Drilling into a C4 view or focusing a table adds a history entry**, so the browser's Back backs out one level.
-  Opening a card only replaces the address, so Back leaves the page.
-- **A heading inside a child** isn't in the address. Its "On this page" scrolls.
+- **History:**
+  - Drilling into a C4 view, opening a table, or switching a diagram adds a history entry, so the browser's Back
+    goes back one step.
+  - A heading or a term moves the page and the address, and adds an entry too.
 - **Unknown names:**
-  - An unknown section or page shows the library's frame with "<Section> has no page "x". It may have been renamed in
-    .bobnet/library.json." and a link to the section.
-  - An unknown focus opens the page from its top, or at the start view (`view`, else `index`), and says nothing.
-- **A project with no library** still has the Library tab. It opens "no library yet" (§11).
-
-**Other links in:**
-
-- the Projects menu (§3): a Library link on each project's row that has one;
-- the Overview's Projects rows: "Library" under the name (13 px, accent).
+  - An unknown section shows the library's frame with "A library has no section "x"." and a link to its sections.
+  - An unknown card shows "<Section> has no card 0009.", and where its cards come from.
+  - An unknown diagram shows the frame's failure card: "It has no diagram "x"."
+  - An unknown view, table, heading or term opens the section from its start, and says nothing.
+- **Links in:**
+  - the Projects menu (§3): a Library link on each project's row;
+  - the Overview's Projects rows: "Library" under the name (13 px, accent).
 
 ## 3. Header: the Projects menu
 
-As in version 1:
+As in version 3. The one change is a project's second line:
 
 - **The button** is "Projects ▾", first in the tabs, before Overview.
   - On a project's page (either tab) it reads the project's name, "Helix ▾", and is the current tab.
   - The Overview tab is then no longer lit. That changes BOB-121 §2.0.
 - **The menu** is 340 px wide. At ≤860 px it spans the screen, 8 px in from each edge.
 - **One row per project:**
-  - the name, and under it the library's tagline in muted 12.5 px;
-  - at the right, **Library** as an outlined pill, or "no library" in muted;
+  - the name;
+  - under it, in muted 12.5 px, the library's tagline (the overview's `tagline`), or **"Library not written yet"**
+    when main has no `library/`;
+  - at the right, **Library** as an outlined pill. Every project has one, written or not (§7). "no library" in muted
+    shows only when the laptop sent no library at all (§13);
   - the row opens the project's page;
   - the current project has the accent left edge.
 - **Its foot:** "Every project at a glance, on the Overview".
@@ -141,6 +127,9 @@ As in version 1:
 - **On a phone** the rows are at least 52 px, and the Library pill 40 px.
 - **No counts.** The menu is for going somewhere.
 
+The prototype lists Toolshed first, tagged "sample". The build lists the board's projects; Toolshed is a fixture,
+not a project.
+
 ## 4. A project's page: Work · Library
 
 - **The head** is as built: ‹ Overview, the name, "lead · PO · laptop · repo", and the project switch. On Library
@@ -148,622 +137,587 @@ As in version 1:
 - **Two underlined tabs, Work and Library.** Work is today's page, unchanged.
 - **The "as of" line** is at the right end of the tab row on Library:
 
-  > As of main at `5ed684a`, 26 Nov 18:00 · checked 4 min ago from mbp-1
+  > As of main at `1c83f2b`, 26 Nov 21:34 · checked 4 min ago from mbp-1 · **3 problems**
 
   - The branch is the project's ref: "v2" for BobNet.
   - The sha links the commit.
+  - **"3 problems"** (warn, a link to the library's home) shows only when files break the standard (§8).
   - On a phone the line is on its own row.
 
 ## 5. The library's layout
 
 | Width | Sections | Page | On this page |
 |---|---|---|---|
-| ≥1280 (desktop 1440) | rail, 220 px, sticky | the rest. Prose up to 780 px; cards, lists and diagrams take the full width | 200 px rail, sticky, for a prose page with 3 or more headings |
+| ≥1280 (desktop 1440) | rail, 220 px, sticky | the rest. Prose up to 780 px; cards, lists and diagrams take the full width | 200 px rail, sticky, for a page with 3 or more headings |
 | 761-1279 (tablet 1024) | rail, 220 px, sticky | the rest | folded under the page's head |
 | ≤760 (phone 390) | one button, "Section: Data model ▾", opening the list in place | full width | folded under the head |
 
-**The rail** has the library's title ("BOBNET LIBRARY", caps, muted), then:
+**The rail** has "TOOLSHED LIBRARY" (caps, muted), then:
 
 - **Home**.
-- **The seven sections, always, in the skeleton's order.**
-  - A written section is its label.
-  - A missing one is muted, with a second line in 11.5 px: "not written yet · architect". The owner *role* comes from
-    the skeleton (0016 §1, §3).
-  - The current section is semibold with a 3 px accent edge. When it has more than one page, those pages are
-    indented under it, and the current page gets the edge.
-- **The foot**: "Repository ↗" and "Sections from `.bobnet/library.json`", linked at the commit.
+- **The seven sections, always, in the standard's order.**
+  - A written section is its label. One with problems has a warn count after it: "Decisions 2".
+  - A section not written is muted, with a second line in 11.5 px: "not written yet · architect".
+  - The current section is semibold with a 3 px accent edge.
+- **The foot**: "library/ on GitHub ↗" (the folder at the commit; "Repository ↗" when there is none) and "The library
+  standard ↗" (the author's guide, `architecture/library-standard.md` on v2).
 
 **On a phone**, the button names the section. Its list opens under it, with 44 px rows. The section's own title
-isn't repeated under the button; only "owner Galen" shows.
+isn't repeated under the button; only "owner Otto" shows.
 
-**A diagram page (C4 or ERD) folds the rail at every width** (version 3), so the frame has the page's width:
+**A diagram page (Architecture, Data model) folds the rail at every width**, as in version 3, so the frame has the
+page's width:
 
 - The section's title becomes the button: "Data model ▾", at the title's size (22 px, 20 on a phone). It opens the
   rail's list, 280 px wide, as a menu under it. A click outside closes it, and so does Escape, which returns the focus
   to the button.
-- The owner follows the button, then the section's page tabs on the same row (shot 36). A phone stacks them.
-- Any other page keeps the rail as above.
+- The owner follows the button, then the data model's diagram tabs on the same row (§11.1). A phone stacks them.
 
 ## 6. The home: seven tiles
 
-- **The head**: the library's title (26 px) and its tagline (muted 16 px).
-- **Then a tile per section, in the skeleton's order.** The grid is `auto-fill, minmax(240px, 1fr)`: 4 across at 1440
-  and 3 at 1024. A phone has one column.
+Shots 02, 25.
+
+- **The head**:
+  - the library's title (26 px), from the overview's front matter (`title`);
+  - its `tagline` (muted 16 px);
+  - its people, in muted 13.5 px: "Wren, product owner · Otto, architect · Ines, designer" (0017 §6).
+- **The problems**, when there are any (§8), open, above the tiles.
+- **Then a tile per section, in the standard's order.** The grid is `auto-fill, minmax(240px, 1fr)`: 4 across at
+  1440 and 3 at 1024. A phone has one column.
 - **A written tile** (a link to its section) has:
-  - the label (16 px semibold);
-  - up to 3 lines, one per page. Each is a kind tag in 10.5 px accent caps, then the page title:
-    - **C4 DIAGRAM** BobNet in C4
-    - **ERD** Schema
-    - **TABLE** Taxonomy
-    - **PAGE** Data dictionary
-    - a children page: its count, then the most recent child, e.g. **16 DECISIONS** latest: A project's library: a
-      fixed skeleton…, or **10 FEATURES** latest: Usage, from a session's bar to its agents
-  - at the foot, the owner (the manifest's person, else the role) and "changed 26 Nov", the newest page.
-- **A missing tile** has a dashed edge on no fill. Its label is muted, then "Not written yet", then "the architect
-  writes it". It still links to its section (§7, missing).
-- **Under the tiles**, in muted 13.5 px: "5 of 7 sections written. Each is files on v2 in cath42/bobnet-mcp; to change
-  one, ask its owner."
+  - the label (16 px semibold), and a warn "2 problems" when it has any;
+  - what is in it, a kind tag in 10.5 px accent caps, then a line:
 
-## 7. A section
+    | Section | Tag | The line |
+    |---|---|---|
+    | Overview | PAGE | Goals, scope and quality goals |
+    | Architecture | C4 DIAGRAM | Context, containers, components and flows |
+    | Data model | ERD | All tables, and the named diagrams |
+    | Decisions, Use cases, UX design | 3 DECISIONS, 3 USE CASES, 2 CARDS | latest: the highest number's title |
+    | Glossary | A–Z | Terms in users' words |
 
-- **The head**: the section's label (26 px; 22 px on a phone, where it is hidden behind the picker), then "owner
-  Toad" in muted 13 px.
-- **Its pages as underlined tabs** when it has more than one, as Vitals' Data model has: Schema · Entities and
-  relations · Data dictionary.
-  - The first page opens by default.
-  - On a phone the tabs scroll sideways inside their row.
-- **Then the page**, drawn by its kind:
+  - for a card section, a second line counting each status: "2 accepted · 1 superseded";
+  - at the foot, the owner's name (else the role) and "changed 26 Nov", the newest file's commit date.
+- **A tile not written** has a dashed edge on no fill. Its label is muted, then "Not written yet", then "the
+  architect, Otto, writes it". It still links to its section (§7).
+- **Under the tiles**, in muted 13.5 px: "7 of 7 sections written. Each is a file or a folder under library/ on main,
+  the same in every project: the library standard ↗. To change one, ask its owner."
+- **The home reads only the index** (0017 §4): the paths, titles, heads and commit dates. It fetches no file, so the
+  Architecture, Data model and Glossary tiles say what they hold, not counts.
 
-| Kind | Drawn as | § |
-|---|---|---|
-| `likec4` | the C4 frame | §9 |
-| `erd` | the ERD frame | §10 |
-| `children` in Decisions | the decision list | §8 |
-| `children` in UX design | the UX cards | §8 |
-| `children` in Use cases (or anywhere else) | a card per file | §8 |
-| `md` in Use cases, with 3 or more `###` cases | use-case cards | §8 |
-| `md`, `mermaid`, `table` | prose, a small diagram, the taxonomy, as in version 1 | §12 |
+## 7. Not written: a section, or a whole project
 
-- **A prose page's head** is one line, under the section's tabs: the page title (15 px semibold), then "changed
-  `cd9d226`, 22 Nov · path ↗". The owner shows only when it differs from the section's.
+**A section not written** (its file or folder absent; 0016 §3, 0017 §5) keeps its place and its address. Shot 28:
 
-**A missing section** (absent, or with no pages; 0016 §3) keeps its place and its address:
+> **Glossary isn't written yet.**
+> It holds: terms in users' words, A to Z.
+> The product owner (Wren) writes it as `library/glossary.md` on main, from its template in the library standard ↗.
 
-> **UX design isn't written yet.**
-> It holds: one card per feature: its spec, its prototype, and Casper's verdict with its date.
-> The designer writes it, as files on main, and lists them under `sections.ux` in `.bobnet/library.json ↗`.
+- It is a dashed card, left-aligned. The name in brackets is the overview's owner, when the overview names one.
+- What each section holds, in the page's words:
 
-- It is a dashed card, left-aligned. The "holds" line is the skeleton's (below), in the page's words.
-- When the manifest names the section's owner, it reads "The designer writes it (Daisy)".
-
-| Section | Holds (the page's wording; the ids and roles are 0016 §1's) |
+| Section | Holds |
 |---|---|
-| Overview | Goals, scope, constraints and quality goals. |
-| Architecture | The C4 model, from context to containers to components, and how the parts run and deploy. |
-| Data model | The schema as a diagram, the data dictionary and the taxonomy. |
+| Overview | Goals, stakeholders, scope, constraints and quality goals. |
+| Architecture | The C4 model, from context to containers to components, each use case's flow, and where it runs. |
+| Data model | Every table, its columns and relations, as diagrams: all tables, and the named ones. |
 | Decisions | One record per decision: its context, the options, the decision, its consequences and its status. |
-| Use cases | One card per use case, with its scenarios under it. |
-| UX design | One card per feature: its spec, its prototype, and Casper's verdict with its date. |
-| Glossary | Terms in users' words. |
+| Use cases | One card per use case: its actor, goal, scenario and acceptance. |
+| UX design | One card per feature: its screens and states, its prototype, and the owner's verdict with its date. |
+| Glossary | Terms in users' words, A to Z. |
 
-## 8. Cards: the prose behind them
+**A project with no `library/` on main** (0017 §5; BobNet, Helix and Vitals today). Shot 27:
 
-### 8.1 A card's head
+- The Library tab still opens. The rail shows the seven sections, all muted.
+- The home's head is "Helix's library", then a dashed card:
 
-A child file's head is read from one of two places:
+  > **Helix has no library on main yet.**
+  > A library is seven sections in a `library/` folder on main, in the same files in every project. Helix's main at
+  > 5ed684a has none, so each section below is not written yet.
+  > Its team writes them from the templates in the library standard ↗. Files elsewhere in the repo aren't read.
 
-- **Front matter**: `key: value` lines between `---` lines at the top (0016 §2).
-- **Otherwise, the `Key: value` lines right under the file's `# ` title, up to the first blank line.** They may be
-  written as `Key: value`, `**Key:** value` or `- **Key:** value`. An indented line continues the value above it.
-  This is what Helix's and Vitals' ADRs already have:
+- Then the seven tiles, dashed, each with "Not written yet" and its path in mono: `library/data-model.dbml`.
+- A section opens §7's card, without an owner's name (there is no overview to name one).
 
-  ```
-  Date: <day>
-  Status: accepted (<day>; Q-<n>) …
-  Decided by: Casper
-  ```
+## 8. Problems with the standard
 
-  BobNet's ADRs have the same thing as `- **Status:** accepted (Toad, 2026-11-26), …`. So 129 ADRs become a list
-  without being rewritten. **This is a proposed addition to 0016 §2, for Toad** (§14).
+0017 §4 lists the problems the supervisor finds: a front matter key missing, unknown or with a value outside its
+list; a heading missing or out of order; a card name or number wrong or used twice; a file the standard doesn't name;
+glossary terms out of order. They are never fatal. Shots 25, 26:
 
-**The status word** is the first word of `status`, shown as a pill (11.5 px, 1 px border in its colour):
+- **Counted** on the "as of" line (§4), on the rail ("Decisions 2"), and on the section's tile.
+- **Listed** on the home, open, in a box with a warn edge:
+  - "3 problems with the library standard";
+  - one line each: the path under `library/` and "line 2 ↗", linked to that line on GitHub, then the message;
+  - "Its owner fixes the file on main; the library standard ↗ has the rules and templates."
+- **In its section**, the same box, folded, with only that section's problems: "2 problems in Decisions".
+- **On its card**, the problems in a warn box under the title: "Line 2: status is "decided": it is one of proposed,
+  accepted, rejected, deprecated or superseded".
+- **The file still shows as far as it can** (0017 §5):
+  - a status outside the list shows as written, in a dashed warn pill with "?": "decided ?", titled "Not one of the
+    standard's statuses";
+  - a missing heading is just missing.
+- **A file the standard doesn't name** is listed, never shown: "notes/counter-ideas.md: the standard doesn't name
+  this file, so it isn't shown".
 
-| Colour | Words |
+The messages are 0017 §4's kinds in the page's words. The supervisor's text is the build's; the prototype's three are
+examples.
+
+## 9. Cards: decisions, use cases, UX design
+
+Shots 17-22.
+
+**What every card has** (0017 §2): a number (`NNNN`, the file's name), a title (its `# ` line), front matter with
+fixed keys, and fixed headings.
+
+**Numbers** show as they are written, `0003`, in muted tabular 13 px, in lists and in references. A card's own page
+puts its kind and number over the title: "DECISION 0003", "USE CASE 0001", "UX CARD 0002" (12 px caps, muted). No
+"ADR-" or "UC-" prefix: the section says the kind (0017's alternatives leave this to me).
+
+**Status pills** (11.5 px, a 1 px border in the colour):
+
+| Colour | Values (0017 §2) |
 |---|---|
-| ok | accepted, handled, built, approved, done |
-| warn | proposed, partly, waiting, draft, designing |
-| muted | not yet, superseded, rejected, deprecated, and any other word (cut to 12 characters) |
+| ok | accepted, agreed, built, approved |
+| warn | proposed, draft, in review, changes asked |
+| muted | superseded, rejected, deprecated, retired |
+| warn, dashed, with "?" | anything else (§8) |
 
-The rest of the status line shows on the child's page.
+**Every list has the same bar**:
 
-### 8.2 Decisions: the list
+- "Find a decision" (16 px, so a phone doesn't zoom). It searches the number, the title, the front matter and the
+  card's first 4,000 characters.
+- The statuses that occur, each with its count, "All 3 · Accepted 2 · Superseded 1", when there are two or more.
+- The count: "3 decisions, newest first", or "1 of 3 decisions" while finding.
+- No match: "No decision matches. Clear the find or pick All."
+- Highest number first.
 
-Shots 08, 14.
+### 9.1 Decisions
 
-- **The bar**:
-  - "Find a decision" (16 px, so a phone doesn't zoom). It searches the number, title, status, decider and the
-    record's first 4,000 characters.
-  - The statuses that occur, each with its count: "All 117 · Accepted 113 · Proposed 1 · Rejected 1 · Superseded 1".
-    It shows only when there are two or more.
-  - The count: "117 decisions, newest first", or "3 of 117 decisions" while finding.
-- **One row per record, highest number first**, in one hairline-framed list:
-  - the number (muted, tabular);
-  - the title, without its "0016." or "ADR 0008:" prefix;
-  - the status pill;
-  - the date ("26 Nov 2026": the `date` field, else the first date in the status);
-  - who decided (`decided by`, else the name that opens the status's brackets).
-- **At ≤760** a row is two lines: the number, the pill and the date, then the title. "Who" goes.
-- **The first 40 rows show**, then "Show the other 77". A new find or filter goes back to 40.
-- **No match:** "No decision matches. Clear the find or pick All."
-- **A row opens the child page** (§8.5).
-- **A Decisions section with an index page** (Helix's decisions index, Vitals' README) shows it as the
-  section's first tab, and the list as the second.
+**The list** is one hairline-framed list, a row per decision:
 
-### 8.3 UX design: a card per feature
+- the number;
+- the title, and "superseded by 0003" in muted 12.5 px when another decision's `supersedes` names it;
+- the status pill;
+- the `date` ("11 Jun 2026");
+- `decision-makers`, joined: "Otto, Wren and Ines".
 
-Shot 10.
+At ≤760 a row is two lines: the number, the pill and the date, then the title. The deciders go.
 
-- The cards are in a grid (`minmax(280px, 1fr)`), newest feature first, under "10 features, newest first".
-- **Each card has:**
-  - the feature id (accent) and its status pill;
-  - the title, from the spec's `# ` line, without "BOB-211 design A:" and capitalised;
-  - **the verdict**: Casper's words in quotes, then "Casper, Q-17 · 26 Nov". Waiting reads "Waiting on Casper's
-    verdict" in warn. With no verdict on the card, it reads "No verdict on the card yet" in muted;
-  - **Spec**, which opens the spec as the child page, and **Prototype ↗**, the link, in a new tab. Both are 36 px
-    buttons, 44 px on touch.
-- **The template** is mine to set (0016 §2). Each feature's `design/<feature>/spec.md` opens with:
+**A decision's page:**
 
-  ```
-  ---
-  feature: BOB-211
-  status: built            # designing | waiting | approved | built
-  prototype: https://bobnet-prototype-bob-211.casper-cth.workers.dev
-  verdict: Build it as shown
-  verdict by: Casper, Q-17
-  verdict date: 2026-11-26
-  ---
-  ```
+- "‹ Decisions", "DECISION 0003", the title (21 px).
+- A head box (the surface, a hairline, 8 px radius). Its fields sit two across at ≥760 and stack on a phone:
+  - Status: its pill;
+  - Date;
+  - Decided by;
+  - Supersedes: each as "0002 Reminders go by email", a link;
+  - Superseded by: derived, never written (0017 §2), linked the same way;
+  - Feature: the board ref.
+- The meta line: "owner Otto · changed `1c83f2b`, 26 Nov · library/decisions/0003-….md ↗".
+- Then Context, Options, Decision and Consequences, with "On this page" (§5).
 
-  The prototype fills BobNet's ten cards from the board: Q-13 for BOB-121, Q-17 for BOB-211, and BOB-212 waiting.
-  The other seven have no verdict on record, so they read "No verdict on the card yet". Adding the front matter is
-  BobNet's own conversion item, and mine.
-- The UX section lists only the specs. That needs a file pattern on `children` (§14).
+### 9.2 Use cases
 
-### 8.4 Use cases: cards
+**The list** is cards, `minmax(300px, 1fr)`, one column on a phone:
 
-Shots 11, 15, 20, 21.
+- the number and the status pill;
+- the title, which opens the card;
+- Actor (`actor`), and Goal: the first paragraph under `## Goal`, cut at about 150 characters;
+- at the foot, chips:
+  - **"Its flow ›"** when the architecture has the dynamic view `uc<NNNN>`. It opens that view;
+  - **"UX 0001"** for each UX card whose `use-cases` names it.
 
-**A use-case page** is an `md` page in Use cases with 3 or more `###` headings, such as Vitals' catalogue (34 use
-cases) or a Helix scenario file (20 cases). It shows as cards:
+**A use case's page:** "‹ Use cases", "USE CASE 0001", the title, then the head box:
 
-- **The bar**: "Find a use case" (or "Find a case" in a scenario file), the status filter when the cases have a
-  `Status`, and "34 use cases in 10 groups".
-- **"About this page"**: the text before the first `##`, folded in a hairline box.
-- **Each `##` is a group**: its title (15 px semibold) and its count. Its `###` cases are cards in a grid
-  (`minmax(300px, 1fr)`; one column on a phone). A `##` with no cases under it is a folded box with its prose, such as
-  an opening walk-through.
-- **A card's face:**
-  - its title (15 px semibold) and, when it has a `Status`, the status pill;
-  - up to 3 fields, label then value. They come from the leading `- **Key:** value` lines, which may hold several
-    fields joined by " · ". Actor, Door, Goal, Case and Expected come first; otherwise the first fields other than
-    Status. A value is cut at about 150 characters;
-  - the fold, named by what is behind it: "<the other fields' names, joined by ·>". Opening it shows the
-    whole case and puts the case in the address.
-- **The find** searches each case's title and text. The count reads "3 of 34 use cases", and a group with no match
-  hides.
+- Status;
+- Actor;
+- Date;
+- Feature;
+- Flow: "Its flow, in the architecture ›";
+- UX design: "0001 Catalogue and reserving".
 
-**A Use cases `children` page** (Helix's scenarios, BobNet's capabilities) is a card per file:
+Then Goal, Preconditions, Main scenario, Extensions and Acceptance. In Acceptance, **Given**, **when** and
+**then** are semibold, so each criterion reads at a glance.
 
-- the file's title;
-- its first sentence (muted, about 170 characters);
-- "20 cases", "6 criteria" (the items under `## Criteria`) or "a page", then the owner and "changed 22 Nov".
+### 9.3 UX design
 
-The folder's README sits behind "About scenarios". A file with 3 or more cases opens as cards; any other file opens
-as prose.
+**The cards** are in a grid, `minmax(280px, 1fr)`:
 
-### 8.5 A child's page
+- the number, the `feature` (accent), and the status pill;
+- the title, which opens the card;
+- **the verdict**:
+  - with a `verdict`, its words in quotes, then "the verdict, 9 Mar 2026" (`verdict-date`) in muted;
+  - "Waiting on a verdict" (warn) when the status is in review;
+  - "Changes asked" (warn) when it is changes asked;
+  - otherwise "No verdict yet" (muted);
+- "Use cases" and a chip per number in `use-cases`;
+- **The card** and **Prototype ↗** (`prototype`, in a new tab): 36 px buttons, 44 px on touch.
 
-Shot 09.
+**A UX card's page:** "‹ UX design", "UX CARD 0001", the title, then the head box:
 
-- **"‹ Architecture decisions"** (back to the list), then the title (21 px).
-- **Its head:**
-  - for a UX card: the pill, the verdict and Prototype ↗;
-  - for any card: every field in a hairline box, label (8.5 em) then value, with the status pill before the status
-    line.
-- **The meta line**: "owner Bill · changed `cd9d226`, 22 Nov · path ↗".
-- **Then the prose, without the head lines.** "On this page" works as on any prose page, by scrolling (§2).
+- Status;
+- Verdict: the quote · its date;
+- Prototype: "Open it ↗";
+- Use cases, linked;
+- Date;
+- Feature.
 
-## 9. Architecture: the C4 frame (LikeC4)
+Then Purpose, Screens, States and Open questions.
 
-Shots 03-07, 23, 24.
+## 10. Architecture: the C4 frame (LikeC4)
+
+Shots 03-08, 31. The viewer is unchanged (0017 §7); the page groups the views by 0017 §2's fixed ids.
 
 **The bar, above the frame:**
 
-- **The crumb**, one link per level, named by its element: "Context › BobNet › Broker › **Board object**".
-  - The levels come from the model: each view's element and the views of its ancestors.
-  - The current level is bold.
-  - Under the crumb, in muted 13 px, the view's own title: "Board object: components". It is hidden on a phone.
+- **The crumb**, one link per level, named by its element: "Context › Toolshed › **API**". The current level is
+  bold.
+- **Under it, what the view is**, in muted 13 px (hidden on a phone):
+
+  | View | The line |
+  |---|---|
+  | `index` | Level 1: the context |
+  | `containers` | Level 2: its containers |
+  | `<container>Components` | Level 3: the components of API |
+  | `uc<NNNN>` | **The flow of use case 0001: Reserve a tool ›**, a link to the use case |
+  | any other (deployment) | Where it runs |
+
 - **At the right:**
-  - **↑ Out**: one level up. It is disabled at the context.
-  - **The views** (version 3): a select listing every view by its title, a dynamic one marked "· steps", with the
-    current one selected. Picking one goes there, as a history entry. It replaces version 2's row of chips. A select
-    is the phone's own picker, and its text is 16 px so the phone doesn't zoom.
-  - **Fit**: the whole view in the frame.
-  - **Full screen**.
-  - On a phone the select has its own row over the buttons.
+  - **↑ Out**: one level up. It is disabled at the context. A flow's and a deployment's level up is the context.
+  - **The views**: a select with three groups, in this order:
+    - **C4 levels**: Context, Containers, then "API: components" for each container that has a view;
+    - **Use-case flows**: "0001 · Reserve a tool";
+    - **Deployment**: "Production".
 
-**The frame** is a hairline box on the surface, with the radius:
+    A group with no views is left out. Picking one goes there, as a history entry. Its text is 16 px so the phone
+    doesn't zoom.
+  - **Fit**, and **Full screen**.
 
-| Width | Height |
+**The frame**, its heights, pan and zoom, the ⤢ drill on a box, a box's details, the focus on a double-click, the
+dynamic view's step-through, the hidden LikeC4 panels and "Tap to explore" are as in version 3:
+
+| Width | Frame height |
 |---|---|
 | ≥1280 | `clamp(420px, 100vh − 290px, 760px)` |
 | 761-1279 | 62 vh |
 | ≤760 | 64 vh, at least 380 px |
 
-**In the frame:**
+**On a phone the picker is the way in** (0017 §7). In a wide view at 390 px a box is too small to tap, so its ⤢
+doesn't show. So on a phone (shot 06):
 
-- **Pan and zoom** by drag, wheel and pinch.
-- **A box with its own view has LikeC4's ⤢ "Navigate to view" button.** It drills in, the crumb follows, and the
-  address gains the view (§2).
-- **Any other box** opens LikeC4's details on click: its description, technology, relations and its views.
-- **A box carries its own description** (LikeC4 draws the element's `description` under its title). So the C4 page
-  already follows version 3's rule: what a box is shows on the box, and the rest one click away, in the frame.
-  Nothing about the model is prose beside it.
-- **A relation's label** opens what it links.
-- **A double-click** focuses an element: the rest dims.
-- **A dynamic view** ("A land") has LikeC4's step-through.
+- the picker has its own row, full width, 40 px, right under the crumb, above the frame;
+- under it, ↑ Out on the left, Fit and Full screen on the right;
+- picking a view brings the frame up when it is below the fold.
 
-**LikeC4's own top panel** (its logo, back and forward, title and view switch) is hidden: BobNet's bar has these.
-So are its search, notation legend and "compare with auto layout". The model's colours and shapes are its own: the
-architect chooses them in the `.c4` files. The rest is the dashboard's, and LikeC4 follows the system's light or
-dark.
+Full screen is still the way to read a big view: the bar and the frame fill the screen, and Close or Escape leaves.
 
-**Under the frame**, one line in muted 12.5 px: "Model: architecture/model/ ↗ · LikeC4 · main at 0a8fbe3". The
-folder links to GitHub at the commit.
-
-**On a touch screen** (`pointer: coarse`):
-
-- The frame is covered by **"Tap to explore"**, an accent pill, with "Then pinch to zoom, drag to move, tap a box to
-  open it" under it. So a finger on the page scrolls the page and never gets caught in the diagram.
-- A tap hands the frame the finger, and **Done** appears in the bar to give it back.
-- The bar's buttons and its picker are 40 px.
-- **Full screen is the way to read a big view on a phone** (shot 07). The bar and the frame fill the
-  screen, the page doesn't scroll behind it, and Close or Escape leaves.
+**Under the frame**, one line in muted 12.5 px: "Model: library/architecture/ ↗ · LikeC4 · main at 1c83f2b".
 
 **States:**
 
 | State | What shows |
 |---|---|
-| Drawing | Over the frame, on the surface: **Drawing the model…**, "The first time on this device, the viewer downloads (2.4 MB).", and three grey lines. It is about 0.3 s on a desktop once the viewer is cached (0016 §6). |
-| No answer in 15 s | The frame is replaced by a dashed card: **This model couldn't be drawn here.** "The viewer didn't answer within 15 seconds." It lists the model's files with GitHub links and sizes, and has **Try again**. |
-| Errors, nothing drawn | The same card: "The viewer found errors in it:", then each as "bobnet.c4 line 54: Could not resolve reference to Element named 'bobnet.brokr'" in warn. (The prototype's example.) |
-| Errors, a model drawn | The frame shows. Above it, a warn line: "2 problems in the model: what they touch may be missing" opens the same list. |
-| Too large (`too_large`, 0016 §5) | **This model is too large to show here** (n files, n KB), and its files on GitHub. |
+| Drawing | Over the frame: **Drawing the model…**, "The first time on this device, the viewer downloads (2.4 MB).", and three grey lines. |
+| No answer in 15 s | The frame is replaced by a dashed card: **This model couldn't be drawn here.** "The viewer didn't answer within 15 seconds." Its files with GitHub links and sizes, and **Try again**. |
+| Errors, nothing drawn | The same card: "The viewer found errors in it:", then each as "views.c4 line 30 ↗: Could not resolve reference to …", linked to the line. |
+| Errors, a model drawn | The frame shows. Above it, a warn line, "1 problem in the model: what they touch may be missing", opens the same list (shot 31). |
+| Too large (0017 §4: 64 files, 512 KB) | **This model is too large to show here** (n files, n KB), and its files on GitHub. |
 
-## 10. Data model: the ERD frame (Liam)
+## 11. Data model: the ERD frame (Liam), from DBML
 
-Shots 18, 19, 32-37.
+Shots 09-16, 29, 30, 36, 38. The model is one file, `library/data-model.dbml` (0017 §2). The viewer parses it in the
+frame (0017 §7).
 
-### 10.1 The bar and the frame
+### 11.1 The diagrams
+
+- **The diagrams are tabs**, on the section's head row after the owner:
+
+  > **Data model ▾** owner Otto · <u>All tables 9</u> · Catalogue 4 · Lending 6
+
+  - "All tables" is always first. Then each `DiagramView`, in the file's order. Each is named from its DBML name,
+    capitalised, with `_` and `-` as spaces.
+  - The count is its tables, muted.
+  - The current one is underlined in accent, as the section tabs are.
+  - On a phone the tabs scroll sideways in their row.
+- **Where the tabs come from:** the viewer's `ready.views`, kept on the device by the DBML's blob, which never
+  changes. So a second visit draws them at once. On the first, "All tables" shows with a grey bar beside it until the
+  viewer answers.
+- **Switching diagrams** is a new address (`…/data/lending`) and reloads the frame. That takes about 0.3 s once the
+  viewer is cached (0017 §7).
+  - An open table stays open when the new diagram has it: each tab's link carries it.
+  - Otherwise the new diagram opens with no table.
+
+### 11.2 The bar and the toggle
 
 **The bar:**
 
-- **The crumb**: "All 10 tables" › **<table>** (the open table).
+- **The crumb**: "Lending" › **loan** (the diagram, then the open table).
+- **Under it**, the model's `Project` note, in muted 13 px, cut at about 140 characters: "What Toolshed keeps: who
+  the members are, which tools each shed holds, and who has which tool when." Hidden on a phone.
 - **At the right:**
-  - **Find a table**: a select, "Find a table (10)", then every table by name, A-Z, in mono. Picking one opens it,
-    as a history entry. On a phone it has its own row, and when the frame is below the fold, picking scrolls the
-    frame up.
-  - **Fit** and **Full screen**.
+  - **The toggle**: "Show" and a segmented control, **Tables · Keys · Columns**;
+  - **Find a table**: a select, "Find a table (6)", then the diagram's tables by name, A-Z, in mono;
+  - **Fit**, and **Full screen**.
 
-**In the frame:**
+**The toggle (Casper's ask, Q-21: "toggle that by diagram"):**
 
-- Liam's canvas. Scrolling (a trackpad's two fingers) pans, and pinch or the zoom buttons zoom. A mouse drag on
-  the canvas doesn't pan: that is Liam's.
-- **A click on a table opens it**: it and its relations light in accent, its card opens (§10.2), and the address
-  gains the table, so a table can be linked.
-- **An opened table is brought into view**, at 100 %, in the middle of the part of the frame the card leaves free:
-  left of the docked card, or above the phone's sheet. That holds however it was opened: a click, the picker, a
-  relation chip, or a link.
-- **A click on another table moves the card to it.** Panning doesn't close it. The card's ×, Escape, or "All 10
-  tables" in the crumb close it.
-- Liam's own bottom toolbar stays: zoom, fit, tidy up, and "show": table name, keys or all columns.
-- **Liam's table pane is hidden** (version 3). The card replaces it.
+- **Three states**, which are Liam's own show modes (0017 §7):
 
-**Under the frame**, one line in muted 12.5 px: "Schema: schema.sql ↗ · descriptions: data-dictionary.md ↗ · Liam
-ERD · main at 62e475d". The second link is there only when the page has an `about` file (§10.3).
+  | Button | What each table shows | Its title |
+  |---|---|---|
+  | Tables | its name | Each table's name |
+  | Keys | its name, its key and its foreign keys | Names, keys and foreign keys |
+  | Columns | every column, with its type | Every column |
 
-**Touch, full screen, the frame's heights and the states** are as in §9, with "the schema" in place of "the model",
-and 1.3 MB. An ERD's errors are the parser's, by line ("schema.sql line 12: syntax error at or near "CONSTRAINT"").
+  Tables and Columns are the two he asked for. **Keys** is the middle one, and costs nothing: Liam draws it. It
+  shows which column each line leaves from, without the rest. If Casper wants exactly two, Keys goes; that is one
+  line (§17).
+- **It is per diagram.** Each diagram keeps its own state, on the device (`localStorage`, by project and diagram).
+  A diagram opens as it was last left.
+- **The first time**, "All tables" opens as Tables, and a `DiagramView` as Columns (0017 §7). A named diagram is a
+  small one, chosen to be read.
+- **It toggles live**: the frame isn't reloaded, and the view keeps its place.
+- **Liam's own "show" menu**, in its bottom toolbar, is hidden, so there is one toggle. So is its table list's button
+  (§11.5).
 
-### 10.2 The entity card
+**On a phone** the bar is three rows:
 
-Casper wants a table's context on the diagram, not beside it. The card is drawn by the page over the frame, from
-what the viewer reports (§14), so it is BobNet's look and keyboard, not Liam's.
+- the crumb;
+- the table finder, full width, 40 px;
+- the toggle on the left (without "Show"; the group keeps it as its name for a screen reader), and Fit and Full
+  screen on the right. All buttons are 40 px.
 
-**Where it sits:**
+**In the frame**, as in version 3:
+
+- Liam's canvas. Scrolling pans, and pinch or the zoom buttons zoom.
+- **A click on a table opens it**: it and its relations light in accent, its card opens (§11.3), and the address gains
+  the table.
+- **An opened table is brought into view**, in the part of the frame the card leaves free (0016 §6, the React Flow
+  bridge).
+- A click on another table moves the card to it. The card's ×, Escape, or the diagram's name in the crumb close it.
+- **Hover on a desktop** previews a table: its name, its note cut at about 150 characters, and "Click for its fields
+  and relations". Never on touch.
+
+**Under the frame**, one line in muted 12.5 px: "Model: data-model.dbml ↗ · DBML · Liam ERD · main at 1c83f2b".
+
+### 11.3 The entity card
+
+**It stays.** Casper's v2 ask was "entity context be something I can open or see on the diagram somehow", and the
+card is that: one table's whole context, on the diagram, at every width. The DBML now carries what v3 needed `about`
+for: every table has a `Note`, and a column a `note:` (0017 §2).
+
+**Where it sits** is as in version 3:
 
 | Width | The card |
 |---|---|
 | ≥761 (tablet, desktop) | Docked at the frame's right, 10 px in from its edges, `min(360px, 44%)` wide (330 px and 48% on a tablet), as tall as it needs, up to the frame's height. It scrolls inside. The diagram stays live to its left. |
-| ≤760 (phone) | A sheet over the frame's lower 62%, with a grab line at its top, flat at the bottom edge. It scrolls inside. The diagram above it stays visible. In full screen it is 55% of the frame. |
+| ≤760 (phone) | A sheet over the frame's lower 62% (55% in full screen), with a grab line. It scrolls inside. The diagram above it stays visible. |
 
-It is above "Tap to explore", so a phone can read it without exploring. On a phone a table is opened from the
-picker, or by a tap while exploring.
+**What it holds, top to bottom** (shots 13, 14):
 
-**What it holds, top to bottom:**
-
-1. **The head**: the table's name (mono, 15.5 px semibold), "16 columns" (muted), and × (Close: show all tables).
+1. **The head**: the table's name (mono, 15.5 px semibold), "9 columns" (muted), and × (Close: show all tables).
    The head stays put while the card scrolls.
-2. **What it is**: one line (15 px). It is the table's description, from the first of:
-   - the schema's own comment on the table (`COMMENT ON TABLE`; Liam reads it);
-   - the page's `about` file (§10.3).
-
-   With neither, it reads in muted: "No description: the schema has no comment on it, and the data dictionary no
-   heading for it."
-3. **Relations**: "It refers to", then a chip per table its foreign keys point at ("→ <table>"). Then "Referred to
-   by", a chip per table whose foreign keys point at it ("← <table>"). A chip opens that table, as a history entry.
-   After 8 chips a dashed "12 more" shows the rest.
-4. **Key fields**: the primary key's and the foreign keys' columns, one row each:
-   - the name (mono, semibold), its type (muted mono), and "PK" in accent;
+2. **What it is**: the table's `Note` (15 px). Without one: "No note: the data model has no Note on this table."
+   (muted). That breaks 0017 §2, and the supervisor doesn't check the DBML, so the card says it.
+3. **Drawn in**: a chip per diagram that has the table, "All tables" first. The current one is outlined in accent and
+   isn't a link. Another opens that diagram with the table open. It shows only when a `DiagramView` has the table.
+4. **Relations**:
+   - "It refers to", then a chip per table its foreign keys point at: "→ tool";
+   - "Referred to by", then a chip per table whose foreign keys point at it: "← damage_report";
+   - a one-to-one relation's chip ends in a muted **1:1**. It is the unique foreign key of 0017 §3;
+   - a chip opens that table, as a history entry;
+   - **a table that isn't in this diagram** has a dashed chip, titled "Not in Lending: opens it in All tables". It
+     opens it there;
+   - after 8 chips, a dashed "12 more" shows the rest.
+5. **Key fields**: the primary key's and the foreign keys' columns, a row each:
+   - the name (mono, semibold) and its type (muted mono);
+   - tags: **PK** (accent), **unique** (muted), and **may be null** (muted) for a column without `not null` that
+     isn't the key;
+   - the default, as "= now()" (muted);
    - for a foreign key, "→ <table>" at the right. It opens that table;
-   - the column's note under it (muted 12.5 px, cut at about 170 characters): its schema comment, else its Notes cell
-     in the `about` file.
-5. **All 16 columns**, folded: every column, as the key field rows.
-6. **More from the data dictionary**, folded, when the `about` file has more prose under the table's heading (cut
-   at about 700 characters).
-7. **"<table> in the data dictionary →"**, when the `about` file is also a page of the section. It opens that page at
-   the table's heading.
+   - the column's `note` under it (muted 12.5 px, cut at about 170 characters);
+   - **for an enum column, its values**, each with its note, in a small list under it: "`out` The member has the
+     tool".
+6. **The other 5 columns**, folded, as the key rows. A table with no key fields shows them open, as "All 4 columns".
+7. **"In data-model.dbml, line 77 ↗"**: the table's line on GitHub.
 
-**Hover, on a desktop** (a fine pointer): pointing at a table shows a preview by it, 280 px wide: the name, the
-description (cut at about 150 characters), and "Click for its fields and relations" in muted. It sits under the
-table, or over it when there's no room below. It never shows for the open table, and never on touch. It takes no
-clicks.
+**The keyboard**: the card's chips, links and × are buttons and links in the page's order. Escape closes the card.
+Full screen's Escape closes full screen first.
 
-**The keyboard**: the card's chips, links and × are buttons in the page's order. Escape closes the card. Full
-screen's Escape closes full screen first.
+### 11.4 Per-table expand: not in R9
 
-### 10.3 Descriptions from a markdown file: `about`
+Expanding one table in a diagram drawn as Tables is not Liam's: its show mode is one for the whole diagram (0017 §7).
+It would be a patch on Liam's node data through the React Flow bridge, time-boxed in build B task 3, and the vendoring
+test would have to guard it on every Liam release.
 
-A schema seldom has comments; Vitals' has none. Its data dictionary describes every table. So an `erd` page may
-name one more file (a proposed 0016 §2 addition; Toad agrees, to record):
+I leave it out:
 
-```json
-{ "id": "erd", "kind": "erd", "format": "postgres", "src": "database/schema/schema.sql",
-  "about": "docs/library/data-dictionary.md" }
-```
+- The card already shows one table's attributes in place, at every width. It also shows the notes, the enum values
+  and the relations, which an expanded node can't.
+- The toggle per diagram is what Casper asked for.
+- On a phone an expanded node in a names-only diagram is too small to read; the card's sheet isn't.
 
-- **The rule that matches a table** is a heading (`##` to `####`) that opens with the table's name in backticks:
+If Casper wants it after seeing v4, it is a later item (§17).
 
-  ```
-  ### `orders` — one customer order
-  ```
+### 11.5 Liam's look
 
-  - The text after the dash is the table's description.
-  - A table under that heading with a "Column" and a "Notes" column gives the columns' notes. A cell may name
-    several columns, each in backticks.
-  - The rest of the prose under the heading is "more".
-- **A table with no heading** gets no description and no error. The schema's own comment wins over `about`.
-- `about` never hides a schema that fails to parse: that is still §9's failure state.
-- `library_page` returns the file with the schema (`files`), resolved on main like `src`.
+As in version 3 (`tools/erd-theme.css`: BobNet's tokens as literals, Liam's variables mapped to them, its header and
+table drawer hidden), plus:
 
-### 10.4 Helix's data model
+- Liam's show menu and its table list are hidden, by Liam's test ids (`[data-testid="show-mode"]`'s container,
+  `[data-testid="toggle-sidebar-icon-button"]`), never its hashed classes. BobNet's bar has both.
+- The literal `#1DED83` glow still needs replacing in the bundle before it is hashed (build B task 3).
 
-**Why it showed "couldn't be drawn"**: it was a bug, not intended. Helix's Data model opened on `entities.md`,
-whose mermaid diagram fails at line 54 (`: to`, a mermaid keyword). That is LAND-189, Bill's fix.
+**States** are §10's, with "the data model" for "the model", 0.9 MB for the download, and the DBML parser's errors
+by line: "data-model.dbml line 51 ↗: Table 'sheds' does not exist in Schema 'public'" (shot 30). A model that
+doesn't parse draws nothing: there is no half-drawn ERD.
 
-**Helix as a real ERD.** Helix's `architecture/model/model.json`, built from its yaml, has every table (67, with
-its platform tables), each with a one-line description (`grain`), its columns with types, keys and notes, and its
-foreign keys. Toad's recommendation (consult, 26 Nov; his amendment of 0016 to come):
+## 12. Overview and glossary
 
-- **Helix's build (`build_doc.py`) writes a `schema.sql`** from it, with `COMMENT ON` from each `grain` and `note`.
-  Helix's library lists it as an `erd` page, `format: postgres`, first in Data model. That is one task on Helix's
-  board (Bill's).
-- **BobNet needs nothing Helix-specific.** It reads Helix's schema like any other. The card needs about 2 tasks on
-  BobNet's side, for every project:
-  - the viewer's richer `ready.tables` and `hover`: 0.5;
-  - the page's card, chips and sheet: 1;
-  - `about` in the manifest, `library_page` and the cache: 0.5.
-- BobNet doesn't read Helix's model.json, and doesn't take a second schema format (Liam's JSON), unless Helix can't
-  write SQL.
+**The overview** (shot 24) is a prose page:
 
-**The prototype** draws Helix's ERD now: it converts the model file into what Liam would parse from that
-`schema.sql` (`tools/gen_data.py`, private output). Its source line says so, with a "Prototype" tag: "Drawn from
-architecture/model/model.json ↗ until Helix's build writes architecture/model/schema.sql". Helix's Data model tabs
-are Schema · Entities and relations · Data element taxonomy.
+- the section's head, then the `tagline` as its lede (17 px);
+- the meta line: "changed `1c83f2b`, 26 Nov · library/overview.md ↗";
+- its fixed headings, Goals, Stakeholders, Scope, Constraints and Quality goals, with "On this page".
 
-### 10.5 Liam's look
+The front matter isn't shown as fields. Its title, tagline and people head the library's home (§6).
 
-**Liam's look, mapped to style.css** (0016 §6; Toad's finding 2). The override is
-`design/BOB-212/tools/erd-theme.css`. The vendoring tool appends it to the viewer's `<style>`. How it works:
+**The glossary** (shot 23):
 
-- **The frame can't read the dashboard's variables** (an opaque origin). So the file opens with style.css's tokens as
-  literals, `--bn-bg`, `--bn-surface`, `--bn-text`, `--bn-muted`, `--bn-line`, `--bn-accent` and the rest, light
-  and then under `prefers-color-scheme: dark`. The tool writes those two blocks from style.css's `:root` when it runs,
-  so a token change follows at the next vendoring.
-- **Then Liam's variables (Liam 0.7.24) are mapped to them:**
+- the meta line;
+- **Find a term** (16 px), and the count, "10 terms" or "2 of 10 terms";
+- **the letters** that open a term, each a 32 px square button (44 px on touch). It jumps to the first term under that
+  letter;
+- **the terms**, a hairline between each:
+  - the term (16 px semibold, a link to its own address);
+  - its `Also:` words in muted: "also return";
+  - its definition (15 px, at most 72 characters a line).
+- **A term in the address** (`…/glossary/hold`) is scrolled to the middle, and marked with a light accent fill and a
+  3 px accent edge.
 
-| Liam | BobNet |
-|---|---|
-| `--global-background`, `--pane-muted-background`, the canvas (`--xy-background-color-default`) | `--bg` |
-| `--global-muted-background`, `--pane-background`, `--node-background`, buttons | `--surface` |
-| `--global-foreground`, `--global-body-text`, `--node-foreground`, and `--overlay-5…100` (Liam's text is white at an alpha) | `--text`, at the same alphas |
-| `--global-mute-text`, `--node-action` | `--muted` |
-| `--global-border`, `--pane-border`, `--node-border`, the canvas dots | `--line` |
-| `--primary-*` (Liam's green #1DED83), `--node-selected`, `--node-layout` (a focused table's relations) | `--accent` |
-| `--main-font`, `--message-font` | style.css's system font stack (Liam's is Times in a sandbox: its Google font can't load) |
-| `--code-font` | the dashboard's mono stack |
-
-- **React Flow's own variables** are set again on `.react-flow.dark`, because Liam runs React Flow in its dark mode.
-- **What is hidden:** Liam's one `<header>`. That is its logo and title, its Search (⌘K), GitHub, release notes,
-  help, Export and Copy Link. In a sandbox with no network the links and Copy Link do nothing, and BobNet's bar has
-  the table finder. It is selected by element, never by Liam's hashed classes (`_wrapper_j2hiu_1`), which change
-  with each release.
-- **Also hidden (version 3): Liam's table pane**, the drawer that opened at the right with columns and related
-  tables. The card replaces it (§10.2). It is selected by vaul's attribute, `[data-vaul-drawer]`, not a hashed class.
-  The pane closes the open table on any mousedown outside it. The viewer keeps that off the canvas, so a pan or a
-  click on another table doesn't close the card.
-- **What is left of Liam's own colour:** the glow on a focused table's relations is a literal `#1DED83` in Liam's
-  script (29 places), not a variable. The tool should replace it with the accent in the bundle before it hashes it.
-  The prototype doesn't, so a faint green glow shows. Shots 18 and 19 show light and dark.
-
-## 11. States
+## 13. States
 
 | State | What shows |
 |---|---|
-| Reading (first read) | The rail and seven tiles as grey shapes, still under reduced motion, and "Reading the library…". |
+| Reading (first read) | The rail and the tiles as grey shapes, still under reduced motion, and "Reading the library…". |
 | The read failed | `.banner.down`: **The library couldn't be read**, the error, and Retry. What was read stays under it. |
-| No library | A dashed card: **BobNet has no library yet.** "A library is a project's architecture, data model, decisions, use cases, UX design and glossary, from files on its main that `.bobnet/library.json` lists. Its architect writes that file; the supervisor on its laptop sends them here." "A laptop whose supervisor is older than the release with libraries sends none." The menu reads "no library". |
-| May be behind (`checked_at` 2 h or more) | The "as of" line turns warn with a dot, and a banner: **This may be behind main.** "mbp-1 last checked 5h ago; it checks every 10 minutes while it runs. The pages are main at 62e475d (22 Nov)." |
-| The last fetch failed | The line turns warn, and a banner: **mbp-1 couldn't fetch helix-navigator 12 min ago.** "<its message>. The pages are main at 5ed684a (26 Nov), last checked 3h ago. They update at its next fetch." |
-| Main moved while open | The page is redrawn at the same spot, and a toast: "Helix's library is now main at 9c01d2e." A diagram already open isn't redrawn until the reader leaves it, or presses Try again. |
-| A page missing on main | A banner: **A page is missing on main.** "<path> is not on main at 5ed684a." The page itself: **<path> isn't on main at 5ed684a.** "The library still lists it. Its owner (Bill) moves the entry in `.bobnet/library.json` or puts the file back." "Its history on GitHub ↗". Its tab is marked "missing" in warn. |
-| A missing section | §7. |
-| A bad manifest (`problems: manifest`) | A banner: **Helix's .bobnet/library.json has a problem at 9c01d2e:** "<message>". That section or page is left out and the rest shows (0016 §2). |
-| A diagram drawing, failing or with errors | §9. |
-| A small (mermaid) diagram that can't be drawn | As in version 1: "This diagram couldn't be drawn here. Its source is below." Helix's `entities.md` line 54 is still this state until Helix quotes `to` (LAND-189). Helix's Data model no longer opens on it: its ERD is first (§10.4). |
+| No library sent (the laptop's supervisor predates libraries) | A dashed card: **No library from Toolshed's laptop yet.** "The supervisor on a project's laptop reads its `library/` folder on main and sends it here. One older than the release with libraries sends none." The menu reads "no library". |
+| No `library/` on main | §7 (shot 27). |
+| A section not written | §7 (shot 28). |
+| Files that break the standard | §8 (shots 25, 26). |
+| May be behind (`checked_at` 2 h or more) | The "as of" line turns warn, and a banner: **This may be behind main.** "mbp-1 last checked 5h ago; it checks every 10 minutes while it runs. The library is main at 1c83f2b (26 Nov)." |
+| The last fetch failed | The line turns warn, and a banner: **mbp-1 couldn't fetch Toolshed 12 min ago.** "<its message>. The library is main at 1c83f2b (26 Nov), last checked 3h ago. It updates at the next fetch." |
+| Main moved while open | The page is redrawn at the same spot, and a toast: "Toolshed's library is now main at 9c01d2e." A diagram already open isn't redrawn until the reader leaves it, or presses Try again. |
+| A diagram drawing, failing or with errors | §10, §11 (shots 29-31). |
+| A small (mermaid) diagram that can't be drawn | "This diagram couldn't be drawn here. Its source is below." |
 
-## 12. Prose pages, tables, links and small diagrams
+Gone since version 3: the bad manifest and the page missing on main. There is no manifest, and a file is either on
+main or not written.
 
-These are unchanged from version 1. In short:
+## 14. Prose, links and small diagrams
 
-- **The markdown** is rendered in the page with markdown-it (`html: false`; raw HTML shows as text).
-  - Body text is 15.5 px / 1.6, at most 72 characters a line.
-  - Headings are restyled under `.doc`: not style.css's small-caps `h2`.
-  - A heading shows "#" on hover, which puts it in the address.
-  - Code blocks scroll sideways in their own box.
-  - Only `data:` images show. A repo image is a link to it on GitHub.
-- **A table** sits in its own frame that scrolls sideways. Its cells wrap between 7 em and 46 ch, and style.css's
-  `td:nth-child(3)` nowrap is undone.
-- **Helix's taxonomy** (`table`, 850 elements) has a find box, Area, All · Stored · Derived and the count.
-  - It shows the first 200 rows, then "Show the other 650".
-  - On a phone each row is a card (`table.stack`).
+As in version 3:
+
+- **Markdown** is rendered with markdown-it (`html: false`). Body text is 15.5 px / 1.6, at most 72 characters a
+  line. Headings are restyled under `.doc`. A heading shows "#" on hover, which puts it in the address. Code scrolls
+  sideways. A repo image is a link to it on GitHub; UX images are in `library/ux/images/` (0017 §1).
+- **A table** sits in its own frame that scrolls sideways.
 - **The links:**
-  - to another library page or child: it opens in place;
+  - to a file the library shows (a card, the overview, the glossary, the model): it opens in place. A card by its
+    number, a heading by its slug;
   - to any other file in the repo: it opens on GitHub at the commit shown, in a new tab, marked ↗;
-  - http(s): it opens in a new tab;
+  - http(s): a new tab;
   - anything else is plain text.
-- **A mermaid block** (0015 §6, mermaid pinned to 11.x) is drawn as an image fitted to the column, with Full size and
-  Source. It stays for small diagrams; zoomable ones are §9 and §10.
+- **A mermaid block** (0015 §6, 11.x) is drawn as an image fitted to the column, with Full size and Source.
 
-## 13. Look, the prototype, and the shots
+## 15. Look, the prototype, and the shots
 
 - **The look is BobNet's own:** style.css's tokens, type, radius, `.card`, `.seg`, `.banner` and buttons. New rules
-  are in `prototype/proto.css` (all but `.proto-*`), and move into style.css. Dark is every colour as a token, and the
-  frames follow the system's scheme too.
-- **Collisions with style.css** (as in version 1):
-  - `nav` at ≤860 px. The rail and the section tabs are navs and need `order: 0`.
-  - `.kind`: use `.st` for status pills and `.sd` for the taxonomy.
-  - `h2` caps.
-  - `td:nth-child(3)` nowrap.
+  are in `prototype/proto.css` (all but `.proto-*`), and move into style.css. Version 4's are at its end. Dark is every
+  colour as a token, and the frames follow the system's scheme too.
 - **The prototype's own:**
-  - "Prototype: states", at the bottom right, switches §11's states, a diagram that never answers, and one with
-    errors. It is not built.
+  - "Prototype: states", at the bottom right, switches §13's states. It is not built. "Files that break the
+    standard" adds a decision with two problems and a stray file; "A diagram with errors" breaks one line of
+    `views.c4` and one of the DBML.
   - It loads mermaid from a CDN.
-  - The frames are served by the shots' server with the viewer CSP of 0016 §6, and by the deployed worker the same
-    way (`_headers`).
-- **To make the git-ignored parts** on a laptop with the clones and `~/.cache/bobnet-spikes/bob212`:
-  - `python3 -I tools/gen_data.py prototype/data.js <spike>/private-vitals/frame-erd/schema.json`
-  - the C4 viewer: esbuild `tools/likec4-viewer.jsx` with the spike's flags, then
-    `architecture/spikes/bob212/pack-viewer.mjs` → `prototype/vendor/likec4-viewer.html`
-  - `node tools/pack-erd.mjs <@liam-hq/cli 0.7.24>/dist-cli/html prototype/vendor/erd-viewer.html`
-  - `node tools/shots.mjs`
+  - The "sample" tag on Toolshed.
+  - The frames are served with their CSP: `tools/shots.mjs`'s server, and the deployed worker's `_headers`.
+- **To make it**, from the repo:
+  - `node design/BOB-212/tools/gen_data.mjs`: `prototype/data.js` from the sample (committed);
+  - the ERD viewer, with Toad's spike cache (`~/.cache/bobnet-spikes/bob212/`):
+    1. copy `architecture/spikes/bob212/dbml-to-liam.mjs` and `tools/dbml-entry.mjs` into a folder under its `dbml/`;
+    2. `esbuild dbml-entry.mjs --bundle --minify --format=iife --platform=browser --outfile=dbml.js`;
+    3. `node tools/pack-erd.mjs <@liam-hq/cli 0.7.24>/dist-cli/html dbml.js prototype/vendor/erd-viewer.html`.
 
-**Shots** are in `shots/`, at 390, 1024 and 1440, light, with `-dark` for some:
+    No `'unsafe-eval'`: its CSP is the three hashes in `erd-viewer.hash`;
+  - the C4 viewer: esbuild `tools/likec4-viewer.jsx` with the spike's flags, then
+    `architecture/spikes/bob212/pack-viewer.mjs` → `prototype/vendor/likec4-viewer.html` (unchanged since v3);
+  - `node tools/shots.mjs [filter]` → `shots/v4/`.
+
+  `prototype/vendor/` and `shots/` are made, not kept (about 10 MB).
+
+**Shots** are in `shots/v4/`, at 390, 1024 and 1440, light, with `-dark` for some:
 
 | | | | |
 |---|---|---|---|
-| 01 the menu open | 02 BobNet's home (dark too) | 03 the C4 context (dark too) | 04 drilled to the Board object (dark too) |
-| 05 the containers | 06 a phone, exploring | 07 full screen | 08 BobNet's decisions (dark too) |
-| 09 an ADR opened | 10 the UX cards (dark too) | 11 BobNet's capabilities | 12 a missing section |
-| 13 Helix's home | 14 Helix's 117 decisions | 15 a Helix scenario file as cards | 16 the taxonomy |
-| 17 Vitals' home | 18 Vitals' ERD (dark too) | 19 a table focused (dark too) | 20 Vitals' use cases |
-| 21 a use case opened | 22 a prose page | 23 a diagram drawing | 24 a diagram with errors |
-| 25 may be behind | 26 fetch failed | 27 a page missing | 28 no library |
-| 29 reading | 30 the sections open on a phone | 31 the Work tab | 32 hover on a table (desktop) |
-| 33 Helix's ERD (dark too) | 34 a Helix table opened (dark too) | 35 a Helix table on a phone, full screen | 36 a diagram page's folded sections |
-| 37 a click on a table, then another | | | |
+| 01 the menu open | 02 the home (dark too) | 03 the C4 context (dark too) | 04 drilled to the API (dark too) |
+| 05 a click on ⤢ drills | 06 a phone picks a view | 07 a use case's flow | 08 full screen |
+| 09 All tables, as Tables (dark too) | 10 All tables, as Columns | 11 Lending, as Columns (dark too) | 12 Lending, as Keys |
+| 13 a table's card (dark too) | 14 a card's other columns | 15 hover on a table | 16 the card on a phone, full screen |
+| 17 the decisions (dark too) | 18 a decision | 19 the use cases (dark too) | 20 a use case |
+| 21 the UX cards (dark too) | 22 a UX card | 23 the glossary at a term | 24 the overview |
+| 25 problems, on the home | 26 a card with problems | 27 Helix: no library/ yet | 28 a section not written |
+| 29 a diagram drawing | 30 a DBML error | 31 a C4 error, drawn | 32 may be behind |
+| 33 fetch failed | 34 no library sent | 35 reading | 36 the folded sections |
+| 37 the Work tab | 38 two clicks on tables, two cards | | |
 
-Version 3 changed 19: a table opened from the picker, with its card, at 390, 1024 and 1440.
+## 16. For Luigi and Toad
 
-**What each project shows** (0016 §4, as the prototype maps it):
+**What the page reads** is 0017 §4: the `library` read's `index` (paths, sections, blobs, `changed`, `title`,
+`head`), its problems, and `library_page {section, path?}` for a section's files. The home reads only the index.
 
-| Section | BobNet (v2, 0a8fbe3) | Helix (main) | Vitals (main, 62e475d) |
-|---|---|---|---|
-| Overview | `product/requirements/README.md` | not written yet | not written yet |
-| Architecture | **LikeC4**: `architecture/model/` | `architecture/overview.md` | `docs/library/architecture.md` |
-| Data model | not written yet | **ERD** (stand-in: from `model.json`, §10.4); `entities.md` (its mermaid fails, §11); the taxonomy table | **ERD**: `schema.sql`, with the data dictionary as `about`; `data-model.mmd`; the data dictionary |
-| Decisions | 16 ADRs, `children` | `decisions-index.md`; 117 ADRs, `children` | `docs/decisions/README.md`; 11 ADRs, `children` |
-| Use cases | 11 capabilities, `children` of `product/requirements` | `scenarios/`, `children` (1 file, 20 cases) | `use-cases.md`, as cards (34) |
-| UX design | 10 features, `children` of `design/*/spec.md` | not written yet | not written yet |
-| Glossary | not written yet | not written yet | `glossary.md` |
+**Settled since version 3:** ADR 0016 recorded v3's §14 items 1-12 (Toad, 2e5b177; his message of 26 Nov). 0017 drops
+1, 2 and 10 (head lines, `children`'s `match`, `about`), and the card's parts it kept pending Q-21 hold, as the card
+stays.
 
-Each repo's ADR folder as a `children` page is 0016 §2's own example for Vitals, and the same for Helix and BobNet.
-It costs no rewriting (§8.1).
+**What version 4 adds, for Toad to rule on:**
 
-## 14. For Luigi and Toad
+1. **`ready` for an `erd` also carries:**
+   - `enums: [{name, note, values: [{name, note}]}]`, for an enum column's values on the card. Toad's
+     `dbml-to-liam.mjs` drops the values' notes;
+   - on each table: `line` (its line in the DBML, for "line 77 ↗"), and on each column `default` and `unique`;
+   - `shown`, the diagram's table names, so the finder and the dashed chips need no second parse.
 
-**What the page reads** (0015 §4, 0016 §5):
+   The prototype's viewer does it in `tools/dbml-entry.mjs` (`dbmlExtras`), beside Toad's converter.
+2. **`{t: "show", show}` from the viewer** when Liam's own show mode changes, so the page's toggle follows it. With
+   Liam's menu hidden (item 3) it is a safety net, not a path a reader takes.
+3. **Hide Liam's show menu and table list** by `[data-testid="show-mode"]`'s container and
+   `[data-testid="toggle-sidebar-icon-button"]` (`tools/erd-theme.css`). The vendoring test checks they still match.
+4. **The diagram tabs are cached** on the device by the DBML's blob (§11.1). Nothing on the wire.
+5. **A use case's flow** is found by the page in the `.c4` files' text: `dynamic view uc<NNNN>`. That is a regex, not
+   a parse. It means the Use cases section fetches the architecture's files (cached by blob). Toad: or should the
+   index say which `uc<NNNN>` views exist, as the supervisor reads the `.c4` files anyway?
+6. **The views picker's groups** come from the ids alone (`index`, `containers`, `*Components`, `uc<NNNN>`, any other
+   is deployment). That leans on 0017 §2's fixed ids, and the viewer is unchanged.
+7. **The toggle's key on the device** is by project and diagram, and survives a new commit. A diagram renamed in the
+   DBML starts again from its default.
 
-- `library {project}`: the manifest, resolved, with the commit, `committed_at`, `checked_at`, the laptop, github
-  and problems.
-- `library_page {project, section, page}`:
-  - the text;
-  - every area's text for `table`;
-  - every child's path and text for `children`;
-  - `files: [{path, text}]` for `likec4` and `erd`.
+**Build tasks** are 0017's (A 7, B 6). Version 4 changes none of them:
 
-  The home's tiles need only the manifest, plus the children's titles and dates.
+- the toggle and the tabs are B4;
+- the card is B5;
+- items 1-3 are B3;
+- §8's problems and §7's states are A4;
+- the cards and the glossary are A5.
 
-**What the prototype found that 0016 doesn't say yet.** These are proposals, Toad's to rule on:
-
-1. **Card heads from the lines under the title** (§8.1), as well as front matter. Helix and Vitals already write ADRs
-   that way.
-2. **`children` needs a file pattern**: `"match": "*/spec.md"` for the UX cards in `design/`, and `^\d{4}-` to leave a
-   folder's README out. Without it every review file is a card. The prototype uses `match` and `skip`.
-3. **Two more messages from the page to a viewer:** `{t: "focus", focus}`, so BobNet's crumb, ↑ Out and the picker can
-   move it without sending the files again, and `{t: "fit"}`.
-4. **`ready` carries what the bar needs:** `views: [{id, title, label, crumb, dynamic}]` for LikeC4 and
-   `tables: [names]` for an ERD. The page parses nothing; the viewer does.
-5. **The LikeC4 viewer's settings:**
-   - `controls={false}`, `showNavigationButtons={false}`, `enableSearch={false}`, `enableNotations={false}`,
-     `enableCompareWithLatest={false}`;
-   - details, relationship details, focus mode and the dynamic step-through on;
-   - `injectFontCss={false}`.
-
-   The source is `tools/likec4-viewer.jsx`.
-6. **The ERD viewer's focus** is Liam's own `?active=<table>`. The preamble reads it (wrapping `pushState`) and writes
-   it (`pushState` and a `popstate`): `tools/pack-erd.mjs`.
-7. **The vendoring tool replaces Liam's literal `#1DED83`** before hashing (§10).
-
-**Version 3, for the entity card** (§10.2; Toad agreed in a consult, 26 Nov, and records it in 0016):
-
-8. **`ready.tables` carries each table, not just its name**: `[{name, comment, columns: [{name, type, notNull,
-   comment}], pk: [names], fks: [{columns, table, targetColumns}]}]`, from Liam's own parse. The page still parses no
-   SQL. Never the SQL text.
-9. **A new message from the viewer:** `{t: "hover", table | null, rect: {x, y, w, h}}`, in the frame's pixels, one
-   message per change of table (not per mouse move). The page places the preview from it.
-10. **`about` on an `erd` page** (§10.3): optional, a repo path, resolved on main like `src`, returned in `files`,
-    cached by its blob like the schema. The matching rule is §10.3's.
-11. **Liam's drawer hidden by `[data-vaul-drawer]`**, and its outside-mousedown kept off the canvas (the preamble
-    wraps `document.addEventListener` for capture `mousedown`: `tools/pack-erd.mjs`). Both are Liam 0.7.24's. The
-    vendoring has a test that fails when a Liam release stops matching them.
-12. **A message from the page to the viewer: `{t: "inset", right, bottom}`**, the frame pixels the card covers,
-    sent whenever the card opens, closes or the frame resizes. The viewer centres an opened table in what is left.
-    The prototype opens a table as a click on its node would (Liam then centres it), and nudges it by half the inset
-    with a synthetic wheel (Liam pans on scroll). The build should do it through React Flow, not events.
-13. **Helix's schema** is Helix's build's (§10.4): one task on Helix's board. BobNet's side is about 2 tasks
-    (§10.4), on top of build B's task 3.
-## 15. Open questions
+## 17. Open questions
 
 1. **AC3**: Casper picks A, B or C (§1); Mario asks him. Only the header and the tabs wait for his answer.
-2. **Toad**: §14's proposals 1, 2 and 7 change 0016 §2 and §7. Proposals 3 to 6 are the viewers' messages.
-   Version 3's 8 to 11 he agreed to in a consult; they hold until his amendment of 0016 is on main.
-3. **Peach**: BobNet's Use cases are its capability files (`product/requirements/*.md`), as cards with their criteria
-   count. Are those BobNet's use cases, or should Peach write use-case cards? It is BobNet's own conversion item
-   either way.
-4. Helix's mermaid (§11, line 54's `to`) is Helix's to fix (LAND-189, Bill). Helix's `schema.sql` from its build
-   (§10.4) is a new Helix task: Mario passes it to Helix's lead once Casper wants Helix's ERD.
-5. **Centring an opened table** (§10.1, §14 item 12): Liam centres a table only on its own click, not on its
-   `?active`. The prototype clicks the node and then scrolls the canvas with a synthetic wheel. Luigi and Toad: can
-   the build's viewer reach Liam's React Flow instance for it, or do we keep the click and the wheel, under the
-   vendoring test?
+2. **The toggle**: three states (Tables · Keys · Columns), or exactly his two? I recommend three (§11.2). Mario asks
+   with the prototype.
+3. **Per-table expand**: left out of R9 (§11.4). If Casper wants it, it is a new item after R9.
+4. **Toad**: §16's items 1-3 and 5.
+5. **Peach**: AC1's evidence reads "Helix and Vitals libraries shown on phone and desktop". Under Q-21 that is
+   Toolshed's library end to end, and each real project's library comes with its conversion (Toad's handoff says the
+   same).

@@ -135,3 +135,8 @@ header { display: none !important; }
    frame (spec §10.2). Liam's own table drawer is hidden, selected by vaul's attribute, never by Liam's hashed
    classes. The build's vendoring test fails if a Liam release stops matching it (Toad, BOB-212). */
 [data-vaul-drawer], [data-vaul-overlay] { display: none !important; }
+/* Version 4: BobNet's bar has the toggle per diagram and the table finder (spec §10.1), so Liam's own show menu in
+   its toolbar and its table list's button are hidden, by Liam's test ids, never by its hashed classes. The build's
+   vendoring test checks they still match. */
+div:has(> [data-testid="show-mode"]) { display: none !important; }
+[data-testid="toggle-sidebar-icon-button"], [data-sidebar="sidebar"] { display: none !important; }
