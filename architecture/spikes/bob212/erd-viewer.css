@@ -1,0 +1,54 @@
+/* BOB-212: BobNet's ERD viewer (erd-viewer.jsx), after React Flow's own style.css. The frame has an opaque origin
+   and can't read the dashboard's variables, so these are style.css's tokens as literals (Daisy's erd-theme.css);
+   the vendoring tool writes them from style.css. Sizes match size() in erd-viewer.jsx: HEAD 40 (48 on touch), ROW 26, PAD 12, TOG 52 (64). */
+:root {
+  --bn-bg: #f6f6f3; --bn-surface: #ffffff; --bn-text: #1c1c1a; --bn-muted: #6b6a64; --bn-line: #e3e2dc;
+  --bn-accent: #2f5d50;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bn-bg: #141413; --bn-surface: #1e1e1c; --bn-text: #ecebe6; --bn-muted: #9b9a93; --bn-line: #2e2e2b; --bn-accent: #7fbfa9; }
+}
+html, body, #root { margin: 0; height: 100%; background: var(--bn-bg); color: var(--bn-text);
+  font: 13px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.defs { position: absolute; width: 0; height: 0; }
+.react-flow { --xy-background-color: var(--bn-bg); --xy-background-pattern-color: var(--bn-line);
+  --xy-edge-stroke: var(--bn-muted); --xy-edge-stroke-width: 1.25;
+  --xy-controls-button-background-color: var(--bn-surface); --xy-controls-button-color: var(--bn-text);
+  --xy-controls-button-border-color: var(--bn-line); --xy-controls-button-background-color-hover: var(--bn-bg); }
+.react-flow__node-table { padding: 0; border: 0; background: none; cursor: pointer; }
+.react-flow__handle { opacity: 0; pointer-events: none; width: 1px; height: 1px; min-width: 0; min-height: 0; border: 0; }
+
+.tbl { box-sizing: border-box; width: 100%; height: 100%; overflow: hidden; background: var(--bn-surface);
+  border: 1px solid var(--bn-line); border-radius: 8px; transition: opacity .15s; }
+.tbl.lit { border-color: var(--bn-accent); box-shadow: 0 0 0 1px var(--bn-accent); }
+.tbl.dim { opacity: .45; }
+.head { position: relative; box-sizing: border-box; height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 6px 0 12px; }
+.tbl.open .head { border-bottom: 1px solid var(--bn-line); background: color-mix(in srgb, var(--bn-accent) 7%, var(--bn-surface)); }
+.name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 13.5px var(--mono); }
+/* The node's own control: a real button, 52 x 30 at 100 %, so a tap hits it once the reader zooms in a little. */
+.tog { flex: none; box-sizing: border-box; width: 52px; height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  border: 1px solid var(--bn-line); border-radius: 6px; background: var(--bn-bg); color: var(--bn-muted);
+  font: 12px var(--mono); cursor: pointer; touch-action: manipulation; }
+.tog:hover, .tog:focus-visible { border-color: var(--bn-accent); color: var(--bn-accent); outline: none; }
+.tog[aria-expanded="true"] { color: var(--bn-accent); border-color: color-mix(in srgb, var(--bn-accent) 45%, var(--bn-line)); }
+.chev { font-size: 11px; }
+.cols { list-style: none; margin: 0; padding: 3px 0; }
+.cols li { position: relative; box-sizing: border-box; height: 26px; display: grid; grid-template-columns: 24px 1fr auto; align-items: center;
+  column-gap: 0; padding: 0 12px; font: 12.5px var(--mono); white-space: nowrap; }
+.cols li .cn { overflow: hidden; text-overflow: ellipsis; margin-right: 16px; }
+.cols li .ct { color: var(--bn-muted); font-size: 12px; text-align: right; }
+.cols li .k { font: 600 9.5px var(--mono); color: var(--bn-muted); }
+.cols li.pk .k { color: var(--bn-accent); }
+.cols li.pk .cn { font-weight: 600; }
+
+.react-flow__edge.lit .react-flow__edge-path { stroke: var(--bn-accent); stroke-width: 2; }
+.react-flow__edge.dim { opacity: .3; }
+.mk { fill: none; stroke: var(--bn-muted); stroke-width: 1.25; }
+.mk-lit { fill: none; stroke: var(--bn-accent); stroke-width: 2; }
+.react-flow__controls { box-shadow: none; border: 1px solid var(--bn-line); border-radius: 8px; overflow: hidden; }
+@media (pointer: coarse) {
+  .head { height: 46px; } .tog { width: 64px; height: 38px; font-size: 13px; }
+  .react-flow__controls-button { width: 40px; height: 40px; }
+}

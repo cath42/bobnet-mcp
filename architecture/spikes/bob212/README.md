@@ -115,3 +115,43 @@ cd ../frame-dbml && TOOLS=../tools EXE=<chrome-headless-shell> node <repo>/archi
 
 The sample's architecture is `frame-test.mjs` with `sources.json` made from `sample/library/architecture/*.c4`, and
 `API` as the element to drill.
+
+## Each table opened on its own: BobNet's own ERD viewer (ADR 0017 §7, Q-22)
+
+Toad, 2026-11-27, after Casper's Q-22: "I want to be able to toggle column/attribute level details PER ENTITY". Liam's
+show mode is one for the whole diagram, so Liam is dropped (0017 §7, Alternatives).
+
+- **The viewer.** `erd-viewer.jsx` (React Flow 12 draws, dagre lays out), `erd-viewer.css` and `dbml-model.mjs`
+  (DBML to the tables, enums, diagrams and notes the viewer and the entity card read). `pack-erd-viewer.mjs`
+  bundles it with esbuild into one HTML file, 0.96 MB (0.28 MB gzip), and writes its one CSP hash. It replaces
+  `dbml-to-liam.mjs` and `pack-erd-dbml.mjs`, kept here as the record of the Liam spike.
+- **Each table** has a control on its node, a button with its column count. It shows or hides that table's columns,
+  and leaves the rest as they are. On every toggle the diagram is laid out again. The order stays (dagre orders by
+  relations, not sizes), and the tables glide 200 ms. While the reader hasn't moved the view, it stays fitted;
+  once they have, the toggled table stays put. Under 700 px wide it lays out top to bottom.
+- **The test.** `frame-erd-own-test.mjs` runs it in a sandboxed frame under the dashboard's CSP and the viewer's (its
+  hash only), at 1280 by mouse and 390 by tap. It asserts, after each step: which tables show columns, the
+  `expanded` message, and no overlapping tables. Then the state handed back in `files`, focus, hover, expand all /
+  collapse all, and the Lending diagram. 0 console errors. The shots are in `shots-per-entity/`:
+
+  | Shot | What it shows |
+  |---|---|
+  | `*-a-all-collapsed` | All tables, every one closed |
+  | `*-b-loan-expanded` | loan open, the other 8 closed |
+  | `*-c-loan-member-expanded` | loan and member open |
+  | `*-d-member-only` | loan closed again; member still open |
+  | `*-e-expand-all` | every table open (the page's optional extra) |
+  | `*-f-lending-loan-expanded` | the Lending diagram, loan open |
+
+  At 390 the fitted diagram is at about 60 %, so a node's control is about 33 x 20 px on screen. Pinch-zoom makes it
+  bigger.
+
+To re-run (outside the repo):
+
+```
+cd ~/.cache/bobnet-spikes/bob212 && mkdir -p erd-own && cd erd-own && npm init -y
+npm i react@19 react-dom@19 @xyflow/react@12 @dagrejs/dagre @dbml/parse@13.0.0 esbuild && cd ..
+node <repo>/architecture/spikes/bob212/pack-erd-viewer.mjs erd-own frame-own/erd-viewer.html
+TOOLS=$PWD/tools EXE=<chrome-headless-shell> node <repo>/architecture/spikes/bob212/frame-erd-own-test.mjs frame-own \
+  <repo>/architecture/spikes/bob212/sample/library/data-model.dbml frame-own/shots
+```

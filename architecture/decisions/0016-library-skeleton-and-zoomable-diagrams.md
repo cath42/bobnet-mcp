@@ -20,6 +20,9 @@
   page-kinds column of §1 are replaced by fixed paths and one format per section; `about` is gone; the ERD viewer
   reads DBML with no `'unsafe-eval'`, and draws a diagram at a time with its own toggle (0017 §7). The build tasks
   are 0017's. What stands is listed at 0017's head.
+- **Amended by ADR 0017 again** (2026-11-27, Casper's Q-22: each table opened on its own): the ERD viewer is
+  BobNet's own (React Flow and dagre), not Liam's app, so §6's Liam parts (the bridge, `?active=`, the parser from
+  Liam's release) are gone. Its messages are 0017 §7's.
 
 ## Context
 

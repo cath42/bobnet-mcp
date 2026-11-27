@@ -33,3 +33,8 @@ Daisy's v4 prototype draws it, and build A and B use it as their fixture, in pla
   - `lending` with its attributes: 6 tables and 41 rows. Toggled live, it shows names only.
 
   The only console error is Liam's Google Fonts request, which the CSP blocks. Build B's theme drops it.
+
+- **Each table on its own (Q-22, 2026-11-27).** BobNet's own ERD viewer (`pack-erd-viewer.mjs`,
+  `frame-erd-own-test.mjs`) draws it with a control on every table. At 1280 by mouse and 390 by tap: all closed;
+  loan open among closed tables; loan and member open; loan closed with member still open. 0 errors and no
+  overlapping tables. The shots are in `../shots-per-entity/`.
