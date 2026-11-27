@@ -1,5 +1,8 @@
 # BOB-212 spike: zoomable diagrams (LikeC4, Liam ERD) in BobNet's page
 
+> **Since ADR 0017** (the library standard), the data model is DBML, not a Postgres schema. The second spike is
+> at the end: "DBML in the ERD viewer". The sample project it draws is `sample/`.
+
 Toad, 2026-11-26. The decision this feeds is ADR 0016. Casper's go and the direction are in
 `lead/bob212/frameworks-decision.md`.
 
@@ -78,3 +81,37 @@ To re-run:
 cd ~/.cache/bobnet-spikes/bob212
 TOOLS=$PWD/tools EXE=<chrome-headless-shell> node <repo>/architecture/spikes/bob212/frame-test.mjs frame-test
 ```
+
+## DBML in the ERD viewer (ADR 0017)
+
+Toad, 2026-11-26, after Casper's Q-21 answer: one standard format for every repo's data model.
+
+- **Liam doesn't read DBML.** `@liam-hq/cli` 0.7.24 takes `schemarb`, `postgres`, `prisma`, `drizzle`, `tbls` and
+  `liam`, its own schema JSON. So the viewer converts DBML to Liam's JSON in the frame: `dbml-to-liam.mjs`.
+- **The parser.**
+  - `@dbml/core` bundles every SQL importer: 15 MB. Its DBML compiler alone, `@dbml/parse` 13.0.0, is 490 KB
+    (127 KB gzip). It is pure JS with no `eval`, and its errors carry line numbers.
+  - DBML 13 has `DiagramView`: named diagrams, which may overlap. `TableGroup`s can't: DBML refuses a table in two
+    groups.
+- **The viewer.** `pack-erd-dbml.mjs` packs Liam's app, the parser bundle and a preamble into one file: 2.9 MB,
+  0.87 MB gzip. The preamble gives Liam only the chosen diagram's tables, and sets Liam's own `?showMode=`. It
+  toggles the mode live by a `pushState` and a `popstate`.
+  - Liam drops the mode when it loads on a narrow screen, so the preamble applies it again after the first draw.
+  - Liam keeps `showMode`, `active` and `hidden` (the hidden tables, a compressed list) in its URL, through nuqs.
+- **The test.** `frame-dbml-test.mjs` runs it under the dashboard's CSP and the viewer's, with no
+  `'unsafe-eval'`. The results are in `sample/README.md`.
+- **The rules check.** `check-library.mjs` checks a library's front matter, headings, names and stray files. It
+  is a reference for `protocol`'s `readFrontMatter`.
+
+To re-run (outside the repo, in `~/.cache/bobnet-spikes/bob212/`):
+
+```
+cd dbml && npm i @dbml/parse@13.0.0 esbuild && cp <repo>/architecture/spikes/bob212/dbml-to-liam.mjs .
+echo 'import { dbmlToLiam, only } from "./dbml-to-liam.mjs"; window.dbmlToLiam = dbmlToLiam; window.dbmlOnly = only;' > entry.mjs
+npx esbuild entry.mjs --bundle --minify --format=iife --platform=browser --outfile=dbml.js
+node <repo>/architecture/spikes/bob212/pack-erd-dbml.mjs ../tools/node_modules/@liam-hq/cli/dist-cli/html dbml.js ../frame-dbml/erd-viewer.html
+cd ../frame-dbml && TOOLS=../tools EXE=<chrome-headless-shell> node <repo>/architecture/spikes/bob212/frame-dbml-test.mjs . <repo>/architecture/spikes/bob212/sample/library/data-model.dbml
+```
+
+The sample's architecture is `frame-test.mjs` with `sources.json` made from `sample/library/architecture/*.c4`, and
+`API` as the element to drill.

@@ -1,0 +1,43 @@
+// The BobNet library standard's C4 notation (ADR 0017, architecture/library-standard.md).
+// Copy this file as it is into library/architecture/; never edit it in a project.
+
+specification {
+  // C4 level 1: who uses the system, and the systems around it.
+  element person {
+    style {
+      shape person
+      color green
+    }
+  }
+  element system
+  element external {
+    notation 'A system someone else runs'
+    style {
+      color gray
+    }
+  }
+
+  // C4 level 2: what runs or keeps data inside the system.
+  element container
+  element store {
+    notation 'A container that keeps data'
+    style {
+      shape storage
+      color amber
+    }
+  }
+
+  // C4 level 3: the parts of a container.
+  element component {
+    style {
+      color sky
+    }
+  }
+
+  // Where the containers run (arc42 §7).
+  deploymentNode environment
+  deploymentNode node
+
+  tag planned
+  tag deprecated
+}

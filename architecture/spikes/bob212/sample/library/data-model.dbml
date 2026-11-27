@@ -1,0 +1,135 @@
+// Toolshed's data model. The BobNet library standard (ADR 0017): one DBML file, every table
+// with a Note, every relation written as a ref, a DiagramView per diagram.
+
+Project toolshed {
+  database_type: 'PostgreSQL'
+  Note: 'What Toolshed keeps: who the members are, which tools each shed holds, and who has which tool when.'
+}
+
+Enum loan_state {
+  out [note: 'The member has the tool']
+  returned [note: 'Back on the shelf, checked by a steward']
+  overdue [note: 'Past its due date and not returned']
+  lost [note: 'Written off by a steward']
+}
+
+Enum tool_condition {
+  good
+  worn [note: 'Works, shows its age']
+  repair [note: 'Out of the catalogue until it is fixed']
+  retired
+}
+
+Table member {
+  id uuid [pk]
+  email text [not null, unique, note: 'Where reminders go when push is off']
+  name text [not null]
+  phone text [note: 'Optional; stewards call it for an overdue loan']
+  home_shed_id uuid [not null, ref: > shed.id, note: 'The shed the member joined at']
+  is_steward boolean [not null, default: false, note: 'A steward may check tools out and in']
+  joined_at timestamptz [not null, default: `now()`]
+  Note: 'A person who may borrow tools. Joining is free; a member is blocked while they have an overdue loan.'
+}
+
+Table shed {
+  id uuid [pk]
+  name text [not null, unique]
+  address text [not null]
+  opening_hours text [not null, note: 'Free text, shown as written, e.g. "Sat 10-13"']
+  Note: 'A place where tools are kept and handed over. A tool lives in one shed.'
+}
+
+Table category {
+  id uuid [pk]
+  name text [not null, unique]
+  parent_id uuid [ref: > category.id, note: 'Null for a top-level category']
+  Note: 'How the catalogue is browsed, e.g. Garden > Hedge trimmers. Two levels at most.'
+}
+
+Table tool {
+  id uuid [pk]
+  shed_id uuid [not null, ref: > shed.id]
+  category_id uuid [not null, ref: > category.id]
+  name text [not null, note: 'As a member would say it, e.g. "Cordless drill, 18 V"']
+  condition tool_condition [not null, default: 'good']
+  loan_days int [not null, default: 7, note: 'How long one loan may last']
+  added_at timestamptz [not null, default: `now()`]
+  Note: 'One physical tool on a shelf. Two identical drills are two tools.'
+}
+
+Table photo {
+  id uuid [pk]
+  tool_id uuid [not null, ref: > tool.id]
+  object_key text [not null, unique, note: 'Its key in the photo bucket']
+  position int [not null, default: 0, note: 'Order in the gallery; 0 is the cover']
+  Note: 'A picture of a tool. The bytes are in object storage; this row is the pointer.'
+}
+
+Table reservation {
+  id uuid [pk]
+  tool_id uuid [not null, ref: > tool.id]
+  member_id uuid [not null, ref: > member.id]
+  pickup_on date [not null, note: 'The day the member means to collect it']
+  hold_until timestamptz [not null, note: 'pickup_on plus 24 h (ADR 0001); after it the hold lapses']
+  created_at timestamptz [not null, default: `now()`]
+  Note: 'A member asking to pick a tool up on a given day. It holds the tool until hold_until.'
+
+  indexes {
+    (tool_id, pickup_on) [unique, note: 'One reservation per tool per day']
+  }
+}
+
+Table loan {
+  id uuid [pk]
+  tool_id uuid [not null, ref: > tool.id]
+  member_id uuid [not null, ref: > member.id]
+  reservation_id uuid [unique, ref: - reservation.id, note: 'The reservation it fulfilled; null for a walk-in']
+  checked_out_by uuid [not null, ref: > member.id, note: 'The steward at the counter']
+  out_at timestamptz [not null]
+  due_at timestamptz [not null, note: 'out_at plus the tool\'s loan_days']
+  returned_at timestamptz
+  state loan_state [not null, default: 'out']
+  Note: 'A tool in a member\'s hands, from check-out at the counter to its return.'
+}
+
+Table damage_report {
+  id uuid [pk]
+  loan_id uuid [not null, ref: > loan.id]
+  reported_by uuid [not null, ref: > member.id]
+  description text [not null]
+  needs_repair boolean [not null, default: false, note: 'True sets the tool\'s condition to repair']
+  reported_at timestamptz [not null, default: `now()`]
+  Note: 'Something wrong with a tool, found during or after a loan. Reports never block a member.'
+}
+
+Table notification {
+  id uuid [pk]
+  member_id uuid [not null, ref: > member.id]
+  loan_id uuid [ref: > loan.id]
+  kind text [not null, note: 'due_soon, overdue, hold_lapsing']
+  channel text [not null, note: 'push or email (ADR 0003)']
+  sent_at timestamptz
+  Note: 'One reminder to a member, queued by the worker and sent once.'
+}
+
+// The diagrams. "All tables" is always drawn first; each DiagramView adds one, in this order.
+
+DiagramView catalogue {
+  Tables {
+    shed
+    category
+    tool
+    photo
+  }
+}
+
+DiagramView lending {
+  Tables {
+    member
+    tool
+    reservation
+    loan
+    damage_report
+    notification
+  }
+}

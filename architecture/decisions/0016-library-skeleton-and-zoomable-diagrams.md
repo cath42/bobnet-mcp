@@ -16,6 +16,10 @@
 
   **Pending Q-21** (Casper's verdict on version 3) is marked where his answer could reverse it: the entity card,
   `about` and the messages only the card uses. Everything else stands whatever he answers.
+- **Amended by ADR 0017** (2026-11-26, Casper's Q-21: one standard, not each repo's files): §2, §4 and §5 and the
+  page-kinds column of §1 are replaced by fixed paths and one format per section; `about` is gone; the ERD viewer
+  reads DBML with no `'unsafe-eval'`, and draws a diagram at a time with its own toggle (0017 §7). The build tasks
+  are 0017's. What stands is listed at 0017's head.
 
 ## Context
 

@@ -1,0 +1,52 @@
+// Toolshed's views: the C4 levels, one dynamic view per use case that has a flow, and production.
+
+views {
+  view index {
+    title 'Context'
+    description 'Toolshed, the people who use it, and the services it sends reminders through'
+    include member, steward, toolshed, pushService, email
+  }
+
+  view containers of toolshed {
+    title 'Containers'
+    include *, member, steward, pushService, email
+  }
+
+  view apiComponents of toolshed.api {
+    title 'API'
+    include *, toolshed.app, toolshed.db, toolshed.photos
+  }
+
+  view workerComponents of toolshed.worker {
+    title 'Reminder worker'
+    include *, toolshed.db, pushService, email
+  }
+
+  dynamic view uc0001 {
+    title 'Reserve a tool'
+    description 'Use case 0001'
+    member -> toolshed.app 'picks a tool and a pickup day'
+    toolshed.app -> toolshed.api.reservations 'reserves'
+    toolshed.api.reservations -> toolshed.api.catalogue 'is the tool lendable that day?'
+    toolshed.api.reservations -> toolshed.db 'writes the reservation, hold until pickup + 24 h'
+    toolshed.app -> member 'shows the hold and the shed\'s hours'
+  }
+
+  dynamic view uc0002 {
+    title 'Borrow and return a tool'
+    description 'Use case 0002'
+    steward -> toolshed.app 'scans the tool at the counter'
+    toolshed.app -> toolshed.api.loans 'checks out'
+    toolshed.api.loans -> toolshed.api.reservations 'fulfils the member\'s reservation'
+    toolshed.api.loans -> toolshed.db 'writes the loan with its due date'
+    toolshed.worker.scheduler -> toolshed.db 'finds it due tomorrow, queues a reminder'
+    toolshed.worker.sender -> pushService 'sends "due tomorrow"'
+    steward -> toolshed.app 'checks the tool back in'
+    toolshed.app -> toolshed.api.loans 'returns'
+  }
+
+  deployment view prod {
+    title 'Production'
+    include prod.**
+  }
+}

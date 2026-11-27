@@ -8,6 +8,8 @@
   - §4's `library_page` and §6's rendering are extended: `likec4` and `erd` pages, drawn in
     sandboxed viewers.
   - Mermaid is pinned to 11.x, not 10.x.
+- **Amended by ADR 0017** (2026-11-26): §3's manifest is gone. The library is `library/` at fixed paths, and the
+  `library` op carries an `index` in place of `manifest` (0017 §4).
 
 ## Context
 

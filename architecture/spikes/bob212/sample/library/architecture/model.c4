@@ -1,0 +1,124 @@
+// Toolshed's architecture: who uses it, what it is made of, and where it runs.
+
+model {
+  member = person 'Member' {
+    description 'Borrows tools: browses the catalogue, reserves, collects and returns them'
+  }
+  steward = person 'Steward' {
+    description 'A volunteer at a shed: checks tools out and in, writes damage reports'
+  }
+
+  pushService = external 'Web Push' {
+    technology 'The browsers\' push services'
+    description 'Delivers reminders to a member\'s phone or desktop'
+  }
+  email = external 'Email provider' {
+    technology 'Transactional email over SMTP'
+    description 'Sends reminders to a member who has push turned off'
+  }
+
+  toolshed = system 'Toolshed' {
+    description 'A neighbourhood tool library: members borrow tools from the sheds near them'
+
+    app = container 'Web app' {
+      technology 'TypeScript, React, installable PWA'
+      description 'The catalogue, reservations and the steward\'s counter screen, on a phone or a shed tablet'
+      style {
+        shape browser
+      }
+    }
+
+    api = container 'API' {
+      technology 'Node.js, Fastify'
+      description 'Every read and write; the only container that touches the database'
+
+      catalogue = component 'Catalogue' {
+        description 'Sheds, categories, tools and their photos'
+      }
+      reservations = component 'Reservations' {
+        description 'Holds a tool for a member until 24 h after the pickup day (ADR 0001)'
+      }
+      loans = component 'Loans' {
+        description 'Check-out and check-in at the counter; due dates; blocks a member with an overdue loan'
+      }
+      members = component 'Members' {
+        description 'Sign-up by email link, stewards, home shed'
+      }
+      reports = component 'Damage reports' {
+        description 'Takes a report and sets the tool to repair when it needs it'
+      }
+    }
+
+    worker = container 'Reminder worker' {
+      technology 'Node.js, runs every 15 minutes'
+      description 'Finds loans due soon or overdue and holds about to lapse, and sends one reminder each'
+
+      scheduler = component 'Scheduler' {
+        description 'Picks what is due and queues a notification row for it'
+      }
+      sender = component 'Sender' {
+        description 'Sends each queued notification by push, else by email (ADR 0003)'
+      }
+    }
+
+    db = store 'Database' {
+      technology 'PostgreSQL 16'
+      description 'Members, sheds, tools, reservations, loans, reports and notifications (the data model)'
+    }
+
+    photos = store 'Photo bucket' {
+      technology 'S3-compatible object storage'
+      description 'Tool photos; the database holds their keys'
+    }
+
+    sms = container 'SMS reminders' {
+      #planned
+      description 'For members without a smartphone. Not built'
+    }
+  }
+
+  member -> toolshed.app 'browses, reserves'
+  steward -> toolshed.app 'checks tools out and in'
+  toolshed.app -> toolshed.api 'calls' {
+    technology 'JSON over HTTPS'
+  }
+  toolshed.app -> toolshed.photos 'loads photos' {
+    technology 'signed URLs'
+  }
+
+  toolshed.api.catalogue -> toolshed.db 'reads and writes tools'
+  toolshed.api.catalogue -> toolshed.photos 'stores photos, signs URLs'
+  toolshed.api.reservations -> toolshed.api.catalogue 'checks the tool is lendable'
+  toolshed.api.reservations -> toolshed.db 'reads and writes reservations'
+  toolshed.api.loans -> toolshed.api.reservations 'fulfils a reservation'
+  toolshed.api.loans -> toolshed.api.members 'blocks or unblocks a member'
+  toolshed.api.loans -> toolshed.db 'reads and writes loans'
+  toolshed.api.members -> toolshed.db 'reads and writes members'
+  toolshed.api.reports -> toolshed.api.catalogue 'sets a tool to repair'
+  toolshed.api.reports -> toolshed.db 'writes reports'
+
+  toolshed.worker.scheduler -> toolshed.db 'reads due loans and lapsing holds, queues notifications'
+  toolshed.worker.sender -> toolshed.db 'reads the queue, marks sent'
+  toolshed.worker.sender -> pushService 'sends a reminder'
+  toolshed.worker.sender -> email 'sends a reminder when push is off'
+  pushService -> member 'shows the reminder'
+  email -> member 'delivers the reminder'
+}
+
+deployment {
+  environment prod 'Production' {
+    node fly 'Fly.io, one region' {
+      instanceOf toolshed.api
+      instanceOf toolshed.worker
+    }
+    node pages 'Static hosting' {
+      instanceOf toolshed.app
+    }
+    node neon 'Managed Postgres' {
+      instanceOf toolshed.db
+    }
+    node bucket 'Object storage' {
+      instanceOf toolshed.photos
+    }
+  }
+}
