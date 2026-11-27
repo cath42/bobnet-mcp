@@ -23,3 +23,20 @@ Casper: "Yes agreee go ahead".
 
 So: Q-19 (verdict on the site-map prototype) withdrawn; Toad spikes and amends ADR 0015; Daisy reworks the spec and
 prototype; then one verdict ask with the new link.
+
+## Q-21, v3 verdict (Casper, 2026-11-26, in Mario's session): changes
+
+"Not a big fan of the data model layout, it seems to be either table or table with attributes for all in the diagram, I
+was hoping to be able to toggle that by diagram. It also seems its sourcing from various types of files in each repo,
+make it consistent for all and prototype using a sample instead of trying to use the repo, its confusing you and it
+seems to create different diagram options for different repos thats definitely not what I want im looking for standards
+and frameworks not \"work with what I've got\" please."
+
+So:
+- One standard for every project: each library section has one source format and one place in the repo, the same in
+  every repo (no per-repo mapping of whatever files exist; build.py's mapping is not the model). A project that
+  doesn't follow it yet shows the section as not written; converting is that project's own item.
+- The data model diagram: a toggle per diagram between tables only and tables with their attributes (Daisy designs
+  the control; per-table expand may sit beside it).
+- Prototype v4 uses one sample project written to the standard, not Helix's or Vitals' repos.
+- The project menu (A/B/C) is still open: asked again with v4.
