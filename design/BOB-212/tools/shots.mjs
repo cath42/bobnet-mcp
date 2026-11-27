@@ -1,4 +1,4 @@
-// Shots of the BOB-212 prototype (version 2) at 390 (phone, touch), 1024 (tablet, touch) and 1440 (desktop), light,
+// Shots of the BOB-212 prototype (version 3) at 390 (phone, touch), 1024 (tablet, touch) and 1440 (desktop), light,
 // and some dark. The viewers are served with their own CSP (ADR 0016 §6), the page with frame-src 'self'.
 //   node design/BOB-212/tools/shots.mjs [name-filter]   (writes design/BOB-212/shots/*.png)
 // Prints any page error, any page wider than its viewport, and each viewer's ready.
@@ -52,8 +52,8 @@ const shots = [
   ["16-helix-taxonomy", "#project/helix/library/data/taxonomy/all-elements", [390, 1440], null, false],
   ["17-home-vitals", "#project/vitals/library", [390, 1440], null, true],
   ["18-vitals-erd", "#project/vitals/library/data", [390, 1024, 1440], async (p) => { await ready(p); await p.waitForTimeout(1500); }, false, true],
-  // A table focused by its chip, the sixth: its name stays out of this public file.
-  ["19-vitals-erd-focus", "#project/vitals/library/data", [390, 1440], async (p) => { await ready(p); await p.waitForTimeout(1500); await p.locator(".vf-jump .chip-b").nth(5).click(); await p.waitForTimeout(2500); }, false, true],
+  // A table opened from the bar's picker, by position: its name stays out of this public file. Its entity card shows.
+  ["19-vitals-erd-focus", "#project/vitals/library/data", [390, 1024, 1440], async (p) => { await ready(p); await p.waitForTimeout(1500); await pickTable(p, 5); }, false, true],
   ["20-vitals-usecases", "#project/vitals/library/usecases", [390, 1024, 1440], null, false],
   ["21-vitals-usecase-open", "#project/vitals/library/usecases", [390, 1440], async (p) => { const c = p.locator(".ucard").nth(4); await c.locator("summary").click(); await c.scrollIntoViewIfNeeded(); await p.evaluate(() => scrollBy(0, -90)); }, false],
   ["22-vitals-architecture", "#project/vitals/library/architecture", [390, 1440], null, false],
@@ -66,7 +66,29 @@ const shots = [
   ["29-loading", "#project/bobnet/library", [390, 1440], async (p) => { await state(p, "loading"); }, false],
   ["30-sections-open", "#project/vitals/library/data", [390], async (p) => { await p.click(".secs-pick"); }, false],
   ["31-work-tab", "#project/helix", [390, 1440], null, false],
+  // Version 3: hover on a desktop previews a table; Helix's model as an ERD (a stand-in: see gen_data.py).
+  ["32-vitals-erd-hover", "#project/vitals/library/data", [1440], async (p) => {
+    await ready(p); await p.waitForTimeout(1500);
+    await p.frameLocator(".vf-box iframe").locator(".react-flow__node").nth(2).hover(); await p.waitForTimeout(600);
+  }, false],
+  ["33-helix-erd", "#project/helix/library/data", [390, 1024, 1440], async (p) => { await ready(p); await p.waitForTimeout(2500); await toFrame(p); }, false, true],
+  ["34-helix-erd-focus", "#project/helix/library/data", [390, 1024, 1440], async (p) => { await ready(p); await p.waitForTimeout(2500); await pickTable(p, 14); }, false, true],
+  ["35-helix-erd-full", "#project/helix/library/data", [390], async (p) => { await ready(p); await p.waitForTimeout(2000); await pickTable(p, 14); await p.click(".vf-full-b"); await p.waitForTimeout(1200); }, false],
+  // A click on a table in the frame opens its card; a click on another moves the card (Liam's drawer is hidden).
+  ["37-erd-click", "#project/vitals/library/data", [1440], async (p) => {
+    await ready(p); await p.waitForTimeout(1500);
+    const nodes = p.frameLocator(".vf-box iframe").locator(".react-flow__node");
+    for (const n of [2, 4]) {
+      const id = await nodes.nth(n).getAttribute("data-id");
+      await nodes.nth(n).click(); await p.waitForTimeout(1200);
+      const got = await p.evaluate(() => [decodeURIComponent(location.hash.split("/").pop()), document.querySelector(".ent-h b")?.textContent ?? ""]);
+      console.log("  click", n, got[0] === id && got[1] === id ? "opens its card" : "MISMATCH");
+    }
+  }, false],
+  ["36-sections-folded", "#project/vitals/library/data", [1440], async (p) => { await ready(p); await p.click(".secs-pick"); await p.waitForTimeout(300); }, false],
 ];
+async function pickTable(p, n) { await p.selectOption(".vf-pick", { index: n }); await p.waitForTimeout(2500); }
+const toFrame = async (p) => { await p.evaluate(() => document.querySelector(".vf").scrollIntoView({ block: "start" })); await p.waitForTimeout(300); };
 async function state(p, v) { await p.evaluate((v) => { const r = document.querySelector(`.proto-states input[value="${v}"]`); r.checked = true; r.dispatchEvent(new Event("change")); }, v); }
 const only = process.argv[2];
 const browser = await chromium.launch(process.env.EXE ? { executablePath: process.env.EXE } : {});

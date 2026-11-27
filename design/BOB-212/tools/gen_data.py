@@ -7,6 +7,9 @@ in each repo), its seven fixed sections, and per page the raw files exactly as g
 or parsed here; the prototype does that in the page, as the build will. Two stand-ins, both marked in the data:
 - `erd`: the build posts schema.sql into the viewer and Liam parses it there (0016 build B task 3). The prototype
   posts the schema as Liam's CLI parsed it in Toad's spike (private-vitals/frame-erd/schema.json).
+- `erd` for Helix (version 3): ADR 0016 has Helix's build emit a schema.sql with COMMENT ON from each table's
+  grain and each column's note (Toad, BOB-212). Until it does, the prototype converts architecture/model/model.json
+  into what Liam would parse from that file (`helix_schema` below), and the page says so.
 - `head` on BobNet's UX cards: what each spec's front matter would say. The specs have none yet.
 Helix and Vitals are private repos and bobnet-mcp is public: the output is git-ignored.
 """
@@ -40,6 +43,8 @@ MANIFESTS = {
         "sections": {
             "architecture": {"owner": "Bill", "pages": [{"id": "overview", "src": "architecture/overview.md"}]},
             "data": {"owner": "Bill", "pages": [
+                {"id": "erd", "kind": "erd", "format": "postgres", "src": "architecture/model/schema.sql", "title": "Schema",
+                 "standin": "architecture/model/model.json"},
                 {"id": "entities", "src": "architecture/model/entities.md"},
                 {"id": "taxonomy", "kind": "table", "src": "architecture/model/taxonomy/README.md", "owner": "Bill + Picard",
                  "table": {"dir": "architecture/model/taxonomy", "areas": [
@@ -61,7 +66,8 @@ MANIFESTS = {
         "sections": {
             "architecture": {"owner": "Galen", "pages": [{"id": "notes", "src": "docs/library/architecture.md"}]},
             "data": {"owner": "Galen", "pages": [
-                {"id": "erd", "kind": "erd", "format": "postgres", "src": "database/schema/schema.sql", "title": "Schema"},
+                {"id": "erd", "kind": "erd", "format": "postgres", "src": "database/schema/schema.sql", "title": "Schema",
+                 "about": "docs/library/data-dictionary.md"},
                 {"id": "entities", "kind": "mermaid", "src": "database/data-model.mmd", "title": "Entities and relations",
                  "intro": "The entity-level diagram, drawn from `database/data-model.mmd`. The schema itself: [schema.sql](schema/schema.sql) and [views.sql](views.sql)."},
                 {"id": "dictionary", "src": "docs/library/data-dictionary.md"}]},
@@ -98,6 +104,34 @@ def first_h1(text, fallback):
     return next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), fallback)
 
 
+def helix_schema(model):
+    """Helix's model.json as Liam's parse of the schema.sql Helix's build would emit: tables lower-cased, each table's
+    grain and each column's note as its COMMENT ON, the mixins' columns appended, `fk: "TABLE.col"` as FOREIGN KEY."""
+    tables, mixins = {}, model.get("mixins", {})
+    every = [t for d in model["domains"] for t in d["tables"]] + model.get("platform_tables", {}).get("tables", [])
+    names = {t["name"].lower() for t in every}
+    for t in every:
+        name = t["name"].lower()
+        cols = list(t.get("columns", [])) + [c for m in t.get("mixins", []) for c in mixins.get(m, {}).get("columns", [])]
+        columns, cons = {}, {}
+        for c in cols:
+            if c["name"] in columns:
+                continue
+            note = (c.get("note") or "").strip() or None
+            columns[c["name"]] = {"name": c["name"], "type": c.get("type", ""), "default": c.get("default"), "check": None,
+                                  "notNull": bool(c.get("pk")) or c.get("nullable") is False, "comment": note}
+            if c.get("pk"):
+                pk = cons.setdefault(f"{name}_pkey", {"type": "PRIMARY KEY", "name": f"{name}_pkey", "columnNames": []})
+                pk["columnNames"].append(c["name"])
+            fk = c.get("fk")
+            m = re.match(r"^([A-Z_]+)\.([a-z_]+)$", fk.strip()) if isinstance(fk, str) else None
+            if m and m.group(1).lower() in names:
+                cons[f"{name}_{c['name']}_fkey"] = {"type": "FOREIGN KEY", "name": f"{name}_{c['name']}_fkey", "columnNames": [c["name"]],
+                    "targetTableName": m.group(1).lower(), "targetColumnNames": [m.group(2)], "updateConstraint": "NO_ACTION", "deleteConstraint": "NO_ACTION"}
+        tables[name] = {"name": name, "columns": columns, "comment": (t.get("grain") or "").strip() or None, "indexes": {}, "constraints": cons}
+    return {"tables": tables, "enums": {}, "extensions": {}}
+
+
 def main():
     schema = json.load(open(sys.argv[2])) if len(sys.argv) > 2 else None
     out = {}
@@ -111,7 +145,7 @@ def main():
             for p in sec["pages"]:
                 kind = p.get("kind", "md")
                 page = {"id": p["id"], "kind": kind, "owner": p.get("owner")}
-                if kind in ("md", "table", "mermaid", "erd"):
+                if kind in ("md", "table", "mermaid") or (kind == "erd" and not p.get("standin")):
                     text = show(p["src"])
                     page.update(src=p["src"], text=text, changed=changed(repo, sha, p["src"]),
                                 title=p.get("title") or first_h1(text, p["id"]))
@@ -122,7 +156,13 @@ def main():
                     page["areas"] = [{"label": lab, "src": f"{t['dir']}/{f}.md", "text": show(f"{t['dir']}/{f}.md")} for f, lab in t["areas"]]
                 if kind == "erd":
                     page["format"] = p["format"]
-                    page["schema"] = schema  # stand-in: Liam's parse of this schema.sql (see the docstring)
+                    if p.get("standin"):  # the file Helix's build will emit isn't on main yet: say what it's drawn from
+                        page.update(src=p["src"], title=p["title"], text="", standin=p["standin"], changed=changed(repo, sha, p["standin"]),
+                                    schema=helix_schema(json.loads(show(p["standin"]))))
+                    else:
+                        page["schema"] = schema  # stand-in: Liam's parse of this schema.sql (see the docstring)
+                    if p.get("about"):
+                        page["about"] = {"path": p["about"], "text": show(p["about"])}
                 if kind == "likec4":
                     files = [f for f in git(repo, "ls-tree", "-r", "--name-only", sha, p["dir"] + "/").split()
                              if f.endswith((".c4", ".likec4")) or f.endswith("likec4.config.json")]

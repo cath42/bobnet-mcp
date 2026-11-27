@@ -1,6 +1,6 @@
 # BOB-212: each project's library on BobNet, and the project menu back
 
-Daisy, design session `BOB-212 design A`, version 2, 2026-11-26. For R9 (R3.1).
+Daisy, design session `BOB-212 design A`, version 3, 2026-11-26. For R9 (R3.1).
 
 **Sources:**
 
@@ -8,6 +8,9 @@ Daisy, design session `BOB-212 design A`, version 2, 2026-11-26. For R9 (R3.1).
 - Casper's words, in `lead/bob212/frameworks-decision.md`: "some structure around architecture, data models,
   use cases, prototypes, ux design"; "Its a lot of text though"; diagrams one can "focus/zoom on details … or zoom
   out and see bigger picture"; then "Yes agreee go ahead".
+- Casper on version 2 (to poe, 26 Nov): "The data model couldn't render for the helix project, was that a bug or
+  intentional? Still a lot of text on the side, id prefer entity context be something I can open or see on the
+  diagram somehow".
 - The data path and the skeleton: Toad's ADR 0015, as amended by ADR 0016
   (`architecture/decisions/0016-library-skeleton-and-zoomable-diagrams.md`), and his spike
   (`architecture/spikes/bob212/README.md`).
@@ -18,13 +21,30 @@ This spec is the screens. Where it meets the ADRs, it cites them as 0015 §n and
 
 - BobNet's own library as the target: its LikeC4 model, its ADRs, its capabilities and its UX cards, from `v2`;
 - Helix's and Vitals' real library pages, from each repo's main, put into the sections as 0016 §4 maps them;
-- Vitals' schema as a zoomable ERD.
+- Vitals' schema as a zoomable ERD, and Helix's model as one (a stand-in until Helix's build writes its schema, §10.4).
 
 **Helix and Vitals are private repos, and bobnet-mcp is public**, so `prototype/data.js`, `prototype/vendor/` and
 `shots/` are git-ignored. To make them on a laptop with the clones and Toad's spike cache, see §13. Casper allowed
 the deployed prototype on an open, unlisted link (Q-18, "an unlisted link is fine").
 
-## 0. What changed since the first prototype
+## 0. What changed
+
+### Since version 2
+
+- **A table's context is on the diagram** (§10.2). A click on a table, or a tap on a phone, opens its card in the
+  frame: what it is, what it refers to and what refers to it, its key fields with their notes, and all its columns
+  folded. On a desktop, hovering over a table shows its one line first. Liam's own side pane is gone.
+- **Less text beside a diagram.** On a C4 or ERD page:
+  - the sections rail folds into the section's name, which opens the sections (§5);
+  - the section's tabs share its row;
+  - the view and table chips under the frame are one picker in the bar (§9, §10);
+  - the source line is one short line.
+- **Helix's data model draws** (§10.4). It "couldn't be drawn" because of a bug in Helix's `entities.md` (line 54,
+  LAND-189, Bill's to fix). Helix's model file has every table, its description and its keys. Once Helix's build
+  writes a `schema.sql` from it, it is a real ERD with nothing Helix-specific in BobNet. The prototype draws that
+  ERD now, from the model file.
+
+### Since the first prototype
 
 - **Seven fixed sections** (0016 §1): Overview, Architecture, Data model, Decisions, Use cases, UX design and
   Glossary. They are in the same order in every project. A section not written yet stays in its place, muted, with
@@ -155,6 +175,14 @@ As in version 1:
 
 **On a phone**, the button names the section. Its list opens under it, with 44 px rows. The section's own title
 isn't repeated under the button; only "owner Galen" shows.
+
+**A diagram page (C4 or ERD) folds the rail at every width** (version 3), so the frame has the page's width:
+
+- The section's title becomes the button: "Data model ▾", at the title's size (22 px, 20 on a phone). It opens the
+  rail's list, 280 px wide, as a menu under it. A click outside closes it, and so does Escape, which returns the focus
+  to the button.
+- The owner follows the button, then the section's page tabs on the same row (shot 36). A phone stacks them.
+- Any other page keeps the rail as above.
 
 ## 6. The home: seven tiles
 
@@ -357,8 +385,12 @@ Shots 03-07, 23, 24.
   - Under the crumb, in muted 13 px, the view's own title: "Board object: components". It is hidden on a phone.
 - **At the right:**
   - **↑ Out**: one level up. It is disabled at the context.
+  - **The views** (version 3): a select listing every view by its title, a dynamic one marked "· steps", with the
+    current one selected. Picking one goes there, as a history entry. It replaces version 2's row of chips. A select
+    is the phone's own picker, and its text is 16 px so the phone doesn't zoom.
   - **Fit**: the whole view in the frame.
   - **Full screen**.
+  - On a phone the select has its own row over the buttons.
 
 **The frame** is a hairline box on the surface, with the radius:
 
@@ -374,6 +406,9 @@ Shots 03-07, 23, 24.
 - **A box with its own view has LikeC4's ⤢ "Navigate to view" button.** It drills in, the crumb follows, and the
   address gains the view (§2).
 - **Any other box** opens LikeC4's details on click: its description, technology, relations and its views.
+- **A box carries its own description** (LikeC4 draws the element's `description` under its title). So the C4 page
+  already follows version 3's rule: what a box is shows on the box, and the rest one click away, in the frame.
+  Nothing about the model is prose beside it.
 - **A relation's label** opens what it links.
 - **A double-click** focuses an element: the rest dims.
 - **A dynamic view** ("A land") has LikeC4's step-through.
@@ -383,20 +418,16 @@ So are its search, notation legend and "compare with auto layout". The model's c
 architect chooses them in the `.c4` files. The rest is the dashboard's, and LikeC4 follows the system's light or
 dark.
 
-**Under the frame:**
-
-- "6 VIEWS" and a chip per view. The current one is in accent, and a dynamic view is marked "· steps". A chip goes
-  straight to that view, a history entry.
-- "Model: architecture/model/bobnet.c4 ↗ · drawn here by LikeC4, from main at 0a8fbe3" (muted 12.5 px; every file of
-  the model, linked at the commit).
+**Under the frame**, one line in muted 12.5 px: "Model: architecture/model/ ↗ · LikeC4 · main at 0a8fbe3". The
+folder links to GitHub at the commit.
 
 **On a touch screen** (`pointer: coarse`):
 
 - The frame is covered by **"Tap to explore"**, an accent pill, with "Then pinch to zoom, drag to move, tap a box to
   open it" under it. So a finger on the page scrolls the page and never gets caught in the diagram.
 - A tap hands the frame the finger, and **Done** appears in the bar to give it back.
-- The bar's buttons and the chips are 40 px.
-- **Full screen is the way to read a big view on a phone** (shot 07). The bar, the frame and the chips fill the
+- The bar's buttons and its picker are 40 px.
+- **Full screen is the way to read a big view on a phone** (shot 07). The bar and the frame fill the
   screen, the page doesn't scroll behind it, and Close or Escape leaves.
 
 **States:**
@@ -411,26 +442,136 @@ dark.
 
 ## 10. Data model: the ERD frame (Liam)
 
-Shots 18, 19.
+Shots 18, 19, 32-37.
 
-**The bar**: "All 10 tables" › **<table>** (the focused table), with Fit and Full screen at the right.
+### 10.1 The bar and the frame
+
+**The bar:**
+
+- **The crumb**: "All 10 tables" › **<table>** (the open table).
+- **At the right:**
+  - **Find a table**: a select, "Find a table (10)", then every table by name, A-Z, in mono. Picking one opens it,
+    as a history entry. On a phone it has its own row, and when the frame is below the fold, picking scrolls the
+    frame up.
+  - **Fit** and **Full screen**.
 
 **In the frame:**
 
-- Liam's canvas: pan, zoom and pinch.
-- **A click on a table focuses it.**
-  - It and its relations light in accent, and its detail pane opens at the right: columns, keys, not-null and
-    related tables.
-  - The address gains the table, so a table can be linked.
-  - Liam's own bottom toolbar stays: zoom, fit, tidy up, and "show": table name, keys or all columns.
+- Liam's canvas. Scrolling (a trackpad's two fingers) pans, and pinch or the zoom buttons zoom. A mouse drag on
+  the canvas doesn't pan: that is Liam's.
+- **A click on a table opens it**: it and its relations light in accent, its card opens (§10.2), and the address
+  gains the table, so a table can be linked.
+- **An opened table is brought into view**, at 100 %, in the middle of the part of the frame the card leaves free:
+  left of the docked card, or above the phone's sheet. That holds however it was opened: a click, the picker, a
+  relation chip, or a link.
+- **A click on another table moves the card to it.** Panning doesn't close it. The card's ×, Escape, or "All 10
+  tables" in the crumb close it.
+- Liam's own bottom toolbar stays: zoom, fit, tidy up, and "show": table name, keys or all columns.
+- **Liam's table pane is hidden** (version 3). The card replaces it.
 
-**Under the frame:**
-
-- "FOCUS A TABLE" and a chip per table (mono 12.5 px). A chip focuses its table, and a second tap clears it.
-- "Schema: database/schema/schema.sql ↗ · drawn here by Liam ERD, from main at 62e475d".
+**Under the frame**, one line in muted 12.5 px: "Schema: schema.sql ↗ · descriptions: data-dictionary.md ↗ · Liam
+ERD · main at 62e475d". The second link is there only when the page has an `about` file (§10.3).
 
 **Touch, full screen, the frame's heights and the states** are as in §9, with "the schema" in place of "the model",
 and 1.3 MB. An ERD's errors are the parser's, by line ("schema.sql line 12: syntax error at or near "CONSTRAINT"").
+
+### 10.2 The entity card
+
+Casper wants a table's context on the diagram, not beside it. The card is drawn by the page over the frame, from
+what the viewer reports (§14), so it is BobNet's look and keyboard, not Liam's.
+
+**Where it sits:**
+
+| Width | The card |
+|---|---|
+| ≥761 (tablet, desktop) | Docked at the frame's right, 10 px in from its edges, `min(360px, 44%)` wide (330 px and 48% on a tablet), as tall as it needs, up to the frame's height. It scrolls inside. The diagram stays live to its left. |
+| ≤760 (phone) | A sheet over the frame's lower 62%, with a grab line at its top, flat at the bottom edge. It scrolls inside. The diagram above it stays visible. In full screen it is 55% of the frame. |
+
+It is above "Tap to explore", so a phone can read it without exploring. On a phone a table is opened from the
+picker, or by a tap while exploring.
+
+**What it holds, top to bottom:**
+
+1. **The head**: the table's name (mono, 15.5 px semibold), "16 columns" (muted), and × (Close: show all tables).
+   The head stays put while the card scrolls.
+2. **What it is**: one line (15 px). It is the table's description, from the first of:
+   - the schema's own comment on the table (`COMMENT ON TABLE`; Liam reads it);
+   - the page's `about` file (§10.3).
+
+   With neither, it reads in muted: "No description: the schema has no comment on it, and the data dictionary no
+   heading for it."
+3. **Relations**: "It refers to", then a chip per table its foreign keys point at ("→ <table>"). Then "Referred to
+   by", a chip per table whose foreign keys point at it ("← <table>"). A chip opens that table, as a history entry.
+   After 8 chips a dashed "12 more" shows the rest.
+4. **Key fields**: the primary key's and the foreign keys' columns, one row each:
+   - the name (mono, semibold), its type (muted mono), and "PK" in accent;
+   - for a foreign key, "→ <table>" at the right. It opens that table;
+   - the column's note under it (muted 12.5 px, cut at about 170 characters): its schema comment, else its Notes cell
+     in the `about` file.
+5. **All 16 columns**, folded: every column, as the key field rows.
+6. **More from the data dictionary**, folded, when the `about` file has more prose under the table's heading (cut
+   at about 700 characters).
+7. **"<table> in the data dictionary →"**, when the `about` file is also a page of the section. It opens that page at
+   the table's heading.
+
+**Hover, on a desktop** (a fine pointer): pointing at a table shows a preview by it, 280 px wide: the name, the
+description (cut at about 150 characters), and "Click for its fields and relations" in muted. It sits under the
+table, or over it when there's no room below. It never shows for the open table, and never on touch. It takes no
+clicks.
+
+**The keyboard**: the card's chips, links and × are buttons in the page's order. Escape closes the card. Full
+screen's Escape closes full screen first.
+
+### 10.3 Descriptions from a markdown file: `about`
+
+A schema seldom has comments; Vitals' has none. Its data dictionary describes every table. So an `erd` page may
+name one more file (a proposed 0016 §2 addition; Toad agrees, to record):
+
+```json
+{ "id": "erd", "kind": "erd", "format": "postgres", "src": "database/schema/schema.sql",
+  "about": "docs/library/data-dictionary.md" }
+```
+
+- **The rule that matches a table** is a heading (`##` to `####`) that opens with the table's name in backticks:
+
+  ```
+  ### `orders` — one customer order
+  ```
+
+  - The text after the dash is the table's description.
+  - A table under that heading with a "Column" and a "Notes" column gives the columns' notes. A cell may name
+    several columns, each in backticks.
+  - The rest of the prose under the heading is "more".
+- **A table with no heading** gets no description and no error. The schema's own comment wins over `about`.
+- `about` never hides a schema that fails to parse: that is still §9's failure state.
+- `library_page` returns the file with the schema (`files`), resolved on main like `src`.
+
+### 10.4 Helix's data model
+
+**Why it showed "couldn't be drawn"**: it was a bug, not intended. Helix's Data model opened on `entities.md`,
+whose mermaid diagram fails at line 54 (`: to`, a mermaid keyword). That is LAND-189, Bill's fix.
+
+**Helix as a real ERD.** Helix's `architecture/model/model.json`, built from its yaml, has every table (67, with
+its platform tables), each with a one-line description (`grain`), its columns with types, keys and notes, and its
+foreign keys. Toad's recommendation (consult, 26 Nov; his amendment of 0016 to come):
+
+- **Helix's build (`build_doc.py`) writes a `schema.sql`** from it, with `COMMENT ON` from each `grain` and `note`.
+  Helix's library lists it as an `erd` page, `format: postgres`, first in Data model. That is one task on Helix's
+  board (Bill's).
+- **BobNet needs nothing Helix-specific.** It reads Helix's schema like any other. The card needs about 2 tasks on
+  BobNet's side, for every project:
+  - the viewer's richer `ready.tables` and `hover`: 0.5;
+  - the page's card, chips and sheet: 1;
+  - `about` in the manifest, `library_page` and the cache: 0.5.
+- BobNet doesn't read Helix's model.json, and doesn't take a second schema format (Liam's JSON), unless Helix can't
+  write SQL.
+
+**The prototype** draws Helix's ERD now: it converts the model file into what Liam would parse from that
+`schema.sql` (`tools/gen_data.py`, private output). Its source line says so, with a "Prototype" tag: "Drawn from
+architecture/model/model.json ↗ until Helix's build writes architecture/model/schema.sql". Helix's Data model tabs
+are Schema · Entities and relations · Data element taxonomy.
+
+### 10.5 Liam's look
 
 **Liam's look, mapped to style.css** (0016 §6; Toad's finding 2). The override is
 `design/BOB-212/tools/erd-theme.css`. The vendoring tool appends it to the viewer's `<style>`. How it works:
@@ -457,6 +598,10 @@ and 1.3 MB. An ERD's errors are the parser's, by line ("schema.sql line 12: synt
   help, Export and Copy Link. In a sandbox with no network the links and Copy Link do nothing, and BobNet's bar has
   the table finder. It is selected by element, never by Liam's hashed classes (`_wrapper_j2hiu_1`), which change
   with each release.
+- **Also hidden (version 3): Liam's table pane**, the drawer that opened at the right with columns and related
+  tables. The card replaces it (§10.2). It is selected by vaul's attribute, `[data-vaul-drawer]`, not a hashed class.
+  The pane closes the open table on any mousedown outside it. The viewer keeps that off the canvas, so a pan or a
+  click on another table doesn't close the card.
 - **What is left of Liam's own colour:** the glow on a focused table's relations is a literal `#1DED83` in Liam's
   script (29 places), not a variable. The tool should replace it with the accent in the bundle before it hashes it.
   The prototype doesn't, so a faint green glow shows. Shots 18 and 19 show light and dark.
@@ -475,7 +620,7 @@ and 1.3 MB. An ERD's errors are the parser's, by line ("schema.sql line 12: synt
 | A missing section | §7. |
 | A bad manifest (`problems: manifest`) | A banner: **Helix's .bobnet/library.json has a problem at 9c01d2e:** "<message>". That section or page is left out and the rest shows (0016 §2). |
 | A diagram drawing, failing or with errors | §9. |
-| A small (mermaid) diagram that can't be drawn | As in version 1: "This diagram couldn't be drawn here. Its source is below." Helix's `entities.md` line 54 is still this state until Helix quotes `to`. |
+| A small (mermaid) diagram that can't be drawn | As in version 1: "This diagram couldn't be drawn here. Its source is below." Helix's `entities.md` line 54 is still this state until Helix quotes `to` (LAND-189). Helix's Data model no longer opens on it: its ERD is first (§10.4). |
 
 ## 12. Prose pages, tables, links and small diagrams
 
@@ -534,7 +679,11 @@ These are unchanged from version 1. In short:
 | 17 Vitals' home | 18 Vitals' ERD (dark too) | 19 a table focused (dark too) | 20 Vitals' use cases |
 | 21 a use case opened | 22 a prose page | 23 a diagram drawing | 24 a diagram with errors |
 | 25 may be behind | 26 fetch failed | 27 a page missing | 28 no library |
-| 29 reading | 30 the sections open on a phone | 31 the Work tab | |
+| 29 reading | 30 the sections open on a phone | 31 the Work tab | 32 hover on a table (desktop) |
+| 33 Helix's ERD (dark too) | 34 a Helix table opened (dark too) | 35 a Helix table on a phone, full screen | 36 a diagram page's folded sections |
+| 37 a click on a table, then another | | | |
+
+Version 3 changed 19: a table opened from the picker, with its card, at 390, 1024 and 1440.
 
 **What each project shows** (0016 §4, as the prototype maps it):
 
@@ -542,7 +691,7 @@ These are unchanged from version 1. In short:
 |---|---|---|---|
 | Overview | `product/requirements/README.md` | not written yet | not written yet |
 | Architecture | **LikeC4**: `architecture/model/` | `architecture/overview.md` | `docs/library/architecture.md` |
-| Data model | not written yet | `entities.md` (its mermaid fails, §11); the taxonomy table | **ERD**: `schema.sql`; `data-model.mmd`; the data dictionary |
+| Data model | not written yet | **ERD** (stand-in: from `model.json`, §10.4); `entities.md` (its mermaid fails, §11); the taxonomy table | **ERD**: `schema.sql`, with the data dictionary as `about`; `data-model.mmd`; the data dictionary |
 | Decisions | 16 ADRs, `children` | `decisions-index.md`; 117 ADRs, `children` | `docs/decisions/README.md`; 11 ADRs, `children` |
 | Use cases | 11 capabilities, `children` of `product/requirements` | `scenarios/`, `children` (1 file, 20 cases) | `use-cases.md`, as cards (34) |
 | UX design | 10 features, `children` of `design/*/spec.md` | not written yet | not written yet |
@@ -571,7 +720,7 @@ It costs no rewriting (§8.1).
    that way.
 2. **`children` needs a file pattern**: `"match": "*/spec.md"` for the UX cards in `design/`, and `^\d{4}-` to leave a
    folder's README out. Without it every review file is a card. The prototype uses `match` and `skip`.
-3. **Two more messages from the page to a viewer:** `{t: "focus", focus}`, so BobNet's crumb, ↑ Out and the chips can
+3. **Two more messages from the page to a viewer:** `{t: "focus", focus}`, so BobNet's crumb, ↑ Out and the picker can
    move it without sending the files again, and `{t: "fit"}`.
 4. **`ready` carries what the bar needs:** `views: [{id, title, label, crumb, dynamic}]` for LikeC4 and
    `tables: [names]` for an ERD. The page parses nothing; the viewer does.
@@ -586,11 +735,35 @@ It costs no rewriting (§8.1).
    it (`pushState` and a `popstate`): `tools/pack-erd.mjs`.
 7. **The vendoring tool replaces Liam's literal `#1DED83`** before hashing (§10).
 
+**Version 3, for the entity card** (§10.2; Toad agreed in a consult, 26 Nov, and records it in 0016):
+
+8. **`ready.tables` carries each table, not just its name**: `[{name, comment, columns: [{name, type, notNull,
+   comment}], pk: [names], fks: [{columns, table, targetColumns}]}]`, from Liam's own parse. The page still parses no
+   SQL. Never the SQL text.
+9. **A new message from the viewer:** `{t: "hover", table | null, rect: {x, y, w, h}}`, in the frame's pixels, one
+   message per change of table (not per mouse move). The page places the preview from it.
+10. **`about` on an `erd` page** (§10.3): optional, a repo path, resolved on main like `src`, returned in `files`,
+    cached by its blob like the schema. The matching rule is §10.3's.
+11. **Liam's drawer hidden by `[data-vaul-drawer]`**, and its outside-mousedown kept off the canvas (the preamble
+    wraps `document.addEventListener` for capture `mousedown`: `tools/pack-erd.mjs`). Both are Liam 0.7.24's. The
+    vendoring has a test that fails when a Liam release stops matching them.
+12. **A message from the page to the viewer: `{t: "inset", right, bottom}`**, the frame pixels the card covers,
+    sent whenever the card opens, closes or the frame resizes. The viewer centres an opened table in what is left.
+    The prototype opens a table as a click on its node would (Liam then centres it), and nudges it by half the inset
+    with a synthetic wheel (Liam pans on scroll). The build should do it through React Flow, not events.
+13. **Helix's schema** is Helix's build's (§10.4): one task on Helix's board. BobNet's side is about 2 tasks
+    (§10.4), on top of build B's task 3.
 ## 15. Open questions
 
 1. **AC3**: Casper picks A, B or C (§1); Mario asks him. Only the header and the tabs wait for his answer.
 2. **Toad**: §14's proposals 1, 2 and 7 change 0016 §2 and §7. Proposals 3 to 6 are the viewers' messages.
+   Version 3's 8 to 11 he agreed to in a consult; they hold until his amendment of 0016 is on main.
 3. **Peach**: BobNet's Use cases are its capability files (`product/requirements/*.md`), as cards with their criteria
    count. Are those BobNet's use cases, or should Peach write use-case cards? It is BobNet's own conversion item
    either way.
-4. Helix's mermaid (§11, line 54's `to`) is Helix's to fix. Mario passes it to Helix's lead.
+4. Helix's mermaid (§11, line 54's `to`) is Helix's to fix (LAND-189, Bill). Helix's `schema.sql` from its build
+   (§10.4) is a new Helix task: Mario passes it to Helix's lead once Casper wants Helix's ERD.
+5. **Centring an opened table** (§10.1, §14 item 12): Liam centres a table only on its own click, not on its
+   `?active`. The prototype clicks the node and then scrolls the canvas with a synthetic wheel. Luigi and Toad: can
+   the build's viewer reach Liam's React Flow instance for it, or do we keep the click and the wheel, under the
+   vendoring test?

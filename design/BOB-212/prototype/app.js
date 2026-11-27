@@ -1,4 +1,4 @@
-// BOB-212 prototype, version 2: the Projects menu, a project's Work · Library tabs, and each project's library in
+// BOB-212 prototype, version 3 (the entity card on the ERD, spec §10.2): the Projects menu, a project's Work · Library tabs, and each project's library in
 // ADR 0016's seven fixed sections: cards and diagrams first, the prose behind them. The libraries are real (data.js,
 // from each repo's main); everything else on the page is a stand-in for what is built.
 (function () {
@@ -282,6 +282,11 @@
     const go = (f) => { nav(libHref(ctx.key, ctx.sid, page.id, f || null)); setFocus(f || ""); };
     const crumb = h("div", { class: "vf-crumb", "aria-label": c4 ? "Level" : "Table" });
     const back = h("button", { type: "button", class: "vf-back", title: "One level out", "aria-label": "One level out", onclick: () => go(parentOf()) }, "↑ Out");
+    // Version 3: the views and the tables are one picker in the bar, not a row of chips under the frame.
+    const pick = h("select", { class: "vf-pick", "aria-label": c4 ? "Go to a view" : "Find a table", onchange: (e) => {
+      go(e.target.value);
+      if (box.getBoundingClientRect().bottom > innerHeight) wrap.scrollIntoView({ block: "start" }); // a phone: bring the frame up
+    } });
     const fit = h("button", { type: "button", onclick: () => post({ t: "fit" }) }, "Fit");
     const fullB = h("button", { type: "button", class: "vf-full-b", onclick: () => full(!wrap.classList.contains("full")) }, "Full screen");
     const done = h("button", { type: "button", class: "vf-done", onclick: () => wrap.classList.remove("exploring") }, "Done");
@@ -289,14 +294,85 @@
     const veil = h("div", { class: "vf-veil" }, h("div", { class: "vf-load" }, h("b", null, c4 ? "Drawing the model…" : "Drawing the schema…"),
       h("span", null, `The first time on this device, the viewer downloads (${c4 ? "2.4" : "1.3"} MB).`), h("div", { class: "skel" }, h("i"), h("i"), h("i"))));
     const touch = h("button", { type: "button", class: "vf-touch", onclick: () => wrap.classList.add("exploring") },
-      h("b", null, "Tap to explore"), h("span", null, c4 ? "Then pinch to zoom, drag to move, tap a box to open it" : "Then pinch to zoom, drag to move, tap a table to focus it"));
-    const box = h("div", { class: "vf-box" }, iframe, veil, touch);
+      h("b", null, "Tap to explore"), h("span", null, c4 ? "Then pinch to zoom, drag to move, tap a box to open it" : "Then pinch to zoom, drag to move, tap a table to open it"));
+    const peek = h("div", { class: "ent-peek", hidden: true, "aria-hidden": "true" });
+    const ent = h("div", { class: "ent-slot" });
+    const box = h("div", { class: "vf-box" }, iframe, veil, touch, peek, ent);
     const warnLine = h("div", { class: "vf-warn", hidden: true });
-    const jump = h("div", { class: "vf-jump" });
-    const foot = h("div", { class: "vf-foot" }, c4 ? "Model: " : "Schema: ",
-      files.map((f, i) => [i ? ", " : "", h("a", { href: ghBlob(ctx.lib, f.path), target: "_blank", rel: "noopener" }, `${f.path} ↗`)]),
-      ` · drawn here by ${c4 ? "LikeC4" : "Liam ERD"}, from main at ${sha7(ctx.lib.commit)}`);
-    const wrap = h("div", { class: `vf vf-${kind}` }, h("div", { class: "vf-bar" }, crumb, h("span", { class: "vf-act" }, c4 ? back : null, fit, fullB, done)), warnLine, box, jump, foot);
+    const src = (path, label) => h("a", { href: ghBlob(ctx.lib, path), target: "_blank", rel: "noopener" }, `${label ?? path.split("/").pop()} ↗`);
+    const foot = h("div", { class: "vf-foot" }, c4
+      ? ["Model: ", h("a", { href: ghTree(ctx.lib, page.dir), target: "_blank", rel: "noopener" }, `${page.dir}/ ↗`), ` · LikeC4 · main at ${sha7(ctx.lib.commit)}`]
+      : page.standin
+        ? [h("span", { class: "proto-tag" }, "Prototype"), " Drawn from ", src(page.standin, page.standin), ` until Helix's build writes ${page.src} · Liam ERD · main at ${sha7(ctx.lib.commit)}`]
+        : ["Schema: ", src(page.src), page.about ? [" · descriptions: ", src(page.about.path)] : null, ` · Liam ERD · main at ${sha7(ctx.lib.commit)}`]);
+    const wrap = h("div", { class: `vf vf-${kind}` }, h("div", { class: "vf-bar" }, crumb, h("span", { class: "vf-act" }, c4 ? back : null, pick, fit, fullB, done)), warnLine, box, foot);
+
+    // ---- the ERD's entity card (spec §10.2): the table's description, key fields and relations, from the table ----
+    const T = new Map(), refBy = new Map();
+    const about = !c4 && page.about ? aboutOf(page.about.text) : new Map();
+    const dict = !c4 && page.about ? pagesOf(ctx.lib, ctx.sid).find((x) => x.src === page.about.path) : null;
+    const descOf = (t) => t.comment || about.get(t.name)?.desc || "";
+    function index() {
+      T.clear(); refBy.clear();
+      for (const t of st.tables) T.set(t.name, t);
+      for (const t of st.tables) for (const f of t.fks) if (f.table !== t.name) refBy.set(f.table, [...(refBy.get(f.table) ?? []), t.name]);
+    }
+    const uniq = (xs) => [...new Set(xs)];
+    function relChips(names, dir) {
+      const more = names.length > 8;
+      const chip = (n) => h("button", { type: "button", class: "chip-b mono", onclick: () => go(n) }, dir === "out" ? "→ " : "← ", n);
+      const row = h("div", { class: "ent-rel" }, names.slice(0, 8).map(chip));
+      if (more) row.append(h("button", { type: "button", class: "chip-b ghost", onclick: (e) => { e.currentTarget.replaceWith(...names.slice(8).map(chip)); } }, `${names.length - 8} more`));
+      return row;
+    }
+    function colRow(t, c, fkOf) {
+      const note = c.comment || about.get(t.name)?.cols[c.name] || "";
+      const to = fkOf.get(c.name);
+      return h("li", null, h("span", { class: "cn" }, c.name),
+        h("span", { class: "ct" }, c.type, t.pk.includes(c.name) ? h("span", { class: "tag" }, "PK") : null),
+        to ? h("button", { type: "button", class: "ent-to", onclick: () => go(to) }, `→ ${to}`) : null,
+        note ? h("small", null, clip(plain(note), 170)) : null);
+    }
+    function entCard(t) {
+      const a = about.get(t.name), desc = descOf(t);
+      const fkOf = new Map(t.fks.flatMap((f) => f.columns.map((c) => [c, f.table])));
+      const key = t.columns.filter((c) => t.pk.includes(c.name) || fkOf.has(c.name));
+      const outs = uniq(t.fks.map((f) => f.table).filter((n) => n !== t.name)), ins = uniq(refBy.get(t.name) ?? []);
+      const dictLink = dict && a ? h("a", { class: "ent-dict", href: libHref(ctx.key, ctx.sid, dict.id, a.id) }, `${t.name} in the ${dict.title.toLowerCase()} →`) : null;
+      return h("aside", { class: "ent", "aria-label": `${t.name}: what it is` },
+        h("div", { class: "ent-h" }, h("b", null, t.name), h("span", { class: "muted" }, `${t.columns.length} columns`),
+          h("button", { type: "button", class: "ent-x", "aria-label": "Close: show all tables", onclick: () => go("") }, "×")),
+        desc ? h("p", { class: "ent-d" }, cap(plain(desc))) : h("p", { class: "ent-d none" }, `No description: the schema has no comment on it${page.about ? ", and the data dictionary no heading for it" : ""}.`),
+        outs.length || ins.length ? h("div", { class: "ent-s" }, h("div", { class: "lab" }, "Relations"),
+          outs.length ? [h("span", { class: "ent-sub" }, "It refers to"), relChips(outs, "out")] : null,
+          ins.length ? [h("span", { class: "ent-sub" }, "Referred to by"), relChips(ins, "in")] : null) : null,
+        key.length ? h("div", { class: "ent-s" }, h("div", { class: "lab" }, "Key fields"), h("ul", { class: "ent-cols" }, key.map((c) => colRow(t, c, fkOf)))) : null,
+        h("details", { class: "ent-all" }, h("summary", null, `All ${t.columns.length} columns`), h("ul", { class: "ent-cols" }, t.columns.map((c) => colRow(t, c, fkOf)))),
+        a?.more.length ? h("details", { class: "ent-all" }, h("summary", null, "More from the data dictionary"), h("p", { class: "ent-more" }, clip(plain(a.more.join(" ")), 700))) : null,
+        dictLink);
+    }
+    function drawEnt() {
+      if (c4) return;
+      const t = st.focus && T.get(st.focus);
+      ent.replaceChildren(...(t ? [entCard(t)] : []));
+      wrap.classList.toggle("has-ent", !!t);
+      // The part of the frame the card covers, so the viewer puts an opened table where it can be seen (spec §10.2).
+      const b = box.getBoundingClientRect(), c = ent.firstChild?.getBoundingClientRect();
+      const phone = matchMedia("(max-width: 760px)").matches;
+      post({ t: "inset", right: c && !phone ? Math.round(b.right - c.left) : 0, bottom: c && phone ? Math.round(b.bottom - c.top) : 0 });
+      if (t && peek.dataset.t === t.name) peek.hidden = true;
+    }
+    function hover(name, r) {
+      const t = name && T.get(name);
+      if (!t || name === st.focus || coarse.matches) { peek.hidden = true; delete peek.dataset.t; return; }
+      const desc = descOf(t);
+      peek.dataset.t = name;
+      peek.replaceChildren(h("b", null, name), desc ? h("span", null, clip(cap(plain(desc)), 150)) : null, h("small", null, "Click for its fields and relations"));
+      peek.hidden = false;
+      const W = box.clientWidth, H = box.clientHeight, pw = peek.offsetWidth, ph = peek.offsetHeight;
+      peek.style.left = `${Math.max(8, Math.min(r.x, W - pw - 8))}px`;
+      peek.style.top = `${r.y + r.h + 8 + ph < H ? r.y + r.h + 8 : Math.max(8, r.y - ph - 8)}px`;
+    }
 
     const viewOf = (id) => st.views.find((v) => v.id === id);
     function parentOf() {
@@ -313,14 +389,17 @@
             last ? h("b", { "aria-current": "location" }, lab) : h("a", { href: libHref(ctx.key, ctx.sid, page.id, id), onclick: (e) => { e.preventDefault(); go(id); } }, lab)].filter(Boolean);
         }), ...(v && v.title !== v.label ? [h("span", { class: "vf-title" }, v.title)] : []));
         back.disabled = cr.length < 2;
-        jump.replaceChildren(...(st.views.length ? [h("span", { class: "lab" }, `${st.views.length} views`)] : []),
-          ...st.views.map((x) => h("button", { type: "button", class: "chip-b", "aria-pressed": String(x.id === st.focus), onclick: () => go(x.id) }, x.title, x.dynamic ? h("small", null, " · steps") : null)));
+        pick.replaceChildren(h("option", { value: "", disabled: true }, `${st.views.length} views`),
+          ...st.views.map((x) => h("option", { value: x.id, selected: x.id === st.focus }, `${x.title}${x.dynamic ? " · steps" : ""}`)));
       } else {
-        crumb.replaceChildren(st.focus ? h("a", { href: libHref(ctx.key, ctx.sid, page.id), onclick: (e) => { e.preventDefault(); go(""); } }, `All ${st.tables.length} tables`) : h("b", null, `All ${st.tables.length} tables`),
+        const n = st.tables.length;
+        crumb.replaceChildren(st.focus ? h("a", { href: libHref(ctx.key, ctx.sid, page.id), onclick: (e) => { e.preventDefault(); go(""); } }, `All ${n} tables`) : h("b", null, `All ${n} tables`),
           ...(st.focus ? [h("span", { class: "sep", "aria-hidden": "true" }, "›"), h("b", { "aria-current": "location" }, st.focus)] : []));
-        jump.replaceChildren(...(st.tables.length ? [h("span", { class: "lab" }, "Focus a table")] : []),
-          ...st.tables.map((t) => h("button", { type: "button", class: "chip-b mono", "aria-pressed": String(t === st.focus), onclick: () => go(t === st.focus ? "" : t) }, t)));
+        pick.replaceChildren(h("option", { value: "", selected: !st.focus }, `Find a table (${n})`),
+          ...[...st.tables].sort((a, b) => a.name.localeCompare(b.name)).map((t) => h("option", { value: t.name, selected: t.name === st.focus }, t.name)));
+        drawEnt();
       }
+      pick.disabled = !(c4 ? st.views.length : st.tables.length);
     }
     function setFocus(f) {
       f = f || (c4 ? page.view : "");
@@ -337,8 +416,7 @@
         h("p", { class: "muted" }, `Its ${files.length === 1 ? "file" : `${files.length} files`} on GitHub at ${sha7(ctx.lib.commit)}:`),
         h("ul", { class: "files" }, files.map((f) => h("li", null, h("a", { href: ghBlob(ctx.lib, f.path), target: "_blank", rel: "noopener" }, `${f.path} ↗`), h("span", { class: "muted" }, ` ${kb(f.text)}`)))),
         h("div", { class: "actions" }, h("button", { type: "button", onclick: () => render(true) }, "Try again"))));
-      jump.replaceChildren();
-      back.disabled = true; fit.disabled = true; fullB.disabled = true;
+      back.disabled = true; fit.disabled = true; fullB.disabled = true; pick.disabled = true;
     }
     function full(on) {
       wrap.classList.toggle("full", on);
@@ -346,7 +424,11 @@
       fullB.textContent = on ? "Close" : "Full screen";
       if (on) fullB.focus();
     }
-    wrap.addEventListener("keydown", (e) => { if (e.key === "Escape" && wrap.classList.contains("full")) full(false); });
+    wrap.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if (wrap.classList.contains("full")) full(false);
+      else if (!c4 && st.focus) go("");
+    });
 
     const me = {
       win: () => iframe.contentWindow,
@@ -365,6 +447,7 @@
           st.ready = true; st.views = d.views || []; st.tables = d.tables || []; st.errors = d.errors || [];
           if (c4 && !st.views.length) return fail("The viewer found no views in it.", st.errors);
           if (c4 && !viewOf(st.focus)) st.focus = page.view;
+          if (!c4) { index(); if (st.focus && !T.has(st.focus)) st.focus = ""; }
           veil.hidden = true;
           if (st.errors.length) {
             warnLine.hidden = false;
@@ -378,6 +461,7 @@
           nav(libHref(ctx.key, ctx.sid, page.id, d.focus || null));
           draw();
         }
+        if (d.t === "hover" && !c4) hover(d.table, d.rect);
       },
     };
     st.timer = setTimeout(() => { if (!st.ready) fail("The viewer didn't answer within 15 seconds."); }, 15000);
@@ -385,6 +469,35 @@
     draw();
     wrap.frame = me;
     return wrap;
+  }
+
+  /** An erd page's `about` file (spec §10.2; 0016 §2 as amended): a heading naming a table in backticks. The text
+   *  after its dash is the description, the Notes column of its table the columns' notes, and its other prose
+   *  "more". A table with no heading gets nothing, and no error. */
+  function aboutOf(text) {
+    const out = new Map(), lines = text.replace(/\r\n?/g, "\n").split("\n");
+    let cur = null;
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i], hm = l.match(/^#{2,4}\s+(.*?)\s*$/);
+      if (hm) {
+        const nm = hm[1].match(/^`([A-Za-z0-9_.]+)`\s*(?:[—–-]+\s*(.*))?$/);
+        cur = nm ? { desc: nm[2] ?? "", cols: {}, more: [], id: slug(hm[1]) } : null;
+        if (cur) out.set(nm[1].toLowerCase(), cur);
+        continue;
+      }
+      if (!cur) continue;
+      if (l.trim().startsWith("|") && isTableSep(lines[i + 1] ?? "")) {
+        const head = cells(l).map((c) => plain(c).toLowerCase()), ci = head.findIndex((c) => c.startsWith("column")), ni = head.findIndex((c) => c.startsWith("note"));
+        for (i += 2; i < lines.length && lines[i].trim().startsWith("|"); i++) {
+          const row = cells(lines[i]), note = ni >= 0 ? plain(row[ni] ?? "").trim() : "";
+          if (ci >= 0 && note) for (const n of (row[ci] ?? "").match(/`[^`]+`/g) ?? []) cur.cols[n.slice(1, -1)] = note;
+        }
+        i--;
+        continue;
+      }
+      if (l.trim()) cur.more.push(l.trim());
+    }
+    return out;
   }
 
   // ---------- card heads: front matter, or the Key: value lines under the title (spec §8) ----------
@@ -641,12 +754,18 @@
       h("div", { class: "secs-nav" }, navLinks),
       h("div", { class: "foot" }, h("a", { href: lib.github, target: "_blank", rel: "noopener" }, "Repository ↗"),
         h("span", null, "Sections from ", h("a", { href: ghBlob(lib, ".bobnet/library.json"), target: "_blank", rel: "noopener" }, h("code", null, ".bobnet/library.json")))));
+    // Version 3: a diagram page folds the rail into its head, at every width: the section's name opens the
+    // sections, and the frame gets the page's width (spec §5).
+    if (content.diagram) { rail.classList.add("folded"); content.head.prepend(rail); }
     const aside = content.toc?.length >= 3 ? h("aside", { class: "lib-toc", "aria-label": "On this page" }, h("div", { class: "lab" }, "On this page"), tocList(content.toc, content.tocHref)) : null;
-    const wrap = h("div", { class: `lib${aside ? " has-toc" : ""}` }, rail, h("div", { class: "doc-col" }, banners(lib), content), aside);
+    const wrap = h("div", { class: `lib${aside ? " has-toc" : ""}${content.diagram ? " diagram" : ""}` }, content.diagram ? null : rail, h("div", { class: "doc-col" }, banners(lib), content), aside);
     if (aside && window.innerWidth >= 1280) queueMicrotask(() => spy(wrap));
     return wrap;
   }
   const tocList = (toc, href) => h("ul", null, toc.map((t) => h("li", { class: `h${t.n}` }, href ? h("a", { href: href(t.id), dataset: { h: t.id } }, t.text) : h("a", { href: `#h-${t.id}`, "data-scroll": "", dataset: { h: t.id } }, t.text))));
+  // A folded rail closes on a click outside it or on Escape.
+  addEventListener("click", (e) => { for (const r of document.querySelectorAll(".lib-rail.folded.open")) if (!r.contains(e.target)) { r.classList.remove("open"); r.querySelector(".secs-pick").setAttribute("aria-expanded", "false"); } });
+  addEventListener("keydown", (e) => { if (e.key !== "Escape") return; for (const r of document.querySelectorAll(".lib-rail.folded.open")) { r.classList.remove("open"); r.querySelector(".secs-pick").setAttribute("aria-expanded", "false"); r.querySelector(".secs-pick").focus(); } });
   function pageLabel(x) {
     return { likec4: x.title, erd: x.title, children: x.title }[x.kind] ?? x.title;
   }
@@ -703,6 +822,7 @@
     const body = pageBody(p, lib, sec, page, r);
     const el = h("div", { class: `doc-page${["likec4", "erd", "table", "children"].includes(page.kind) || body.wide ? " wide" : ""}` }, head, tabs, body);
     el.toc = body.toc; el.tocHref = body.tocHref; el.frame = body.frame; el.cards = body.cards;
+    el.diagram = !!body.frame; el.head = head;
     return el;
   }
 

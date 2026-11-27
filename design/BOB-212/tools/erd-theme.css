@@ -131,3 +131,7 @@ body { font-family: var(--main-font); background: var(--bn-bg); color: var(--bn-
 header { display: none !important; }
 .react-flow__attribution { opacity: .6; }
 .react-flow__attribution a { color: var(--bn-muted); }
+/* Version 3: a table's description, key fields and relations are BobNet's entity card, drawn by the page over the
+   frame (spec §10.2). Liam's own table drawer is hidden, selected by vaul's attribute, never by Liam's hashed
+   classes. The build's vendoring test fails if a Liam release stops matching it (Toad, BOB-212). */
+[data-vaul-drawer], [data-vaul-overlay] { display: none !important; }

@@ -404,3 +404,92 @@ body.vf-lock { overflow: hidden; }
   .vf-bar { gap: 6px; }
   .vf-act { margin-left: auto; }
 }
+
+/* ---------- Version 3: the text goes onto the diagram (spec §0, §5, §9, §10.2) ---------- */
+/* A diagram page: the rail folds into the head. The section's name is the button that opens the sections. */
+.lib.diagram { grid-template-columns: minmax(0, 1fr); }
+.lib.diagram .sec-head { position: relative; align-items: center; }
+.lib.diagram .sec-head .doc-title { display: none; }
+.lib-rail.folded { position: relative; top: 0; max-height: none; overflow: visible; display: block; z-index: 8; }
+.lib-rail.folded .lab, .lib-rail.folded .foot { display: none; }
+.lib-rail.folded .secs-pick { display: inline-flex; width: auto; gap: 8px; align-items: center; min-height: 40px; padding: 2px 12px 2px 10px;
+  margin-left: -10px; font-size: 22px; font-weight: 650; letter-spacing: -.01em; background: transparent; border-color: transparent; color: var(--text); }
+.lib-rail.folded .secs-pick:hover, .lib-rail.folded.open .secs-pick { background: var(--surface); border-color: var(--line); }
+.lib-rail.folded .secs-pick > span:last-child { font-size: 13px; color: var(--muted); }
+.lib-rail.folded .secs-pick .muted { display: none; }
+.lib-rail.folded .secs-nav { display: none; position: absolute; top: calc(100% + 4px); left: 0; width: 280px; max-width: calc(100vw - 24px); max-height: 70vh; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px; box-shadow: 0 10px 30px rgb(0 0 0 / .14); }
+.lib-rail.folded.open .secs-nav { display: grid; }
+@media (pointer: coarse) { .lib-rail.folded .secs-nav a { min-height: 44px; align-items: center; } }
+@media (max-width: 760px) { .lib.diagram .sec-head .doc-title { display: none; } .lib-rail.folded .secs-pick { font-size: 20px; } }
+
+/* The bar's picker: the views of a model, or the tables of a schema. 16px, so a phone doesn't zoom on it. */
+.vf-pick { min-height: 34px; max-width: 15rem; font-size: 16px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font-family: inherit; }
+.vf-erd .vf-pick { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; }
+@media (max-width: 760px) { .vf-pick, .vf-erd .vf-pick { font-size: 16px; max-width: none; flex: 1 1 100%; order: -1; min-height: 40px; } .vf-act { flex: 1 1 100%; } }
+@media (pointer: coarse) { .vf-pick { min-height: 40px; } }
+.proto-tag { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; font-weight: 700; color: var(--warn); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; margin-right: 2px; }
+
+/* The entity card: in the frame, docked at the right on a tablet and a desktop, a sheet from the bottom on a phone. */
+.ent-slot:empty { display: none; }
+.ent-slot { position: absolute; z-index: 3; top: 10px; right: 10px; bottom: 10px; width: min(360px, 44%); display: flex; flex-direction: column; justify-content: flex-start; pointer-events: none; }
+.ent { pointer-events: auto; max-height: 100%; overflow-y: auto; overscroll-behavior: contain; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgb(0 0 0 / .14); padding: 12px 14px 14px; display: grid; gap: 12px; align-content: start; font-size: 14px; }
+.ent-h { display: flex; align-items: baseline; gap: 8px; position: sticky; top: -12px; margin: -12px -14px 0; padding: 12px 14px 6px; background: var(--surface); }
+.ent-h b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15.5px; overflow-wrap: anywhere; }
+.ent-h .muted { font-size: 12.5px; white-space: nowrap; }
+.ent-x { margin-left: auto; min-height: 32px; min-width: 32px; padding: 0; font-size: 18px; line-height: 1; border-color: transparent; background: transparent; color: var(--muted); }
+.ent-x:hover { color: var(--text); border-color: var(--line); }
+.ent-d { margin: 0; font-size: 15px; line-height: 1.45; }
+.ent-d.none { font-size: 13.5px; color: var(--muted); }
+.ent-s { display: grid; gap: 6px; }
+.ent .lab { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.ent-sub { font-size: 12.5px; color: var(--muted); }
+.ent-rel { display: flex; flex-wrap: wrap; gap: 5px; }
+.ent-rel .chip-b { min-height: 28px; font-size: 12.5px; }
+.chip-b.ghost { color: var(--accent); border-style: dashed; }
+.ent-cols { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border-top: 1px solid var(--line); }
+.ent-cols li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.ent-cols .cn { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; font-weight: 600; }
+.ent-cols .ct { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
+.ent-cols .tag { font-family: inherit; font-size: 10.5px; font-weight: 700; color: var(--accent); margin-left: 6px; letter-spacing: .04em; }
+.ent-to { min-height: 0; padding: 0 6px; font-size: 12.5px; border-radius: 999px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); margin-left: auto; }
+.ent-cols small { flex-basis: 100%; font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+.ent-all > summary { margin: 0; font-size: 13.5px; color: var(--accent); cursor: pointer; min-height: 28px; display: flex; align-items: center; }
+.ent-all[open] > summary { margin-bottom: 6px; }
+.ent-more { margin: 0; font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+.ent-dict { font-size: 13.5px; color: var(--accent); text-decoration: none; }
+.ent-dict:hover { text-decoration: underline; }
+/* Hover on a desktop: a small preview by the table; a click opens the card. */
+.ent-peek { position: absolute; z-index: 4; width: 280px; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / .14); padding: 8px 10px; display: grid; gap: 3px; font-size: 13.5px; line-height: 1.4; }
+.ent-peek[hidden] { display: none; }
+.ent-peek b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px; }
+.ent-peek small { color: var(--muted); font-size: 12px; }
+@media (max-width: 1279px) { .ent-slot { width: min(330px, 48%); } }
+@media (max-width: 760px) {
+  /* A sheet over the frame's lower part: the diagram stays visible above it; the sheet scrolls inside. */
+  .ent-slot { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 62%; }
+  .ent { border-radius: var(--radius) var(--radius) 0 0; border-bottom: 0; height: 100%; box-shadow: 0 -8px 24px rgb(0 0 0 / .14); }
+  .ent-h::before { content: ""; position: absolute; left: 50%; top: 4px; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--line); }
+  .ent-x { min-height: 40px; min-width: 40px; }
+  .ent-rel .chip-b { min-height: 36px; }
+  .ent-to { min-height: 32px; }
+}
+.vf.full .ent-slot { bottom: 10px; }
+@media (max-width: 760px) { .vf.full .ent-slot { bottom: 0; height: 55%; } }
+/* A diagram page's head is one row: the section's name (the sections' button), its owner, then its pages' tabs. */
+.lib.diagram .doc-page { grid-template-columns: auto minmax(0, 1fr); column-gap: 18px; row-gap: 10px; }
+.lib.diagram .doc-page > * { grid-column: 1 / -1; }
+.lib.diagram .doc-page > .sec-head { grid-column: 1; }
+.lib.diagram .doc-page > .sec-tabs { grid-column: 2; align-self: end; }
+.lib.diagram .doc-page > .sec-head:last-of-type + .page-diagram, .lib.diagram .doc-page > .page-diagram { grid-column: 1 / -1; }
+.vf { scroll-margin-top: 64px; }
+@media (max-width: 760px) {
+  .lib.diagram .doc-page { grid-template-columns: minmax(0, 1fr); }
+  .lib.diagram .doc-page > .sec-head, .lib.diagram .doc-page > .sec-tabs { grid-column: 1; }
+}
+/* Under style.css's sticky header (z-index 1) when the page scrolls: the frame is its own stacking context. */
+.vf-box { isolation: isolate; }
+.lib-rail.folded { z-index: auto; }
+.lib-rail.folded .secs-nav { z-index: 2; }
