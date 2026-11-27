@@ -40,3 +40,18 @@ So:
   the control; per-table expand may sit beside it).
 - Prototype v4 uses one sample project written to the standard, not Helix's or Vitals' repos.
 - The project menu (A/B/C) is still open: asked again with v4.
+
+## Q-22, v4 verdict (Casper, 2026-11-27, on the board): redo
+
+"You still didn't get it, I want to be able to toggle column/attribute level details PER ENTITY, its still attribute
+details for all or nothing that's not what I want"
+
+The requirement, as a check the prototype must visibly pass before it goes back to him:
+- On a data-model diagram, every entity (table node) has its own control on the node itself. Using it shows or hides
+  THAT entity's attributes (columns) on the diagram, in place. Every other entity stays as it was. So one diagram can
+  show Loan expanded with its columns, and Member and Tool as names only, at the same time.
+- Works with a mouse and with a tap on a phone. Optional extras ("expand all", "collapse all") may sit beside it, but they
+  are not the feature. The state is kept per diagram.
+- Evidence before the ask: screenshots at 1280 and 390 showing one entity expanded among collapsed ones, then a
+  second one expanded too. Mario looks at them.
+Everything else from v4 stands (the standard, ADR 0017, Toolshed, the entity card, the C4 views). Menu A/B/C still open.
