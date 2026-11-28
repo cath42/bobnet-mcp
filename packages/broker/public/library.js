@@ -1,13 +1,18 @@
 // A project's library (BOB-212; ADR 0015, 0017; design/BOB-212/spec.md v6): seven sections, each one file or folder
 // under library/ on the project's main, the same in every repo. The Board keeps them as a cache its supervisor sends;
 // this page reads the `library` read (the index: paths, titles, heads) and a section's texts with `library_page`, and
-// renders Markdown in the page with markdown-it (html off), so no laptop-made HTML is ever shown. The diagrams
-// (Architecture, Data model) come with build B: their sections say what they hold and link their files.
+// renders Markdown in the page with markdown-it (html off), so no laptop-made HTML is ever shown. The architecture
+// draws in the vendored LikeC4 viewer, in a sandboxed frame (ADR 0016 §6, 0017 §7); the data model comes with B3.
 
-const VENDOR = {
+export const VENDOR = {
   markdown: new URL("./vendor/markdown-it-15.0.3.min.js", import.meta.url).href,
   mermaid: new URL("./vendor/mermaid-11.17.2.min.js", import.meta.url).href,
+  // A viewer at its extensionless address, where Workers' assets serve its .html and the Worker sets its own CSP
+  // (csp.ts viewerPath). public/vendor/viewers.json names the file; the page can't read JSON under its CSP.
+  likec4: new URL("./vendor/likec4-viewer-1.61.1", import.meta.url).href,
 };
+/** How long a viewer may take to say hello and draw before the page says it couldn't (spec §10). */
+const VIEWER_WAIT_MS = 15_000;
 const GUIDE = "https://github.com/cath42/bobnet-mcp/blob/v2/architecture/library-standard.md";
 /** What each section holds, in the page's words (spec §7). */
 const HOLDS = {
@@ -335,12 +340,18 @@ export function libraryPages(app) {
     }
     const sec = r.section ? sectionsOf(read.reply).find((s) => s.id === r.section) : null;
     const pages = pagesFor(key, read.reply, lib, sec, r);
-    const pageKey = [location.hash.split("?")[0].split("/").slice(0, sec && ["decisions", "usecases", "ux"].includes(sec.id) ? 5 : 4).join("/"), read.read,
-      ...pages.map((x) => (x ? `${x.read}:${x.error ?? ""}` : "-")), Boolean(md.lib), md.error ?? ""].join("|");
+    // A diagram's frame is redrawn only when its model changes, not at each read: a new frame loads the viewer again.
+    const pageKey = sec && isDiagram(sec.id)
+      ? [location.hash.split("?")[0].split("/").slice(0, 4).join("/"), lib.commit, JSON.stringify(lib.problems.filter((x) => x.kind !== "fetch_failed")),
+        ...pages.map((x) => (x?.reply ? `r:${x.reply.commit}` : x?.error ? "e" : "-"))].join("|")
+      : [location.hash.split("?")[0].split("/").slice(0, sec && ["decisions", "usecases", "ux"].includes(sec.id) ? 5 : 4).join("/"), read.read,
+        ...pages.map((x) => (x ? `${x.read}:${x.error ?? ""}` : "-")), Boolean(md.lib), md.error ?? ""].join("|");
     if (drawn.key !== pageKey) {
       drawn.key = pageKey;
       drawn.el = frame(key, name, read.reply, lib, sec, r, pages);
     }
+    // The architecture's view is the address's: Back, a link or a pick moves the frame there, without drawing it again.
+    if (sec?.id === "architecture") drawn.el.viewer?.setFocus(r.item);
     scrollTo(r);
     return [err, banners(lib, name), drawn.el];
   }
@@ -353,7 +364,9 @@ export function libraryPages(app) {
     if (cards && r.item) {
       const c = cardsOf(lib, sec.id).find((x) => x.num === r.item);
       out.push(c && !c.too_large ? pageRead(key, sec.id, c.path) : null);
-    } else if (sec.id !== "architecture" && sec.id !== "data") out.push(pageRead(key, sec.id));
+    } else if (sec.id === "architecture") {
+      if (!filesOf(lib, "architecture").some((f) => f.too_large)) out.push(pageRead(key, sec.id));
+    } else if (sec.id !== "data") out.push(pageRead(key, sec.id));
     if (sec.id === "usecases" && written(lib, "architecture") && !filesOf(lib, "architecture").some((f) => f.too_large)) out.push(pageRead(key, "architecture"));
     return out;
   }
@@ -411,15 +424,39 @@ export function libraryPages(app) {
         h("a", { href: libHref(key), "aria-current": !r.section ? "page" : null }, h("span", null, "Home")),
         sectionsOf(read).map((s) => {
           const ok = written(lib, s.id), n = problemsIn(read, lib, s.id).length;
-          return h("a", { href: libHref(key, s.id), class: ok ? null : "missing", "aria-current": sec?.id === s.id ? (r.item ? "true" : "page") : null },
+          return h("a", { href: libHref(key, s.id), class: ok ? null : "missing", "aria-current": sec?.id === s.id ? (r.item && !isDiagram(s.id) ? "true" : "page") : null },
             h("span", null, s.label, n ? h("span", { class: "pdot", title: plural(n, "problem") }, ` ${n}`) : null), ok ? null : h("small", null, `not written yet · ${s.role}`));
         })),
       h("div", { class: "foot" }, lib.github ? ext(lib.index ? ghTree(lib, "library") : lib.github, lib.index ? "library/ on GitHub ↗" : "Repository ↗") : null, guide("The library standard ↗")));
+    // A diagram page folds the rail into its head at every width: the section's name opens the sections, and the
+    // frame has the page's width (spec §5).
+    const fold = sec && isDiagram(sec.id) && written(lib, sec.id) ? content.querySelector(".sec-head") : null;
+    if (fold) {
+      rail.classList.add("folded");
+      fold.prepend(rail);
+    }
     const toc = content.toc?.length >= 3 ? h("aside", { class: "lib-toc", "aria-label": "On this page" }, h("div", { class: "lab" }, "On this page"), tocList(content.toc, content.tocHref)) : null;
-    const wrap = h("div", { class: `lib${toc ? " has-toc" : ""}` }, rail, h("div", { class: "doc-col" }, content), toc);
+    const wrap = h("div", { class: `lib${toc ? " has-toc" : ""}${fold ? " diagram" : ""}` }, fold ? null : rail, h("div", { class: "doc-col" }, content), toc);
     if (toc) queueMicrotask(() => spy(wrap));
+    wrap.viewer = content.viewer ?? null;
     return wrap;
   }
+  const isDiagram = (sid) => sid === "architecture" || sid === "data";
+  /** A folded rail closes on a click outside it, and on Escape, which gives the focus back to its button. */
+  const closeFolded = (focus) => {
+    for (const r of document.querySelectorAll(".lib-rail.folded.open")) {
+      r.classList.remove("open");
+      const b = r.querySelector(".secs-pick");
+      b.setAttribute("aria-expanded", "false");
+      if (focus) b.focus();
+    }
+  };
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest?.(".lib-rail.folded")) closeFolded(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && document.querySelector(".lib-rail.folded.open")) closeFolded(true);
+  });
   const tocList = (toc, href) => h("ul", null, toc.map((t) => h("li", { class: `h${t.n}` }, h("a", { href: href ? href(t.id) : `#h-${t.id}`, dataset: { h: t.id } }, t.text))));
   /** On a wide screen, On this page marks the section being read. */
   function spy(root) {
@@ -494,14 +531,15 @@ export function libraryPages(app) {
   function section(key, read, lib, sec, r, pages) {
     const owner = ownerOf(lib, sec) ?? sec.role;
     const head = h("div", { class: "sec-head" }, h("h1", { class: "doc-title" }, sec.label), h("span", { class: "muted" }, `owner ${owner}`));
-    if (sec.id === "architecture" || sec.id === "data") return h("div", { class: "doc-page wide" }, head, problemList(read, lib, sec.id), diagramSoon(lib, sec));
+    if (sec.id === "data") return h("div", { class: "doc-page wide" }, head, problemList(read, lib, sec.id), diagramSoon(lib, sec));
     const cards = ["decisions", "usecases", "ux"].includes(sec.id);
     const [texts, c4] = pages;
     const fail = pages.find((x) => x?.error && !x.reply);
     if (fail) {
-      return h("div", { class: "doc-page" }, head, h("div", { class: "banner down" }, h("b", null, `${sec.label} couldn't be read`), h("span", null, fail.error),
+      return h("div", { class: `doc-page${isDiagram(sec.id) ? " wide" : ""}` }, head, h("div", { class: "banner down" }, h("b", null, `${sec.label} couldn't be read`), h("span", null, fail.error),
         app.button("Retry", "", () => { for (const x of pages) if (x?.error) keptRead(x.op, key, () => shownKey() === key, true); scheduleRender(); })));
     }
+    if (sec.id === "architecture") return modelPage(key, read, lib, sec, head, texts, r);
     let body;
     if (cards && r.item) return cardPage(key, read, lib, sec, r, texts, sec.id === "usecases" ? c4 : null);
     if (cards) body = cardList(key, lib, sec, texts, c4);
@@ -518,7 +556,7 @@ export function libraryPages(app) {
   const tooLarge = (lib, f) => h("div", { class: "empty-card lib-empty nw-card" }, h("b", null, "This file is too large to show here."),
     h("p", null, `${f.path} is ${kb(f.bytes)}, over the 512 KB a file may be. `, ext(ghBlob(lib, f.path), "Read it on GitHub ↗")));
 
-  /** Build B draws these; until then the section says so, and links its files. */
+  /** B3 draws the data model; until then the section says so, and links its file. */
   function diagramSoon(lib, sec) {
     const fs = filesOf(lib, sec.id);
     const kind = sec.id === "architecture" ? "LikeC4" : "DBML";
@@ -529,6 +567,204 @@ export function libraryPages(app) {
       h("p", { class: "src-line" }, h("b", null, "Model: "), ext(sec.id === "architecture" ? ghTree(lib, "library/architecture") : ghBlob(lib, "library/data-model.dbml"),
         sec.id === "architecture" ? "library/architecture/" : "data-model.dbml", lib.github ? " ↗" : ""), ` · ${kind} · ${branchOf(lib)} at ${sha7(lib.commit)}`),
     ];
+  }
+
+  // ---------- the architecture: LikeC4 in a sandboxed frame, BobNet's bar over it (ADR 0016 §6, 0017 §7; spec §10) ----------
+
+  /** The frame on the page now: the only window whose messages the page takes (0016 §6: the source is checked). */
+  const viewers = { cur: null };
+  window.addEventListener("message", (e) => {
+    const v = viewers.cur;
+    if (v && e.source && e.source === v.win() && e.data && typeof e.data === "object") v.on(e.data);
+  });
+  /** 0017 §2's fixed view ids: the C4 levels, a use case's flow, and any other id a deployment. */
+  const viewKind = (id) => (id === "index" || id === "containers" || /Components$/.test(id) ? "c4" : /^uc\d{4}$/.test(id) ? "flow" : "deploy");
+  const str = (x) => typeof x === "string";
+  /** The viewer's errors, in the shape the page lists: {path, line, message}. */
+  const errorsOf = (xs) => (Array.isArray(xs) ? xs.filter((x) => x && str(x.message)).map((x) => ({ path: str(x.path) ? x.path : "", line: Number.isInteger(x.line) ? x.line : 0, message: x.message })) : []);
+  /** One of the model's errors: its file and line on GitHub, then what it says. */
+  function errLine(lib, files, x) {
+    const path = x.path ? files.find((f) => f.path === x.path || f.path.endsWith(`/${x.path}`))?.path ?? null : null;
+    if (!path) return h("li", null, x.message);
+    return h("li", null, ext(ghBlob(lib, path, x.line ? `L${x.line}` : null), `${path.split("/").pop()}${x.line ? ` line ${x.line}` : ""}${lib.github ? " ↗" : ""}`), `: ${x.message}`);
+  }
+  /** The model's files, each on GitHub with its size. */
+  const fileList = (lib, fs) => h("ul", { class: "files" }, fs.map((f) => h("li", null, ext(ghBlob(lib, f.path), h("code", null, f.path.replace(/^library\//, "")), lib.github ? " ↗" : ""), h("span", { class: "muted" }, ` ${kb(f.bytes)}`))));
+
+  /** The architecture's page: its head, its problems with the standard, then the frame, or why there is none. */
+  function modelPage(key, read, lib, sec, head, page, r) {
+    const fs = filesOf(lib, "architecture");
+    const el = h("div", { class: "doc-page wide" }, head, problemList(read, lib, sec.id));
+    const source = h("p", { class: "src-line" }, "Model: ", ext(ghTree(lib, "library/architecture"), "library/architecture/", lib.github ? " ↗" : ""), ` · LikeC4 · ${branchOf(lib)} at ${sha7(lib.commit)}`);
+    if (fs.some((f) => f.too_large)) {
+      el.append(h("div", { class: "vf-fail" }, h("b", null, "This model is too large to show here"),
+        h("p", null, `${plural(fs.length, "file")}, ${kb(fs.reduce((n, f) => n + f.bytes, 0))}: a model shows here up to 64 files and 512 KB. Its files on GitHub:`), fileList(lib, fs)), source);
+      return el;
+    }
+    const files = page?.reply?.files;
+    if (!files) {
+      el.append(h("div", { class: "vf" }, h("div", { class: "vf-box" }, loading())), source);
+      return el;
+    }
+    const v = c4Frame(key, lib, fs, files, r.item);
+    el.append(v.el, source);
+    el.viewer = v;
+    return el;
+  }
+  const loading = () => h("div", { class: "vf-veil" }, h("div", { class: "vf-load" }, h("b", null, "Drawing the model…"),
+    h("span", null, "The first time on this device, the viewer downloads (2.5 MB)."), h("div", { class: "skel" }, h("i"), h("i"), h("i"))));
+
+  /**
+   * LikeC4's frame and its bar (spec §10): the crumb, what the view is, ↑ Out, the views by kind, Fit and Full screen.
+   * The frame says hello, is handed the model's files, says ready with its views; then the view moves both ways: the
+   * reader's drill comes as focus and goes in the address (a history entry); the bar and the address send it focus.
+   */
+  function c4Frame(key, lib, index, files, start) {
+    const title = overviewHead(lib).title || key;
+    const st = { ready: false, views: [], errors: [], focus: start || "index", timer: 0, failed: false };
+    const post = (m) => iframe.contentWindow?.postMessage(m, "*");
+    const href = (id) => libHref(key, "architecture", id === "index" ? null : id);
+    const viewOf = (id) => st.views.find((x) => x.id === id);
+    const go = (id) => {
+      if (!id || id === st.focus) return;
+      history.pushState(null, "", href(id));
+      setFocus(id);
+    };
+    const crumb = h("div", { class: "vf-crumb", "aria-label": "Level" });
+    const sub = h("div", { class: "vf-title" });
+    const back = h("button", { type: "button", class: "vf-back", "aria-label": "One level out", onclick: () => go(parentOf()) }, "↑ Out");
+    const pick = h("select", { class: "vf-pick", "aria-label": "Go to a view", onchange: (e) => {
+      go(e.target.value);
+      // A phone: the frame comes up when it is below the fold.
+      if (box.getBoundingClientRect().bottom > innerHeight) wrap.scrollIntoView({ block: "start" });
+    } });
+    const fit = h("button", { type: "button", onclick: () => post({ t: "fit" }) }, "Fit");
+    const fullB = h("button", { type: "button", class: "vf-full-b", onclick: () => full(!wrap.classList.contains("full")) }, "Full screen");
+    const done = h("button", { type: "button", class: "vf-done", onclick: () => wrap.classList.remove("exploring") }, "Done");
+    const iframe = h("iframe", { sandbox: "allow-scripts", src: VENDOR.likec4, title: `${title}'s architecture: a diagram you can zoom and open` });
+    const veil = loading();
+    // On touch a finger on the page scrolls the page; a tap hands the frame the finger until Done.
+    const touch = h("button", { type: "button", class: "vf-touch", onclick: () => wrap.classList.add("exploring") },
+      h("b", null, "Tap to explore"), h("span", null, "Then pinch to zoom, drag to move, tap a box to open it"));
+    const box = h("div", { class: "vf-box" }, iframe, veil, touch);
+    const warn = h("div", { class: "vf-warn", hidden: true });
+    const bar = h("div", { class: "vf-bar" }, h("div", { class: "vf-where" }, crumb, sub), h("div", { class: "vf-act" }, back, pick, h("span", { class: "vf-btns" }, fit, fullB, done)));
+    const wrap = h("div", { class: "vf vf-likec4" }, bar, warn, box);
+
+    function parentOf() {
+      const cr = viewOf(st.focus)?.crumb ?? [];
+      return cr.length > 1 ? cr[cr.length - 2] : null;
+    }
+    /** What the view is, under the crumb: its C4 level, the use case it is the flow of, or where it runs. */
+    function levelOf(v) {
+      const k = viewKind(v.id);
+      if (k === "flow") {
+        const n = v.id.slice(2), uc = cardsOf(lib, "usecases").find((c) => c.num === n);
+        return uc ? h("a", { href: libHref(key, "usecases", n) }, `The flow of use case ${n}: ${uc.title ?? uc.path} ›`) : `The flow of use case ${n}, which has no card`;
+      }
+      if (k === "deploy") return "Where it runs";
+      return v.id === "index" ? "Level 1: the context" : v.id === "containers" ? "Level 2: its containers" : `Level 3: the components of ${v.label}`;
+    }
+    function draw() {
+      const v = viewOf(st.focus), cr = v?.crumb ?? [st.focus];
+      // Until the viewer has said its views, the crumb is a grey line: their names are the model's.
+      if (!st.ready) crumb.replaceChildren(h("span", { class: "vf-skel", "aria-hidden": "true" }));
+      else crumb.replaceChildren(...cr.flatMap((id, i) => {
+        const lab = viewOf(id)?.label ?? (id === "index" ? "Context" : id), last = i === cr.length - 1;
+        return [i ? h("span", { class: "sep", "aria-hidden": "true" }, "›") : null,
+          last ? h("b", { "aria-current": "location" }, lab) : h("a", { href: href(id), onclick: (e) => { e.preventDefault(); go(id); } }, lab)].filter(Boolean);
+      }));
+      sub.replaceChildren(v ? levelOf(v) : "");
+      back.disabled = !st.ready || cr.length < 2;
+      const group = (k, label, name) => {
+        const vs = st.views.filter((x) => viewKind(x.id) === k);
+        return vs.length ? h("optgroup", { label }, vs.map((x) => h("option", { value: x.id, selected: x.id === st.focus }, name(x)))) : null;
+      };
+      pick.replaceChildren(h("option", { value: "", disabled: true, selected: !v }, st.ready ? plural(st.views.length, "view") : "Views"),
+        group("c4", "C4 levels", (x) => (x.id === "index" ? "Context" : x.id === "containers" ? "Containers" : `${x.label}: components`)),
+        group("flow", "Use-case flows", (x) => `${x.id.slice(2)} · ${x.title}`),
+        group("deploy", "Deployment", (x) => x.title));
+      pick.disabled = fit.disabled = !st.ready;
+    }
+    function setFocus(f) {
+      f ||= "index";
+      if (f === st.focus) return;
+      st.focus = f;
+      if (st.ready) post({ t: "focus", focus: f });
+      draw();
+    }
+    function fail(why, errors) {
+      clearTimeout(st.timer);
+      st.failed = true;
+      box.replaceWith(h("div", { class: "vf-fail" }, h("b", null, "This model couldn't be drawn here."), h("p", null, why),
+        errors.length ? h("ul", { class: "errs" }, errors.map((x) => errLine(lib, index, x))) : null,
+        h("p", { class: "muted" }, `Its ${plural(index.length, "file")} on GitHub at ${sha7(lib.commit)}:`), fileList(lib, index),
+        h("div", { class: "actions" }, h("button", { type: "button", onclick: () => { drawn.key = null; scheduleRender(); } }, "Try again"))));
+      // Nothing is drawn, so there is nothing for the bar to move.
+      bar.hidden = true;
+    }
+    function full(on) {
+      wrap.classList.toggle("full", on);
+      document.body.classList.toggle("vf-lock", on);
+      fullB.textContent = on ? "Close" : "Full screen";
+      if (on) fullB.focus();
+    }
+    wrap.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && wrap.classList.contains("full")) full(false);
+    });
+    const wait = () => {
+      clearTimeout(st.timer);
+      st.timer = setTimeout(() => { if (!st.ready && wrap.isConnected) fail("The viewer didn't answer within 15 seconds.", []); }, VIEWER_WAIT_MS);
+    };
+
+    const me = {
+      el: wrap,
+      win: () => iframe.contentWindow,
+      setFocus: (f) => { if (!st.failed) setFocus(f); },
+      on(d) {
+        if (st.failed) return;
+        if (d.t === "hello") {
+          // Again after the frame was put back in the page, which loads it anew: it draws from the start.
+          if (st.ready) {
+            st.ready = false;
+            veil.hidden = false;
+            draw();
+          }
+          wait();
+          post({ t: "files", kind: "likec4", files, focus: st.focus });
+        } else if (d.t === "ready") {
+          clearTimeout(st.timer);
+          st.errors = errorsOf(d.errors);
+          st.views = Array.isArray(d.views) ? d.views.filter((x) => x && str(x.id) && Array.isArray(x.crumb) && x.crumb.every(str))
+            .map((x) => ({ id: x.id, title: str(x.title) ? x.title : x.id, label: str(x.label) ? x.label : x.id, crumb: x.crumb })) : [];
+          if (!st.views.length) return fail("The viewer found errors in it:", st.errors);
+          st.ready = true;
+          // An unknown view opens the context, and says nothing (spec §2).
+          if (!viewOf(st.focus)) {
+            st.focus = "index";
+            if (route()?.section === "architecture") history.replaceState(null, "", href("index"));
+          }
+          veil.hidden = true;
+          warn.hidden = !st.errors.length;
+          warn.replaceChildren(...(st.errors.length ? [h("details", null, h("summary", null, `${plural(st.errors.length, "problem")} in the model: what they touch may be missing`),
+            h("ul", { class: "errs" }, st.errors.map((x) => errLine(lib, index, x))))] : []));
+          draw();
+        } else if (d.t === "focus") {
+          // The reader drilled or went back in the frame: the address follows, as a history entry.
+          if (!st.ready || !str(d.focus) || !viewOf(d.focus) || d.focus === st.focus) return;
+          st.focus = d.focus;
+          history.pushState(null, "", href(d.focus));
+          draw();
+        } else if (d.t === "open") {
+          // A link in the model: out, in a tab of its own (0015 §6's rule for a web link); nothing else opens.
+          if (str(d.url) && /^https?:\/\//i.test(d.url)) window.open(d.url, "_blank", "noopener");
+        }
+      },
+    };
+    viewers.cur = me;
+    wait();
+    draw();
+    return me;
   }
 
   const metaLine = (lib, f, owner) => h("div", { class: "doc-meta" }, owner ? h("span", null, `owner ${owner}`) : null,
@@ -725,5 +961,11 @@ export function libraryPages(app) {
       l ? h("a", { class: "pm-lib", href: libHref(p.key), "aria-label": `${p.name}'s library` }, "Library") : h("span", { class: "pm-nolib" }, "no library"));
   }
 
-  return { route, view, asOf, menuRow, libraryRead };
+  /** Whether two addresses are one project's architecture, another of its views: the frame moves, the page stays. */
+  const inPlace = (from, to) => {
+    const at = (u) => /#project\/([^/?]+)\/library\/architecture(?:[/?]|$)/.exec(u)?.[1] ?? null;
+    return at(from) !== null && at(from) === at(to);
+  };
+
+  return { route, view, asOf, menuRow, libraryRead, inPlace };
 }

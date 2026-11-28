@@ -4322,7 +4322,7 @@ function render() {
   const at = box?.selectionStart;
   // So does a control that names itself (a graph's bar, its detail's buttons): a live frame must not take the keyboard's place.
   const fk = document.activeElement?.getAttribute?.("data-fk");
-  $("view").replaceChildren(...VIEWS[v]().filter(Boolean));
+  drawView(VIEWS[v]().filter(Boolean));
   measureAsks();
   statusScroll();
   usageScroll();
@@ -4331,6 +4331,18 @@ function render() {
     again?.focus();
     if (again && at !== undefined && at !== null) again.setSelectionRange(at, at);
   } else if (fk) focusKey(fk);
+}
+/**
+ * Puts a view's elements in the page. One that is there already and holds a viewer's frame (the library's diagrams)
+ * stays where it is, the rest drawn around it: an iframe taken out of the page and put back loads anew.
+ */
+function drawView(els) {
+  const view = $("view"), keep = els.find((el) => el.parentNode === view && el.querySelector?.("iframe"));
+  if (!keep) return view.replaceChildren(...els);
+  for (const el of [...view.childNodes]) if (el !== keep) el.remove();
+  const at = els.indexOf(keep);
+  keep.before(...els.slice(0, at));
+  keep.after(...els.slice(at + 1));
 }
 /** Focuses the control a redraw made in the place of the one that had `fk`, where the page is scrolled. */
 function focusKey(fk) {
@@ -4384,7 +4396,7 @@ $("capture-open").addEventListener("click", () => openCapture());
 /** An element to bring into view after the next view change: the Overview's context link lands on it (BOB-31). */
 let scrollAfter = null;
 let lastView = viewName();
-window.addEventListener("hashchange", () => {
+window.addEventListener("hashchange", (e) => {
   holdRender = false;
   followOldLink();
   hashFilters();
@@ -4393,7 +4405,8 @@ window.addEventListener("hashchange", () => {
   lastView = viewName();
   stv.scrollFor = null;
   render();
-  window.scrollTo(0, 0);
+  // Back or Forward between two views of one diagram moves the frame, not the page.
+  if (!library.inPlace(e.oldURL ?? "", location.href)) window.scrollTo(0, 0);
   stv.scrollFor = null;
   statusScroll();
   if (viewName() === "usage" && hashPath()[1]) state.usageScroll = hashPath()[1];

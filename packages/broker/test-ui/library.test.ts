@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { checkLibrary, LIBRARY_STANDARD } from "@bobnet/protocol";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { viewerPath } from "../src/csp.ts";
 import { $, click, FakeSocket, go, iso, key, open, project, refuse, sent, settle, text, texts, view, world, type Op } from "./page.ts";
 // markdown-it as the page vendors it: the page takes the one already loaded.
 (globalThis as { markdownit?: unknown }).markdownit = (await import("../public/vendor/markdown-it-15.0.3.min.js" as string)).default;
@@ -259,5 +260,190 @@ describe("the Projects menu (spec §3) and the Overview's Library link", () => {
     world.reads["library"] = () => refuse("The board can't be reached");
     await at("#project/toolshed/library");
     expect(text(".banner.down")).toBe("The library couldn't be readThe board can't be reachedRetry");
+  });
+});
+
+// ---------- the architecture: the LikeC4 frame (BOB-234; ADR 0016 §6, 0017 §7; spec §10) ----------
+
+/** The views as the vendored viewer says them for the sample (tools/vendor/likec4-viewer.jsx; frame-test.mjs). */
+const VIEWS = [
+  { id: "index", title: "Context", label: "Context", dynamic: false, crumb: ["index"] },
+  { id: "containers", title: "Containers", label: "Toolshed", dynamic: false, crumb: ["index", "containers"] },
+  { id: "apiComponents", title: "API", label: "API", dynamic: false, crumb: ["index", "containers", "apiComponents"] },
+  { id: "workerComponents", title: "Reminder worker", label: "Reminder worker", dynamic: false, crumb: ["index", "containers", "workerComponents"] },
+  { id: "uc0001", title: "Reserve a tool", label: "Reserve a tool", dynamic: true, crumb: ["index", "uc0001"] },
+  { id: "uc0002", title: "Borrow and return a tool", label: "Borrow and return a tool", dynamic: true, crumb: ["index", "uc0002"] },
+  { id: "prod", title: "Production", label: "Production", dynamic: false, crumb: ["index", "prod"] },
+];
+const C4 = () => SAMPLE_FILES.filter((f) => f.path.startsWith("library/architecture/"));
+
+/** The frame on the page, as the viewer in it: what the page posts it, and a message from it. happy-dom loads no frame. */
+function frame() {
+  const el = view().querySelector("iframe")!;
+  const posted: Array<Record<string, unknown>> = [];
+  const win = { postMessage: (m: Record<string, unknown>) => posted.push(m) };
+  Object.defineProperty(el, "contentWindow", { value: win, configurable: true });
+  const say = async (data: unknown, source: unknown = win) => {
+    window.dispatchEvent(new MessageEvent("message", { data, source: source as Window }));
+    await settle(20);
+  };
+  return { el, posted, say };
+}
+
+const crumb = () => texts(".vf-crumb > *").join(" ");
+
+describe("the architecture (spec §10; ADR 0016 §6, 0017 §7)", () => {
+  it("frames the pinned LikeC4 viewer at the address the Worker gives its own content policy", async () => {
+    const vendor = JSON.parse(readFileSync(join(import.meta.dirname, "../public/vendor/viewers.json"), "utf8")) as { likec4: { file: string } };
+    expect(viewerPath("likec4")).toBe(`/vendor/${vendor.likec4.file.replace(/\.html$/, "")}`);
+    await at("#project/toolshed/library/architecture");
+    const el = view().querySelector(".vf-box iframe")!;
+    expect(el.getAttribute("src")!.endsWith(viewerPath("likec4"))).toBe(true);
+    expect(el.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(el.getAttribute("title")).toBe("Toolshed's architecture: a diagram you can zoom and open");
+  });
+
+  it("hands the viewer the model's files and the address's view, and draws the bar from its ready", async () => {
+    await at("#project/toolshed/library/architecture/apiComponents");
+    expect(sent("library_page").at(-1)!.op).toMatchObject({ section: "architecture" });
+    // A diagram page folds the rail into its head at every width: the section's name opens the sections.
+    expect(view().querySelector(".lib.diagram .sec-head .lib-rail.folded")).not.toBeNull();
+    expect(text(".sec-head .secs-pick")).toBe("Section: Architecture▾");
+    expect(text(".sec-head > .muted")).toBe("owner Otto");
+    expect(text(".vf-veil")).toBe("Drawing the model…The first time on this device, the viewer downloads (2.5 MB).");
+    expect(text(".src-line")).toBe("Model: library/architecture/ ↗ · LikeC4 · main at 1c83f2b");
+    expect(hrefs(".src-line a")).toEqual([`${GH}/tree/${COMMIT}/library/architecture`]);
+    const v = frame();
+    await v.say({ t: "hello" });
+    expect(v.posted).toEqual([{ t: "files", kind: "likec4", files: C4(), focus: "apiComponents" }]);
+    await v.say({ t: "ready", errors: [], views: VIEWS });
+    expect(view().querySelector<HTMLElement>(".vf-veil")!.hidden).toBe(true);
+    expect(crumb()).toBe("Context › Toolshed › API");
+    expect(text(".vf-crumb b")).toBe("API");
+    expect(text(".vf-where .vf-title")).toBe("Level 3: the components of API");
+    expect([...view().querySelectorAll(".vf-pick optgroup")].map((g) => [g.getAttribute("label"), [...g.querySelectorAll("option")].map((o) => o.textContent)])).toEqual([
+      ["C4 levels", ["Context", "Containers", "API: components", "Reminder worker: components"]],
+      ["Use-case flows", ["0001 · Reserve a tool", "0002 · Borrow and return a tool"]],
+      ["Deployment", ["Production"]],
+    ]);
+    expect(view().querySelector<HTMLSelectElement>(".vf-pick")!.value).toBe("apiComponents");
+    expect(view().querySelector<HTMLButtonElement>(".vf-back")!.disabled).toBe(false);
+    expect(view().querySelector(".vf-warn")!.hasAttribute("hidden")).toBe(true);
+  });
+
+  it("puts the reader's drill in the address as a history entry, and moves the frame from the bar, the crumb and Back", async () => {
+    await at("#project/toolshed/library/architecture");
+    const v = frame();
+    await v.say({ t: "hello" });
+    expect(v.posted[0]).toMatchObject({ focus: "index" });
+    await v.say({ t: "ready", errors: [], views: VIEWS });
+    expect(view().querySelector<HTMLButtonElement>(".vf-back")!.disabled).toBe(true);
+    expect(text(".vf-where .vf-title")).toBe("Level 1: the context");
+    // The viewer drilled: the address follows, and nothing goes back to it.
+    const entries = history.length;
+    await v.say({ t: "focus", focus: "containers" });
+    expect(location.hash).toBe("#project/toolshed/library/architecture/containers");
+    expect(history.length).toBe(entries + 1);
+    expect(crumb()).toBe("Context › Toolshed");
+    expect(v.posted).toHaveLength(1);
+    // ↑ Out, the views and the crumb send it focus.
+    await click(view().querySelector(".vf-back"));
+    expect(location.hash).toBe("#project/toolshed/library/architecture");
+    expect(v.posted.at(-1)).toEqual({ t: "focus", focus: "index" });
+    const pick = view().querySelector<HTMLSelectElement>(".vf-pick")!;
+    pick.value = "uc0001";
+    pick.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle(20);
+    expect(location.hash).toBe("#project/toolshed/library/architecture/uc0001");
+    expect(v.posted.at(-1)).toEqual({ t: "focus", focus: "uc0001" });
+    // A flow links its use case; its level up is the context.
+    expect(text(".vf-where .vf-title")).toBe("The flow of use case 0001: Reserve a tool ›");
+    expect(hrefs(".vf-where .vf-title a")).toEqual(["#project/toolshed/library/usecases/0001"]);
+    expect(crumb()).toBe("Context › Reserve a tool");
+    await click(view().querySelector(".vf-crumb a"));
+    expect(v.posted.at(-1)).toEqual({ t: "focus", focus: "index" });
+    // The address moves it too (Back, a link): the same frame, not drawn again; and Fit.
+    await go("#project/toolshed/library/architecture/prod");
+    expect(v.posted.at(-1)).toEqual({ t: "focus", focus: "prod" });
+    expect(text(".vf-where .vf-title")).toBe("Where it runs");
+    expect(view().querySelector("iframe")).toBe(v.el);
+    await click([...view().querySelectorAll(".vf-btns button")].find((b) => b.textContent === "Fit"));
+    expect(v.posted.at(-1)).toEqual({ t: "fit" });
+    // A redraw of the page (a read, a report) leaves the frame where it is: an iframe moved loads anew.
+    FakeSocket.last.frame({ t: "board_changed", project: "toolshed", seq: 2, refs: ["library"] });
+    await settle(600);
+    expect(view().querySelector("iframe")).toBe(v.el);
+    expect(v.el.isConnected).toBe(true);
+  });
+
+  it("opens a link in the model in a tab of its own, and takes no message from any window but its frame's", async () => {
+    const opened = vi.spyOn(window, "open").mockReturnValue(null);
+    await at("#project/toolshed/library/architecture");
+    const v = frame();
+    await v.say({ t: "hello" }, { postMessage() {} });
+    expect(v.posted).toEqual([]);
+    await v.say({ t: "hello" });
+    await v.say({ t: "ready", errors: [], views: VIEWS });
+    await v.say({ t: "focus", focus: "containers" }, window);
+    expect(location.hash).toBe("#project/toolshed/library/architecture");
+    await v.say({ t: "open", url: "https://example.com/adr" });
+    await v.say({ t: "open", url: "javascript:alert(1)" });
+    expect(opened.mock.calls).toEqual([["https://example.com/adr", "_blank", "noopener"]]);
+    opened.mockRestore();
+  });
+
+  it("lists the model's errors by file and line: over a drawn model, or in its place with its files and Try again", async () => {
+    await at("#project/toolshed/library/architecture/nope");
+    let v = frame();
+    await v.say({ t: "hello" });
+    const errors = [{ path: "views.c4", line: 30, message: "Could not resolve reference to 'toolshed.api.reservation'" }];
+    await v.say({ t: "ready", errors, views: VIEWS });
+    // An unknown view opens the context, and says nothing.
+    expect(location.hash).toBe("#project/toolshed/library/architecture");
+    expect(crumb()).toBe("Context");
+    expect(text(".vf-warn summary")).toBe("1 problem in the model: what they touch may be missing");
+    expect(text(".vf-warn li")).toBe("views.c4 line 30 ↗: Could not resolve reference to 'toolshed.api.reservation'");
+    expect(hrefs(".vf-warn li a")).toEqual([`${GH}/blob/${COMMIT}/library/architecture/views.c4#L30`]);
+
+    await at("#project/toolshed/library/architecture");
+    v = frame();
+    await v.say({ t: "hello" });
+    await v.say({ t: "ready", errors: [...errors, { path: "", line: 0, message: "The model couldn't be read" }], views: [] });
+    expect(view().querySelector(".vf-box")).toBeNull();
+    expect(text(".vf-fail b")).toBe("This model couldn't be drawn here.");
+    expect(texts(".vf-fail p")[0]).toBe("The viewer found errors in it:");
+    expect(texts(".vf-fail .errs li")).toEqual(["views.c4 line 30 ↗: Could not resolve reference to 'toolshed.api.reservation'", "The model couldn't be read"]);
+    expect(texts(".vf-fail .files li")).toEqual(C4().map((f) => expect.stringMatching(new RegExp(`^${f.path.slice(8)} ↗ \\d+ KB$`))));
+    expect(view().querySelector<HTMLElement>(".vf-bar")!.hidden).toBe(true);
+    await click([...view().querySelectorAll(".vf-fail button")].find((b) => b.textContent === "Try again"));
+    await settle(400);
+    expect(view().querySelector(".vf-fail")).toBeNull();
+    expect(view().querySelector(".vf-box iframe")).not.toBe(v.el);
+  });
+
+  it("says a model over the limits is too large, with its files on GitHub, and draws no frame", async () => {
+    const l = libraryOf("toolshed", files) as { index: { files: Array<{ section: string; too_large?: true }> } };
+    for (const f of l.index.files) if (f.section === "architecture") f.too_large = true;
+    lib["toolshed"] = l as unknown as Record<string, unknown>;
+    await at("#project/toolshed/library/architecture");
+    expect(view().querySelector("iframe")).toBeNull();
+    expect(sent("library_page")).toEqual([]);
+    expect(text(".vf-fail b")).toBe("This model is too large to show here");
+    expect(text(".vf-fail p")).toMatch(/^3 files, \d+ KB: a model shows here up to 64 files and 512 KB\. Its files on GitHub:$/);
+    expect(hrefs(".vf-fail .files a")).toEqual(C4().map((f) => `${GH}/blob/${COMMIT}/${f.path}`));
+  });
+
+  it("opens the sections from the folded title, and closes them on a click outside or Escape, the focus back on the title", async () => {
+    await at("#project/toolshed/library/architecture");
+    const pick = view().querySelector<HTMLButtonElement>(".lib-rail.folded .secs-pick")!;
+    await click(pick);
+    expect(pick.getAttribute("aria-expanded")).toBe("true");
+    expect(texts(".lib-rail.folded .secs-nav a")).toEqual(["Home", "Overview", "Architecture", "Data model", "Decisions", "Use cases", "UX design", "Glossary"]);
+    await click(view().querySelector(".src-line"));
+    expect(pick.getAttribute("aria-expanded")).toBe("false");
+    await click(pick);
+    await key(document.body, "Escape");
+    expect(pick.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(pick);
   });
 });

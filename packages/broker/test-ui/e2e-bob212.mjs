@@ -8,8 +8,9 @@
 //     client's BrokerConnection as a laptop's supervisor that serves toolshed.
 //   - The page in Chromium as the owner, at 1280 and 390 wide: every section, then a change pushed to the fixture's main
 //     (a use case gains a mermaid sequence) shown after the next sync.
-//   - Two more projects: "workshop", the sample with its glossary gone and files that break the standard; and "vitals",
-//     whose main has no library/.
+//   - Two more projects: "workshop", the sample with its glossary gone, files that break the standard and a model with
+//     an error; and "vitals", whose main has no library/.
+//   - The architecture in the vendored LikeC4 viewer (BOB-234): loading, drilled in, zoomed, an error, no answer.
 //
 //   node test-ui/e2e-bob212.mjs [filter]   (from packages/broker; writes test-ui/shots/bob212-*.png)
 // Prints each check, any page error, any page wider than its viewport, and at 390 the tap targets under 44 px.
@@ -79,6 +80,9 @@ const workshop = fixture("workshop", (work) => {
   rmSync(join(work, "library/glossary.md"));
   const adr = join(work, "library/decisions/0001-reservations-hold-for-24-hours.md");
   writeFileSync(adr, readFileSync(adr, "utf8").replace("status: accepted", "status: decided").replace("## Options", "## Choices"));
+  // A reference to a component that isn't there: LikeC4 draws the rest, and says so by file and line (BOB-234).
+  const views = join(work, "library/architecture/views.c4");
+  writeFileSync(views, readFileSync(views, "utf8").replace("toolshed.api.reservations -> toolshed.db", "toolshed.api.reservation -> toolshed.db"));
   mkdirSync(join(work, "library/notes"));
   writeFileSync(join(work, "library/notes/counter-ideas.md"), "# Ideas for the counter\n");
 });
@@ -158,6 +162,47 @@ async function page(width, touch) {
   p.on("console", (m) => m.type() === "error" && !/Content Security Policy|favicon/.test(m.text()) && console.log(`console at ${width}: ${m.text().slice(0, 300)}`));
   return p;
 }
+/**
+ * A page's full length. On a phone a viewport at a time, stitched: Chromium's full-page capture draws the page without
+ * the phone's (pointer: coarse), so its touch rules would be missing from the shot. Sticky parts are put in the flow
+ * while it is taken, so each is drawn once, where the page starts.
+ */
+async function fullShot(p, path) {
+  await p.evaluate(() => window.scrollTo(0, 0));
+  if (p.viewportSize().width > 390) return p.screenshot({ path, fullPage: true });
+  const vh = p.viewportSize().height;
+  const H = await p.evaluate(() => {
+    for (const el of document.querySelectorAll("body *")) if (getComputedStyle(el).position === "sticky") el.dataset.wasSticky = el.style.position || "-", el.style.position = "static";
+    return document.documentElement.scrollHeight;
+  });
+  const parts = [];
+  for (let y = 0; y < H; y += vh) {
+    const at = await p.evaluate((y) => { window.scrollTo(0, y); return window.scrollY; }, y);
+    await p.waitForTimeout(150);
+    parts.push({ at, png: (await p.screenshot()).toString("base64") });
+  }
+  await p.evaluate(() => {
+    for (const el of document.querySelectorAll("[data-was-sticky]")) el.style.position = el.dataset.wasSticky === "-" ? "" : el.dataset.wasSticky, delete el.dataset.wasSticky;
+    window.scrollTo(0, 0);
+  });
+  const canvas = await stitcher();
+  const png = await canvas.evaluate(async ({ parts, w, H }) => {
+    const c = document.createElement("canvas");
+    Object.assign(c, { width: w, height: H });
+    const g = c.getContext("2d");
+    for (const x of parts) {
+      const img = new Image();
+      img.src = `data:image/png;base64,${x.png}`;
+      await img.decode();
+      g.drawImage(img, 0, x.at);
+    }
+    return c.toDataURL("image/png").split(",")[1];
+  }, { parts, w: p.viewportSize().width, H });
+  writeFileSync(path, Buffer.from(png, "base64"));
+}
+let stitchPage = null;
+const stitcher = async () => (stitchPage ??= await (await browser.newContext()).newPage());
+
 async function shot(p, name, hash, wait = null) {
   if (filter && !name.includes(filter)) return;
   await p.goto(`${BASE}/${hash}`);
@@ -175,9 +220,7 @@ async function shot(p, name, hash, wait = null) {
     if (small.length) console.log(`  ${name} at ${w}: under 44 px: ${[...new Set(small)].slice(0, 8).join("; ")}`);
   }
   const file = join(out, `bob212-${name}-${w}.png`);
-  // A full-page shot from the top: a sticky header would otherwise be drawn where the page was scrolled to.
-  await p.evaluate(() => window.scrollTo(0, 0));
-  await p.screenshot({ path: file, fullPage: true });
+  await fullShot(p, file);
   shots.push(file);
 }
 
@@ -202,7 +245,7 @@ const SECTIONS = [
 ];
 for (const [width, touch] of [[1280, false], [390, true]]) {
   const p = await page(width, touch);
-  for (const [name, hash] of SECTIONS) await shot(p, name, hash, name === "16-work-tab" ? ".p-tabs" : name === "20-overview-rows" ? ".prow .plib" : null);
+  for (const [name, hash] of SECTIONS) await shot(p, name, hash, { "03-architecture": ".vf-crumb b", "16-work-tab": ".p-tabs", "20-overview-rows": ".prow .plib" }[name] ?? null);
   // The Projects menu, open.
   if (!filter || "17-menu".includes(filter)) {
     await p.goto(`${BASE}/#project/toolshed/library`);
@@ -222,7 +265,8 @@ for (const [width, touch] of [[1280, false], [390, true]]) {
     // A fresh load: a hash-only goto would keep the Projects menu the step above left open.
     await p.goto(`${BASE}/#project/toolshed/library/usecases`);
     await p.reload();
-    await p.waitForSelector(".uc-links a");
+    await p.waitForSelector(".uc-links a[href*='/architecture/']");
+    await p.waitForTimeout(600);
     const hits = await p.$$eval(".uc-links a", (as) => as.map((a) => {
       a.scrollIntoView({ block: "center" });
       const r = a.getBoundingClientRect(), x = r.left + r.width / 2;
@@ -254,6 +298,120 @@ for (const [width, touch] of [[1280, false], [390, true]]) {
     check(/Superseded by\s*0003/.test(by), "decision 0002 shows superseded by 0003, derived");
   }
   await p.context().close();
+}
+
+// ---------- the architecture: LikeC4 in its frame, at 1280 by mouse and 390 by touch (BOB-234; spec §10) ----------
+if (!filter || /arch|^2[1-5]/.test(filter)) {
+  for (const [width, touch] of [[1280, false], [390, true]]) {
+    const p = await page(width, touch);
+    const csp = [];
+    p.on("console", (m) => /Content Security Policy/.test(m.text()) && csp.push(m.text().slice(0, 200)));
+    const fr = p.frameLocator(".vf-box iframe");
+    const node = (text) => fr.locator(".react-flow__node", { hasText: text }).first();
+    const drawnAt = async (hash) => {
+      await p.goto(`${BASE}/${hash}`);
+      await p.waitForSelector(".vf-veil[hidden]", { state: "attached", timeout: 30000 });
+      await p.waitForTimeout(800);
+    };
+    const save = async (name) => {
+      await fullShot(p, join(out, `bob212-${name}-${width}.png`));
+      shots.push(name);
+    };
+    // On a phone each step starts from a fresh page: "Tap to explore" back over the frame.
+    const again = async () => {
+      if (!touch) return;
+      await p.reload();
+      await p.waitForSelector(".vf-veil[hidden]", { state: "attached", timeout: 30000 });
+      await p.waitForTimeout(800);
+    };
+
+    // Loading: the viewer's document held back, so the page's veil shows.
+    let release, done;
+    const held = new Promise((r) => (release = r)), sent = new Promise((r) => (done = r));
+    await p.route("**/vendor/likec4-viewer-*", async (route) => {
+      await held;
+      await route.continue();
+      done();
+    }, { times: 1 });
+    await p.goto(`${BASE}/#project/toolshed/library/architecture/containers`);
+    await p.waitForSelector(".vf-veil:not([hidden])");
+    await p.waitForTimeout(400);
+    check((await p.textContent(".vf-veil")).startsWith("Drawing the model…"), `at ${width} the frame says it is drawing while the viewer loads`);
+    await save("21-arch-loading");
+    release();
+    await sent;
+    await p.waitForSelector(".vf-veil[hidden]", { state: "attached", timeout: 30000 });
+    await again();
+    await node("Reminder worker").waitFor({ timeout: 20000 });
+    const crumb = () => p.$$eval(".vf-crumb > *", (els) => els.map((e) => e.textContent).join(" "));
+    check((await crumb()) === "Context › Toolshed", `at ${width} the containers view is drawn under its crumb: ${await crumb()}`);
+
+    // Drilled in: API's own button in the frame; the address and the bar follow the viewer's focus.
+    if (touch) await p.click(".vf-touch");
+    const api = node("API");
+    if (touch) await api.tap(); else await api.hover();
+    const drill = api.locator("button").first();
+    await drill.click({ timeout: 3000 }).catch(() => drill.dispatchEvent("click"));
+    await node("Reservations").waitFor({ timeout: 10000 });
+    await p.waitForFunction(() => location.hash.endsWith("/architecture/apiComponents"), null, { timeout: 5000 }).catch(() => {});
+    check(p.url().endsWith("#project/toolshed/library/architecture/apiComponents") && (await crumb()) === "Context › Toolshed › API",
+      `at ${width} a drill in the frame moves the address and the crumb: ${p.url().split("#")[1]}, ${await crumb()}`);
+    await p.waitForTimeout(800);
+    await save("22-arch-drilled");
+    await again();
+
+    // Zoomed: a pinch reaches the frame as a ctrl-wheel.
+    if (touch) await p.click(".vf-touch");
+    const box = await p.$eval(".vf-box", (el) => { el.scrollIntoView({ block: "center" }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+    const scale = async () => Number((await fr.locator(".react-flow__viewport").first().getAttribute("style")).match(/scale\(([\d.]+)\)/)[1]);
+    const fitted = await scale();
+    await p.mouse.move(box.x, box.y);
+    await p.keyboard.down("Control");
+    for (let i = 0; i < 3; i++) await p.mouse.wheel(0, touch ? -50 : -40);
+    await p.keyboard.up("Control");
+    await p.waitForTimeout(600);
+    const zoomed = await scale();
+    check(zoomed > fitted * 1.2, `at ${width} the frame zooms: ${fitted.toFixed(2)} -> ${zoomed.toFixed(2)}`);
+    await save("23-arch-zoomed");
+    await again();
+    // ↑ Out and Back: the frame moves, the page doesn't load it again.
+    const frameEl = await p.$(".vf-box iframe");
+    await p.click(".vf-back");
+    await node("Reminder worker").waitFor({ timeout: 10000 });
+    await p.goBack();
+    await node("Reservations").waitFor({ timeout: 10000 });
+    check(await frameEl.evaluate((el) => el.isConnected), `at ${width} ↑ Out and Back move the same frame: ${p.url().split("#")[1]}`);
+
+    // An error: Workshop's model names a component that isn't there; the rest is drawn, the error linked to its line.
+    await drawnAt("#project/workshop/library/architecture");
+    const warn = await p.textContent(".vf-warn summary").catch(() => "");
+    const errs = await p.$$eval(".vf-warn li", (ls) => ls.map((l) => l.textContent));
+    check(/^\d+ problems? in the model/.test(warn) && errs.some((e) => /^views\.c4 line \d+( ↗)?: /.test(e)), `at ${width} Workshop's model error: ${warn}; ${errs[0]}`);
+    await p.click(".vf-warn summary");
+    await p.waitForTimeout(200);
+    await save("24-arch-error");
+    await again();
+
+    // The folded rail: the section's name opens the sections, as a menu over the page (spec §5).
+    await drawnAt("#project/toolshed/library/architecture");
+    await p.click(".lib-rail.folded .secs-pick");
+    await p.waitForTimeout(200);
+    check(await p.isVisible(".lib-rail.folded .secs-nav"), `at ${width} the title opens the sections`);
+    await p.screenshot({ path: join(out, `bob212-26-arch-sections-${width}.png`) });
+    await p.keyboard.press("Escape");
+    check(!(await p.isVisible(".lib-rail.folded .secs-nav")), `at ${width} Escape closes them`);
+
+    // No answer in 15 s: a viewer that never says hello.
+    await p.route("**/vendor/likec4-viewer-*", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title>x</title>" }));
+    await p.goto(`${BASE}/#project/toolshed/library/architecture`);
+    await p.reload();
+    await p.waitForSelector(".vf-fail", { timeout: 25000 });
+    check((await p.textContent(".vf-fail p")) === "The viewer didn't answer within 15 seconds.", `at ${width} a viewer that doesn't answer gives its files after 15 s`);
+    await save("25-arch-no-answer");
+    await p.unroute("**/vendor/likec4-viewer-*");
+    check(csp.length === 0, `at ${width} no content policy refused anything: ${csp.join(" | ")}`);
+    await p.context().close();
+  }
 }
 
 // ---------- a change pushed to the fixture's main shows after the next sync ----------
