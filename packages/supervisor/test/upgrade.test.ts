@@ -1144,8 +1144,8 @@ describe("bin.ts check: the preflight (AC 4)", () => {
     writeFileSync(join(sdk, "sdk.mjs"), "");
     expect(() => claudeBinary(join(sdk, "sdk.mjs"), "linux", "x64")).toThrow(/claude-agent-sdk-linux-x64 or @anthropic-ai\/claude-agent-sdk-linux-x64-musl not installed/);
     const { dir, env } = configFolder();
-    const missing = () => claudeBinary(join(sdk, "sdk.mjs"), "darwin", "arm64");
-    expect(preflight(dir, release(">=24"), "24.1.0", env, missing)).toEqual([expect.stringMatching(/^claude binary: @anthropic-ai\/claude-agent-sdk-darwin-arm64 not installed/)]);
+    const missing = () => claudeBinary(join(sdk, "sdk.mjs"), "freebsd", "arm64");
+    expect(preflight(dir, release(">=24"), "24.1.0", env, missing)).toEqual([expect.stringMatching(/^claude binary: @anthropic-ai\/claude-agent-sdk-freebsd-arm64 not installed/)]);
   });
 
   it("the real bin.ts check exits 0 on a good config, opening no db and taking no pid file, and 1 on a bad one", () => {
