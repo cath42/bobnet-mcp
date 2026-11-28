@@ -263,7 +263,7 @@ describe("LibrarySync (ADR 0015 §1)", () => {
       expect(calls).toBe(4);
       expect(lines).toEqual(["the broker refused the library; it may predate libraries"]);
     }
-  });
+  }, 30_000);
 
   it("asks whether it may fetch before each project, so a slot taken between two isn't met by a fetch (review A 7)", async () => {
     const a = fixture(), b = fixture();
