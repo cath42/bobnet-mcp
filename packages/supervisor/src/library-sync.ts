@@ -1,4 +1,4 @@
-import { checkLibrary, LIBRARY_BLOB_MAX, type BoardOpInput, type BoardResults, type LibraryIndex, type LibraryProblem } from "@bobnet/protocol";
+import { checkLibrary, LIBRARY_BLOB_MAX, LIMITS, type BoardOpInput, type BoardResults, type LibraryIndex, type LibraryProblem } from "@bobnet/protocol";
 import type { Logger } from "@bobnet/client/log";
 import { catFiles, exec as run, type Exec } from "./board.ts";
 import { repoName } from "./ci-poll.ts";
@@ -11,6 +11,11 @@ import type { ProjectConfig } from "./config.ts";
 export const LIBRARY_SYNC_MS = 10 * 60_000;
 /** An unchanged library is sent again this often, alone, so the page knows how old the check is (0015 §5). */
 export const LIBRARY_HEARTBEAT_MS = 60 * 60_000;
+
+/** An index frame's op must fit the broker's 900 KB board frame with its envelope (0015 §2), as a report's does. */
+export const LIBRARY_FIT_BYTES = LIMITS.boardFrameBytes - 1024;
+/** Over it, the cards' front-matter values longer than this are left out of the index, and then all of theirs. */
+export const LIBRARY_FIT_VALUE = 200;
 
 /** What a read of the clone found: the library op, and the texts of the blobs it names. */
 export interface LibraryRead {
@@ -93,10 +98,31 @@ export async function readLibrary(p: ProjectConfig, opts: { fetch: boolean; exec
   }));
   const send = new Map<string, string>();
   for (const f of files) if (!f.too_large && textOf.has(f.path)) send.set(f.blob, textOf.get(f.path)!);
-  return {
-    op: { op: "library_sync", project: p.key, ref, commit, committed_at, github, index: { standard: 1, files }, problems: [...problems, ...checked.problems].slice(0, 200) },
-    texts: send,
+  const op: LibraryRead["op"] = { op: "library_sync", project: p.key, ref, commit, committed_at, github, index: { standard: 1, files }, problems: [...problems, ...checked.problems].slice(0, 200) };
+  return { op: fitIndex(op), texts: send };
+}
+
+/**
+ * The op as it fits a frame (review A 4): an index over `LIBRARY_FIT_BYTES` would be refused at every tick and the
+ * library would freeze, saying nothing. The cards' long front-matter values go first, then all of theirs; the
+ * overview's are kept for the menu and the page's title. Either way one `too_large` problem on `library/` says so.
+ */
+export function fitIndex(op: LibraryRead["op"], max = LIBRARY_FIT_BYTES): LibraryRead["op"] {
+  const size = (o: LibraryRead["op"]) => Buffer.byteLength(JSON.stringify(o));
+  if (op.index === null || size(op) <= max) return op;
+  const problem: LibraryProblem = {
+    kind: "too_large",
+    path: "library/",
+    message: `the index is over the ${Math.floor(max / 1024)} KB a frame may be, so the cards' front-matter values over ${LIBRARY_FIT_VALUE} characters aren't shown`,
   };
+  const cut = (keep: (v: string) => boolean): LibraryRead["op"] => ({
+    ...op,
+    index: { ...op.index!, files: op.index!.files.map((f) => (f.section === "overview" || !f.head ? f : { ...f, head: Object.fromEntries(Object.entries(f.head).filter(([, v]) => keep(v))) })) },
+    problems: [problem, ...(op.problems ?? [])].slice(0, 200),
+  });
+  const short = cut((v) => v.length <= LIBRARY_FIT_VALUE);
+  if (size(short) <= max) return short;
+  return cut(() => false);
 }
 
 /** Each file's last change at or before `commit`, from one `git log` of `library/`: its short sha and its date. */
@@ -126,6 +152,9 @@ interface Sent {
   at: number;
 }
 
+/** The broker's answers that it won't take the ops at all, as an older one gives; said once per start. */
+const REFUSED = new Set(["invalid", "bad_frame", "unsupported", "frame_too_large"]);
+
 /**
  * Sends the service projects' libraries (0015 §1): directly, the reply awaited, never through the outbox; a failed
  * send is simply tried again at the next tick. A blob goes once per start; an unchanged library goes again only as
@@ -147,9 +176,12 @@ export class LibrarySync {
     while (this.running.size > 0) await Promise.allSettled([...this.running.values()]);
   }
 
-  /** Every project, one after the other. */
-  async syncAll(projects: ProjectConfig[], fetch = true): Promise<void> {
-    for (const p of projects) await this.sync(p, fetch);
+  /**
+   * Every project, one after the other. `fetch` is asked before each project's read, so a land granted while an
+   * earlier one synced doesn't meet this fetch on the same remote-tracking ref (review A 7).
+   */
+  async syncAll(projects: ProjectConfig[], fetch: () => boolean = () => true): Promise<void> {
+    for (const p of projects) await this.sync(p, fetch());
   }
 
   /** One project; a sync already running for it is waited for, not doubled. */
@@ -191,12 +223,14 @@ export class LibrarySync {
         state.blobs.clear();
       }
     } catch (err) {
-      const code = (err as { code?: string }).code;
-      // An older broker doesn't know the ops: said once per start, and tried again at the tick (0015 §4).
-      if (code === "invalid" && !this.refused) {
+      const code = (err as { code?: string }).code ?? "";
+      // An older broker doesn't know the ops (bad_frame, unsupported, or a blob over its 64 KB frame): said once per
+      // start, and tried again at the tick (0015 §4).
+      const refused = REFUSED.has(code);
+      if (refused && !this.refused) {
         this.refused = true;
         this.deps.log.warn("the broker refused the library; it may predate libraries", { project: p.key, err: (err as Error).message });
-      } else if (code !== "invalid") {
+      } else if (!refused) {
         this.deps.log.info("the library wasn't sent; trying again at the next tick", { project: p.key, err: (err as Error).message });
       }
     }

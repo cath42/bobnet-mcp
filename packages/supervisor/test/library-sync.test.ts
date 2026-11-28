@@ -3,11 +3,12 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { gitBlobId, type BoardOpInput, type BoardResults } from "@bobnet/protocol";
+import { BoardOp, gitBlobId, LIBRARY_C4_FILES_MAX, LIBRARY_CARDS_MAX, LIBRARY_FILES_MAX, LIMITS, type BoardOpInput, type BoardResults } from "@bobnet/protocol";
 import type { Logger } from "@bobnet/client/log";
 import { describe, expect, it } from "vitest";
 import type { ProjectConfig } from "../src/config.ts";
-import { githubOf, LIBRARY_HEARTBEAT_MS, LibrarySync, readLibrary, type LibrarySend } from "../src/library-sync.ts";
+import { githubOf, LIBRARY_FIT_BYTES, LIBRARY_HEARTBEAT_MS, LibrarySync, readLibrary, type LibrarySend } from "../src/library-sync.ts";
+import type { Exec } from "../src/board.ts";
 import { quiet } from "./fakes.ts";
 
 // The library sync (ADR 0015 §1, 0017 §4) against `git init` fixtures: an origin made from the standard's sample,
@@ -45,14 +46,16 @@ function fixture(withLibrary = true): Fixture {
   return {
     project,
     push(files, message = "change") {
+      const added: string[] = [];
       for (const [path, text] of Object.entries(files)) {
         if (text === null) git(work, "rm", "-q", path);
         else {
           mkdirSync(join(work, path, ".."), { recursive: true });
           writeFileSync(join(work, path), text);
-          git(work, "add", path);
+          added.push(path);
         }
       }
+      if (added.length > 0) git(work, "add", "--", ...added);
       git(work, "commit", "-q", "-m", message);
       git(work, "push", "-q", "origin", "main");
       return git(work, "rev-parse", "HEAD").trim();
@@ -139,6 +142,38 @@ describe("readLibrary (ADR 0015 §1, 0017 §4)", () => {
     expect(op.problems![0]).toMatchObject({ kind: "fetch_failed", at: "2026-11-27T10:00:00.000Z", message: expect.stringMatching(/^git fetch origin main: /) });
   });
 
+  it("fits a worst-case index into a frame: the cards' long values left out, with one problem on library/ (review A 4)", async () => {
+    const f = fixture();
+    // 267 files: 200 UX cards with a 300-character title and every key at 1,000 characters, 64 .c4 files with long
+    // names, and the overview; every card's values break their rules, so it has 200 problems too.
+    const files: Record<string, string> = {};
+    const long = (c: string) => c.repeat(1000);
+    for (let i = 1; i <= LIBRARY_CARDS_MAX; i++) {
+      const n = String(i).padStart(4, "0");
+      const head = ["status", "date", "feature", "use-cases", "prototype", "verdict", "verdict-date"].map((k, j) => `${k}: ${long("abcdefg"[j]!)}`);
+      files[`library/ux/${n}-${"card".repeat(40)}.md`] = `---\n${head.join("\n")}\n---\n\n# ${"T".repeat(300)}\n`;
+    }
+    for (let i = 0; i < LIBRARY_C4_FILES_MAX - 3; i++) files[`library/architecture/${String(i).padStart(2, "0")}-${"view".repeat(50)}.c4`] = "model {}\n";
+    f.push(files, "a worst-case library");
+    const read = await readLibrary(f.project, { fetch: true });
+    expect(read.op.index!.files).toHaveLength(LIBRARY_FILES_MAX);
+    const frame = JSON.stringify({ t: "board_op", id: "x".repeat(36), as: "supervisor", key: "k".repeat(36), op: read.op });
+    expect(Buffer.byteLength(frame)).toBeLessThanOrEqual(LIMITS.boardFrameBytes);
+    expect(Buffer.byteLength(JSON.stringify(read.op))).toBeLessThanOrEqual(LIBRARY_FIT_BYTES);
+    // The broker takes it as it is sent.
+    expect(BoardOp.safeParse(read.op).success).toBe(true);
+    expect(read.op.problems![0]).toMatchObject({ kind: "too_large", path: "library/", message: expect.stringMatching(/over the 899 KB/) });
+    expect(read.op.problems!.filter((p) => p.kind === "too_large" && p.path === "library/")).toHaveLength(1);
+    // The overview keeps its head; a card keeps its title and loses the long values.
+    expect(read.op.index!.files.find((x) => x.section === "overview")!.head).toMatchObject({ title: "Toolshed" });
+    const card = read.op.index!.files.find((x) => x.path.startsWith("library/ux/0001-"))!;
+    expect(card.title).toBe("T".repeat(300));
+    expect(Object.values(card.head ?? {}).every((v) => v.length <= 200)).toBe(true);
+    // The sample, well under it, is sent whole, with no such problem.
+    const small = await readLibrary(fixture().project, { fetch: true });
+    expect(small.op.problems).toEqual([]);
+  }, 30_000);
+
   it("links GitHub only for a GitHub remote", () => {
     expect(githubOf("git@github.com:cath42/toolshed.git")).toBe("https://github.com/cath42/toolshed");
     expect(githubOf("https://github.com/cath42/toolshed")).toBe("https://github.com/cath42/toolshed");
@@ -210,6 +245,44 @@ describe("LibrarySync (ADR 0015 §1)", () => {
     await sync.sync(f.project);
     expect(calls).toBe(2);
     expect(warned).toEqual(["the broker refused the library; it may predate libraries"]);
+  });
+
+  it("says once, not every tick, when an older broker answers bad_frame, unsupported or frame_too_large (review A 3)", async () => {
+    for (const code of ["bad_frame", "unsupported", "frame_too_large"]) {
+      const f = fixture();
+      const lines: string[] = [];
+      const log: Logger = { ...quiet, warn: (m: string) => void lines.push(m), info: (m: string) => void lines.push(m) };
+      let calls = 0;
+      const send = (async () => {
+        calls++;
+        throw Object.assign(new Error(code), { code });
+      }) as unknown as LibrarySend;
+      const sync = new LibrarySync({ log, send });
+      await sync.syncAll([f.project, { ...f.project, key: "workshop" }]);
+      await sync.syncAll([f.project, { ...f.project, key: "workshop" }]);
+      expect(calls).toBe(4);
+      expect(lines).toEqual(["the broker refused the library; it may predate libraries"]);
+    }
+  });
+
+  it("asks whether it may fetch before each project, so a slot taken between two isn't met by a fetch (review A 7)", async () => {
+    const a = fixture(), b = fixture();
+    const board = fakeBoard();
+    const fetched: string[] = [];
+    const exec = (async (cmd: string, args: string[], cwd: string) => {
+      if (args[0] === "fetch") fetched.push(cwd);
+      return execFileSync(cmd, args, { cwd, encoding: "utf8" });
+    }) as Exec;
+    // A land is granted while the first project syncs: its index is the last op it sends.
+    let slotHeld = false;
+    const sync = new LibrarySync({ log: quiet, exec, send: (async (op: Parameters<LibrarySend>[0]) => {
+      if (op.op === "library_sync") slotHeld = true;
+      return board.send(op as never);
+    }) as LibrarySend });
+    await sync.syncAll([a.project, { ...b.project, key: "workshop" }], () => !slotHeld);
+    expect(fetched).toEqual([a.project.path]);
+    // Both were read and sent; the second at what its clone had.
+    expect(board.ops.filter((o) => o.op === "library_sync").map((o) => o.project)).toEqual(["toolshed", "workshop"]);
   });
 
   it("reads no fetch after a land, whose push already moved the ref", async () => {

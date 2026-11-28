@@ -3511,8 +3511,9 @@ export class Supervisor {
   async syncLibraries(): Promise<void> {
     if (this.closing) return;
     // No fetch while a run slot is held: a land's own fetch moves the same remote-tracking refs, and two fetches at
-    // once can't both lock them. What the land fetched is read instead; the next tick fetches.
-    await this.library.syncAll(this.serviceProjects(), this.slots.status().holders.length === 0);
+    // once can't both lock them. Asked per project, as a slot may be granted while an earlier one syncs. What the
+    // land fetched is read instead; the next tick fetches.
+    await this.library.syncAll(this.serviceProjects(), () => this.slots.status().holders.length === 0);
   }
 
   /**
