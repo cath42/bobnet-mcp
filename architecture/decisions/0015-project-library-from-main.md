@@ -153,7 +153,8 @@ Everything here is additive in `protocol/src/board.ts`.
 - **`library_blob {project, blob, text}`.** A supervisor op, added to `SUPERVISOR_OPS`. It is
   idempotent: a blob already there is `ok`.
 - **`library {project, ref, commit, committed_at, github, manifest | null, problems}`.** A supervisor
-  op. `manifest: null` means the file is gone from main: the broker clears the project's library.
+  op, named **`library_sync`** in the protocol (2026-11-28, `reviews/bob212-review-A.md` §2): reads and writes are
+  one union keyed by `op`, so the write can't share the read's name. `manifest: null` means the file is gone from main: the broker clears the project's library.
   - It answers `{ok, missing: [blob]}`.
   - A new commit sends `board_changed {project, refs: ["library"]}` (`broker.ts:420`) so an open page
     refetches. A heartbeat sends none.

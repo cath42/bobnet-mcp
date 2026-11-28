@@ -136,7 +136,7 @@
 - **What it lists.** `git ls-tree -r <commit> -- library/` at the ref 0015 §1 names. It keeps only the standard's
   paths, and sends each file as a blob (0015 §1, §2): the overview, the glossary, the `.c4` files, the DBML and the
   cards. Images and other files aren't sent.
-- **The index replaces the manifest** in the `library` op (0015 §4): `index: {standard: 1, files: [{path, section,
+- **The index replaces the manifest** in the `library` op (0015 §4; `library_sync` in the protocol): `index: {standard: 1, files: [{path, section,
   blob, changed: {sha, date}, title?, head?}]} | null`. It is `null` when main has no `library/`.
   - `title` is the first `# ` line of a Markdown file.
   - `head` is the front matter, as strings, of the overview and the cards. The card lists need it without fetching
