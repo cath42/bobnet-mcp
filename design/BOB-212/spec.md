@@ -524,11 +524,14 @@ or Escape leaves, as §10's.
 
 - The title and owner stack as in §5. The bar is one row: the table count at the left, Full screen at the right,
   40 px tall.
-- The frame is full width, 70 vh, at least 420 px. Liam takes touch itself: it drops its show mode on a narrow
-  screen and closes its side pane (Toad's v3 spike at 390 × 844, no errors; his new 390 shots are in
-  `architecture/spikes/bob212/shots-liam-as-is/`). The page adds nothing to say about it: it does not tell the
-  reader to use a bigger screen.
-- **Full screen is the way in on a phone**: a Liam diagram is drawn for width. The bar's row is the first thing
+- The frame is full width, 70 vh, at least 420 px. Liam takes touch itself (Toad's 390 × 844 shots,
+  `architecture/spikes/bob212/shots-liam-as-is/`): all 9 Toolshed tables fit, but at about 25 %, so **the names
+  can't be read until the reader zooms**. A tap on a table slides Liam's side pane over with its note and columns;
+  pinch-zoom works. Liam's header (Search, Export, Copy Link, GitHub, help) stays as it is, and its font is the
+  system's (the frame's CSP blocks Google Fonts).
+- **The hint** is about zooming, never about a bigger screen: in muted 12.5 px under the bar on a coarse pointer,
+  "Pinch to zoom, tap a table for its columns." It goes after the first pinch or tap, kept on the device.
+- **Full screen plus pinch is the way in on a phone**: the whole diagram is small at 390. The bar's row is the first thing
   under the title, so the button is above the fold.
 - The source line wraps under the frame, in two lines if it must; nothing scrolls sideways.
 - The page's pinch and scroll: a scroll that starts on the frame pans Liam, so the frame is never between the reader
