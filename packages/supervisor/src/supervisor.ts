@@ -50,6 +50,7 @@ import type { OwnerCheck } from "./owner.ts";
 import { checkCleanupPaths, EFFORTS, type Effort, gitIgnores, guardedFolders, type ProjectConfig, type RoleConfig, type RunConfig, type SupervisorConfig } from "./config.ts";
 import { Cleanup, CleanupBusy, type CleanupDeps, type CleanupOutcome, cleanupView } from "./cleanup.ts";
 import { CI_POLL_MS, GhCiPoll, repoName } from "./ci-poll.ts";
+import { LIBRARY_SYNC_MS, LibrarySync, type LibrarySend } from "./library-sync.ts";
 import { assignSessions, Boards, type DeclaredSession, sessionName, workerTasks } from "./board.ts";
 import { Inbox } from "@bobnet/client/inbox";
 import type { BoardToolDeps } from "@bobnet/client/board-tools";
@@ -536,6 +537,8 @@ export class Supervisor {
   /** What an upgrade's exit runs: the shutdown, with EXIT_UPGRADE (bin.ts). */
   private readonly restartForUpgrade: () => void;
   private ciTimer: NodeJS.Timeout | null = null;
+  private libraryTimer: NodeJS.Timeout | null = null;
+  private readonly library: LibrarySync;
 
   constructor(deps: {
     config: SupervisorConfig;
@@ -554,6 +557,7 @@ export class Supervisor {
     captureDir?: string;
     /** The gh adapter (ADR 0001 §10); defaults to one that runs git and gh. */
     ciPoll?: GhCiPoll;
+    library?: LibrarySync;
     /** A remote request's wait (ADR 0007 §2); tests run it on the fake network's clock. */
     sleep?: Sleep;
     /** The credential check on replies and events (§2); a test passes one that matches what findSecret doesn't. */
@@ -583,6 +587,8 @@ export class Supervisor {
       released: (repo, tag, sha) => this.reportReleaseTag(repo, tag, sha),
     });
     this.ciPoll = deps.ciPoll ?? new GhCiPoll(deps.log);
+    // The libraries go directly, as the supervisor itself, the reply awaited: never through the outbox (ADR 0015 §1).
+    this.library = deps.library ?? new LibrarySync({ log: deps.log, send: ((op: BoardOpInput & { op: "library_blob" | "library_sync" }) => this.broker.boardOp(this.config.name, op)) as LibrarySend });
     this.sleep = deps.sleep ?? sleepFor;
     this.ownerCheck = deps.ownerCheck ?? null;
     this.sandboxCheck = deps.sandboxCheck ?? sandboxProblem;
@@ -753,6 +759,10 @@ export class Supervisor {
     void this.pollCi();
     this.ciTimer = setInterval(() => void this.pollCi(), CI_POLL_MS);
     this.ciTimer.unref();
+    // Each service project's library (ADR 0015 §1): at start, then every 10 minutes, and after a land's push.
+    void this.syncLibraries();
+    this.libraryTimer = setInterval(() => void this.syncLibraries(), LIBRARY_SYNC_MS);
+    this.libraryTimer.unref();
     this.stallTimer.unref();
     // The requester's copies (ADR 0007 §7): reconciled now, and on a timer while any isn't ended.
     void this.reconcile();
@@ -766,6 +776,7 @@ export class Supervisor {
     this.boards?.stop();
     this.cleanup.stop();
     if (this.ciTimer) clearInterval(this.ciTimer);
+    if (this.libraryTimer) clearInterval(this.libraryTimer);
     if (this.stallTimer) clearInterval(this.stallTimer);
     if (this.holdTimer) clearInterval(this.holdTimer);
     if (this.reportTimer) clearTimeout(this.reportTimer);
@@ -775,7 +786,8 @@ export class Supervisor {
     const runs = [...this.runs.values()];
     await Promise.all(runs.map((r) => r.stop("supervisor shutting down")));
     // Each exit is recorded before the caller closes the store; a stop kills a session after its grace period.
-    await Promise.race([Promise.all(runs.map((r) => r.exited)), new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS).unref())]);
+    // A library read under way finishes its git first (ADR 0015 §1).
+    await Promise.race([Promise.all([...runs.map((r) => r.exited), this.library.idle()]), new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS).unref())]);
   }
 
   /** The broker is back (each connect): what waited for it goes now. */
@@ -2899,6 +2911,8 @@ export class Supervisor {
       this.store.audit("supervisor", ok ? "land:ok" : held ? "land:held" : stale ? "land:stale" : flaky ? "land:flaky" : "land:failed", workerId, { code: r.code, head });
       this.slotOutcomes.set(workerId, ok ? "passed" : held || stale ? "cancelled" : "failed");
       if (ok) await this.reportPush(w, worktree, target ?? project.rebase, tipBefore);
+      // The push moved the clone's ref, so the library is read again with no fetch (ADR 0015 §1).
+      if (ok && project.board === "service" && !this.closing) void this.library.sync(project, false);
       const last = landSummary(r.output);
       const moved = `stale, ${onto} moved during the land`;
       const failed = `${flaky ? "flaky" : "could not land"} (${r.timedOut ? "timed out" : `exit ${r.code}`})`;
@@ -3491,6 +3505,14 @@ export class Supervisor {
     const ops = await this.ciPoll.poll(projects);
     for (const op of ops) this.store.addOutbox(this.config.name, JSON.stringify({ ctx: null, op }), "board_op");
     if (ops.length > 0) this.flushOutbox();
+  }
+
+  /** The service projects' libraries (ADR 0015 §1, 0017 §4), read from their clones and sent to the Board. */
+  async syncLibraries(): Promise<void> {
+    if (this.closing) return;
+    // No fetch while a run slot is held: a land's own fetch moves the same remote-tracking refs, and two fetches at
+    // once can't both lock them. What the land fetched is read instead; the next tick fetches.
+    await this.library.syncAll(this.serviceProjects(), this.slots.status().holders.length === 0);
   }
 
   /**
