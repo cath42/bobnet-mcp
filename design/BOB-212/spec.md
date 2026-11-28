@@ -1,6 +1,6 @@
 # BOB-212: each project's library on BobNet, and the project menu back
 
-Daisy, design session `BOB-212 design A`, version 5, 2026-11-27 (version 4, 2026-11-26). For R9 (R3.1).
+Daisy, design session `BOB-212 design A`, version 6, 2026-11-27 (version 5 the same day, version 4 on 26 Nov). For R9 (R3.1).
 
 **Sources:**
 
@@ -14,6 +14,8 @@ Daisy, design session `BOB-212 design A`, version 5, 2026-11-27 (version 4, 2026
   sample … im looking for standards and frameworks not "work with what I've got" please".
 - **His verdict on version 4 (Q-22), the same file's last section:** "I want to be able to toggle column/attribute
   level details PER ENTITY". The section turns it into a check; §11.4 is how this version passes it.
+- **His verdict on version 5 (Q-23), the same file's last section:** "Liam as is": accept the limitations, use open
+  standards for the models, and maybe change the visualization later. §0 and §11 are what that changes.
 - **The standard:** Toad's ADR 0017 (`architecture/decisions/0017-library-standard.md`), its author's guide
   (`architecture/library-standard.md`), and the sample project Toolshed (`architecture/spikes/bob212/sample/`). ADR
   0015 and 0016 stand where 0017 says they do.
@@ -26,7 +28,23 @@ menu but have no `library/` yet, so their libraries show what an unconverted pro
 content is in it, so its data (`prototype/data.js`, made by `tools/gen_data.mjs` from the sample) is committed. Its
 GitHub links open the sample's files in bobnet-mcp at `1c83f2b`.
 
-## 0. What changed since version 4
+## 0. What changed since version 5 (Casper's Q-23: "Liam as is")
+
+Marked "dropped, Q-23" where it was; §11 holds the list.
+
+- **The data model shows in Liam ERD, unpatched,** in its own look and side pane, fed from the DBML (§11). No viewer
+  of ours, no override.
+- **Dropped, Q-23:** our ERD viewer, the per-table chip, "Expand all · Collapse all", the finder, the diagram tabs
+  and their addresses (only "all tables"), and our entity card. Liam's whole-diagram show mode takes the place of
+  the per-table toggle, a limit Casper accepted.
+- **Page around the frame** (§11.1): title and owner, a bar with the table count and Full screen, the frame, the
+  source line, the "as of" line. A phone: §11.2.
+- **Stays:** LikeC4 for the architecture (§10), the seven sections, the cards (§9), the standard, the library
+  layout.
+- **The project menu is A** (§1, his "Its fine"). Version 5's prototype and shots are not redone: they show what §11
+  drops, so read §11 over §11.1-11.5 of version 5, in git at ce7581a.
+
+## 0.2 What changed from version 4 to 5 (§11's part is dropped, Q-23)
 
 - **Each table opens on its own node** (§11.4, Casper's Q-22). Every table in the diagram has its own control, a chip
   with its column count and ▸, on its node. A click or a tap on it shows or hides that table's columns in place; the
@@ -91,7 +109,13 @@ So Casper has project pages but no menu to them, and the library needs a home un
 It also gives the library a place that is plainly the project's. The prototype shows A. Casper's answer goes here,
 verbatim, when Mario has it (AC3's evidence).
 
-> Casper (Q-…, date): _to come_
+> Casper (Q-23, 2026-11-27, in Mario's session), asked where the menu choices were; the prototype showed A, the
+> "Toolshed ▾" project button, and B and C were only described: "Its fine, but this is still custom right? We agreed
+> to use the framework and not build a bunch of custom instead accept the limitations and use open standards for
+> models and maybe opt for changing the visualization later right?" Then, on Liam: "Liam as is".
+
+**Settled: A** (his "Its fine" on the menu as shown). The header's Projects menu, and Work and Library on a project's
+page, are built as §3 and §4 draw them.
 
 ## 2. Addresses
 
@@ -102,7 +126,7 @@ depends on the section:
 |---|---|---|---|
 | `overview` | a heading's slug | | `…/library/overview/quality-goals` |
 | `architecture` | a view id (0017 §2's fixed ids) | | `…/library/architecture/apiComponents`, `…/architecture/uc0001` |
-| `data` | the diagram: `all` or a `DiagramView`'s name | a table | `…/library/data/lending/loan` |
+| `data` | none (the diagram and table addresses, `…/data/lending/loan`, are dropped, Q-23) | none | `…/library/data` |
 | `decisions`, `usecases`, `ux` | the card's number | a heading's slug | `…/library/decisions/0003`, `…/usecases/0001/acceptance` |
 | `glossary` | a term's slug | | `…/library/glossary/hold` |
 
@@ -114,7 +138,6 @@ depends on the section:
 - **Unknown names:**
   - An unknown section shows the library's frame with "A library has no section "x"." and a link to its sections.
   - An unknown card shows "<Section> has no card 0009.", and where its cards come from.
-  - An unknown diagram shows the frame's failure card: "It has no diagram "x"."
   - An unknown view, table, heading or term opens the section from its start, and says nothing.
 - **Links in:**
   - the Projects menu (§3): a Library link on each project's row;
@@ -186,7 +209,7 @@ page's width:
 - The section's title becomes the button: "Data model ▾", at the title's size (22 px, 20 on a phone). It opens the
   rail's list, 280 px wide, as a menu under it. A click outside closes it, and so does Escape, which returns the focus
   to the button.
-- The owner follows the button, then the data model's diagram tabs on the same row (§11.1). A phone stacks them.
+- The owner follows the button. (The data model's diagram tabs that stood here are dropped, Q-23.) A phone stacks them.
 
 ## 6. The home: seven tiles
 
@@ -207,7 +230,7 @@ Shots 02, 25.
     |---|---|---|
     | Overview | PAGE | Goals, scope and quality goals |
     | Architecture | C4 DIAGRAM | Context, containers, components and flows |
-    | Data model | ERD | All tables, and the named diagrams |
+    | Data model | ERD | All tables, in Liam (§11) |
     | Decisions, Use cases, UX design | 3 DECISIONS, 3 USE CASES, 2 CARDS | latest: the highest number's title |
     | Glossary | A–Z | Terms in users' words |
 
@@ -439,174 +462,93 @@ Full screen is still the way to read a big view: the bar and the frame fill the 
 | Errors, a model drawn | The frame shows. Above it, a warn line, "1 problem in the model: what they touch may be missing", opens the same list (shot 31). |
 | Too large (0017 §4: 64 files, 512 KB) | **This model is too large to show here** (n files, n KB), and its files on GitHub. |
 
-## 11. Data model: the ERD frame (BobNet's own viewer), from DBML
+## 11. Data model: Liam ERD as is (Casper's Q-23)
 
-Shots: `shots-v5/` (§11.4) and `shots/v5/` 09, 11, 13-16, 29, 30, 36, 38. The model is one file, `library/data-model.dbml` (0017 §2). The viewer parses it in the
-frame (0017 §7).
+Casper's Q-23, 2026-11-27: "Liam as is". The data model shows in **Liam ERD, unpatched, in its own look and its own
+side pane**, with no override stylesheet and no viewer of ours. The model is one file, `library/data-model.dbml`
+(0017 §2); the frame turns it into PostgreSQL DDL with `@dbml/core`'s own exporter and hands that to Liam (0017 §7
+as Toad amends it; his word, not this spec's, for how the frame does it). Everything inside the frame is Liam's.
+This section is only what the page shows around it.
 
-### 11.1 The diagrams
+**Dropped, Q-23** (version 5's §11.1-11.5, all of it; the prototype's ERD still shows them and is not redone):
 
-- **The diagrams are tabs**, on the section's head row after the owner:
+- our ERD viewer (React Flow, dagre, @dbml/parse), its node, the per-table chip (`7 ▸`), its 44 px tap target and
+  `--z`: dropped, Q-23. Q-22's per-entity toggle is knowingly given up until a viewer does it;
+- "Expand all · Collapse all", "Find a table", Fit, the hover preview and "Tap to explore": dropped, Q-23;
+- the diagram tabs ("All tables 9 · Catalogue 4 · Lending 6"), and so the `…/data/<diagram>` address: dropped,
+  Q-23. Only the "all tables" diagram shows; a `DiagramView` in the DBML is not drawn;
+- our entity card (its relations, key fields, enum values, "Drawn in", the line link): dropped, Q-23. Liam's side
+  pane shows a table's columns and relations instead;
+- the crumb, the `Project` note under the bar, `files.expanded` and the device's `expanded.<project>.<diagram>`
+  key: dropped, Q-23;
+- BobNet's own look on the diagram (§11.5): dropped, Q-23. Liam draws itself, in its own colours and type. It is
+  the one place on the page that does not follow style.css, and the frame's edge says so by being a frame (below).
 
-  > **Data model ▾** owner Otto · <u>All tables 9</u> · Catalogue 4 · Lending 6
+**Accepted limits, Casper's words** ("accept the limitations and use open standards for models and maybe opt for
+changing the visualization later"): columns show for all tables or none, by Liam's own show mode (tables, keys,
+all columns), not per table; one diagram; Liam's look. DBML stays the source, so a better viewer can replace Liam
+later and no repo's `library/` changes.
 
-  - "All tables" is always first. Then each `DiagramView`, in the file's order. Each is named from its DBML name,
-    capitalised, with `_` and `-` as spaces.
-  - The count is its tables, muted.
-  - The current one is underlined in accent, as the section tabs are.
-  - On a phone the tabs scroll sideways in their row.
-- **Where the tabs come from:** the viewer's `ready.views`, kept on the device by the DBML's blob, which never
-  changes. So a second visit draws them at once. On the first, "All tables" shows with a grey bar beside it until the
-  viewer answers.
-- **Switching diagrams** is a new address (`…/data/lending`) and reloads the frame. That takes about 0.3 s once the
-  viewer is cached (0017 §7).
-  - An open table stays open when the new diagram has it: each tab's link carries it.
-  - Otherwise the new diagram opens with no table.
+### 11.1 The page around the frame
 
-### 11.2 The bar
+Top to bottom, at every width:
 
-**The bar:**
+1. **The title**: "Data model ▾", the rail's menu button of §5, then the owner, "owner Otto". The tabs are gone,
+   so the row holds nothing else (it stacks on a phone as §5 says).
+2. **The bar**, one row above the frame:
+   - at the left, muted 13 px: "**9 tables**", from the frame's `ready.tables` (Toad: optional, and absent until the
+     frame answers; then the bar's left is empty, not a placeholder);
+   - at the right, **Full screen** (the only control; it is the page's, not Liam's). A secondary button, 40 px on a
+     phone, 32 px elsewhere.
+   - No crumb, no note, no finder.
+3. **The frame**: Liam, filling the width of the content column (the whole screen in Full screen). It has the card
+   look of the other frames, a 1 px border and the page's radius, so the reader sees where BobNet stops and Liam
+   starts.
+4. **Under the frame**, one line in muted 12.5 px, as §10's: "**Model:** data-model.dbml ↗ · DBML · main at 1c83f2b".
+   The link opens the file on GitHub at that commit. This is the model's source link.
+5. **The "as of" line** is the library's, in the page's head as on every section (§5): "main at 1c83f2b · 26 Nov ·
+   checked 4 min ago by mbp-1". It turns warn when it may be behind (§13).
 
-- **The crumb**: "Lending" › **loan** (the diagram, then the table whose card is open).
-- **Under it**, the model's `Project` note, in muted 13 px, cut at about 140 characters: "What Toolshed keeps: who
-  the members are, which tools each shed holds, and who has which tool when." Hidden on a phone.
-- **At the right:**
-  - **Expand all · Collapse all**: two text buttons in accent, 13 px, no border, a muted "·" between. They are the
-    optional extra of Q-22, not the feature: they set every table of this diagram open, or closed (`{t: "expand",
-    tables}`), and that is kept as any toggle is. Each is disabled (muted) when it would change nothing;
-  - **Find a table**: a select, "Find a table (6)", then the diagram's tables by name, A-Z, in mono;
-  - **Fit**, and **Full screen**.
+**Heights:**
 
-**On a phone** the bar is three rows:
-
-- the crumb;
-- the table finder, full width, 40 px;
-- "Expand all · Collapse all" on the left, in 12.5 px on one line, each 44 px tall; Fit, Full screen and Done on the
-  right, 40 px.
-
-**In the frame:**
-
-- The canvas: scrolling pans; pinch or the zoom buttons zoom. Under 700 px wide the diagram lays out top to bottom.
-- **The chip on a table** (`7 ▸`) opens or closes its columns (§11.4). It never opens the card.
-- **A click on a table anywhere else (its name) opens its card**: it and its relations light in accent, its card
-  opens (§11.3), and the address gains the table. Opening the card doesn't open or close the table's columns.
-- **An opened table is brought into view**, at 100 %, in the part of the frame the card leaves free (0016 §6).
-- A click on another table moves the card to it. The card's ×, Escape, or the diagram's name in the crumb close it.
-- **Hover on a desktop** previews a table: its name, its note cut at about 150 characters, and "Click for its fields
-  and relations". Never on touch.
-- **On touch**, "Tap to explore" now reads "Then tap ▸ on a table for its columns, tap its name for its card".
-
-**Under the frame**, one line in muted 12.5 px: "Model: data-model.dbml ↗ · DBML · main at 1c83f2b".
-
-### 11.3 The entity card
-
-**It stays.** Casper's v2 ask was "entity context be something I can open or see on the diagram somehow", and the
-card is that: one table's whole context, on the diagram, at every width. The DBML now carries what v3 needed `about`
-for: every table has a `Note`, and a column a `note:` (0017 §2).
-
-**Where it sits** is as in version 3:
-
-| Width | The card |
+| Width | Frame height |
 |---|---|
-| ≥761 (tablet, desktop) | Docked at the frame's right, 10 px in from its edges, `min(360px, 44%)` wide (330 px and 48% on a tablet), as tall as it needs, up to the frame's height. It scrolls inside. The diagram stays live to its left. |
-| ≤760 (phone) | A sheet over the frame's lower 62% (55% in full screen), with a grab line. It scrolls inside. The diagram above it stays visible. |
+| ≥1280 | `clamp(420px, 100vh − 250px, 760px)` |
+| 761-1279 | 62 vh |
+| ≤760 | 70 vh, at least 420 px |
 
-**What it holds, top to bottom** (shots 13, 14):
+**Full screen** fills the screen with the bar's row and the frame; Close (on the bar's right, where Full screen was)
+or Escape leaves, as §10's.
 
-1. **The head**: the table's name (mono, 15.5 px semibold), "9 columns" (muted), and × (Close: show all tables).
-   The head stays put while the card scrolls.
-2. **What it is**: the table's `Note` (15 px). Without one: "No note: the data model has no Note on this table."
-   (muted). That breaks 0017 §2, and the supervisor doesn't check the DBML, so the card says it.
-3. **Drawn in**: a chip per diagram that has the table, "All tables" first. The current one is outlined in accent and
-   isn't a link. Another opens that diagram with the table open. It shows only when a `DiagramView` has the table.
-4. **Relations**:
-   - "It refers to", then a chip per table its foreign keys point at: "→ tool";
-   - "Referred to by", then a chip per table whose foreign keys point at it: "← damage_report";
-   - a one-to-one relation's chip ends in a muted **1:1**. It is the unique foreign key of 0017 §3;
-   - a chip opens that table, as a history entry;
-   - **a table that isn't in this diagram** has a dashed chip, titled "Not in Lending: opens it in All tables". It
-     opens it there;
-   - after 8 chips, a dashed "12 more" shows the rest.
-5. **Key fields**: the primary key's and the foreign keys' columns, a row each:
-   - the name (mono, semibold) and its type (muted mono);
-   - tags: **PK** (accent), **unique** (muted), and **may be null** (muted) for a column without `not null` that
-     isn't the key;
-   - the default, as "= now()" (muted);
-   - for a foreign key, "→ <table>" at the right. It opens that table;
-   - the column's `note` under it (muted 12.5 px, cut at about 170 characters);
-   - **for an enum column, its values**, each with its note, in a small list under it: "`out` The member has the
-     tool".
-6. **The other 5 columns**, folded, as the key rows. A table with no key fields shows them open, as "All 4 columns".
-7. **"In data-model.dbml, line 77 ↗"**: the table's line on GitHub.
+### 11.2 A phone (390)
 
-**The keyboard**: the card's chips, links and × are buttons and links in the page's order. Escape closes the card.
-Full screen's Escape closes full screen first.
+- The title and owner stack as in §5. The bar is one row: the table count at the left, Full screen at the right,
+  40 px tall.
+- The frame is full width, 70 vh, at least 420 px. Liam takes touch itself: it drops its show mode on a narrow
+  screen and closes its side pane (Toad's v3 spike at 390 × 844, no errors; his new 390 shots are in
+  `architecture/spikes/bob212/shots-liam-as-is/`). The page adds nothing to say about it: it does not tell the
+  reader to use a bigger screen.
+- **Full screen is the way in on a phone**: a Liam diagram is drawn for width. The bar's row is the first thing
+  under the title, so the button is above the fold.
+- The source line wraps under the frame, in two lines if it must; nothing scrolls sideways.
+- The page's pinch and scroll: a scroll that starts on the frame pans Liam, so the frame is never between the reader
+  and the rest of the page: the page scrolls from anywhere outside it, and the bar is above it.
 
-### 11.4 Each table on its own node (Casper's Q-22)
+### 11.3 States
 
-This is the feature. The check, from `lead/bob212/frameworks-decision.md`: every entity has its own control on the
-node; using it shows or hides THAT entity's columns on the diagram, in place; every other entity stays as it was;
-by mouse and by tap; kept per diagram.
+§10's, with "the data model" for "the model", and these differences:
 
-**The node, closed:** one row, 40 px tall: the table's name (mono 13.5 px semibold), and at its right the
-**control**, a chip 52 × 28 with the column count and ▸ (`7 ▸`, muted mono 12 px, on the page's background colour,
-a hairline border). The node is as wide as its name and the chip; nothing else.
+| State | What shows |
+|---|---|
+| Drawing | Over the frame until `ready`: **Drawing the data model…**, "The first time on this device, the viewer downloads (its size is in the ADR).", and three grey lines. The bar shows no count. |
+| No answer in 15 s | The frame is replaced by a dashed card: **The data model couldn't be drawn here.** "The viewer didn't answer within 15 seconds." The file on GitHub with its size, and **Try again**. |
+| The DBML has errors | The same card: "The viewer found errors in it:", then each as "data-model.dbml line 51 ↗: Table 'sheds' does not exist in Schema 'public'", linked to the line (0017 §5). Nothing is drawn: there is no half-drawn ERD. |
+| Liam can't read the converted model | The same card, one error and no line: **The viewer couldn't read the converted model.** The file's link and Try again. Toad says this should not happen. |
+| Too large (0017 §4) | §10's: **This data model is too large to show here**, and the file on GitHub. |
+| No data model | §7's "not written" card. |
 
-**The node, open:** the same head on a faint accent wash, a line under it, then its columns, a row each, 26 px:
-
-| | | |
-|---|---|---|
-| **PK** (accent) or **FK** (muted), 9.5 px | the name, mono 12.5 px (semibold for the key) | its type, muted, right; `?` after it when it may be null |
-
-The chip shows only ▾ on an accent wash, with an accent-tinted border. A relation's line joins the column it leaves
-from, when that table is open, and the node's head when it is closed.
-
-**Using it:**
-
-- A click or a tap on the chip opens or closes that table only. The diagram is laid out again around it (dagre: the
-  same order, more room), the tables glide there in 200 ms.
-- **Where the view goes:** while the reader hasn't panned or zoomed, the whole diagram stays fitted. Once they have,
-  the table they toggled stays where it is on screen, and the view then moves just enough to show it whole.
-- The page keeps the open tables' names per project and diagram, on the device (`expanded.<project>.<diagram>`), from
-  the viewer's `{t: "expanded", tables}`, and hands them back in `files.expanded`. So a reload, or coming back to the
-  diagram, draws the same tables open. The first time, every table is closed.
-- Each diagram is its own: loan open in Lending doesn't open it in All tables.
-- **The keyboard:** the chip is a real button (`aria-expanded`, its label "Show loan's 9 columns" or "Hide …"), Tab
-  reaches it, Enter or Space toggles it.
-
-**A phone (the tap target).** At 390 the fitted diagram is drawn at about 50-60 %, so a 52 × 28 chip is about 27 ×
-15 px on screen. Making the chip bigger makes every closed node bulky, so the chip stays as drawn and its **target**
-grows instead:
-
-- On a coarse pointer, an invisible circle around the chip, centred on it, catches the tap. Its size in the diagram
-  is `clamp(52, 46 / zoom, 88)` by `clamp(28, 46 / zoom, 88)`, so it is 46 px on screen at any zoom down to 50 %,
-  and grows no further. At 88 it stays inside the gaps between nodes (28 across, 56 between ranks), so it never
-  takes a tap meant for the next table.
-- Pinching in makes it smaller in the diagram, and never under the chip itself.
-- A press shows the target, a faint accent circle, so the reader sees what they hit.
-- Measured in the deployed shape at 390 (`tools/shots-v5.mjs`): the chip drawn 27 × 15 px, its target 46 × 46 px,
-  at zoom 0.52.
-- The name stays the way to the card; the chip's target reaches into the name's end by at most 18 px.
-
-**Shots** (`shots-v5/`, from the staged deploy dir, at 1280 by mouse and 390 by tap):
-
-| | 1280 | 390 |
-|---|---|---|
-| a. All tables, every table closed | `1280-a-all-collapsed` | `390-a-all-collapsed` |
-| b. loan open, the other 8 closed | `1280-b-loan-expanded` | `390-b-loan-expanded` |
-| c. loan and member open | `1280-c-loan-member-expanded` | `390-c-loan-member-expanded` |
-| d. loan's card open; loan and member still open | `1280-d-loan-card` | `390-d-loan-card` |
-
-### 11.5 The viewer's look
-
-The viewer's styles are React Flow's, Toad's `erd-viewer.css` (style.css's tokens as literals: the frame can't read
-the page's), then mine, `tools/erd-node.css`: the node and its control as above, one size on every device, the tap
-target, and the press. The prototype packs Toad's `erd-viewer.jsx` with two checked patches (`tools/pack-erd.mjs`):
-the node's sizes, and the zoom as `--z` on the frame's root (§16).
-
-**States** are §10's, with "the data model" for "the model", 0.9 MB for the download, and the DBML parser's errors
-by line: "data-model.dbml line 51 ↗: Table 'sheds' does not exist in Schema 'public'" (shot 30). A model that
-doesn't parse draws nothing: there is no half-drawn ERD.
+The frame is sandboxed (0016 §6) and may need `unsafe-eval` inside, for Liam's SQL parser; that is the frame's
+business, and the page needs nothing beyond `frame-src 'self'`.
 
 ## 12. Overview and glossary
 
@@ -644,7 +586,7 @@ The front matter isn't shown as fields. Its title, tagline and people head the l
 | May be behind (`checked_at` 2 h or more) | The "as of" line turns warn, and a banner: **This may be behind main.** "mbp-1 last checked 5h ago; it checks every 10 minutes while it runs. The library is main at 1c83f2b (26 Nov)." |
 | The last fetch failed | The line turns warn, and a banner: **mbp-1 couldn't fetch Toolshed 12 min ago.** "<its message>. The library is main at 1c83f2b (26 Nov), last checked 3h ago. It updates at the next fetch." |
 | Main moved while open | The page is redrawn at the same spot, and a toast: "Toolshed's library is now main at 9c01d2e." A diagram already open isn't redrawn until the reader leaves it, or presses Try again. |
-| A diagram drawing, failing or with errors | §10, §11 (shots 29-31). |
+| A diagram drawing, failing or with errors | §10, §11.3 (shots 29-31; 29 and 30 show the dropped viewer's version of §11.3). |
 | A small (mermaid) diagram that can't be drawn | "This diagram couldn't be drawn here. Its source is below." |
 
 Gone since version 3: the bad manifest and the page missing on main. There is no manifest, and a file is either on
@@ -680,14 +622,14 @@ As in version 3:
   - The frames are served with their CSP: `tools/shots.mjs`'s server, and the deployed worker's `_headers`.
 - **To make it**, from the repo:
   - `node design/BOB-212/tools/gen_data.mjs`: `prototype/data.js` from the sample (committed);
-  - the ERD viewer, with Toad's spike cache: `node tools/pack-erd.mjs ~/.cache/bobnet-spikes/bob212/erd-own
+  - (the ERD viewer, dropped, Q-23; the prototype still packs it, and is not redone) the ERD viewer, with Toad's spike cache: `node tools/pack-erd.mjs ~/.cache/bobnet-spikes/bob212/erd-own
     prototype/vendor/erd-viewer.html`. No eval of any kind: its CSP is the one hash in `erd-viewer.hash`;
   - the C4 viewer: esbuild `tools/likec4-viewer.jsx` with the spike's flags, then
     `architecture/spikes/bob212/pack-viewer.mjs` → `prototype/vendor/likec4-viewer.html` (unchanged since v3);
   - `node tools/shots.mjs [filter]` → `shots/v5/`;
   - `sh tools/stage.sh`: the deploy dir in a fresh temp dir (assets only, `bobnet-prototype-bob-212`, `_headers`
     with noindex and each viewer's CSP);
-  - `node tools/shots-v5.mjs <that dir>` → `shots-v5/` (§11.4), with its checks.
+  - `node tools/shots-v5.mjs <that dir>` → `shots-v5/`, with its checks (dropped, Q-23: it shows the per-table chip).
 
   `prototype/vendor/` and `shots/` are made, not kept (about 10 MB). `shots-v5/` is kept: it is Q-22's evidence.
 
@@ -714,6 +656,17 @@ As in version 3:
 **Settled since version 3:** ADR 0016 recorded v3's §14 items 1-12 (Toad, 2e5b177; his message of 26 Nov). 0017 drops
 1, 2 and 10 (head lines, `children`'s `match`, `about`), and the card's parts it kept pending Q-21 hold, as the card
 stays.
+
+**Settled since version 5** (Casper's Q-23; Toad amends ADR 0017 §7 beside this spec):
+
+- The data model's viewer is Liam ERD as is. The frame: DBML to PostgreSQL DDL with `@dbml/core`, Liam's own app,
+  `hello` then `ready {errors, tables}`, no other messages (no focus, hover, fit, show, expanded or about). It has
+  `unsafe-eval` for Liam's SQL parser, kept in 0016 §6's sandbox (opaque origin, `connect-src 'none'`); the page
+  needs only `frame-src 'self'`. Toad's words are the rule: this spec only records them (his consult, 27 Nov, until
+  the ADR lands).
+- **Dropped, Q-23** from what version 5 asked for: items 1-5 below, `files.expanded`, `{t: "expand"}`, `{t:
+  "expanded"}`, `enums`, `line`, the card's fields, the diagram tabs' `ready.views` and the `…/data/<diagram>`
+  address. Build tasks B3-B6 shrink to the frame, the bar, the states and the source line (Toad re-cuts them).
 
 **Settled since version 4** (Toad, 9016889, ADR 0017 §7 as amended, and his message of 27 Nov): `ready` carries
 `enums` with notes, each table's `line`, each column's `default`, `unique` and `pk`, `shown` and `expanded`; the
@@ -744,9 +697,9 @@ messages `files.expanded`, `{t: "expand"}` and `{t: "expanded"}`; the show toggl
 
 ## 17. Open questions
 
-1. **AC3**: Casper picks A, B or C (§1); Mario asks him. Only the header and the tabs wait for his answer.
-2. **Per-table expand** is the feature now (§11.4). Casper's verdict on it comes with the v5 link.
-3. **Toad**: §16's v5 items 1-2, the node's sizes and `--z`, for the build's viewer.
+1. ~~AC3~~: settled, A (§1, Q-23).
+2. ~~Per-table expand~~: given up, Q-23 (§11).
+3. **Toad**: ADR 0017 §7's wording of the frame (§16), and whether `ready.tables` stays; the count is optional.
 4. **Peach**: AC1's evidence reads "Helix and Vitals libraries shown on phone and desktop". Under Q-21 that is
    Toolshed's library end to end, and each real project's library comes with its conversion (Toad's handoff says the
    same).
