@@ -1,4 +1,4 @@
-import { BOARD_READS, BoardOp, type BoardCaller, type BoardReadName, type BoardExportV1, type BoardImportReply, type BoardReply } from "@bobnet/protocol";
+import { BOARD_READS, BoardOp, gitBlobId, type BoardCaller, type BoardReadName, type BoardExportV1, type BoardImportReply, type BoardReply } from "@bobnet/protocol";
 import { DurableObject } from "cloudflare:workers";
 import { migrate } from "../schema.ts";
 import { BoardError } from "./errors.ts";
@@ -32,6 +32,10 @@ export class Board extends DurableObject<Env> {
     const parsed = BoardOp.safeParse(input);
     if (!parsed.success) return { ok: false, code: "invalid", message: parsed.error.issues[0]?.message ?? "Invalid operation" };
     const op = parsed.data;
+    // A library's blob is main's bytes, provably (ADR 0015 §2): its id is git's own for its text.
+    if (op.op === "library_blob" && (await gitBlobId(op.text)) !== op.blob) {
+      return { ok: false, code: "invalid", message: `The text isn't blob ${op.blob}: its git id differs` };
+    }
     return this.answer(op.op, () => {
       if (isRead(op)) return { ok: true, result: this.store.read(caller, op), changed: null };
       const { result, changed } = this.ctx.storage.transactionSync(() =>

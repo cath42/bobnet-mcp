@@ -52,6 +52,7 @@ import {
   weightOf,
 } from "@bobnet/protocol";
 import { BoardError } from "./errors.ts";
+import { LibraryCache } from "./library.ts";
 import { Rules, type Scope } from "./rules.ts";
 import { apportion, bands, calendar, cumulative, median, perCall, summed, type Calendar } from "./usage.ts";
 
@@ -341,6 +342,7 @@ const ORDERED = "ORDER BY i.ord IS NULL, i.ord, i.pk";
 
 export class BoardStore {
   private readonly rules: Rules;
+  private readonly library: LibraryCache;
 
   /** `now`: the board's clock, which a write's time, Waits' ages and the stale rule read (ADR 0011 §2). */
   constructor(
@@ -348,6 +350,7 @@ export class BoardStore {
     private readonly now: () => number = () => Date.now(),
   ) {
     this.rules = new Rules(sql);
+    this.library = new LibraryCache(sql, now);
   }
 
   // ---------- Reads ----------
@@ -374,6 +377,10 @@ export class BoardStore {
         return this.usageDay(caller, op);
       case "project":
         return this.projectPage(caller, op);
+      case "library":
+        return this.library.read(this.readable(caller, op.project));
+      case "library_page":
+        return this.library.page(this.readable(caller, op.project), op);
     }
   }
 
@@ -385,7 +392,16 @@ export class BoardStore {
 
   private projectRecord(p: ProjectRow): ProjectRecord {
     const repos = this.sql.exec<{ repo: string }>("SELECT repo FROM project_repos WHERE project = ? ORDER BY repo", p.pk).toArray();
-    return { key: p.key, name: p.name, prefix: p.prefix, draft_prefix: p.draft_prefix, lead: p.lead, po: p.po, repos: repos.map((r) => r.repo) };
+    return {
+      key: p.key,
+      name: p.name,
+      prefix: p.prefix,
+      draft_prefix: p.draft_prefix,
+      lead: p.lead,
+      po: p.po,
+      repos: repos.map((r) => r.repo),
+      library: this.library.summary(p.pk),
+    };
   }
 
   private list(caller: BoardCaller, op: Op<"list">): BoardResults["list"] {
@@ -1514,10 +1530,23 @@ export class BoardStore {
     op: Exclude<BoardOp, Op<BoardReadName>>,
   ): { result: Written; changed: { project: string; seq: number; refs: string[] } | null } {
     if (op.op === "ci_run") return this.ciRun(GH_SOURCE, ghRun(caller, op), whoOf(caller));
+    if (op.op === "library_blob" || op.op === "library_sync") return this.librarySync(caller, op);
     const tx = new Tx(this.sql, caller, this.now);
     const result = this.apply(tx, op);
     if (tx.seqs.length === 0) return { result: { ...result, seq: this.lastSeq() }, changed: null };
     return { result, changed: { project: tx.projectKey ?? "*", seq: tx.seqs.at(-1)!, refs: [...tx.refs] } };
+  }
+
+  /**
+   * A library's blob or its index (ADR 0015 §1, §2): a cache, so no event and no history. A new library tells the open
+   * pages to read it again (`board_changed` with refs ["library"]); a heartbeat doesn't.
+   */
+  private librarySync(caller: BoardCaller, op: Op<"library_blob"> | Op<"library_sync">): ReturnType<BoardStore["write"]> {
+    const p = this.project(op.project);
+    const seq = this.lastSeq();
+    if (op.op === "library_blob") return { result: { ref: null, seq, ...this.library.blob(caller, p, op) }, changed: null };
+    const { changed, ...result } = this.library.sync(caller, p, op);
+    return { result: { ref: null, seq, ...result }, changed: changed ? { project: p.key, seq, refs: ["library"] } : null };
   }
 
   /** A CI system's report of one run (§10), from POST /v1/runs: the source is its token's. */
@@ -1618,6 +1647,9 @@ export class BoardStore {
         return this.slotRun(tx, op);
       case "ci_run":
         throw new BoardError("forbidden", "A CI run is reported by its CI system or a supervisor's gh adapter");
+      case "library_blob":
+      case "library_sync":
+        throw new BoardError("invalid", "A library is kept apart from the board's records");
     }
   }
 

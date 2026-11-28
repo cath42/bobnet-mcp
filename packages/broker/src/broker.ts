@@ -5,6 +5,7 @@ import {
   BOARD_READS,
   BOARD_SENDER,
   type BoardCaller,
+  type BoardOpName,
   type BoardReply,
   type BoardTold,
   CLIENT_FRAME_TYPES,
@@ -21,6 +22,7 @@ import {
   findSecret,
   formatAddress,
   type Identity,
+  LARGE_BOARD_OPS,
   LIMITS,
   type PeerInfo,
   parseRecipient,
@@ -143,9 +145,10 @@ export class Broker extends DurableObject<Env> {
       if (typeof raw === "object" && raw !== null && typeof (raw as { rid?: unknown }).rid === "string") {
         rid = (raw as { rid: string }).rid;
       }
-      // A supervisor's snapshot and boards may be larger than other frames.
+      // A supervisor's snapshot and boards may be larger than other frames, and so may a library's blobs and index (ADR 0015 §2).
       t = (raw as { t?: unknown } | null)?.t;
-      const limit = t === "board" || t === "report" ? LIMITS.boardFrameBytes : LIMITS.frameBytes;
+      const large = t === "board" || t === "report" || (t === "board_op" && LARGE_BOARD_OPS.includes((raw as { op?: { op?: unknown } }).op?.op as BoardOpName));
+      const limit = large ? LIMITS.boardFrameBytes : LIMITS.frameBytes;
       if (encoder.encode(data).byteLength > limit) {
         throw new FrameError("frame_too_large", `Frames are limited to ${limit} bytes`);
       }

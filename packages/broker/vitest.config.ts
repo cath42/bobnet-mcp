@@ -1,4 +1,6 @@
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 import { exportJWK, generateKeyPair } from "jose";
 import { Response } from "miniflare";
 import { defineConfig } from "vitest/config";
@@ -9,6 +11,11 @@ const TEAM = "https://bobnet-test.cloudflareaccess.com";
 const { publicKey, privateKey } = await generateKeyPair("RS256", { extractable: true });
 const publicJwk = { ...(await exportJWK(publicKey)), kid: "test", alg: "RS256", use: "sig" };
 const privateJwk = { ...(await exportJWK(privateKey)), kid: "test", alg: "RS256" };
+
+// The library standard's sample, Toolshed (ADR 0017), as its files' paths and texts: the library tests' fixture.
+const SAMPLE = new URL("../../architecture/spikes/bob212/sample/", import.meta.url).pathname;
+const walk = (dir: string): string[] => readdirSync(dir).flatMap((n) => (statSync(join(dir, n)).isDirectory() ? walk(join(dir, n)) : [join(dir, n)]));
+const toolshed = walk(join(SAMPLE, "library")).sort().map((f) => ({ path: relative(SAMPLE, f), text: readFileSync(f, "utf8") }));
 
 export default defineConfig({
   test: { setupFiles: ["./test/setup.ts"], include: ["test/**/*.test.ts"] },
@@ -31,6 +38,7 @@ export default defineConfig({
           // A CI token mapped to the run slots' reserved source, which no CI may take.
           CI_TOKENS_RESERVED: JSON.stringify({ "ci-3.access": "Slot" }),
           TEST_SIGNING_JWK: JSON.stringify(privateJwk),
+          TOOLSHED: JSON.stringify(toolshed),
         },
         outboundService(req) {
           if (req.url === `${TEAM}/cdn-cgi/access/certs`) return Response.json({ keys: [publicJwk] });

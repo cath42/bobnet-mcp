@@ -504,4 +504,27 @@ export const BOARD_MIGRATIONS: readonly string[] = [
     FOREIGN KEY (project, run) REFERENCES runs (project, pk)
   );
   `,
+  // 9: each project's library (ADR 0015 §2, 0017 §4), a cache of its main, never the record and never exported: its
+  // blobs by git's id, each written once, and one row per project, the library at its newest commit.
+  `
+  CREATE TABLE library_blobs (
+    project INTEGER NOT NULL REFERENCES projects (pk),
+    blob    TEXT NOT NULL,                         -- git's blob id for the text, checked on the way in
+    text    TEXT NOT NULL,
+    bytes   INTEGER NOT NULL CHECK (bytes >= 0),
+    PRIMARY KEY (project, blob)
+  );
+
+  CREATE TABLE libraries (
+    project       INTEGER PRIMARY KEY REFERENCES projects (pk),
+    ref           TEXT NOT NULL,                   -- the project's ref the supervisor read, origin/main or the rebase target
+    commit_sha    TEXT NOT NULL,
+    committed_at  TEXT NOT NULL,
+    github        TEXT,
+    index_json    TEXT,                            -- NULL: main has no library/
+    laptop        TEXT NOT NULL,
+    checked_at    TEXT NOT NULL,                   -- the last sync that found this commit, by the Board's clock
+    problems_json TEXT NOT NULL
+  );
+  `,
 ];
