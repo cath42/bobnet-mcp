@@ -69,3 +69,21 @@ later if needed. Let's go with that please"
 
 So: DBML stays the data model's foundation; the viewer is replaceable. Toad runs the time-boxed check; Q-23 stays open
 until it is done.
+
+## Q-23: Liam as is, menu A (Casper, 2026-11-27, in Mario's session)
+
+Asked where the menu choices were, Mario explained that the prototype shows A (the "Toolshed ▾" project button) and
+B and C are only described. Casper: "Its fine, but this is still custom right? We agreed to use the framework and not
+build a bunch of custom instead accept the limitations and use open standards for models and maybe opt for changing
+the visualization later right?" Mario: yes, ~230 lines of ours on React Flow + dagre + @dbml/parse; the off-the-shelf
+option that embeds as is is Liam ERD; DBML stays the source, converted by DBML's own SQL exporter for Liam to read;
+the limits accepted are that columns show for all tables or none (Liam's tables / keys / all-columns mode), only the
+"all tables" diagram, and Liam's own look and side pane; our viewer, the per-table chip and our card are dropped; a
+better viewer can replace Liam later with no repo changes. Casper: "Liam as is".
+
+So:
+- Data model viewer: Liam ERD, unpatched, its own look. Fed from library/data-model.dbml through @dbml/core's
+  official export to PostgreSQL DDL. No viewer code of ours, no override stylesheet.
+- Architecture viewer: LikeC4, as already planned.
+- Project menu: A (his "Its fine" on the menu as shown).
+- The Q-22 per-entity toggle is knowingly given up until a viewer does it.
