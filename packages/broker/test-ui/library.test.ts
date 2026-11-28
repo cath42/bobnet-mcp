@@ -167,6 +167,17 @@ describe("the library's addresses and links (spec §2, §14)", () => {
     expect(a("shot")!.getAttribute("href")).toBe(`${GH}/blob/${COMMIT}/library/ux/images/0001.png`);
   });
 
+  it("renders a file with a malformed escape in a link, the link's path kept as written (Toad, review A 5)", async () => {
+    files = SAMPLE_FILES.map((f) => (f.path.startsWith("library/usecases/0001") ? { ...f, text: `${f.text}\nSee [x](a%zz.md) and [y](notes%20on%20holds.md).\n` } : f));
+    lib["toolshed"] = libraryOf("toolshed", files);
+    await at("#project/toolshed/library/usecases/0001");
+    expect(text(".child-t")).toBe("Reserve a tool");
+    expect(text(".doc")).toContain("See x and y.");
+    const a = (label: string) => [...view().querySelectorAll(".doc a")].find((x) => x.textContent === label);
+    expect(a("x")!.getAttribute("href")).toBe(`${GH}/blob/${COMMIT}/library/usecases/a%zz.md`);
+    expect(a("y")!.getAttribute("title")).toBe("library/usecases/notes on holds.md on GitHub at 1c83f2b");
+  });
+
   it("shows raw HTML in a file as text, never as markup", async () => {
     files = SAMPLE_FILES.map((f) => (f.path === "library/overview.md" ? { ...f, text: `${f.text}\n<script>window.pwned = 1</script><b onclick="x()">bold</b>\n` } : f));
     lib["toolshed"] = libraryOf("toolshed", files);

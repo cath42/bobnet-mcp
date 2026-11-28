@@ -90,25 +90,28 @@ export const report = (laptop: string, snap: unknown, at = iso(0)) => {
 };
 export const changed = (key: string) => FakeSocket.last.frame({ t: "board_changed", project: key, seq: 1, refs: [] });
 
-const page = { timers: [] as ReturnType<typeof setInterval>[], listeners: [] as Array<[string, EventListener]> };
+const page = { timers: [] as ReturnType<typeof setInterval>[], listeners: [] as Array<[EventTarget, string, EventListener]> };
 /** Loads the dashboard (again, as a reload does) at `hash`: the page before it stops. Answers as the world has it. */
 export async function open(hash = ""): Promise<Record<string, unknown>> {
   await settle(page.timers.length ? 320 : 0);
   for (const t of page.timers.splice(0)) clearInterval(t);
-  for (const [type, f] of page.listeners.splice(0)) window.removeEventListener(type, f);
+  // The window's and the document's listeners go with the page: the document outlives a reload here, as it doesn't in a browser.
+  for (const [on, type, f] of page.listeners.splice(0)) on.removeEventListener(type, f);
   document.documentElement.innerHTML = html.replace(/<script[\s\S]*?<\/script>|<link[^>]*>/g, "");
   (globalThis as unknown as { WebSocket: typeof FakeSocket }).WebSocket = FakeSocket;
   location.hash = hash;
   vi.resetModules();
-  const every = globalThis.setInterval, listen = window.addEventListener.bind(window);
+  const every = globalThis.setInterval, listen = window.addEventListener.bind(window), listenDoc = document.addEventListener.bind(document);
   globalThis.setInterval = ((...a: Parameters<typeof setInterval>) => { const t = every(...a); page.timers.push(t); return t; }) as typeof setInterval;
-  window.addEventListener = ((type: string, f: EventListener) => { page.listeners.push([type, f]); listen(type, f); }) as typeof window.addEventListener;
+  window.addEventListener = ((type: string, f: EventListener, o?: AddEventListenerOptions) => { page.listeners.push([window, type, f]); listen(type, f, o); }) as typeof window.addEventListener;
+  document.addEventListener = ((type: string, f: EventListener, o?: AddEventListenerOptions) => { page.listeners.push([document, type, f]); listenDoc(type, f, o); }) as typeof document.addEventListener;
   let app: Record<string, unknown>;
   try {
     app = (await import("../public/app.js")) as unknown as Record<string, unknown>;
   } finally {
     globalThis.setInterval = every;
     window.addEventListener = listen;
+    document.addEventListener = listenDoc;
   }
   FakeSocket.last.frame({ t: "welcome", v: 1, identity: { kind: "owner", email: "owner@example.com" } });
   // The projects, then what the page reads with them, each drawn after the debounce.

@@ -52,6 +52,8 @@ const kb = (n) => `${Math.max(1, Math.round(n / 1024))} KB`;
 const numOf = (path) => /\/(\d{4})-[^/]*$/.exec(path)?.[1] ?? "";
 /** A Markdown file's text without its front matter and its # title: the page shows both its own way. */
 const bodyOf = (text) => text.replace(/\r\n?/g, "\n").replace(/^---\n[\s\S]*?\n---\n/, "").replace(/^\s*# .*\n/, "");
+/** A link's path as written, its escapes decoded; a malformed escape ("a%zz.md") is kept as it is. */
+const decPath = (p) => { try { return decodeURI(p); } catch { return p; } };
 function normPath(p) {
   const out = [];
   for (const s of p.split("/")) {
@@ -205,7 +207,7 @@ export function libraryPages(app) {
     }
     if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("//")) return dead();
     const [path, frag] = href.split("#");
-    const target = path ? normPath(ctx.base.replace(/[^/]*$/, "") + decodeURI(path)) : ctx.base;
+    const target = path ? normPath(ctx.base.replace(/[^/]*$/, "") + decPath(path)) : ctx.base;
     const hit = inLibrary(read.library.project, lib, target, frag);
     if (hit) return void a.setAttribute("href", hit);
     const gh = ghBlob(lib, target, frag);
@@ -481,7 +483,7 @@ export function libraryPages(app) {
   function notWritten(lib, s) {
     const owner = lib.index ? ownerOf(lib, s) : null;
     return h("div", { class: "doc-page" },
-      h("div", { class: "doc-head" }, h("h1", { class: "doc-title" }, s.label)),
+      h("div", { class: "sec-head" }, h("h1", { class: "doc-title" }, s.label), h("span", { class: "muted" }, `owner ${owner ?? s.role}`)),
       h("div", { class: "empty-card lib-empty nw-card" }, h("b", null, `${s.label} isn't written yet.`),
         h("p", null, `It holds: ${HOLDS[s.id].charAt(0).toLowerCase()}${HOLDS[s.id].slice(1)}`),
         h("p", null, `The ${s.role}${owner ? ` (${owner})` : ""} writes it as `, h("code", null, s.path), ` on ${branchOf(lib)}, from its template in `, guide(), ".")));
@@ -554,7 +556,8 @@ export function libraryPages(app) {
 
   const cardRef = (key, lib, sid, num) => {
     const c = cardsOf(lib, sid).find((x) => x.num === num);
-    return h("a", { href: libHref(key, sid, num) }, h("span", { class: "cnum" }, num), c ? ` ${c.title ?? ""}` : " (no such card)");
+    // The number and the title, the gap between them outside the underline (Daisy, review A 2).
+    return h("a", { class: "cref", href: libHref(key, sid, num) }, h("span", { class: "cnum" }, num), " ", h("span", { class: "ct" }, c ? c.title ?? "" : "(no such card)"));
   };
   /** The first paragraph under a heading, for a card's face. */
   const paraUnder = (text, heading) => {

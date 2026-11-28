@@ -1508,6 +1508,8 @@ a.lib-tile:hover { border-color: var(--accent); }
 .adr .t { line-height: 1.35; overflow-wrap: anywhere; }
 .adr .t small { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .adr .d, .adr .b { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The deciders wrap to a second line rather than cut (Daisy, review A 1). */
+.adr .b { white-space: normal; overflow: visible; overflow-wrap: anywhere; line-height: 1.35; }
 @media (max-width: 760px) {
   .adr { grid-template-columns: auto auto minmax(0, 1fr); grid-template-areas: "n s d" "t t t"; gap: 4px 10px; min-height: 56px; }
   .adr .n { grid-area: n; } .adr .s { grid-area: s; } .adr .d { grid-area: d; text-align: right; } .adr .t { grid-area: t; } .adr .b { display: none; }
@@ -1526,11 +1528,19 @@ a.lib-tile:hover { border-color: var(--accent); }
 .uc-f dd { margin: 0; overflow-wrap: anywhere; }
 .uc-f dd a { color: var(--accent); }
 .uc-f.wide div { grid-template-columns: 8.5em minmax(0, 1fr); }
-.uc-f .cnum { margin-right: 4px; }
+.uc-f .cnum { margin-right: 0; }
+/* A card's "0002 Title": the title underlined, not the gap (Daisy, review A 2). */
+a.cref { text-decoration: none; }
+a.cref .ct { text-decoration: underline; }
 @media (max-width: 760px) { .uc-f div, .uc-f.wide div { grid-template-columns: 5.5em minmax(0, 1fr); } }
 .uc-links { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
 .uc-links .chip-b { display: inline-flex; align-items: center; min-height: 28px; padding: 2px 10px; border-radius: 999px; text-decoration: none; color: var(--accent); border: 1px solid var(--line); background: var(--surface); }
-@media (pointer: coarse), (max-width: 760px) { .uc-links .chip-b { min-height: 44px; } }
+/* On touch a chip stays the 1280 pill; its 44 px is the hit area around it, and wrapped rows keep theirs apart (Daisy, review A 3). */
+@media (pointer: coarse), (max-width: 760px) {
+  .uc-links { row-gap: 16px; }
+  .uc-links .chip-b { position: relative; }
+  .uc-links .chip-b::before { content: ""; position: absolute; inset: -8px -3px; }
+}
 .ux-v { font-size: 13.5px; display: grid; gap: 2px; }
 .ux-v.none { color: var(--muted); }
 .ux-v.wait { color: var(--warn); }
