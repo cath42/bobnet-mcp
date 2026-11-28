@@ -36,6 +36,43 @@ describe("Worker auth", () => {
     expect(laptop.status).toBe(404);
   });
 
+  it("frames the viewers: the page may frame its own origin, and each viewer has its own content policy (ADR 0016 §6, 0017 §7)", async () => {
+    const { exports } = await import("cloudflare:workers");
+    const viewers = (await import("../public/vendor/viewers.json")).default;
+    const get = async (path: string) => exports.default.fetch(`${ORIGIN}${path}`, { headers: { "cf-access-jwt-assertion": await ownerToken() } });
+    const page = (await get("/")).headers.get("content-security-policy")!;
+    expect(page).toContain("frame-src 'self';");
+    expect(page).toContain("script-src 'self';");
+    expect(page).not.toContain("eval");
+
+    const at = (file: string) => `/vendor/${file.replace(/\.html$/, "")}`;
+    const likec4 = await get(at(viewers.likec4.file));
+    expect(likec4.status).toBe(200);
+    expect(likec4.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+    const lc = likec4.headers.get("content-security-policy")!;
+    expect(lc).toBe(`default-src 'none'; script-src ${viewers.likec4.scripts.join(" ")} 'wasm-unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'`);
+    expect(lc).not.toContain("'unsafe-eval'");
+
+    const erd = await get(at(viewers.erd.file));
+    expect(erd.status).toBe(200);
+    expect(erd.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+    const e = erd.headers.get("content-security-policy")!;
+    expect(e).toBe(`default-src 'none'; script-src ${viewers.erd.scripts.join(" ")} 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'`);
+    expect(e).not.toContain("wasm-unsafe-eval");
+    // Each hash is of a script in the file the Worker serves: a re-pack without a new viewers.json fails here.
+    const { createHash } = await import("node:crypto");
+    for (const [res, kind] of [[likec4, "likec4"], [erd, "erd"]] as const) {
+      const html = await res.text();
+      const inline = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => `'sha256-${createHash("sha256").update(m[1]!).digest("base64")}'`);
+      expect(inline).toEqual(viewers[kind].scripts);
+    }
+    // The file's own name redirects to that address, which is what the page frames.
+    const named = await exports.default.fetch(`${ORIGIN}/vendor/${viewers.erd.file}`, { headers: { "cf-access-jwt-assertion": await ownerToken() }, redirect: "manual" });
+    expect(new URL(named.headers.get("location")!, ORIGIN).pathname).toBe(at(viewers.erd.file));
+    // Any other vendored file keeps the page's policy.
+    expect((await get("/vendor/markdown-it-15.0.3.min.js")).headers.get("content-security-policy")).toBe(page);
+  });
+
   it("rejects a missing, forged or misaddressed token", async () => {
     expect((await upgrade(null)).status).toBe(401);
     expect((await upgrade("not-a-jwt")).status).toBe(401);

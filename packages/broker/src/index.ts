@@ -1,5 +1,6 @@
 import type { BoardReply, BoardResults } from "@bobnet/protocol";
 import { authenticate } from "./auth.ts";
+import { cspFor } from "./csp.ts";
 
 export { Board } from "./board/board.ts";
 export { Broker } from "./broker.ts";
@@ -9,10 +10,6 @@ export { Broker } from "./broker.ts";
 const NETWORK = "network";
 // Every project's board is one Board object (ADR 0001 §1).
 const BOARD = "board";
-
-/** connect-src names the socket explicitly: Safari doesn't count wss:// as 'self'. */
-const csp = (host: string) =>
-  `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' wss://${host}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 
 const SECURITY_HEADERS: Record<string, string> = {
   "x-content-type-options": "nosniff",
@@ -98,7 +95,7 @@ export default {
     const asset = await env.ASSETS.fetch(req);
     const res = new Response(asset.body, asset);
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.headers.set(k, v);
-    res.headers.set("content-security-policy", csp(url.host));
+    res.headers.set("content-security-policy", cspFor(url.pathname, url.host));
     // The vendored libraries are named by their version, so a phone downloads each once (ADR 0015 §6): the one
     // exception to no-store. Not a missing file: that may yet be deployed.
     if (url.pathname.startsWith("/vendor/") && res.ok) res.headers.set("cache-control", "private, max-age=31536000, immutable");

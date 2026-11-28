@@ -1,0 +1,817 @@
+{
+  "tables": {
+    "member": {
+      "name": "member",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "Where reminders go when push is off"
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "phone": {
+          "name": "phone",
+          "type": "text",
+          "default": null,
+          "check": null,
+          "notNull": false,
+          "comment": "Optional; stewards call it for an overdue loan"
+        },
+        "home_shed_id": {
+          "name": "home_shed_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "The shed the member joined at"
+        },
+        "is_steward": {
+          "name": "is_steward",
+          "type": "bool",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "A steward may check tools out and in"
+        },
+        "joined_at": {
+          "name": "joined_at",
+          "type": "timestamptz",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        }
+      },
+      "comment": "A person who may borrow tools. Joining is free; a member is blocked while they have an overdue loan.",
+      "indexes": {},
+      "constraints": {
+        "member_pkey": {
+          "type": "PRIMARY KEY",
+          "name": "member_pkey",
+          "columnNames": [
+            "id"
+          ]
+        },
+        "member_email_key": {
+          "type": "UNIQUE",
+          "name": "member_email_key",
+          "columnNames": [
+            "email"
+          ]
+        },
+        "shed_id_to_member_home_shed_id": {
+          "type": "FOREIGN KEY",
+          "name": "shed_id_to_member_home_shed_id",
+          "columnNames": [
+            "home_shed_id"
+          ],
+          "targetTableName": "shed",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        }
+      }
+    },
+    "shed": {
+      "name": "shed",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "address": {
+          "name": "address",
+          "type": "text",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "opening_hours": {
+          "name": "opening_hours",
+          "type": "text",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "Free text, shown as written, e.g. \"Sat 10-13\""
+        }
+      },
+      "comment": "A place where tools are kept and handed over. A tool lives in one shed.",
+      "indexes": {},
+      "constraints": {
+        "shed_pkey": {
+          "type": "PRIMARY KEY",
+          "name": "shed_pkey",
+          "columnNames": [
+            "id"
+          ]
+        },
+        "shed_name_key": {
+          "type": "UNIQUE",
+          "name": "shed_name_key",
+          "columnNames": [
+            "name"
+          ]
+        }
+      }
+    },
+    "category": {
+      "name": "category",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "parent_id": {
+          "name": "parent_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": false,
+          "comment": "Null for a top-level category"
+        }
+      },
+      "comment": "How the catalogue is browsed, e.g. Garden > Hedge trimmers. Two levels at most.",
+      "indexes": {},
+      "constraints": {
+        "category_pkey": {
+          "type": "PRIMARY KEY",
+          "name": "category_pkey",
+          "columnNames": [
+            "id"
+          ]
+        },
+        "category_name_key": {
+          "type": "UNIQUE",
+          "name": "category_name_key",
+          "columnNames": [
+            "name"
+          ]
+        },
+        "category_id_to_category_parent_id": {
+          "type": "FOREIGN KEY",
+          "name": "category_id_to_category_parent_id",
+          "columnNames": [
+            "parent_id"
+          ],
+          "targetTableName": "category",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        }
+      }
+    },
+    "tool": {
+      "name": "tool",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "shed_id": {
+          "name": "shed_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "category_id": {
+          "name": "category_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "As a member would say it, e.g. \"Cordless drill, 18 V\""
+        },
+        "condition": {
+          "name": "condition",
+          "type": "tool_condition",
+          "default": "good",
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "loan_days": {
+          "name": "loan_days",
+          "type": "int4",
+          "default": 7,
+          "check": null,
+          "notNull": true,
+          "comment": "How long one loan may last"
+        },
+        "added_at": {
+          "name": "added_at",
+          "type": "timestamptz",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        }
+      },
+      "comment": "One physical tool on a shelf. Two identical drills are two tools.",
+      "indexes": {},
+      "constraints": {
+        "tool_pkey": {
+          "type": "PRIMARY KEY",
+          "name": "tool_pkey",
+          "columnNames": [
+            "id"
+          ]
+        },
+        "shed_id_to_tool_shed_id": {
+          "type": "FOREIGN KEY",
+          "name": "shed_id_to_tool_shed_id",
+          "columnNames": [
+            "shed_id"
+          ],
+          "targetTableName": "shed",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        },
+        "category_id_to_tool_category_id": {
+          "type": "FOREIGN KEY",
+          "name": "category_id_to_tool_category_id",
+          "columnNames": [
+            "category_id"
+          ],
+          "targetTableName": "category",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        }
+      }
+    },
+    "photo": {
+      "name": "photo",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "tool_id": {
+          "name": "tool_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "object_key": {
+          "name": "object_key",
+          "type": "text",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "Its key in the photo bucket"
+        },
+        "position": {
+          "name": "position",
+          "type": "int4",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "Order in the gallery; 0 is the cover"
+        }
+      },
+      "comment": "A picture of a tool. The bytes are in object storage; this row is the pointer.",
+      "indexes": {},
+      "constraints": {
+        "photo_pkey": {
+          "type": "PRIMARY KEY",
+          "name": "photo_pkey",
+          "columnNames": [
+            "id"
+          ]
+        },
+        "photo_object_key_key": {
+          "type": "UNIQUE",
+          "name": "photo_object_key_key",
+          "columnNames": [
+            "object_key"
+          ]
+        },
+        "tool_id_to_photo_tool_id": {
+          "type": "FOREIGN KEY",
+          "name": "tool_id_to_photo_tool_id",
+          "columnNames": [
+            "tool_id"
+          ],
+          "targetTableName": "tool",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        }
+      }
+    },
+    "reservation": {
+      "name": "reservation",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "tool_id": {
+          "name": "tool_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "member_id": {
+          "name": "member_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "pickup_on": {
+          "name": "pickup_on",
+          "type": "date",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "The day the member means to collect it"
+        },
+        "hold_until": {
+          "name": "hold_until",
+          "type": "timestamptz",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "pickup_on plus 24 h (ADR 0001); after it the hold lapses"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamptz",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        }
+      },
+      "comment": "A member asking to pick a tool up on a given day. It holds the tool until hold_until.",
+      "indexes": {},
+      "constraints": {
+        "reservation_pkey": {
+          "type": "PRIMARY KEY",
+          "name": "reservation_pkey",
+          "columnNames": [
+            "id"
+          ]
+        },
+        "tool_id_to_reservation_tool_id": {
+          "type": "FOREIGN KEY",
+          "name": "tool_id_to_reservation_tool_id",
+          "columnNames": [
+            "tool_id"
+          ],
+          "targetTableName": "tool",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        },
+        "member_id_to_reservation_member_id": {
+          "type": "FOREIGN KEY",
+          "name": "member_id_to_reservation_member_id",
+          "columnNames": [
+            "member_id"
+          ],
+          "targetTableName": "member",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        }
+      }
+    },
+    "loan": {
+      "name": "loan",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "tool_id": {
+          "name": "tool_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "member_id": {
+          "name": "member_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "reservation_id": {
+          "name": "reservation_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": false,
+          "comment": "The reservation it fulfilled; null for a walk-in"
+        },
+        "checked_out_by": {
+          "name": "checked_out_by",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "The steward at the counter"
+        },
+        "out_at": {
+          "name": "out_at",
+          "type": "timestamptz",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "due_at": {
+          "name": "due_at",
+          "type": "timestamptz",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "out_at plus the tool's loan_days"
+        },
+        "returned_at": {
+          "name": "returned_at",
+          "type": "timestamptz",
+          "default": null,
+          "check": null,
+          "notNull": false,
+          "comment": null
+        },
+        "state": {
+          "name": "state",
+          "type": "loan_state",
+          "default": "out",
+          "check": null,
+          "notNull": true,
+          "comment": null
+        }
+      },
+      "comment": "A tool in a member's hands, from check-out at the counter to its return.",
+      "indexes": {},
+      "constraints": {
+        "loan_pkey": {
+          "type": "PRIMARY KEY",
+          "name": "loan_pkey",
+          "columnNames": [
+            "id"
+          ]
+        },
+        "loan_reservation_id_key": {
+          "type": "UNIQUE",
+          "name": "loan_reservation_id_key",
+          "columnNames": [
+            "reservation_id"
+          ]
+        },
+        "tool_id_to_loan_tool_id": {
+          "type": "FOREIGN KEY",
+          "name": "tool_id_to_loan_tool_id",
+          "columnNames": [
+            "tool_id"
+          ],
+          "targetTableName": "tool",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        },
+        "member_id_to_loan_member_id": {
+          "type": "FOREIGN KEY",
+          "name": "member_id_to_loan_member_id",
+          "columnNames": [
+            "member_id"
+          ],
+          "targetTableName": "member",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        },
+        "reservation_id_to_loan_reservation_id": {
+          "type": "FOREIGN KEY",
+          "name": "reservation_id_to_loan_reservation_id",
+          "columnNames": [
+            "reservation_id"
+          ],
+          "targetTableName": "reservation",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        },
+        "member_id_to_loan_checked_out_by": {
+          "type": "FOREIGN KEY",
+          "name": "member_id_to_loan_checked_out_by",
+          "columnNames": [
+            "checked_out_by"
+          ],
+          "targetTableName": "member",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        }
+      }
+    },
+    "damage_report": {
+      "name": "damage_report",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "loan_id": {
+          "name": "loan_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "reported_by": {
+          "name": "reported_by",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "needs_repair": {
+          "name": "needs_repair",
+          "type": "bool",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "True sets the tool's condition to repair"
+        },
+        "reported_at": {
+          "name": "reported_at",
+          "type": "timestamptz",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        }
+      },
+      "comment": "Something wrong with a tool, found during or after a loan. Reports never block a member.",
+      "indexes": {},
+      "constraints": {
+        "damage_report_pkey": {
+          "type": "PRIMARY KEY",
+          "name": "damage_report_pkey",
+          "columnNames": [
+            "id"
+          ]
+        },
+        "loan_id_to_damage_report_loan_id": {
+          "type": "FOREIGN KEY",
+          "name": "loan_id_to_damage_report_loan_id",
+          "columnNames": [
+            "loan_id"
+          ],
+          "targetTableName": "loan",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        },
+        "member_id_to_damage_report_reported_by": {
+          "type": "FOREIGN KEY",
+          "name": "member_id_to_damage_report_reported_by",
+          "columnNames": [
+            "reported_by"
+          ],
+          "targetTableName": "member",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        }
+      }
+    },
+    "notification": {
+      "name": "notification",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "member_id": {
+          "name": "member_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": null
+        },
+        "loan_id": {
+          "name": "loan_id",
+          "type": "uuid",
+          "default": null,
+          "check": null,
+          "notNull": false,
+          "comment": null
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "due_soon, overdue, hold_lapsing"
+        },
+        "channel": {
+          "name": "channel",
+          "type": "text",
+          "default": null,
+          "check": null,
+          "notNull": true,
+          "comment": "push or email (ADR 0003)"
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamptz",
+          "default": null,
+          "check": null,
+          "notNull": false,
+          "comment": null
+        }
+      },
+      "comment": "One reminder to a member, queued by the worker and sent once.",
+      "indexes": {},
+      "constraints": {
+        "notification_pkey": {
+          "type": "PRIMARY KEY",
+          "name": "notification_pkey",
+          "columnNames": [
+            "id"
+          ]
+        },
+        "member_id_to_notification_member_id": {
+          "type": "FOREIGN KEY",
+          "name": "member_id_to_notification_member_id",
+          "columnNames": [
+            "member_id"
+          ],
+          "targetTableName": "member",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        },
+        "loan_id_to_notification_loan_id": {
+          "type": "FOREIGN KEY",
+          "name": "loan_id_to_notification_loan_id",
+          "columnNames": [
+            "loan_id"
+          ],
+          "targetTableName": "loan",
+          "targetColumnNames": [
+            "id"
+          ],
+          "updateConstraint": "NO_ACTION",
+          "deleteConstraint": "NO_ACTION"
+        }
+      }
+    }
+  },
+  "enums": {
+    "loan_state": {
+      "name": "loan_state",
+      "values": [
+        "out",
+        "returned",
+        "overdue",
+        "lost"
+      ],
+      "comment": null
+    },
+    "tool_condition": {
+      "name": "tool_condition",
+      "values": [
+        "good",
+        "worn",
+        "repair",
+        "retired"
+      ],
+      "comment": null
+    }
+  },
+  "extensions": {}
+}
