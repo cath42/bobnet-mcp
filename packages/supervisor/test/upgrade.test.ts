@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { PushFrame } from "@bobnet/client/connection";
 import { afterEach, describe, expect, it } from "vitest";
 import * as rc41 from "../../protocol/test/fixtures/remote-rc41.ts";
-import { preflight, satisfies } from "../src/check.ts";
+import { claudeBinary, preflight, satisfies } from "../src/check.ts";
 import { GhCiPoll } from "../src/ci-poll.ts";
 import { DEFAULT_RELEASE_ROOT, guardedFolders, parseSupervisorConfig, releaseRoot } from "../src/config.ts";
 import { callTool, handlers, ORCHESTRATOR_ONLY } from "../src/mcp.ts";
@@ -1136,6 +1136,16 @@ describe("bin.ts check: the preflight (AC 4)", () => {
       expect.stringMatching(/^supervisor\.yaml: .*must grant spawn, upgrade: true, cleanup: true, or more than one/),
       expect.stringMatching(/^config\.json: /),
     ]);
+  });
+
+  it("resolves the SDK's native claude binary, and names it a problem when the platform package is missing (rc.57)", () => {
+    expect(existsSync(claudeBinary())).toBe(true);
+    const sdk = temp("bobnet-sdk-");
+    writeFileSync(join(sdk, "sdk.mjs"), "");
+    expect(() => claudeBinary(join(sdk, "sdk.mjs"), "linux", "x64")).toThrow(/claude-agent-sdk-linux-x64 or @anthropic-ai\/claude-agent-sdk-linux-x64-musl not installed/);
+    const { dir, env } = configFolder();
+    const missing = () => claudeBinary(join(sdk, "sdk.mjs"), "darwin", "arm64");
+    expect(preflight(dir, release(">=24"), "24.1.0", env, missing)).toEqual([expect.stringMatching(/^claude binary: @anthropic-ai\/claude-agent-sdk-darwin-arm64 not installed/)]);
   });
 
   it("the real bin.ts check exits 0 on a good config, opening no db and taking no pid file, and 1 on a bad one", () => {
