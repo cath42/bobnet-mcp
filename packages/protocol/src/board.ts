@@ -536,7 +536,7 @@ export const BoardOp = z.discriminatedUnion("op", [
   z.object({ op: z.literal("library_blob"), ...project, blob: fullSha, text: z.string().max(LIBRARY_BLOB_MAX) }),
   /**
    * The library at a commit of the project's ref (ADR 0015 §1, §4; 0017 §4): the `library` op of the ADRs, named apart
-   * from the read. `index: null`: main has no `library/`. Kept when its commit is as new as the one kept, and every blob
+   * from the read. `index: null`: main has no `library/`. Kept when its commit is newer than the one kept, and every blob
    * it names is there; else `missing` lists them and nothing changes. An equal commit refreshes `checked_at` only.
    */
   z.object({

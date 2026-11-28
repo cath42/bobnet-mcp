@@ -128,6 +128,45 @@ describe("a project's library in the Board (ADR 0015 §2, 0017 §4)", () => {
     expect(await reply(sup("mbp-2"), failed)).toMatchObject({ ok: true, changed: { refs: ["library"] } });
   });
 
+  it("refuses an unserved caller's 900 KB blob before it hashes it, and a text over 512 KB in bytes (review A 1, 2)", async () => {
+    await toolshed();
+    // 300K euro signs: 900 KB in UTF-8, under the schema's 512K UTF-16 units. Its id is wrong, so a hash would say so.
+    const text = "\u20ac".repeat(300 * 1024);
+    expect(new TextEncoder().encode(text).byteLength).toBe(900 * 1024);
+    const wrong = "0".repeat(40);
+    // Who sends it is checked first: forbidden, not "its git id differs".
+    expect(await reply(sup("mbp-1", ["helix"]), { op: "library_blob", project: "toolshed", blob: wrong, text })).toMatchObject({ ok: false, code: "forbidden" });
+    expect(await reply(owner, { op: "library_blob", project: "toolshed", blob: wrong, text })).toMatchObject({ ok: false, code: "forbidden" });
+    // Then its bytes, still before the hash: a served supervisor's is invalid for its size, even with its right id.
+    for (const blob of [wrong, await gitBlobId(text)]) {
+      expect(await reply(sup(), { op: "library_blob", project: "toolshed", blob, text })).toMatchObject({ ok: false, code: "invalid", message: expect.stringMatching(/921600 bytes, over the 524288/) });
+    }
+    // 512 KB exactly is kept.
+    const fits = "\u20ac".repeat(512 * 1024 / 4) + "ab".repeat(512 * 1024 / 8);
+    expect(new TextEncoder().encode(fits).byteLength).toBe(512 * 1024);
+    expect(await ok(sup(), { op: "library_blob", project: "toolshed", blob: await gitBlobId(fits), text: fits })).toMatchObject({ stored: true });
+    expect(await rows("SELECT bytes FROM library_blobs")).toEqual([{ bytes: 512 * 1024 }]);
+  });
+
+  it("keeps the stored library on an equal or older date from another commit, and takes a newer one (review A 6)", async () => {
+    await toolshed();
+    await send(sup(), TOOLSHED, C1, "2026-11-27T09:00:00Z");
+    const index = await indexOf(TOOLSHED);
+    const sync = (commit: string, committed_at: string) => ({ op: "library_sync" as const, project: "toolshed", ref: "origin/main", commit, committed_at, github: null, index });
+    const C3 = "3c000000000000000000000000000000000000cc";
+    // The same second, written another way, from a laptop on another commit (an amend): kept, every tick.
+    for (let tick = 0; tick < 2; tick++) {
+      expect(await reply(sup("mbp-2"), sync(C2, "2026-11-27T10:00:00+01:00"))).toMatchObject({ ok: true, result: { stored: false }, changed: null });
+      expect(await reply(sup(), sync(C1, "2026-11-27T09:00:00Z"))).toMatchObject({ ok: true, result: { stored: true }, changed: null });
+    }
+    expect((await ok<BoardResults["library"]>(owner, { op: "library", project: "toolshed" })).library).toMatchObject({ commit: C1, laptop: "mbp-1" });
+    // Older: kept.
+    expect(await reply(sup("mbp-2"), sync(C2, "2026-11-27T08:59:59Z"))).toMatchObject({ ok: true, result: { stored: false } });
+    // Newer, by a second: replaces it.
+    expect(await reply(sup("mbp-2"), sync(C3, "2026-11-27T09:00:01Z"))).toMatchObject({ ok: true, result: { stored: true }, changed: { refs: ["library"] } });
+    expect((await ok<BoardResults["library"]>(owner, { op: "library", project: "toolshed" })).library).toMatchObject({ commit: C3, laptop: "mbp-2" });
+  });
+
   it("keeps a commit with no library/ as a library not written, and drops every blob", async () => {
     await toolshed();
     await send(sup(), TOOLSHED);

@@ -1,4 +1,5 @@
 import {
+  LIBRARY_BLOB_MAX,
   LIBRARY_STANDARD,
   type BoardCaller,
   type BoardOp,
@@ -36,10 +37,9 @@ export class LibraryCache {
     private readonly now: () => number,
   ) {}
 
-  /** One blob, once: its id was checked against its text before this (`Board.apply`). */
+  /** One blob, once: its id was checked against its text before this (`Board.apply`, after `admitBlob`). */
   blob(caller: BoardCaller, project: { pk: number; key: string }, op: Op<"library_blob">): { stored: boolean } {
-    servedBy(caller, project.key, "library blob");
-    const bytes = new TextEncoder().encode(op.text).byteLength;
+    const bytes = admitBlob(caller, op);
     const had = this.sql.exec("SELECT 1 FROM library_blobs WHERE project = ? AND blob = ?", project.pk, op.blob).toArray().length > 0;
     if (!had) this.sql.exec("INSERT INTO library_blobs (project, blob, text, bytes) VALUES (?, ?, ?, ?)", project.pk, op.blob, op.text, bytes);
     return { stored: !had };
@@ -47,7 +47,7 @@ export class LibraryCache {
 
   /**
    * The library at a commit (0015 §1, §2). The newest `committed_at` is kept: an older commit, from a laptop that hasn't
-   * fetched, changes nothing; the same commit refreshes when it was checked, from where, and its problems (a failed
+   * fetched, or another commit of the same date, changes nothing; the same commit refreshes when it was checked, from where, and its problems (a failed
    * fetch). A new commit replaces it whole once every blob it names is here, and drops the blobs nothing names.
    * `changed`: whether an open page should read it again.
    */
@@ -61,7 +61,8 @@ export class LibraryCache {
       this.sql.exec("UPDATE libraries SET checked_at = ?, laptop = ?, problems_json = ? WHERE project = ?", at, laptop, problems, project.pk);
       return { stored: true, missing: [], changed: had.problems_json !== problems };
     }
-    if (had && Date.parse(had.committed_at) > Date.parse(op.committed_at)) return { stored: false, missing: [], changed: false };
+    // An equal date keeps it too: two laptops on different commits of the same second don't replace each other every tick.
+    if (had && Date.parse(had.committed_at) >= Date.parse(op.committed_at)) return { stored: false, missing: [], changed: false };
     const named = [...new Set((op.index?.files ?? []).filter((f) => !f.too_large).map((f) => f.blob))];
     const have = new Set(this.sql.exec<{ blob: string }>("SELECT blob FROM library_blobs WHERE project = ?", project.pk).toArray().map((b) => b.blob));
     const missing = named.filter((b) => !have.has(b));
@@ -127,6 +128,17 @@ export class LibraryCache {
   private row(project: number): LibraryRow | undefined {
     return this.sql.exec<LibraryRow>("SELECT * FROM libraries WHERE project = ?", project).toArray()[0];
   }
+}
+
+/**
+ * Whether a blob may be kept, before anything costly is done with it: who sends it, then its size in UTF-8 bytes
+ * (the schema's cap counts UTF-16 units). `Board.apply` calls it before it hashes the text. Its size in bytes.
+ */
+export function admitBlob(caller: BoardCaller, op: Op<"library_blob">): number {
+  servedBy(caller, op.project, "library blob");
+  const bytes = new TextEncoder().encode(op.text).byteLength;
+  if (bytes > LIBRARY_BLOB_MAX) throw new BoardError("invalid", `The text is ${bytes} bytes, over the ${LIBRARY_BLOB_MAX} a library file may be`);
+  return bytes;
 }
 
 /** A supervisor's, over its pinned connection, for a project it registered as one it serves (as `release_tag`). */

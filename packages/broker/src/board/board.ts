@@ -4,6 +4,7 @@ import { migrate } from "../schema.ts";
 import { BoardError } from "./errors.ts";
 import { exportBoard, importBoard, type Reader } from "./export.ts";
 import { BOARD_MIGRATIONS } from "./schema.ts";
+import { admitBlob } from "./library.ts";
 import { BoardStore, type NoticeRow } from "./store.ts";
 
 /**
@@ -32,9 +33,16 @@ export class Board extends DurableObject<Env> {
     const parsed = BoardOp.safeParse(input);
     if (!parsed.success) return { ok: false, code: "invalid", message: parsed.error.issues[0]?.message ?? "Invalid operation" };
     const op = parsed.data;
-    // A library's blob is main's bytes, provably (ADR 0015 §2): its id is git's own for its text.
-    if (op.op === "library_blob" && (await gitBlobId(op.text)) !== op.blob) {
-      return { ok: false, code: "invalid", message: `The text isn't blob ${op.blob}: its git id differs` };
+    // A library's blob is main's bytes, provably (ADR 0015 §2): its id is git's own for its text. Hashed only once its
+    // sender may send it and its bytes fit.
+    if (op.op === "library_blob") {
+      try {
+        admitBlob(caller, op);
+      } catch (err) {
+        if (err instanceof BoardError) return { ok: false, code: err.code, message: err.message };
+        throw err;
+      }
+      if ((await gitBlobId(op.text)) !== op.blob) return { ok: false, code: "invalid", message: `The text isn't blob ${op.blob}: its git id differs` };
     }
     return this.answer(op.op, () => {
       if (isRead(op)) return { ok: true, result: this.store.read(caller, op), changed: null };
