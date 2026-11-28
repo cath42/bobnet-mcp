@@ -1148,6 +1148,11 @@ describe("bin.ts check: the preflight (AC 4)", () => {
     expect(preflight(dir, release(">=24"), "24.1.0", env, missing)).toEqual([expect.stringMatching(/^claude binary: @anthropic-ai\/claude-agent-sdk-freebsd-arm64 not installed/)]);
   });
 
+  it("the lockfile pins the SDK's native binaries for both laptops, so a land can't drop them as rc.57's did", () => {
+    const lock = readFileSync(fileURLToPath(new URL("../../../pnpm-lock.yaml", import.meta.url)), "utf8");
+    for (const p of ["darwin-arm64", "linux-x64"]) expect(lock).toMatch(new RegExp(`^  '@anthropic-ai/claude-agent-sdk-${p}@[^']+':\\n    resolution:`, "m"));
+  });
+
   it("the real bin.ts check exits 0 on a good config, opening no db and taking no pid file, and 1 on a bad one", () => {
     const { dir, env } = configFolder();
     const bin = fileURLToPath(new URL("../src/bin.ts", import.meta.url));
