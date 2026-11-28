@@ -23,6 +23,10 @@
 - **Amended by ADR 0017 again** (2026-11-27, Casper's Q-22: each table opened on its own): the ERD viewer is
   BobNet's own (React Flow and dagre), not Liam's app, so §6's Liam parts (the bridge, `?active=`, the parser from
   Liam's release) are gone. Its messages are 0017 §7's.
+- **Amended by ADR 0017 a third time** (2026-11-27, Casper's Q-23, "Liam as is"): the ERD viewer is Liam's app
+  again, now unpatched, fed from the DBML by DBML's own exporter to Postgres DDL and Liam's own parser, in the frame.
+  So §6's `'unsafe-eval'` for the ERD frame is back. Its bridge, `?active=`, theme stylesheet, hidden header and
+  drawer, and the card stay gone. §7's changes to Liam are none. The messages are 0017 §7's: `files` and `ready`.
 
 ## Context
 

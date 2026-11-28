@@ -37,4 +37,8 @@ Daisy's v4 prototype draws it, and build A and B use it as their fixture, in pla
 - **Each table on its own (Q-22, 2026-11-27).** BobNet's own ERD viewer (`pack-erd-viewer.mjs`,
   `frame-erd-own-test.mjs`) draws it with a control on every table. At 1280 by mouse and 390 by tap: all closed;
   loan open among closed tables; loan and member open; loan closed with member still open. 0 errors and no
-  overlapping tables. The shots are in `../shots-per-entity/`.
+  overlapping tables. The shots are in `../shots-per-entity/`. Dropped after Q-23.
+- **Liam as is (Q-23, 2026-11-27).** `@dbml/core` 13.1.0's exporter turns it into 178 lines of PostgreSQL DDL
+  (2 enums, 9 tables, 15 foreign keys, 27 `COMMENT ON`s). Liam's own parser reads that exactly as Liam's CLI 0.7.24
+  does, and Liam's unpatched app draws the 9 tables in a sandboxed frame at 1280 and at 390 wide
+  (`../liam-as-is-test.mjs`). The notes show in Liam's side pane. The shots are in `../shots-liam-as-is/`.

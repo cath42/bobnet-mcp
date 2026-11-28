@@ -222,10 +222,12 @@ Write it in [DBML](https://dbml.dbdiagram.io/docs/), in one file.
   - `-` is one-to-one, with `[unique]` on the referring column.
   - Don't use `<>`. A many-to-many is its join table, written out.
 - **`Enum`s** for fixed sets of values, with a `note:` per value where it helps.
-- **The diagrams.** BobNet always draws "All tables" first. Each `DiagramView` adds a diagram, in file order. Make
-  one per area a reader thinks in, of about 4-8 tables. A table may be in several.
-- **Toggling attributes.** The reader toggles each diagram between tables only and tables with their attributes.
-  Nothing in the file sets that.
+- **The diagrams.** Write a `DiagramView` per area a reader thinks in, of about 4-8 tables. A table may be in
+  several. They are part of the standard even though today's viewer, Liam ERD, draws only all the tables (ADR 0017
+  §7): a later viewer that draws them replaces Liam with no change to this file.
+- **What the reader sees.** Liam ERD, as it is: all tables, with Liam's own switch between names, keys and all
+  columns for the whole diagram, and its side pane with a table's notes and columns. Nothing in the file sets that.
+  BobNet converts the file with DBML's own exporter (`dbml2sql`, below), so a file that converts cleanly draws.
 - **Check it** with `npx -p @dbml/cli dbml2sql library/data-model.dbml`. It prints each error as `file(line,col)`,
   but still exits 0, so read its output. To start one from an existing Postgres schema, use
   `npx -p @dbml/cli sql2dbml schema.sql --postgres`, then add the notes.

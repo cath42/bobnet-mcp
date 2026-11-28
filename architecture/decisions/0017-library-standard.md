@@ -5,6 +5,10 @@
   sample … im looking for standards and frameworks not 'work with what I've got' please".
 - **Amended** 2026-11-27 (Toad), after Casper's Q-22: §7's ERD viewer, each table opened on its own; build B tasks
   3-6.
+- **Amended again** 2026-11-27 (Toad), after Casper's Q-23, "Liam as is" (`lead/bob212/frameworks-decision.md`, last
+  section, at `6f27396`): the data model is drawn by Liam ERD, unpatched, fed from the DBML by DBML's own exporter.
+  Our viewer, its per-table control and the entity card are dropped. §2's diagrams, §3, §7, the consequences, the
+  alternatives, build A task 6 and build B. What §7 said under Q-22 is in git at `6f27396`.
 - **The author's guide** is `architecture/library-standard.md`: every file's template and rules. It is part of this
   decision; changing it takes an amendment here.
 - **The sample** is `architecture/spikes/bob212/sample/`: a fictional project, Toolshed, written to the standard. It
@@ -13,11 +17,12 @@
   - in 0016: §2 (the manifest), §4 (build.py's pages onto the sections) and §5 (the sources), the page-kinds column
     of §1, `about`, and the build tasks;
   - in 0015: §3 (the manifest in each repo), and the `manifest` of §4's `library` op;
-  - in 0016 §6 and §7: the ERD viewer (BobNet's own since Q-22, §7: Liam's app is dropped), its parser and CSP,
-    and its messages, which gain the diagram and each table's open state.
+  - in 0016 §6 and §7: the ERD viewer's parser (DBML's exporter, then Liam's own Postgres parser), its messages
+    (`files` and `ready` only), and everything 0016 changed in Liam: the bridge, `?active=`, the theme stylesheet,
+    the hidden header and drawer, the entity card and `about` are gone (§7).
 - **What stands:** 0015 §1 (the supervisor fetches and sends), §2 (the blob cache), §5 (staleness) and §7 (what rides
   what); 0016 §1's seven sections, their order and owner roles, §3's missing-section state, and §6's sandboxed
-  viewers, their CSP and messages, apart from the changes in §7 here.
+  viewers and their CSP, `'unsafe-eval'` for the ERD frame only, as 0016 had it, apart from the changes in §7 here.
 
 ## Context
 
@@ -99,9 +104,10 @@
   - **Every relation is a ref:** inline `[ref: > table.id]`, or a `Ref:` line. `>` is many-to-one and `-` is
     one-to-one. `<>` is not used: a many-to-many is its join table, written out.
   - `Enum`s with a `note:` per value where it helps.
-  - **The diagrams.** "All tables" is always drawn first. Then each `DiagramView` in the file adds one, in file
-    order. It lists its `Tables { … }`, and may also take `TableGroups { … }`. Views may overlap, which
-    `TableGroup`s can't: DBML puts a table in one group only.
+  - **The diagrams.** Each `DiagramView` lists its `Tables { … }`, and may also take `TableGroups { … }`. Views may
+    overlap, which `TableGroup`s can't: DBML puts a table in one group only. They stay in the standard (Casper,
+    Q-23: "DBML stays the standard, DiagramViews included"), though Liam draws only all the tables (§7). A viewer
+    that draws them can replace Liam with no change to any repo.
 - **Glossary:** `# Glossary`, then `## Term` per entry in alphabetical order. A first line `Also: other words` is
   optional. Then the definition, in users' words.
 
@@ -114,13 +120,13 @@
 | Named, overlapping diagrams | `DiagramView` (DBML 13) | no | tbls' viewpoints, in its config | no | ours to invent |
 | Any database, or none yet | yes | Postgres only | generated from a live database | Prisma's ORM | yes |
 | Authored by an agent from a template | concise, widely known (dbdiagram.io) | verbose DDL | JSON meant to be generated | ORM-specific | no one else knows it |
-| Parsed in the viewer | `@dbml/parse` 13.0.0, Apache-2.0: 490 KB, 127 KB gzip, pure JS, no `eval`, errors with line numbers | pg-query: about 2.4 MB, needs `'unsafe-eval'` | Liam reads it natively | Prisma's own wasm and Node | ours to write |
+| Drawn by Liam ERD, unpatched (§7) | through DBML's own exporter to PostgreSQL DDL, which Liam reads natively | natively | natively | natively (its parser needs native swc, not in a browser) | no |
 | A standard | yes | yes, for one engine | yes, a tool's | an ORM's | no |
 
-- **What draws it** is BobNet's own ERD viewer (§7, since Q-22; it was Liam's app, which doesn't read DBML).
-  It parses DBML with `@dbml/parse` inside the frame, in about 50 lines, `architecture/spikes/bob212/dbml-model.mjs`.
-  - The many side of a ref holds the foreign key. In a one-to-one ref, it is the side that isn't its table's key.
-  - The notes on tables, columns, enums and enum values are kept, and each table's line in the file.
+- **What draws it** is Liam ERD, as it is (§7). Liam doesn't read DBML, so DBML's own exporter
+  (`@dbml/core`, `exporter.export(dbml, "postgres")`, the same as `dbml2sql`) turns it into PostgreSQL DDL, which Liam
+  reads. Tables, columns, types, keys, nullability, uniques, defaults, enums, indexes, relations and the notes (as
+  `COMMENT ON`) all carry over. The DDL is never written to a repo: it lives only in the viewer's frame.
 - **The model is for readers.** A project with a database keeps its migrations where its code needs them; the DBML
   is its readable model. To start one from an existing schema, use `sql2dbml` (`@dbml/cli` 13.0.0, a project's own tool,
   not BobNet's). Checking the DBML against the live database is out of scope.
@@ -172,97 +178,102 @@ role's name from there, else the role. That replaces the manifest's per-section 
 
 ### 7. The viewers (amends 0016 §6, §7)
 
-- **Amended 2026-11-27, after Casper's Q-22** ("I want to be able to toggle column/attribute level details PER
-  ENTITY, its still attribute details for all or nothing that's not what I want"; the check is the last section of
-  `lead/bob212/frameworks-decision.md`, at `6b731df`). Liam's app is dropped: its show mode is one for the whole
-  diagram, so per-entity expand would be a patch on a minified, prebuilt bundle, guarded on every Liam release.
-  What this section said before is in git at `9f2c8f1`.
-- **Off-the-shelf viewers were checked first** (Casper, after Q-22; `spikes/bob212/viewer-check.md`): drawDB, ChartDB,
-  Azimutt, Liam, dbml-view and erd-editor each fail the per-entity toggle, our DBML with its views, or the embed. A
-  viewer that passes those later may replace ours: DBML is the source, not the viewer.
-- **The ERD viewer is BobNet's own**: `spikes/bob212/erd-viewer.jsx` (about 230 lines) and `dbml-model.mjs`, with
-  React 19, React Flow (`@xyflow/react` 12) and dagre (`@dagrejs/dagre`), bundled by esbuild and packed into one HTML
-  file (`spikes/bob212/pack-erd-viewer.mjs`).
-  - **No `'unsafe-eval'` and no wasm.** Its CSP is 0016 §6's with `script-src` holding its one hash. The pack fails
-    if the bundle calls `eval` or `new Function`.
-  - It is 0.96 MB, 0.28 MB gzip, parser included: `@dbml/parse` is half of it. Liam's app with the parser was 2.9 MB
-    (0.87 MB gzip).
-  - `THIRD_PARTY.txt` lists `@dbml/parse` (Apache-2.0) and its `lodash-es`, `luxon` and `pathe`; React, React Flow,
-    `zustand`, `classcat` and `use-sync-external-store` (MIT); dagre (MIT); the `d3-*` parts (ISC). Liam and
-    pg-query-emscripten are gone.
-  - React Flow is what Liam drew with, so pan, scroll, pinch and the zoom buttons behave as before. Its
-    attribution link is hidden (`proOptions.hideAttribution`); the licence is MIT and `THIRD_PARTY.txt` credits it.
-- **Each table opens and closes on its own** (Q-22):
-  - **Closed**, a table is a box with its name and a control on the node: the count of its columns and ▸.
-  - **Open**, the box also lists every column: `PK` or `FK`, the name, and the type, with `?` when it may be null.
-    The relations then join the columns' rows, not the box. The control shows ▾.
-  - **The control** is a real `<button>` on the node (`aria-expanded`, "Show loan's 9 columns"). It works by a click
-    and by a tap, and by the keyboard. It toggles only its table. A click or tap elsewhere on the node opens the
-    entity card, as before (`focus`); the control doesn't.
-  - **On a touch screen** the head and the control are bigger (48 px and 64 x 38 px at 100 %).
-- **The layout when a table grows: laid out again, not grown in place.** Grown in place, an open table covers its
-  neighbours. So dagre lays the diagram out again on every toggle, with each box's real size.
-  - **The order stays.** dagre orders a rank by the relations only, never by the sizes. So the same tables keep the
-    same order and neighbours, and only the spacing changes. The tables glide to their new places in 200 ms.
-  - **While the reader hasn't panned or zoomed** since the diagram was fitted, it stays fitted (at 100 % at most).
-    Once they have, the table they toggled stays where it is on screen, and the view then pans only as far as needed
-    to show the whole of it.
-  - **Left to right on a wide frame**: a referenced table sits left of those that refer to it. **Top to bottom
-    under 700 px wide** (a phone): fitted left to right, 9 tables would be drawn at about 30 %, too small to tap. Top
-    to bottom, they fit at about 60 %, with the control about 33 x 20 px on screen; pinch-zoom makes it bigger. There
-    the relations join the boxes' top and bottom, not the columns' rows. The direction is chosen when the frame loads.
-  - Relations are drawn in crow's-foot notation (many, and one-to-one), and a table's reference to itself loops.
-- **The messages** (0016 §6 stands for `hello`, `focus`, `fit`, `hover` and `inset`):
+- **Amended 2026-11-27, after Casper's Q-23**: "Liam as is". He wanted a framework over our own build, its limits
+  accepted, with the open standard at the source so the viewer can be swapped later (the last section of
+  `lead/bob212/frameworks-decision.md`, at `6f27396`). So BobNet's own ERD viewer of Q-22 (React Flow, dagre,
+  `@dbml/parse`, about 230 lines), its per-table control, and the entity card are dropped. They are in git at
+  `6f27396` and in `spikes/bob212/`.
+- **Liam is the off-the-shelf choice.** The time-boxed check (`spikes/bob212/viewer-check.md`) found no viewer that
+  does the per-table toggle as well as embedding. Of those it tried, Liam alone embeds as it is: Apache-2.0, a
+  prebuilt static app, nothing to fetch.
 
-  | Direction | Message | What for |
-  |---|---|---|
-  | page → viewer | `{t: "files", kind: "erd", files, view?, focus?, expanded?}` | `view` is a `DiagramView` id; absent, all tables. `expanded` is the open tables' names; absent, none. |
-  | page → viewer | `{t: "expand", tables}` | Sets which tables are open: the page's optional "Expand all" and "Collapse all". |
-  | viewer → page | `{t: "expanded", tables}` | The reader opened or closed one on its node. The page keeps the list for this diagram. |
-  | viewer → page | `{t: "ready", errors, views, note, tables, enums, shown, expanded}` | Below. |
+#### The ERD viewer: Liam ERD, unpatched, at one release
 
-  - **`show` is gone**, and with it Liam's `?showMode=` and the narrow-screen fix. For the prototype's sake, the
-    viewer still takes `{t: "show", show}` as all open (`columns`) or all closed.
-  - **`ready.tables`** is every table in the model, whatever the diagram: `[{name, note, line, columns: [{name,
-    type, notNull, default, unique, pk, note}], pk, fks: [{columns, table, targetColumns, one}]}]`. `line` is the
-    table's line in the DBML, for the card's link. `one` marks a one-to-one.
-  - **`ready.enums`** is `[{name, note, values: [{name, note}]}]`, for an enum column's values on the card.
-  - **`ready.shown`** is the diagram's table names, and **`ready.expanded`** the open ones as drawn.
-  - These take up Daisy's spec §16 item 1, made in the viewer's own parse (`dbml-model.mjs`) rather than beside a
-    Liam conversion. §16 items 2 and 3 (Liam's show mode and its hidden menus) are gone with Liam.
-  - **Centring a table** (0016 §6, spec §15.5) is the viewer's own `setCenter`, at 100 %, shifted by half the
-    inset. No bridge into someone else's app, and no synthetic wheel.
-  - **Switching diagrams** still reloads the frame. The document is cached `immutable`, and the parse and layout take
-    well under 0.3 s.
-- **What the page keeps, per diagram, on the device:** the open tables' names, from `expanded`, handed back in
-  `files`. A diagram opens as the reader left it, and the first time with every table closed. A name the DBML no
-  longer has is dropped.
-  - **Daisy designs** the node's look and its control, and whether the bar offers "Expand all" and "Collapse all"
-    (`expand`). The bar's Tables · Keys · Columns toggle is gone: the toggle is on each table.
-  - **The route** is `#project/<key>/library/data/<diagram>[/<table>]`, where `<diagram>` is `all` or a
-    `DiagramView` id. The open tables aren't in the route.
-- **The entity card stays** (Daisy's spec §11.3). It shows a table's notes, enum values and relations, which a node
-  doesn't.
+- **What is vendored**: `/vendor/erd-viewer-<version>.html`, one file packed by the vendoring tool
+  (`spikes/bob212/pack-liam-as-is.mjs`). It holds four things:
+  - **Liam's app**: `@liam-hq/cli` 0.7.24's `dist-cli/html`, its script and stylesheet byte for byte. No patch, no
+    override stylesheet, no recoloured accent, nothing hidden: its header, its show switch (names · keys · all
+    columns, for the whole diagram), its side pane and its look are Liam's.
+  - **DBML's exporter**: `@dbml/core` 13.1.0's `exporter.export(text, "postgres")`. The bundle leaves out
+    `@dbml/core`'s SQL importers (14.6 MB of ANTLR grammars that export never calls) by stubbing those modules; the
+    test (below) checks that the frame's DDL is still the unbundled exporter's.
+  - **Liam's own Postgres parser**: `@liam-hq/schema` 0.6.1's SQL processor, on `pg-query-emscripten` 5.1.0. The
+    parser and the app must agree (0016 §6). npm's 0.6.1 is older than the CLI's bundled one, and in 0016's spike it
+    cut Vitals' CHECK bodies. So the test checks that its parse of the exported DDL is the CLI's own
+    `liam erd build --format postgres` output for the same DDL. On the sample it is.
+  - **The frame shell**, about 1 KB, which every sandboxed embed needs: storage and cookie shims for the opaque origin
+    (0016 §6), and the answer to Liam's `fetch("schema.json")`. It draws nothing and styles nothing.
+- **One Liam release, pinned.** Moving to a new Liam or DBML release is a vendoring change: re-pack, re-run the test,
+  look at the shots.
+- **Size**: 5.65 MB, 1.38 MB gzip: Liam's app 2.45 MB, and the parsers 3.19 MB (pg-query is 2.4 MB of that). It is
+  cached `immutable` like every viewer.
+
+#### Where DBML becomes DDL, and the CSP
+
+- **In the viewer's frame**, at view time. The page posts the DBML text, as it posts LikeC4's `.c4` files. Not in
+  the page, which keeps its strict CSP. Not in the supervisor either: 0016's alternatives rejected that (Liam's ~100
+  MB of dependencies, an rc for every parser fix, and laptops on different rcs feeding one renderer), and it would
+  split the parser and the app across two release trains.
+- **`'unsafe-eval'` is needed again, for the ERD frame only.** The DBML exporter doesn't need it. Liam's parser does:
+  `pg-query-emscripten` calls `eval`. So the ERD viewer's CSP is 0016 §6's, as 0016 first had it:
+  `script-src <its three hashes> 'unsafe-eval'`. The LikeC4 frame keeps `'wasm-unsafe-eval'` only. The page never
+  gets either.
+- **How 0016 §6 keeps it isolated.** The frame is `sandbox="allow-scripts"`, with no `allow-same-origin`, so it has
+  an opaque origin: no cookies, no storage, no access to the page or the owner's socket. It has no popups, no
+  downloads and no top navigation, and `connect-src 'none'` gives it no network. Whatever is evaluated in it sees
+  only the DBML text the page handed it, and can only post messages back. The page checks `e.source` and the message
+  shapes, as 0016 §6 says.
+- **What Liam reaches for and doesn't get.** It asks Google Fonts for IBM Plex, which the CSP blocks, so it uses the
+  system font: that is the one console error the test allows. Its header's GitHub, help, Export and Copy Link do
+  nothing in the sandbox. Both are accepted, because the alternative is patching Liam.
+
+#### The messages (0016 §6's `hello` stands; the rest are replaced)
+
+| Direction | Message | What for |
+|---|---|---|
+| viewer → page | `{t: "hello"}` | The frame is listening. |
+| page → viewer | `{t: "files", kind: "erd", files: [{path: "library/data-model.dbml", text}]}` | The DBML, once. |
+| viewer → page | `{t: "ready", errors: [{path, line, message}], tables}` | `tables` is the count drawn. With errors there is nothing to draw. |
+
+- **`errors`**: the DBML's own, by line, from the exporter's parse (`line` from 1). The page lists them with the
+  file's GitHub line link (§5). If Liam's parser rejects the exporter's DDL (it shouldn't), it is one error with
+  `line: 0`: "the viewer couldn't read the converted model".
+- **Nothing else crosses**: no `view`, `focus`, `fit`, `hover`, `inset`, `show`, `expand`, `expanded`, and no
+  `tables`, `enums` or `note` lists. Liam's focus, fit, zoom, show switch and side pane are used inside the frame.
+- **Only "All tables" is drawn.** Liam has no named diagrams, so the `DiagramView`s are not drawn (§2).
+- **The route** is `#project/<key>/library/data`, with no diagram and no table.
+- **Around the frame** the page shows the section's title, owner, source link and staleness, and its own Full
+  screen. That is Daisy's spec §11. There is no diagram picker, no table picker, no card and no hover.
+
+#### The evidence
+
+`spikes/bob212/liam-as-is-test.mjs` runs on the sample (Toolshed). The frame is served under the dashboard's CSP and
+the viewer's, at 1280 x 800 by mouse and 390 x 844 by touch. It checks:
+
+- `ready` has no errors and 9 tables, and 9 nodes are drawn, in about 2 s;
+- the frame's DDL is the unbundled `@dbml/core` exporter's;
+- Liam's parse in the frame equals Liam CLI 0.7.24's `schema.json` for that DDL;
+- a broken DBML gives its error at its line (83);
+- the only console error is the blocked Google Fonts request;
+- no request leaves for anything but the frame's own document.
+
+The shots are in `spikes/bob212/shots-liam-as-is/`:
+
+- `liam-as-is-1280.png` and `liam-as-is-390.png`, fitted;
+- `-loan.png`, with loan clicked or tapped, which opens Liam's side pane with its note and columns.
+
+At 390 the fitted diagram is drawn at about 25 %, too small to read. A tap still opens the side pane, and pinch zooms
+in. On a phone, the page's Full screen and a pinch are the way in (Daisy's).
+
+#### The LikeC4 viewer is unchanged
+
+- The page groups its views by the fixed ids (§2): the C4 levels, the use-case flows and the deployments.
+- The views picker matters on a phone. With the sample's wider containers view at 390 px, a node is too small to
+  tap, so its drill-down button doesn't show. The drill works when the button is clicked (the frame test's
+  fallback).
 - **A use case's flow link** (Daisy's spec §16 item 5): the page keeps its regex on the `.c4` text,
   `dynamic view uc<NNNN>`. The ids are fixed by §2, so it is reading the standard, not guessing. The supervisor
   doesn't parse `.c4` files, and the index stays paths and heads.
-- **The evidence** is `spikes/bob212/frame-erd-own-test.mjs`, on the sample under the dashboard's CSP and the
-  viewer's, at 1280 x 800 by mouse and 390 x 844 by tap, with 0 console errors. The shots are in
-  `spikes/bob212/shots-per-entity/`:
-  - `a`: all closed;
-  - `b`: loan open, the rest closed;
-  - `c`: loan and member open;
-  - `d`: loan closed again, member still open;
-  - `e`: all open (`expand`);
-  - `f`: Lending with loan open.
-
-  After each toggle the test checks which tables show columns, the `expanded` message, and that no two tables
-  overlap.
-- **The LikeC4 viewer is unchanged.** The page groups its views by the fixed ids (§2): the C4 levels, the use-case
-  flows and the deployments.
-  - The views picker matters on a phone. With the sample's wider containers view at 390 px, a node is too small to
-    tap, so its drill-down button doesn't show. The drill works when the button is clicked (the frame test's
-    fallback).
 
 ## Consequences
 
@@ -277,7 +288,17 @@ role's name from there, else the role. That replaces the manifest's per-section 
   - Until a project converts, its library shows "not written yet" with the guide's link.
 - **The DBML is a second description** beside a project's migrations, and can drift from them. We accept that: the
   library is the readable model.
-- **No `'unsafe-eval'` anywhere**, and a smaller ERD viewer.
+- **No viewer code of ours.** The data model is drawn by Liam as it is, with DBML's exporter and Liam's own parser in
+  front. Liam's limits are accepted (Casper, Q-23):
+  - columns show for all tables or none (Liam's switch), not per table: Q-22's per-entity toggle is given up until a
+    viewer does it;
+  - only "All tables": the `DiagramView`s are written but not drawn;
+  - Liam's own look, header and side pane, not the dashboard's;
+  - no entity card.
+- **The viewer can be replaced.** DBML is the source, so a better viewer is a vendoring change, with no change to any
+  repo. The test's checks on the DDL and the parse are what a Liam or DBML release must pass.
+- **`'unsafe-eval'` in the ERD frame**, for Liam's parser, isolated by 0016 §6's sandbox. The page and the LikeC4
+  frame never get it. The ERD viewer is 1.38 MB gzip, where Q-22's own viewer was 0.28 MB.
 - **Less to build.** The supervisor loses globs, `children`, `table`, `mermaid` and `about`, and gains one front
   matter reader in `protocol`.
 - **Moving files.** A project's existing docs move into `library/` when it converts. Its CLAUDE.md and links follow
@@ -294,13 +315,19 @@ role's name from there, else the role. That replaces the manifest's per-section 
   stays for small diagrams inside Markdown.
 - **`docs/` instead of `library/`.** Rejected: `docs/` is often a site generator's folder, and `library/` says what
   it is.
+- **BobNet's own ERD viewer** (Q-22's: React Flow, dagre and `@dbml/parse`, about 230 lines, each table opened on its
+  own, and the entity card). Rejected by Casper (Q-23): a framework with its limits, not a custom build. It is in git
+  at `6f27396` if a later release wants it back.
 - **Per-entity expand by patching Liam's node component** (Q-22). Rejected: Liam ships a minified, prebuilt app
-  whose show mode is global and whose state lives in its URL. A patch would be on hashed code, re-checked on every
-  Liam release, and the `?showMode=` and narrow-screen workarounds would stay. Our own viewer is a third of the size,
-  has no workarounds, and the per-table state is ours.
-- **elkjs for the layout.** Rejected for now: 1.4 MB and asynchronous, for nine tables. dagre is 47 KB and keeps a
-  rank's order when sizes change. A model with hundreds of tables may want elk's port-aware layout later.
-- **Growing an opened table in place, with no new layout.** Rejected: it covers the tables under it.
+  whose show mode is global. A patch would be on hashed code, re-checked on every Liam release. And Q-23 is Liam
+  unpatched.
+- **Our own DBML to Liam JSON converter** (`spikes/bob212/dbml-to-liam.mjs`, v3). Rejected: custom code where
+  DBML's own exporter and Liam's own parser do the job.
+- **The supervisor converts the DBML** (to DDL, or on to Liam's JSON) and sends it as a derived blob. That would take
+  `'unsafe-eval'` out of every browser. Rejected, as in 0016's alternatives: Liam's dependencies on every laptop, an
+  rc for every parser fix, and the parser and the app on two release trains.
+- **Off-the-shelf viewers other than Liam** (drawDB, ChartDB, Azimutt, dbml-view, erd-editor). Rejected in
+  `spikes/bob212/viewer-check.md`: none embeds as it is.
 - **Card numbers per project prefix** (`ADR-0003`, `UC-0003` in the file name). Rejected: the folder already says
   the kind. How a number is shown is Daisy's.
 
@@ -335,43 +362,31 @@ own later item, not R9.
        name them;
      - UX cards with status, the verdict and its date, the prototype and their use cases.
    - Mermaid fences, 11.x.
-6. **The project menu** (AC3), per Daisy's v4 spec and Casper's answer to it.
-7. **End to end.** The sample's library through the fixture supervisor, the broker and the page, at 1280 and 390
-   wide: the evidence shots, until a project has converted.
+6. **The project menu** (AC3): design A, the "<Project> ▾" button, per Daisy's spec. Casper's answer to Q-23: "Its
+   fine".
+7. **End to end.** The sample's library (Toolshed) through the fixture supervisor, the broker and the page, at 1280
+   and 390 wide. These shots are AC1's evidence until a project has converted. Converting Helix, Vitals and BobNet
+   is each project's own later item.
 
-**Build B, the diagrams** (0016 §6, §7, as amended in §7 here), 6 tasks:
+**Build B, the diagrams** (0016 §6, §7, as amended in §7 here), 4 tasks:
 
-1. **The tools and the Worker.**
-   - `tools/vendor/` with the LikeC4 viewer (0016 §7's settings), `viewers.json` and `THIRD_PARTY.txt`.
-   - The Worker serves each viewer with its CSP: `'wasm-unsafe-eval'` for LikeC4, and its one hash only for the ERD.
-   - The dashboard's CSP gains `frame-src 'self'`.
-2. **Dashboard, the architecture page.**
-   - The frame and its messages (0016 §6).
-   - The bar: the crumb, ↑ Out, and the views picker grouped by C4 level, use-case flow and deployment.
-   - A flow's link to its use case, the focus in the route, the errors and the loading state.
-3. **The ERD viewer** (§7, as amended for Q-22): BobNet's own, no Liam.
-   - Its source in the repo, from the spike's `erd-viewer.jsx`, `erd-viewer.css` and `dbml-model.mjs`. The vendoring
-     tool builds it with esbuild into `/vendor/erd-viewer-<version>.html` and its hash (`pack-erd-viewer.mjs`).
-   - Pinned dev dependencies: `@dbml/parse` 13.0.0, `react` and `react-dom` 19, `@xyflow/react` 12, `@dagrejs/dagre`.
-     The build fails if the bundle calls `eval` or `new Function`.
-   - Each table's own control, the layout again on a toggle (order kept, fitted or anchored), and top to bottom
-     under 700 px.
-   - The messages: `files` with `view`, `focus` and `expanded`; `expand`; `expanded`; `focus`, `fit`, `hover` and
-     `inset` (0016 §6); `ready` with `views`, `note`, `tables`, `enums`, `shown` and `expanded`.
-   - The theme from `style.css`'s tokens, light and dark (Daisy's).
-4. **Dashboard, the data model page.**
-   - The diagram picker: "All tables", then the `DiagramView`s.
-   - Each diagram's open tables, kept on the device from `expanded` and handed back in `files` (§7); "Expand all"
-     and "Collapse all" if Daisy's spec keeps them.
-   - The table picker, Fit, Full screen, the diagram and table in the route, and the DBML errors by line.
-5. **Dashboard, the entity card**, per Daisy's spec: from `ready.tables` and `ready.enums`, with its notes, keys,
-   enum values, relation chips and the table's line.
-6. **Tests.** The spike's frame tests on the vendored viewers with the sample, in the broker's suite, at 1280 and
-   390 wide:
-   - `frame-test.mjs`: draw, drill, zoom;
-   - `frame-erd-own-test.mjs`: one table opened by its own control among closed ones, then a second, then the first
-     closed again, by mouse and by tap; no overlaps; `expanded`, the state handed back, focus, hover, `expand`, and
-     one `DiagramView`.
+1. **The vendored viewers and the Worker.** `tools/vendor/` packs the LikeC4 viewer (0016 §7's settings), and the
+   ERD viewer as is from `pack-liam-as-is.mjs`: Liam CLI 0.7.24's app untouched, `@dbml/core` 13.1.0's exporter and
+   `@liam-hq/schema` 0.6.1's SQL parser, all pinned. It writes `viewers.json` and `THIRD_PARTY.txt` (Liam and
+   `@dbml/core` Apache-2.0, pg-query-emscripten MIT). The Worker serves each viewer with its CSP:
+   `'wasm-unsafe-eval'` for LikeC4, `'unsafe-eval'` for the ERD. The dashboard's CSP gains `frame-src 'self'`.
+2. **Dashboard, the architecture page.** The frame and its messages (0016 §6). The bar: the crumb, ↑ Out, and the
+   views picker grouped by C4 level, use-case flow and deployment. A flow's link to its use case, the focus in the
+   route, the errors and the loading state.
+3. **Dashboard, the data model page**, per Daisy's spec §11: the Liam frame with `files` and `ready` (§7), loading
+   until `ready`, the DBML errors by line with GitHub links, the source line, staleness and Full screen. Route
+   `#project/<key>/library/data`.
+4. **Tests**, in the broker's suite, on the vendored viewers with the sample, at 1280 and 390 wide:
+   - `frame-test.mjs`: draw, drill and zoom;
+   - `liam-as-is-test.mjs`: 9 tables drawn; the DDL is the exporter's; the parse is Liam CLI's; a DBML error at
+     its line; only the Google Fonts error.
+
+   They fail on a Liam or DBML release that breaks them.
 
 **What ships how.** It is as 0016 had it: a broker deploy carries build B and build A's tasks 1, 2 and 4-7. Task 3
 rides an rc.

@@ -4,6 +4,10 @@ Casper asked "Is that a custom build? I wanted to try and stick to some good fra
 the open foundation and we check off-the-shelf viewers first (`lead/bob212/frameworks-decision.md`). A two-hour
 time box. Q-23 waits on this.
 
+> **Outcome (Casper, Q-23 "Liam as is", 2026-11-27):** he chose the off-the-shelf viewer over our thin layer, and
+> accepted its limits. The data model is drawn by **Liam ERD, unpatched**, fed from the DBML through DBML's own
+> exporter (ADR 0017 §7, `../shots-liam-as-is/`). The answer below is the check as it was put to him.
+
 ## The answer
 
 **None passes. Keep our thin layer on React Flow + dagre + `@dbml/parse`** (ADR 0017 §7). Those three are the

@@ -155,3 +155,38 @@ node <repo>/architecture/spikes/bob212/pack-erd-viewer.mjs erd-own frame-own/erd
 TOOLS=$PWD/tools EXE=<chrome-headless-shell> node <repo>/architecture/spikes/bob212/frame-erd-own-test.mjs frame-own \
   <repo>/architecture/spikes/bob212/sample/library/data-model.dbml frame-own/shots
 ```
+
+## Liam as is (ADR 0017 §7, Q-23)
+
+Toad, 2026-11-27, after Casper's Q-23: "Liam as is". Our viewer above is dropped. Liam ERD draws the data model,
+unpatched.
+
+- **The pipeline, all in the sandboxed frame.** First DBML, then DBML's own exporter (`@dbml/core` 13.1.0,
+  `exporter.export(text, "postgres")`), then PostgreSQL DDL, then Liam's own parser (`@liam-hq/schema` 0.6.1's SQL
+  processor), then Liam's schema JSON, then Liam CLI 0.7.24's app, byte for byte.
+- **The pack.** `pack-liam-as-is.mjs` writes one HTML file: 5.65 MB, 1.38 MB gzip. It stubs `@dbml/core`'s SQL
+  importers, 14.6 MB that export never calls; without the stubs the bundle is 17.5 MB. The frame shell is the
+  storage shims and the answer to `fetch("schema.json")`, as `pack-liam.mjs` has them.
+- **The CSP** needs `'unsafe-eval'` (pg-query-emscripten), isolated by the sandbox (0016 §6).
+- **The test.** `liam-as-is-test.mjs`, at 1280 by mouse and 390 by touch, checks:
+  - 9 tables drawn;
+  - the frame's DDL is the unbundled exporter's;
+  - Liam's parse in the frame equals Liam CLI's `schema.json` for the same DDL (same content; only key order
+    differs);
+  - a broken DBML reports line 83;
+  - the only console error is the blocked Google Fonts request.
+
+  It takes about 2 s to ready. The shots are in `shots-liam-as-is/`. At 390 the fitted diagram is about 25 %, and a
+  tap opens Liam's side pane.
+
+To re-run (outside the repo, in `~/.cache/bobnet-spikes/bob212/`):
+
+```
+mkdir liam-as-is && cd liam-as-is && npm init -y && npm i @dbml/core@13.1.0 @liam-hq/schema@0.6.1 esbuild
+node -e 'const fs=require("fs");fs.writeFileSync("schema.sql",require("@dbml/core").exporter.export(fs.readFileSync(process.argv[1],"utf8"),"postgres"))' \
+  <repo>/architecture/spikes/bob212/sample/library/data-model.dbml
+../tools/node_modules/.bin/liam erd build --format postgres --input schema.sql --output-dir cli/out && cd ..
+node <repo>/architecture/spikes/bob212/pack-liam-as-is.mjs liam-as-is tools/node_modules/@liam-hq/cli/dist-cli/html frame-liam-as-is/erd-viewer.html
+TOOLS=$PWD/tools EXE=<chrome-headless-shell> node <repo>/architecture/spikes/bob212/liam-as-is-test.mjs frame-liam-as-is \
+  <repo>/architecture/spikes/bob212/sample/library/data-model.dbml liam-as-is liam-as-is/cli/out/schema.json <repo>/architecture/spikes/bob212/shots-liam-as-is
+```
