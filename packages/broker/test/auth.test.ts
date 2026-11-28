@@ -22,6 +22,20 @@ describe("Worker auth", () => {
     expect(ws.status).toBe(426);
   });
 
+  it("serves the vendored libraries immutable, by their versioned names, and everything else no-store (ADR 0015 §6)", async () => {
+    const { exports } = await import("cloudflare:workers");
+    const get = async (path: string) => exports.default.fetch(`${ORIGIN}${path}`, { headers: { "cf-access-jwt-assertion": await ownerToken() } });
+    const md = await get("/vendor/markdown-it-15.0.3.min.js");
+    expect(md.status).toBe(200);
+    expect(md.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+    expect(md.headers.get("content-type")).toMatch(/javascript/);
+    expect((await get("/vendor/mermaid-11.17.2.min.js")).headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+    expect((await get("/app.js")).headers.get("cache-control")).toBe("no-store");
+    expect((await get("/vendor/none-1.0.0.min.js")).headers.get("cache-control")).toBe("no-store");
+    const laptop = await exports.default.fetch(`${ORIGIN}/vendor/markdown-it-15.0.3.min.js`, { headers: { "cf-access-jwt-assertion": await laptopToken(1) } });
+    expect(laptop.status).toBe(404);
+  });
+
   it("rejects a missing, forged or misaddressed token", async () => {
     expect((await upgrade(null)).status).toBe(401);
     expect((await upgrade("not-a-jwt")).status).toBe(401);

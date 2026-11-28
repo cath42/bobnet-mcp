@@ -99,6 +99,9 @@ export default {
     const res = new Response(asset.body, asset);
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.headers.set(k, v);
     res.headers.set("content-security-policy", csp(url.host));
+    // The vendored libraries are named by their version, so a phone downloads each once (ADR 0015 §6): the one
+    // exception to no-store. Not a missing file: that may yet be deployed.
+    if (url.pathname.startsWith("/vendor/") && res.ok) res.headers.set("cache-control", "private, max-age=31536000, immutable");
     return res;
   },
 } satisfies ExportedHandler<Env>;
