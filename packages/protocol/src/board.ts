@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LIBRARY_BLOB_MAX, LIBRARY_PROBLEMS_MAX, LIBRARY_STANDARD, LibraryIndex, LibraryPath, LibraryProblem, LibrarySectionId } from "./library.ts";
 import { SEGMENT } from "./address.ts";
 import type { UsageWeight } from "./weights.ts";
 
@@ -238,6 +239,10 @@ export const BoardOp = z.discriminatedUnion("op", [
    * `tz`), and `day` is in it. The dashboard's, on a tap; not the agents' tools'.
    */
   z.object({ op: z.literal("usage_day"), ...project, day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), days: usageDays.default(30), tz: timeZone.default("UTC") }),
+  /** A project's library (ADR 0015 §4, 0017 §4): its index and problems, without the texts. */
+  z.object({ op: z.literal("library"), ...project }),
+  /** A section's texts at the library's commit: every `.c4` file, the DBML, the overview or glossary, or the card at `path`. */
+  z.object({ op: z.literal("library_page"), ...project, section: LibrarySectionId, path: LibraryPath.optional() }),
 
   // Writes
   z.object({
@@ -524,6 +529,26 @@ export const BoardOp = z.discriminatedUnion("op", [
     tag: z.string().min(1).max(100),
     sha: fullSha,
   }),
+  /**
+   * One file of a project's library (ADR 0015 §1, §2), as git has it at main: kept by its blob id, which the Board checks
+   * the text against, written once. A blob it has is `stored: false`. Its frame may be up to 900 KB.
+   */
+  z.object({ op: z.literal("library_blob"), ...project, blob: fullSha, text: z.string().max(LIBRARY_BLOB_MAX) }),
+  /**
+   * The library at a commit of the project's ref (ADR 0015 §1, §4; 0017 §4): the `library` op of the ADRs, named apart
+   * from the read. `index: null`: main has no `library/`. Kept when its commit is as new as the one kept, and every blob
+   * it names is there; else `missing` lists them and nothing changes. An equal commit refreshes `checked_at` only.
+   */
+  z.object({
+    op: z.literal("library_sync"),
+    ...project,
+    ref: z.string().min(1).max(200),
+    commit: fullSha,
+    committed_at: at,
+    github: z.string().url().max(300).regex(/^https:\/\//).nullable(),
+    index: LibraryIndex.nullable(),
+    problems: z.array(LibraryProblem).max(LIBRARY_PROBLEMS_MAX).default([]),
+  }),
   /** A run-slot run (§10), reported at its grant and again at its release; external_id is unique to the laptop's run. */
   z.object({
     op: z.literal("slot_run"),
@@ -539,10 +564,12 @@ export type BoardOp = z.infer<typeof BoardOp>;
 export type BoardOpInput = z.input<typeof BoardOp>;
 export type BoardOpName = BoardOp["op"];
 
-export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview" | "status" | "usage" | "usage_day" | "project";
-export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview", "status", "usage", "usage_day", "project"] satisfies BoardReadName[];
+export type BoardReadName = "projects" | "list" | "get" | "grants" | "waits" | "overview" | "status" | "usage" | "usage_day" | "project" | "library" | "library_page";
+export const BOARD_READS: readonly BoardOpName[] = ["projects", "list", "get", "grants", "waits", "overview", "status", "usage", "usage_day", "project", "library", "library_page"] satisfies BoardReadName[];
 /** The supervisor's own operations, which only its connection makes (§8). */
-export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_remote", "run_end", "push", "slot_run", "ci_run", "release_tag"];
+export const SUPERVISOR_OPS: readonly BoardOpName[] = ["session_join", "run_start", "run_remote", "run_end", "push", "slot_run", "ci_run", "release_tag", "library_blob", "library_sync"];
+/** Ops whose frame may reach `boardFrameBytes` (ADR 0015 §2): a library's blobs, and its index. */
+export const LARGE_BOARD_OPS: readonly BoardOpName[] = ["library_blob", "library_sync"];
 
 // ---------- Records ----------
 
@@ -560,6 +587,36 @@ export interface ProjectRecord {
   lead: string | null;
   po: string | null;
   repos: string[];
+  /** Its library at a glance (ADR 0015 §4), for the project menu: null when no laptop has sent one. */
+  library?: LibrarySummary | null;
+}
+
+/** A library as the project menu and page offer it: `written` false when main has no `library/`. */
+export interface LibrarySummary {
+  commit: string;
+  committed_at: string;
+  checked_at: string;
+  written: boolean;
+  title: string | null;
+  tagline: string | null;
+  /** The problems with the standard, counted. */
+  problems: number;
+}
+
+/**
+ * A project's library as the Board keeps it (ADR 0015 §2, 0017 §4): a cache of main, never edited. `checked_at`: the
+ * last sync that found this commit, by the Board's clock; `laptop`: whose.
+ */
+export interface LibraryRecord {
+  project: string;
+  ref: string;
+  commit: string;
+  committed_at: string;
+  checked_at: string;
+  laptop: string;
+  github: string | null;
+  index: LibraryIndex | null;
+  problems: LibraryProblem[];
 }
 
 export interface ReleaseRecord {
@@ -1114,6 +1171,10 @@ export interface BoardResults {
   usage: { weights: UsageWeights; tz: string; days: string[]; projects: UsageSeries[] };
   usage_day: UsageDay;
   project: ProjectPage;
+  /** `standard`: the sections as the supervisor read them; `now`: the Board's clock, which staleness is judged by (0015 §5). */
+  library: { library: LibraryRecord | null; standard: typeof LIBRARY_STANDARD; now: string };
+  /** The section's files at `commit`, in path order; a file over the limit has none. */
+  library_page: { commit: string; files: Array<{ path: string; text: string }> };
   create_project: BoardWritten;
   create_release: BoardWritten;
   create: BoardWritten;
@@ -1152,6 +1213,9 @@ export interface BoardResults {
   /** `tied`: the worker whose push the run ran on, once known. */
   ci_run: BoardWritten & { tied: string | null };
   slot_run: BoardWritten;
+  library_blob: BoardWritten & { stored: boolean };
+  /** `missing`: blobs it named that the Board lacks; then nothing was kept. */
+  library_sync: BoardWritten & { stored: boolean; missing: string[] };
 }
 
 export const BoardErrorCode = z.enum(["invalid", "conflict", "forbidden", "unavailable"]);
