@@ -177,6 +177,9 @@ role's name from there, else the role. That replaces the manifest's per-section 
   `lead/bob212/frameworks-decision.md`, at `6b731df`). Liam's app is dropped: its show mode is one for the whole
   diagram, so per-entity expand would be a patch on a minified, prebuilt bundle, guarded on every Liam release.
   What this section said before is in git at `9f2c8f1`.
+- **Off-the-shelf viewers were checked first** (Casper, after Q-22; `spikes/bob212/viewer-check.md`): drawDB, ChartDB,
+  Azimutt, Liam, dbml-view and erd-editor each fail the per-entity toggle, our DBML with its views, or the embed. A
+  viewer that passes those later may replace ours: DBML is the source, not the viewer.
 - **The ERD viewer is BobNet's own**: `spikes/bob212/erd-viewer.jsx` (about 230 lines) and `dbml-model.mjs`, with
   React 19, React Flow (`@xyflow/react` 12) and dagre (`@dagrejs/dagre`), bundled by esbuild and packed into one HTML
   file (`spikes/bob212/pack-erd-viewer.mjs`).

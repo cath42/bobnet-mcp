@@ -1,0 +1,33 @@
+// ChartDB trial: open a new PostgreSQL diagram, paste Toolshed's DBML in its DBML import, look for a per-table toggle.
+import http from "node:http"; import fs from "node:fs"; import path from "node:path";
+const [dir, dbml, outDir, w = "1280", h = "800"] = process.argv.slice(2);
+const { chromium } = await import(path.join(process.env.TOOLS, "node_modules/playwright/index.mjs"));
+const CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; worker-src 'self' blob:; base-uri 'none'; form-action 'none'";
+const types = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json", ".woff2": "font/woff2", ".ttf": "font/ttf" };
+const srv = http.createServer((req, res) => {
+  let p = path.join(dir, decodeURIComponent(req.url.split("?")[0]));
+  if (!fs.existsSync(p) || fs.statSync(p).isDirectory()) p = path.join(dir, "index.html");
+  res.writeHead(200, { "content-type": types[path.extname(p)] ?? "application/octet-stream", "content-security-policy": CSP }); res.end(fs.readFileSync(p));
+}).listen(0);
+const b = await chromium.launch({ executablePath: process.env.EXE });
+const pg = await b.newPage({ viewport: { width: +w, height: +h } });
+const log = []; pg.on("pageerror", (e) => log.push(e.message.slice(0, 150))); pg.on("console", (m) => { if (m.type() === "error") log.push(m.text().slice(0, 150)); });
+const tag = process.env.TAG ?? ""; const shot = (n) => pg.screenshot({ path: path.join(outDir, `chartdb-${w}${tag}-${n}.png`) });
+await pg.goto(`http://localhost:${srv.address().port}/`); await pg.waitForTimeout(2500);
+await pg.locator("[role=dialog] button[aria-label=\"Toggle bold\"]").nth(1).click().catch(() => console.log("no PostgreSQL card"));
+await pg.waitForTimeout(800); await pg.getByRole("button", { name: "Continue" }).click({ timeout: 3000 }).catch(() => console.log("no Continue")); await pg.waitForTimeout(800);
+await shot("1-method");
+const dbmlOpt = pg.locator("[role=dialog]").getByText("DBML", { exact: true }).first();
+await dbmlOpt.click().catch(() => console.log("no DBML option"));
+await pg.waitForTimeout(800);
+const ed = pg.locator("[role=dialog] .monaco-editor .view-lines").last();
+await ed.click(); await pg.keyboard.insertText(fs.readFileSync(dbml, "utf8")); await pg.waitForTimeout(1200);
+await shot("2-pasted");
+console.log("dialog says:", (await pg.locator("[role=dialog]").innerText().catch(() => "")).replace(/\s+/g, " ").slice(-300));
+const imp = pg.getByRole("button", { name: /^Import/ }).last();
+console.log("import enabled:", await imp.isEnabled().catch(() => "n/a"));
+await imp.click({ timeout: 3000 }).catch(() => console.log("import click failed"));
+await pg.waitForTimeout(2500); await shot("3-diagram");
+console.log("nodes:", await pg.locator(".react-flow__node").count(), "show-more buttons:", await pg.getByText(/Show More/).count());
+console.log("errors:", [...new Set(log)].slice(0, 6).join("\n"));
+await b.close(); srv.close();
