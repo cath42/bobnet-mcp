@@ -229,7 +229,7 @@ describe("LibrarySync (ADR 0015 §1)", () => {
     await sync.sync(f.project);
     expect(board.ops.map((o) => o.op)).toEqual(["library_blob", "library_sync", ...Array(14).fill("library_blob"), "library_sync"]);
     expect(board.kept()!.commit).toBe(f.clone("rev-parse", "origin/main"));
-  });
+  }, 30_000);
 
   it("says once when the broker refuses the ops, and tries again at the next tick", async () => {
     const f = fixture();

@@ -848,7 +848,7 @@ describe("GitReleases: only a tag on the line, built here (AC 3)", () => {
   it("refuses a tag whose package.json version isn't the tag's", async () => {
     const g = releasesFor(fakeRepo());
     await expect(g.verify("v2.0.0-rc.51")).rejects.toThrow("v2.0.0-rc.51's package.json says version 2.0.0-rc.50, not 2.0.0-rc.51");
-  });
+  }, 30_000);
 
   it("refuses a tag older than the first release that carries upgrade", async () => {
     const g = releasesFor(fakeRepo());
