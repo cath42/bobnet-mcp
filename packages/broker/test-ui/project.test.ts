@@ -209,9 +209,9 @@ describe("a project's page (BOB-182)", () => {
     expect(text(".p-h")).toBe("Secret");
   });
 
-  it("highlights Overview, and has the CI rows of the Overview's card without the project (c8)", async () => {
+  it("lights the Projects menu, which names it (BOB-212 spec §3), and has the CI rows of the Overview's card without the project (c8)", async () => {
     await open("#project/bobnet");
-    expect([...$("tabs").querySelectorAll("[aria-current]")].map((a) => a.textContent)).toEqual(["Overview"]);
+    expect([...$("tabs").querySelectorAll("[aria-current]")].map((a) => a.textContent)).toEqual(["BobNet▾"]);
     const row = card("pci").querySelector(".ci-row")!;
     expect([...row.children].map((c) => c.className)).toEqual(["ci-wf", "ci-st", "ci-hist", "ci-link"]);
     expect(text(".ci-st", row)).toBe("failed 2h 5m ago · 4be01c7 · Toad's land");

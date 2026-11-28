@@ -1,7 +1,9 @@
 // BobNet dashboard: one owner WebSocket, a full snapshot on connect, then live frames.
 // Each laptop's supervisor reports a snapshot (its workers, every few seconds) and, when it
 // changes, a board per project (backlog, sessions, past runs, commits, CI).
-// Agent-supplied text is only ever set as textContent.
+// Agent-supplied text is only ever set as textContent; a library's Markdown is rendered by markdown-it (library.js).
+
+import { libHref, libraryPages } from "./library.js";
 
 const state = {
   peers: [],
@@ -2115,6 +2117,7 @@ function projectRow(o) {
   // The name's link covers the row (style.css); a tap between the cells' own links opens it too.
   return h("div", { class: "card prow", dataset: { project: p.key }, onclick: (e) => { if (!e.target.closest("a, button")) location.hash = projectHref(p.key); } },
     h("div", { class: "pc pname" }, h("a", { href: projectHref(p.key) }, p.name, h("span", { class: "chev", "aria-hidden": "true" }, " ›")),
+      p.library ? h("a", { class: "plib", href: libHref(p.key) }, "Library") : null,
       h("span", { class: "muted" }, [...laptopsOf(p.key), p.lead ? `lead ${shortName(p.lead)}` : null, p.po ? `PO ${shortName(p.po)}` : null].filter(Boolean).join(" · ")),
       h("span", { class: "pmini" }, ci ? h("span", { class: "ci-pill", dataset: { tone: CI_MARK[ci][1], status: ci } }, `CI ${ci}`) : null, h("span", { class: "muted" }, here ? `${here} running` : "nobody running"))),
     cell("Release", r
@@ -3924,6 +3927,8 @@ function totalLine(runs) {
 const projectHref = (key) => `#project/${key}`;
 /** The project whose page shows, null on any other: the hash's, else the one last picked. */
 const projectRoute = () => (viewName() === "project" ? hashPath()[1] || pageProject() : null);
+/** A project's library (BOB-212): its own module, on this page's helpers. */
+const library = libraryPages({ h, button, keptRead, scheduleRender, toast, brokerNow: () => brokerNow() });
 const PAGE_DAYS = 14;
 /** Who ran lately: how many sessions show before Show all. */
 const LATELY = 8;
@@ -4066,15 +4071,27 @@ function viewProject() {
   const key = projectRoute();
   if (!key) return [noProjects()];
   if (svc.projects && !ov.rows && !ov.loading && !ov.error) loadOverview();
-  const known = knownProjects().find((p) => p.key === key), r = projectRead(key), page = r.reply;
+  const inLib = library.route();
+  // The Library tab needs only the project's record; the Work tab reads the project's page.
+  const known = knownProjects().find((p) => p.key === key), r = inLib && known ? { reply: null, error: null } : projectRead(key), page = r.reply;
   const p = page?.project ?? known, name = p?.name ?? key;
   const retry = () => button("Retry", "", () => { projectRead(key, true); if (svc.roadmaps.get(key)?.error) loadRoadmap(key); render(); });
   const who = [p?.lead ? `lead ${shortName(p.lead)}` : null, p?.po ? `PO ${shortName(p.po)}` : null, laptopsOf(key).join(", ") || null, p?.repos?.join(", ") || null].filter(Boolean).join(" · ");
   const head = h("div", { class: "p-top" },
     h("div", { class: "p-title" }, h("a", { class: "back", href: "#overview" }, "‹ Overview"), h("h2", { class: "p-h" }, name), who ? h("span", { class: "muted" }, who) : null),
-    svc.projects && svc.projects.length > 1 ? projectSwitch(key, (k) => projectHref(k)) : null);
+    // On Library, another project keeps the section (spec §4).
+    svc.projects && svc.projects.length > 1 ? projectSwitch(key, (k) => (inLib ? libHref(k, inLib.section) : projectHref(k))) : null);
   // Not one this page knows of: what the board says about it, or that it is being read.
   if (!p) return [head, r.error ? h("div", { class: "banner down" }, h("b", null, `${name} couldn't be read`), h("span", null, r.error), retry()) : h("div", { class: "empty-card" }, "Reading the board…")];
+  // Work · Library (spec §4); on Library, the library's "as of" line at their right.
+  const tabs = h("div", { class: "p-tabs" },
+    h("nav", { "aria-label": name }, h("a", { href: projectHref(key), "aria-current": inLib ? null : "page" }, "Work"), h("a", { href: libHref(key), "aria-current": inLib ? "page" : null }, "Library")),
+    inLib ? library.asOf(key) : null);
+  if (inLib) {
+    document.title = `${name} library${inLib.section ? ` · ${inLib.section}` : ""} · BobNet`;
+    return [staleBanners(), head, tabs, ...library.view(p)];
+  }
+  document.title = "BobNet";
 
   const road = roadmapOf(key);
   const u = usageRead(key, PAGE_DAYS), weights = u.reply?.weights, series = u.reply && usageSoFar(u.reply, key);
@@ -4089,6 +4106,7 @@ function viewProject() {
   return [
     staleBanners(),
     head,
+    tabs,
     r.error ? h("div", { class: "banner down" }, h("b", null, page ? "The board couldn't be read again" : "The board couldn't be read"),
       h("span", null, page ? `${r.error} Its release, who ran and its backlog are from ${clock(new Date(r.read).toISOString())}.` : `${r.error} Its release, who ran and its backlog aren't shown.`), retry()) : null,
     columns(
@@ -4233,6 +4251,43 @@ function rulesSections() {
   ];
 }
 
+// ---------- The Projects menu (BOB-212 spec §3): first in the tabs, to each project's page and its library ----------
+
+/** The button names the project whose page shows ("Helix ▾"), else "Projects"; the open menu lists the projects. */
+function drawProjectsMenu() {
+  const btn = $("pm-btn"), here = viewName() === "project" ? projectRoute() : null;
+  const p = here ? knownProjects().find((x) => x.key === here) : null;
+  btn.firstChild.textContent = here ? (p?.name ?? here) : "Projects";
+  btn.setAttribute("aria-label", here ? `Projects: ${p?.name ?? here}` : "Projects");
+  btn.toggleAttribute("aria-current", Boolean(here));
+  if ($("pm-pop").hidden) return;
+  const ps = knownProjects();
+  $("pm-list").replaceChildren(...(ps.length ? ps.map((x) => library.menuRow(x, x.key === here)) : [h("li", { class: "pm-row" }, h("span", { class: "muted" }, svc.error ? `The projects couldn't be read: ${svc.error}` : "Reading the projects…"))]));
+}
+function projectsMenu(open) {
+  $("pm-pop").hidden = !open;
+  $("pm-btn").setAttribute("aria-expanded", String(open));
+  drawProjectsMenu();
+  if (open) $("pm-pop").querySelector("a")?.focus();
+}
+$("pm-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  projectsMenu($("pm-pop").hidden);
+});
+$("pm-pop").addEventListener("click", (e) => { if (e.target.closest("a")) projectsMenu(false); });
+document.addEventListener("click", (e) => { if (!$("pm-pop").hidden && !e.target.closest(".pm")) projectsMenu(false); });
+document.addEventListener("keydown", (e) => {
+  if ($("pm-pop").hidden) return;
+  if (e.key === "Escape") {
+    projectsMenu(false);
+    $("pm-btn").focus();
+  } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    const links = [...$("pm-pop").querySelectorAll("a")], i = links.indexOf(document.activeElement);
+    links[(i + (e.key === "ArrowDown" ? 1 : -1) + links.length) % links.length]?.focus();
+    e.preventDefault();
+  }
+});
+
 // ---------- Views ----------
 
 // Now left the tabs (BOB-5 as built 3): "#now" opens the Overview, as any unknown view does.
@@ -4243,9 +4298,10 @@ function render() {
   // A chart drawn away gets no pointerleave; one still pointed at holds again as the pointer moves.
   holdRender = false;
   const v = viewName();
-  // A project's page is the Overview's, a feature's is Features'.
-  const tab = { project: "overview", feature: "features" }[v] ?? v;
-  for (const a of $("tabs").querySelectorAll("a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${tab}`);
+  // A feature's page is Features'; a project's is the Projects menu's, which then names it (BOB-212 spec §3).
+  const tab = { project: null, feature: "features" }[v] ?? v;
+  for (const a of $("tabs").querySelectorAll(":scope > a")) a.toggleAttribute("aria-current", a.getAttribute("href").split("/")[0] === `#${tab}`);
+  drawProjectsMenu();
   // Nothing waits: the count leaves the tab.
   $("needs-n").textContent = waitCount() || "";
   $("tabs").querySelector('a[href="#status"]').dataset.new = String(statusNew());
@@ -4475,6 +4531,12 @@ function connect() {
         scheduleRender();
         break;
       case "board_changed":
+        // A library is a cache of main (BOB-212): its pages read it again, and the projects for the menu's lines.
+        if (f.refs?.length === 1 && f.refs[0] === "library") {
+          loadProjects();
+          readsChanged(f.project);
+          break;
+        }
         if (!svc.projects?.some((p) => p.key === f.project)) loadProjects();
         else {
           roadmapsChanged(f.project);

@@ -1288,3 +1288,284 @@ li.need > .n-links { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 2
   .rel-h .gate button, .on-now .a-btn { min-height: 44px; }
   .settled > summary, .moved > summary, #all-tasks > summary { padding: 13px 0; }
 }
+
+/* =====================================================================================================================
+   A project's library (BOB-212; design/BOB-212/spec.md v6, its prototype's proto.css): the Projects menu, a project's
+   Work · Library tabs, and the library in its seven sections. The diagrams' frames are build B's.
+   ===================================================================================================================== */
+
+/* ---------- Header: the Projects menu, first in the tabs (spec §3) ---------- */
+.pm { position: relative; display: inline-flex; }
+.pm-btn { min-height: 0; padding: 4px 10px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font-size: 14px; }
+.pm-btn:hover { color: var(--text); }
+.pm-btn[aria-current] { color: var(--text); background: var(--surface); border-color: var(--line); font-weight: 600; }
+.pm-btn[aria-expanded="true"] { color: var(--text); border-color: var(--line); }
+.pm-btn .caret { font-size: 12px; margin-left: 4px; }
+.pm-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; width: 340px; max-width: calc(100vw - 24px);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 6px 24px rgb(0 0 0 / .12); padding: 6px; }
+.pm-pop[hidden] { display: none; }
+.pm-pop a { padding: 0; border-radius: 0; font-size: inherit; }
+.pm-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.pm-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; padding: 8px 10px; border-radius: 8px; }
+.pm-row:hover, .pm-row:focus-within { background: var(--bg); }
+.pm-row.here { box-shadow: inset 3px 0 0 var(--accent); }
+.pm-row .pm-name { color: var(--text); text-decoration: none; font-weight: 600; font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
+.pm-row .pm-name::after { content: ""; position: absolute; inset: 0; }
+.pm-row .pm-sub { grid-column: 1; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.pm-row .pm-lib { grid-column: 2; grid-row: 1 / span 2; position: relative; z-index: 1; font-size: 13px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; color: var(--accent); white-space: nowrap; }
+.pm-row .pm-lib:hover { border-color: var(--accent); }
+.pm-row .pm-nolib { grid-column: 2; grid-row: 1 / span 2; font-size: 12.5px; color: var(--muted); }
+.pm-foot { border-top: 1px solid var(--line); margin-top: 6px; padding: 8px 10px 4px; font-size: 13px; }
+.pm-foot a { color: var(--accent); }
+@media (max-width: 860px) {
+  /* The tabs are their own rows here: the menu drops full width under the header. */
+  .pm { position: static; }
+  .pm-pop { left: 8px; right: 8px; width: auto; max-width: none; top: 100%; }
+  .pm-btn { padding: 6px 10px; }
+  .pm-row { min-height: 52px; }
+  .pm-row .pm-lib { min-height: 40px; display: inline-flex; align-items: center; }
+}
+@media (pointer: coarse), (max-width: 760px) { .pm-btn { min-height: 44px; } .pm-row .pm-lib { min-height: 44px; display: inline-flex; align-items: center; } .pm-foot a { display: inline-flex; min-height: 44px; align-items: center; } }
+
+/* The Overview's project rows: Library under the name (spec §2). */
+.prow .pname a.plib { font-size: 13px; font-weight: 400; color: var(--accent); position: relative; z-index: 1; justify-self: start; }
+.prow .pname a.plib::after { content: none; }
+@media (pointer: coarse), (max-width: 760px) { .prow .pname a.plib { min-height: 44px; display: inline-flex; align-items: center; } }
+
+/* ---------- A project's tabs: Work · Library, and the library's "as of" line at their right (spec §4) ---------- */
+.p-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; border-bottom: 1px solid var(--line); margin-top: -8px; }
+.p-tabs nav { margin: 0; gap: 0; width: auto; order: 0; }
+.p-tabs nav a { border-radius: 0; padding: 8px 12px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 14.5px; }
+.p-tabs nav a[aria-current] { background: none; border: 0; border-bottom: 2px solid var(--accent); color: var(--text); font-weight: 600; }
+.p-tabs .fresh { margin-left: auto; padding: 4px 0; }
+@media (max-width: 600px) { .p-tabs .fresh { margin-left: 0; width: 100%; padding: 0 0 8px; } .p-tabs nav a { padding: 10px 14px; } }
+@media (pointer: coarse), (max-width: 760px) { .p-tabs nav a { min-height: 44px; display: inline-flex; align-items: center; } }
+.fresh { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.fresh code, .doc-meta code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.fresh a { color: inherit; }
+.fresh.warn { color: var(--warn); }
+.fresh.warn::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); margin-right: 6px; vertical-align: 1px; }
+.fresh .probs-n { color: var(--warn); font-weight: 600; }
+
+/* ---------- The library: sections | the page | on this page (spec §5) ---------- */
+.lib { display: grid; gap: 24px; grid-template-columns: 220px minmax(0, 1fr); align-items: start; }
+@media (min-width: 1280px) { .lib.has-toc { grid-template-columns: 220px minmax(0, 1fr) 200px; } }
+.lib-rail, .lib-toc { position: sticky; top: 70px; max-height: calc(100vh - 90px); overflow-y: auto; display: grid; gap: 14px; align-content: start; }
+.lib-rail { order: 0; margin: 0; width: auto; flex-wrap: nowrap; }
+.lib-rail .lab, .lib-toc .lab { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; padding: 0 10px; }
+.secs-nav { display: grid; gap: 1px; }
+.secs-nav a { display: flex; justify-content: space-between; gap: 8px; padding: 6px 10px; border-radius: 6px; color: var(--text); text-decoration: none; font-size: 14px; }
+.secs-nav a:hover { background: var(--surface); }
+.secs-nav a[aria-current] { background: var(--surface); border: 0; box-shadow: inset 3px 0 0 var(--accent); font-weight: 600; }
+.secs-nav a.missing { display: grid; gap: 0; color: var(--muted); }
+.secs-nav a.missing small { font-size: 11.5px; color: var(--muted); font-weight: 400; }
+.lib-rail .foot { font-size: 12.5px; color: var(--muted); padding: 10px 10px 0; border-top: 1px solid var(--line); display: grid; gap: 4px; }
+.lib-rail .foot a { color: var(--accent); padding: 0; border-radius: 0; font-size: inherit; }
+.lib-toc { font-size: 13px; }
+.lib-toc ul { list-style: none; margin: 0; padding: 0 0 0 10px; display: grid; gap: 2px; border-left: 1px solid var(--line); }
+.lib-toc a { color: var(--muted); text-decoration: none; display: block; padding: 3px 8px; }
+.lib-toc a:hover { color: var(--text); }
+.lib-toc a.on { color: var(--text); box-shadow: -1px 0 0 var(--accent); margin-left: -1px; }
+.lib-toc li.h3 a { padding-left: 20px; }
+@media (max-width: 1279px) { .lib-toc { display: none; } }
+.secs-pick { display: none; }
+.toc-fold { display: none; }
+@media (max-width: 1279px) { .toc-fold { display: block; } }
+.toc-fold > summary { margin: 0; padding: 8px 0; min-height: 40px; display: flex; align-items: center; }
+.toc-fold ul { list-style: none; margin: 0 0 8px; padding: 0 0 0 12px; display: grid; border-left: 1px solid var(--line); font-size: 14px; }
+.toc-fold a { display: block; padding: 6px 8px; color: var(--text); text-decoration: none; }
+.toc-fold li.h3 a { padding-left: 20px; color: var(--muted); }
+@media (max-width: 760px) {
+  /* A phone: the sections behind one button that names the one shown, its list opening in place. */
+  .lib { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .lib-rail { position: static; max-height: none; overflow: visible; }
+  .lib-rail .lab, .lib-rail .foot { display: none; }
+  .secs-pick { display: flex; width: 100%; justify-content: space-between; align-items: center; min-height: 44px; text-align: left; font-weight: 600; }
+  .secs-pick .muted { font-weight: 400; font-size: inherit; }
+  .lib-rail .secs-nav { display: none; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px; }
+  .lib-rail.open .secs-nav { display: grid; }
+  .secs-nav a { min-height: 44px; align-items: center; }
+  .secs-nav a.missing { align-content: center; }
+  .sec-head .doc-title { display: none; }
+}
+
+/* ---------- A page: its head, then the Markdown (spec §12, §14) ---------- */
+.doc-col, .doc-body { min-width: 0; display: grid; gap: 14px; align-content: start; }
+.doc-body { max-width: 780px; }
+.doc-page { min-width: 0; max-width: 780px; display: grid; gap: 14px; align-content: start; }
+.doc-page.wide { max-width: none; }
+.doc-head { display: grid; gap: 4px; }
+.doc-title { margin: 0; font-size: 26px; line-height: 1.2; text-transform: none; letter-spacing: -.01em; color: var(--text); font-weight: 650; text-wrap: balance; overflow-wrap: anywhere; }
+.sec-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+.sec-head .doc-title { font-size: 22px; }
+.sec-head .muted { font-size: 13px; }
+.doc-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.doc-meta a { color: var(--accent); overflow-wrap: anywhere; }
+.doc-body > .lede, .lib-home .lede { font-size: 17px; color: var(--muted); margin: 0; max-width: 62ch; }
+.lib-home .lede { font-size: 16px; }
+.lib-home .who { margin: 0; font-size: 13.5px; }
+@media (max-width: 600px) { .doc-title { font-size: 22px; } .sec-head .doc-title { font-size: 20px; } }
+.doc { font-size: 15.5px; line-height: 1.6; min-width: 0; overflow-wrap: break-word; }
+.doc > :first-child { margin-top: 0; }
+.doc h1 { display: none; }
+.doc h2, .doc h3, .doc h4 { color: var(--text); text-transform: none; letter-spacing: -.005em; line-height: 1.3; text-wrap: balance; scroll-margin-top: 80px; position: relative; }
+.doc h2 { font-size: 20px; font-weight: 650; margin: 36px 0 8px; }
+.doc h3 { font-size: 16.5px; font-weight: 650; margin: 26px 0 6px; }
+.doc h4 { font-size: 15px; font-weight: 650; margin: 20px 0 4px; }
+@media (max-width: 860px) { .doc h2, .doc h3 { scroll-margin-top: 140px; } }
+.doc .hl { margin-left: 8px; color: var(--muted); text-decoration: none; font-weight: 400; opacity: 0; }
+.doc h2:hover .hl, .doc h3:hover .hl, .doc .hl:focus-visible { opacity: 1; }
+@media (hover: none) { .doc .hl { display: none; } }
+.doc p, .doc li { max-width: 72ch; }
+.doc p { margin: 0 0 12px; }
+.doc ul, .doc ol { margin: 0 0 12px; padding-left: 22px; }
+.doc li { margin: 3px 0; }
+.doc li > ul, .doc li > ol { margin: 4px 0; }
+.doc a { color: var(--accent); text-underline-offset: 2px; }
+.doc a.ext::after { content: "↗"; font-size: .8em; margin-left: 2px; display: inline-block; }
+.doc .dead { color: var(--muted); }
+.doc code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .86em; background: var(--surface); border: 1px solid var(--line); padding: 0 4px; border-radius: 4px; overflow-wrap: anywhere; }
+.doc pre { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; line-height: 1.5; margin: 0 0 14px; }
+.doc pre code { background: none; border: 0; padding: 0; overflow-wrap: normal; font-size: inherit; }
+.doc blockquote { margin: 0 0 12px; padding: 2px 14px; border-left: 3px solid var(--line); color: var(--muted); }
+.doc hr { border: 0; border-top: 1px solid var(--line); margin: 28px 0; }
+.doc strong { font-weight: 650; }
+@media (max-width: 600px) { .doc { font-size: 15px; } .doc pre { font-size: 11.5px; padding: 10px 12px; } .doc h2 { font-size: 18.5px; margin-top: 30px; } }
+/* A table in its own frame: it scrolls sideways inside it, never the page. */
+.tw { overflow-x: auto; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.tw table { width: 100%; border-collapse: collapse; font-size: 13.5px; line-height: 1.45; }
+.tw th, .tw td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: normal; }
+.tw th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--bg); white-space: nowrap; }
+.tw td { min-width: 7em; max-width: 46ch; }
+.tw tr:last-child td { border-bottom: 0; }
+.tw .al-right { text-align: right; } .tw .al-center { text-align: center; }
+/* A small diagram (mermaid): an image fitted to the column; Full size lets it scroll; Source shows its text. */
+.dia { margin: 0 0 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); display: grid; }
+.dia-bar { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.dia-bar .actions { margin: 0; gap: 6px; display: inline-flex; }
+.dia-bar button { min-height: 32px; padding: 4px 10px; font-size: 13px; }
+.dia-view { overflow: auto; padding: 12px; text-align: center; }
+.dia-view img { max-width: 100%; height: auto; }
+.dia.full .dia-view { max-height: 80vh; text-align: left; }
+.dia.full .dia-view img { max-width: none; }
+.dia pre { margin: 0; border: 0; border-radius: 0 0 8px 8px; }
+.dia .dia-note { padding: 8px 12px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.dia .dia-note.warn { color: var(--warn); }
+@media (pointer: coarse), (max-width: 760px) { .dia-bar button { min-height: 44px; } }
+
+/* ---------- The home: a tile per section; a missing one dashed, with who writes it (spec §6, §7) ---------- */
+.lib-tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.lib-tile { text-decoration: none; color: var(--text); align-content: start; min-height: 128px; grid-template-rows: auto 1fr auto; }
+a.lib-tile:hover { border-color: var(--accent); }
+.lib-tile b { font-size: 16px; }
+.lib-tile .gl { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; align-content: start; font-size: 13.5px; line-height: 1.35; }
+.lib-tile .gl li { overflow-wrap: anywhere; }
+.lib-tile .sts { color: var(--muted); font-size: 12.5px; }
+.k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); font-weight: 650; }
+.lib-tile .by { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.lib-tile.missing { border-style: dashed; background: transparent; }
+.lib-tile.missing b { color: var(--muted); font-weight: 600; }
+.lib-tile.missing code { font-size: 12px; }
+.lib-tile .nw { font-size: 13.5px; color: var(--muted); }
+.lib-how { font-size: 13.5px; color: var(--muted); max-width: 72ch; margin: 4px 0 0; }
+.lib-how a, .lib-empty a, .src-line a { color: var(--accent); }
+.lib-empty { display: grid; gap: 8px; justify-items: center; text-align: center; }
+.lib-empty b { color: var(--text); font-size: 15px; }
+.lib-empty p { margin: 0; max-width: 60ch; }
+.nw-card { justify-items: start; text-align: left; padding: 18px; }
+.nw-card code { font-size: 12.5px; }
+.nw-card .files { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+.src-line { margin: 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.skel { display: grid; gap: 10px; }
+.skel i { display: block; height: 12px; border-radius: 6px; background: var(--line); opacity: .6; }
+.skel i:nth-child(3n) { width: 70%; } .skel i:nth-child(3n+1) { width: 92%; }
+@media (prefers-reduced-motion: no-preference) { .skel i { animation: lib-pulse 1.4s ease-in-out infinite; } }
+@keyframes lib-pulse { 50% { opacity: .25; } }
+
+/* ---------- Problems with the standard: on the home, in a section, on a card, and counted (spec §8) ---------- */
+.probs { border: 1px solid var(--warn); border-radius: var(--radius); background: var(--surface); padding: 10px 14px; font-size: 14px; }
+.probs > summary { margin: 0; color: var(--warn); font-weight: 600; cursor: pointer; }
+.probs ul { margin: 8px 0 6px; padding-left: 18px; display: grid; gap: 4px; }
+.probs a { color: var(--accent); }
+.probs code { font-size: 12.5px; color: var(--text); }
+.probs p { margin: 0; font-size: 13px; }
+.probs-in { margin: 0; padding: 8px 12px 8px 28px; border: 1px solid var(--warn); border-radius: 8px; color: var(--warn); font-size: 13.5px; display: grid; gap: 2px; }
+.pdot { color: var(--warn); font-size: 12px; font-weight: 600; }
+
+/* ---------- Cards: decisions, use cases, UX design (spec §9) ---------- */
+.st { display: inline-block; font-size: 11.5px; line-height: 1.55; padding: 0 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; font-weight: 600; }
+.st.ok { color: var(--ok); } .st.warn { color: var(--warn); } .st.mute { color: var(--muted); }
+.st.odd { color: var(--warn); border-style: dashed; }
+.cnum { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; font-size: 13px; }
+.cards-page { display: grid; gap: 14px; min-width: 0; align-content: start; }
+.find-bar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.find-bar .count { font-size: 13px; }
+.adr-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.adr-list li + li { border-top: 1px solid var(--line); }
+.adr { display: grid; grid-template-columns: 3.2em minmax(0, 1fr) 7.5em 7.5em 6.5em; gap: 4px 14px; padding: 10px 14px; align-items: baseline; color: var(--text); text-decoration: none; font-size: 14px; }
+.adr:hover { background: var(--bg); }
+.adr .n { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; font-size: 13px; }
+.adr .t { line-height: 1.35; overflow-wrap: anywhere; }
+.adr .t small { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.adr .d, .adr .b { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 760px) {
+  .adr { grid-template-columns: auto auto minmax(0, 1fr); grid-template-areas: "n s d" "t t t"; gap: 4px 10px; min-height: 56px; }
+  .adr .n { grid-area: n; } .adr .s { grid-area: s; } .adr .d { grid-area: d; text-align: right; } .adr .t { grid-area: t; } .adr .b { display: none; }
+}
+.uc-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-items: start; }
+.ux-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); align-items: start; }
+@media (max-width: 760px) { .uc-grid, .ux-grid { grid-template-columns: minmax(0, 1fr); } }
+.uc-card, .ux-card { gap: 8px; }
+.uc-h, .ux-top { display: flex; gap: 8px; align-items: baseline; }
+.ux-top .id { color: var(--accent); font-size: 12.5px; font-weight: 600; margin-right: auto; }
+.uc-t, .ux-t { font-size: 15.5px; font-weight: 650; line-height: 1.3; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+.uc-t:hover, .ux-t:hover { color: var(--accent); text-decoration: underline; }
+.uc-f { margin: 0; display: grid; gap: 4px; font-size: 13.5px; line-height: 1.4; }
+.uc-f div { display: grid; grid-template-columns: 6.5em minmax(0, 1fr); gap: 8px; }
+.uc-f dt { color: var(--muted); font-size: 12.5px; }
+.uc-f dd { margin: 0; overflow-wrap: anywhere; }
+.uc-f dd a { color: var(--accent); }
+.uc-f.wide div { grid-template-columns: 8.5em minmax(0, 1fr); }
+.uc-f .cnum { margin-right: 4px; }
+@media (max-width: 760px) { .uc-f div, .uc-f.wide div { grid-template-columns: 5.5em minmax(0, 1fr); } }
+.uc-links { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.uc-links .chip-b { display: inline-flex; align-items: center; min-height: 28px; padding: 2px 10px; border-radius: 999px; text-decoration: none; color: var(--accent); border: 1px solid var(--line); background: var(--surface); }
+@media (pointer: coarse), (max-width: 760px) { .uc-links .chip-b { min-height: 44px; } }
+.ux-v { font-size: 13.5px; display: grid; gap: 2px; }
+.ux-v.none { color: var(--muted); }
+.ux-v.wait { color: var(--warn); }
+.ux-card .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.btn { display: inline-flex; align-items: center; min-height: 36px; padding: 6px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); text-decoration: none; font-size: 14px; }
+.btn:hover { border-color: var(--accent); }
+@media (pointer: coarse), (max-width: 760px) { .btn { min-height: 44px; } }
+.child-head { display: grid; gap: 8px; }
+.child-head .back { font-size: 13.5px; color: var(--accent); text-decoration: none; justify-self: start; padding: 4px 0; }
+@media (pointer: coarse), (max-width: 760px) { .child-head .back { min-height: 44px; display: inline-flex; align-items: center; } }
+.eyebrow { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.child-t { margin: 0; font-size: 21px; text-transform: none; letter-spacing: -.005em; color: var(--text); font-weight: 650; line-height: 1.25; text-wrap: balance; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .child-t { font-size: 19px; } }
+.head-box { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px 24px; }
+@media (max-width: 760px) { .head-box { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------- The glossary: a find, the letters, then the terms (spec §12) ---------- */
+.gloss { display: grid; gap: 12px; }
+.az { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; width: auto; order: 0; }
+.az a { min-width: 32px; min-height: 32px; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--accent); text-decoration: none; font-weight: 600; font-size: 13.5px; padding: 0; }
+@media (pointer: coarse), (max-width: 760px) { .az a { min-width: 44px; min-height: 44px; } }
+.terms { margin: 0; display: grid; border-top: 1px solid var(--line); }
+.term { padding: 12px 0; border-bottom: 1px solid var(--line); scroll-margin-top: 90px; display: grid; gap: 4px; }
+.term dt a { font-weight: 650; font-size: 16px; color: var(--text); text-decoration: none; }
+.term dt a:hover { color: var(--accent); }
+.term .also { font-size: 13px; }
+.term dd { margin: 0; }
+.term dd .doc { font-size: 15px; line-height: 1.55; }
+.term dd .doc p { margin: 0; }
+.term.on { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: -10px 0 0 color-mix(in srgb, var(--accent) 8%, transparent), inset 3px 0 0 var(--accent); padding-left: 10px; }
+/* A finger's targets, 44 px (spec §3, §9, §12): the finds, On this page, the card titles. */
+@media (pointer: coarse), (max-width: 760px) {
+  .find-bar .find { min-height: 44px; }
+  .toc-fold > summary, .toc-fold a { min-height: 44px; display: flex; align-items: center; }
+  .uc-t, .ux-t { display: flex; align-items: center; min-height: 44px; }
+  .term dt a { display: inline-flex; align-items: center; min-height: 44px; }
+  .secs-pick { min-height: 44px; }
+}

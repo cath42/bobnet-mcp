@@ -145,7 +145,7 @@ describe("Now's parts on the Overview (BOB-5 as built 3)", () => {
   it("connects to its own host, shows live once rendered, and opens the Overview on #now, Now gone from the tabs", () => {
     expect(FakeSocket.last.url).toMatch(/\/v1\/ws$/);
     expect($("conn").dataset["state"]).toBe("live");
-    expect([...$("tabs").querySelectorAll("a")].map((a) => a.textContent!.replace(/\d+$/, "").trim())).toEqual(["Overview", "Needs you", "Status", "Roadmap", "Features", "Triage", "Usage"]);
+    expect([...$("tabs").querySelectorAll(":scope > a")].map((a) => a.textContent!.replace(/\d+$/, "").trim())).toEqual(["Overview", "Needs you", "Status", "Roadmap", "Features", "Triage", "Usage"]);
     expect($("tabs").querySelector("[aria-current]")!.getAttribute("href")).toBe("#overview");
     expect($("working").textContent).toContain("records-agent");
     expect(view().textContent).not.toMatch(/\$\d/);
@@ -1304,7 +1304,7 @@ describe("the overview: needs you, working now, projects (BOB-3 #7)", () => {
     });
 
     it("is the second tab, with its count, and lists everything across projects in two groups, each oldest first (#1, #2, #6)", () => {
-      expect([...document.querySelectorAll("#tabs a")].map((a) => a.getAttribute("href")).slice(0, 2)).toEqual(["#overview", "#needs"]);
+      expect([...document.querySelectorAll("#tabs > a")].map((a) => a.getAttribute("href")).slice(0, 2)).toEqual(["#overview", "#needs"]);
       expect(document.querySelector('#tabs a[aria-current]')!.getAttribute("href")).toBe("#needs");
       expect($("needs-n").textContent).toBe("6");
       expect(refs("needs-holding")).toEqual(["BOB-12", "Q-258", "BOB-31", "r_9"]);
@@ -2380,7 +2380,7 @@ describe("the Status tab (BOB-39, BOB-40; design/BOB-33/spec.md)", () => {
   it("is the third tab; a first visit reads the last 24 hours, in one read for every project", async () => {
     await answerStatus();
     await go("#status");
-    expect([...$("tabs").querySelectorAll("a")].map((a) => a.getAttribute("href"))[2]).toBe("#status");
+    expect([...$("tabs").querySelectorAll(":scope > a")].map((a) => a.getAttribute("href"))[2]).toBe("#status");
     expect(statusTab().hasAttribute("aria-current")).toBe(true);
     expect(view().querySelector(".span-bar .when")!.textContent).toMatch(/^The last 24 hours/);
     expect(view().querySelector(".span-note")!.textContent).toMatch(/^First visit on this device/);
@@ -2882,7 +2882,8 @@ describe("usage data (BOB-172)", () => {
       expect(location.hash).toBe(to);
       expect(t.hidden).toBe(!said);
       if (said) expect(t.textContent).toBe("Sessions moved: who ran is on each project's page; laptops and agents are under Laptops.");
-      if (said) expect([...$("tabs").querySelectorAll("[aria-current]")].map((a) => a.textContent)).toEqual(["Overview"]);
+      // A project's page lights the Projects menu, which names it (BOB-212 spec §3).
+      if (said) expect([...$("tabs").querySelectorAll("[aria-current]")].map((a) => a.textContent)).toEqual(["bobnet▾"]);
     }
     // A malformed % opens a page all the same.
     await go("#sessions/%E0%A4%A");
