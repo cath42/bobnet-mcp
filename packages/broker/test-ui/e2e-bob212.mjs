@@ -167,9 +167,10 @@ async function shot(p, name, hash, wait = null) {
   const wide = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   if (wide > 0) console.log(`  ${name} at ${w}: ${wide} px wider than the viewport`);
   if (w <= 390) {
-    // The library's own controls; links inside a sentence (prose, a meta or source line, a field's value) aren't targets.
+    // The library's own controls; links inside a sentence (prose, a meta or source line, a field's value) aren't targets,
+    // and a pill's 44 px is its hit area, checked on its own below.
     const small = await p.evaluate(() => [...document.querySelectorAll("#view .p-tabs a, #view .lib a, #view .lib button, #view .lib input, #view .lib summary, #pm-btn")]
-      .filter((el) => el.offsetParent && el.getBoundingClientRect().height > 0 && el.getBoundingClientRect().height < 44 && !el.closest(".doc, .probs, .lib-rail .foot, .doc-meta, .fresh, .src-line, .uc-f dd, .ux-v, .adr-list .t, .lib-how, .nw-card p, .files"))
+      .filter((el) => el.offsetParent && el.getBoundingClientRect().height > 0 && el.getBoundingClientRect().height < 44 && !el.closest(".doc, .probs, .lib-rail .foot, .doc-meta, .fresh, .src-line, .uc-f dd, .ux-v, .adr-list .t, .lib-how, .nw-card p, .files, .uc-links"))
       .map((el) => `${el.tagName.toLowerCase()} "${el.textContent.trim().slice(0, 24)}" ${Math.round(el.getBoundingClientRect().height)}px`));
     if (small.length) console.log(`  ${name} at ${w}: under 44 px: ${[...new Set(small)].slice(0, 8).join("; ")}`);
   }
@@ -215,6 +216,20 @@ for (const [width, touch] of [[1280, false], [390, true]]) {
       check(h.every((x) => x >= 44), `the menu's rows and Library pills at 390 are 44 px or more: ${h.join(", ")}`);
     }
     await p.screenshot({ path: join(out, `bob212-17-menu-${width}.png`) });
+  }
+  // A touch pill is drawn 28 px tall; its ::before takes taps 8 px above and below it, 44 px in all (Daisy, review A 3).
+  if (touch && (!filter || "07-usecases".includes(filter))) {
+    // A fresh load: a hash-only goto would keep the Projects menu the step above left open.
+    await p.goto(`${BASE}/#project/toolshed/library/usecases`);
+    await p.reload();
+    await p.waitForSelector(".uc-links a");
+    const hits = await p.$$eval(".uc-links a", (as) => as.map((a) => {
+      a.scrollIntoView({ block: "center" });
+      const r = a.getBoundingClientRect(), x = r.left + r.width / 2;
+      const reach = (y, d) => { let n = 0; while (n < 30 && a.contains(document.elementFromPoint(x, y + d * (n + 1)))) n++; return n; };
+      return Math.round(r.height + reach(r.top + 0.5, -1) + reach(r.bottom - 0.5, 1));
+    }));
+    check(hits.length > 0 && hits.every((h) => h >= 44), `the use cases' pills at 390 take a tap over 44 px or more: ${hits.join(", ")}`);
   }
   if (touch && (!filter || "18-sections".includes(filter))) {
     await p.goto(`${BASE}/#project/toolshed/library/decisions`);
