@@ -1662,3 +1662,15 @@ body.vf-lock { overflow: hidden; }
   .vf-btns { justify-self: end; }
   .vf-btns button { padding: 4px 10px; }
 }
+
+/* ---------- The data model: Liam ERD as is, in its frame; the bar has the table count and Full screen (spec §11) ---------- */
+.vf-erd .vf-box { height: clamp(420px, calc(100vh - 250px), 760px); }
+@media (max-width: 1279px) { .vf-erd .vf-box { height: 62vh; } }
+@media (max-width: 760px) { .vf-erd .vf-box { height: 70vh; min-height: 420px; } }
+.vf-erd .vf-bar { flex-wrap: nowrap; }
+.vf-count { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.vf-erd .vf-btns { margin-left: auto; }
+.vf-erd .vf-btns button { min-height: 32px; padding: 4px 12px; font-size: 13.5px; }
+.vf-hint { display: none; margin: 0; font-size: 12.5px; color: var(--muted); }
+@media (pointer: coarse) { .vf-hint:not([hidden]) { display: block; } }
+@media (pointer: coarse), (max-width: 760px) { .vf-erd .vf-btns button { min-height: 44px; } }

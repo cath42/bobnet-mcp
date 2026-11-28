@@ -2,7 +2,8 @@
 // under library/ on the project's main, the same in every repo. The Board keeps them as a cache its supervisor sends;
 // this page reads the `library` read (the index: paths, titles, heads) and a section's texts with `library_page`, and
 // renders Markdown in the page with markdown-it (html off), so no laptop-made HTML is ever shown. The architecture
-// draws in the vendored LikeC4 viewer, in a sandboxed frame (ADR 0016 §6, 0017 §7); the data model comes with B3.
+// draws in the vendored LikeC4 viewer and the data model in Liam ERD as is, each in a sandboxed frame (ADR 0016 §6,
+// 0017 §7).
 
 export const VENDOR = {
   markdown: new URL("./vendor/markdown-it-15.0.3.min.js", import.meta.url).href,
@@ -10,7 +11,10 @@ export const VENDOR = {
   // A viewer at its extensionless address, where Workers' assets serve its .html and the Worker sets its own CSP
   // (csp.ts viewerPath). public/vendor/viewers.json names the file; the page can't read JSON under its CSP.
   likec4: new URL("./vendor/likec4-viewer-1.61.1", import.meta.url).href,
+  erd: new URL("./vendor/erd-viewer-0.7.24", import.meta.url).href,
 };
+/** Set on this device once the reader has touched the data model's frame: the hint about zooming goes (spec §11.2). */
+const ERD_HINT = "bobnet.library.erdHint";
 /** How long a viewer may take to say hello and draw before the page says it couldn't (spec §10). */
 const VIEWER_WAIT_MS = 15_000;
 const GUIDE = "https://github.com/cath42/bobnet-mcp/blob/v2/architecture/library-standard.md";
@@ -364,9 +368,9 @@ export function libraryPages(app) {
     if (cards && r.item) {
       const c = cardsOf(lib, sec.id).find((x) => x.num === r.item);
       out.push(c && !c.too_large ? pageRead(key, sec.id, c.path) : null);
-    } else if (sec.id === "architecture") {
-      if (!filesOf(lib, "architecture").some((f) => f.too_large)) out.push(pageRead(key, sec.id));
-    } else if (sec.id !== "data") out.push(pageRead(key, sec.id));
+    } else if (isDiagram(sec.id)) {
+      if (!filesOf(lib, sec.id).some((f) => f.too_large)) out.push(pageRead(key, sec.id));
+    } else out.push(pageRead(key, sec.id));
     if (sec.id === "usecases" && written(lib, "architecture") && !filesOf(lib, "architecture").some((f) => f.too_large)) out.push(pageRead(key, "architecture"));
     return out;
   }
@@ -531,7 +535,6 @@ export function libraryPages(app) {
   function section(key, read, lib, sec, r, pages) {
     const owner = ownerOf(lib, sec) ?? sec.role;
     const head = h("div", { class: "sec-head" }, h("h1", { class: "doc-title" }, sec.label), h("span", { class: "muted" }, `owner ${owner}`));
-    if (sec.id === "data") return h("div", { class: "doc-page wide" }, head, problemList(read, lib, sec.id), diagramSoon(lib, sec));
     const cards = ["decisions", "usecases", "ux"].includes(sec.id);
     const [texts, c4] = pages;
     const fail = pages.find((x) => x?.error && !x.reply);
@@ -539,7 +542,7 @@ export function libraryPages(app) {
       return h("div", { class: `doc-page${isDiagram(sec.id) ? " wide" : ""}` }, head, h("div", { class: "banner down" }, h("b", null, `${sec.label} couldn't be read`), h("span", null, fail.error),
         app.button("Retry", "", () => { for (const x of pages) if (x?.error) keptRead(x.op, key, () => shownKey() === key, true); scheduleRender(); })));
     }
-    if (sec.id === "architecture") return modelPage(key, read, lib, sec, head, texts, r);
+    if (isDiagram(sec.id)) return modelPage(key, read, lib, sec, head, texts, r);
     let body;
     if (cards && r.item) return cardPage(key, read, lib, sec, r, texts, sec.id === "usecases" ? c4 : null);
     if (cards) body = cardList(key, lib, sec, texts, c4);
@@ -556,20 +559,7 @@ export function libraryPages(app) {
   const tooLarge = (lib, f) => h("div", { class: "empty-card lib-empty nw-card" }, h("b", null, "This file is too large to show here."),
     h("p", null, `${f.path} is ${kb(f.bytes)}, over the 512 KB a file may be. `, ext(ghBlob(lib, f.path), "Read it on GitHub ↗")));
 
-  /** B3 draws the data model; until then the section says so, and links its file. */
-  function diagramSoon(lib, sec) {
-    const fs = filesOf(lib, sec.id);
-    const kind = sec.id === "architecture" ? "LikeC4" : "DBML";
-    return [
-      h("div", { class: "empty-card lib-empty nw-card" }, h("b", null, sec.id === "architecture" ? "The model isn't drawn here yet." : "The data model isn't drawn here yet."),
-        h("p", null, `Its diagram${sec.id === "architecture" ? "s come" : " comes"} with the library's viewers, in the next build. Its ${fs.length === 1 ? "file is" : "files are"} on GitHub:`),
-        h("ul", { class: "files" }, fs.map((f) => h("li", null, ext(ghBlob(lib, f.path), h("code", null, f.path.replace(/^library\//, "")), lib.github ? " ↗" : ""), h("span", { class: "muted" }, ` ${kb(f.bytes)}`))))),
-      h("p", { class: "src-line" }, h("b", null, "Model: "), ext(sec.id === "architecture" ? ghTree(lib, "library/architecture") : ghBlob(lib, "library/data-model.dbml"),
-        sec.id === "architecture" ? "library/architecture/" : "data-model.dbml", lib.github ? " ↗" : ""), ` · ${kind} · ${branchOf(lib)} at ${sha7(lib.commit)}`),
-    ];
-  }
-
-  // ---------- the architecture: LikeC4 in a sandboxed frame, BobNet's bar over it (ADR 0016 §6, 0017 §7; spec §10) ----------
+  // ---------- the diagrams: LikeC4 and Liam ERD, each in a sandboxed frame, BobNet's bar over it (ADR 0016 §6, 0017 §7; spec §10, §11) ----------
 
   /** The frame on the page now: the only window whose messages the page takes (0016 §6: the source is checked). */
   const viewers = { cur: null };
@@ -577,6 +567,8 @@ export function libraryPages(app) {
     const v = viewers.cur;
     if (v && e.source && e.source === v.win() && e.data && typeof e.data === "object") v.on(e.data);
   });
+  // A tap in a frame takes the focus from the page.
+  window.addEventListener("blur", () => setTimeout(() => viewers.cur?.touched?.(), 0));
   /** 0017 §2's fixed view ids: the C4 levels, a use case's flow, and any other id a deployment. */
   const viewKind = (id) => (id === "index" || id === "containers" || /Components$/.test(id) ? "c4" : /^uc\d{4}$/.test(id) ? "flow" : "deploy");
   const str = (x) => typeof x === "string";
@@ -591,28 +583,47 @@ export function libraryPages(app) {
   /** The model's files, each on GitHub with its size. */
   const fileList = (lib, fs) => h("ul", { class: "files" }, fs.map((f) => h("li", null, ext(ghBlob(lib, f.path), h("code", null, f.path.replace(/^library\//, "")), lib.github ? " ↗" : ""), h("span", { class: "muted" }, ` ${kb(f.bytes)}`))));
 
-  /** The architecture's page: its head, its problems with the standard, then the frame, or why there is none. */
+  /** What each diagram page draws, in the page's words: its noun, its source, the viewer's download (gzip). */
+  const MODELS = {
+    architecture: { what: "model", kind: "LikeC4", size: "2.5 MB", limit: "a model shows here up to 64 files and 512 KB",
+      source: (lib) => ext(ghTree(lib, "library/architecture"), "library/architecture/", lib.github ? " ↗" : "") },
+    data: { what: "data model", kind: "DBML", size: "1.4 MB", limit: "a file shows here up to 512 KB",
+      source: (lib) => ext(ghBlob(lib, "library/data-model.dbml"), "data-model.dbml", lib.github ? " ↗" : "") },
+  };
+  /** A diagram's page: its head, its problems with the standard, then the frame, or why there is none. */
   function modelPage(key, read, lib, sec, head, page, r) {
-    const fs = filesOf(lib, "architecture");
+    const m = MODELS[sec.id], fs = filesOf(lib, sec.id);
     const el = h("div", { class: "doc-page wide" }, head, problemList(read, lib, sec.id));
-    const source = h("p", { class: "src-line" }, "Model: ", ext(ghTree(lib, "library/architecture"), "library/architecture/", lib.github ? " ↗" : ""), ` · LikeC4 · ${branchOf(lib)} at ${sha7(lib.commit)}`);
+    const source = h("p", { class: "src-line" }, "Model: ", m.source(lib), ` · ${m.kind} · ${branchOf(lib)} at ${sha7(lib.commit)}`);
     if (fs.some((f) => f.too_large)) {
-      el.append(h("div", { class: "vf-fail" }, h("b", null, "This model is too large to show here"),
-        h("p", null, `${plural(fs.length, "file")}, ${kb(fs.reduce((n, f) => n + f.bytes, 0))}: a model shows here up to 64 files and 512 KB. Its files on GitHub:`), fileList(lib, fs)), source);
+      el.append(h("div", { class: "vf-fail" }, h("b", null, `This ${m.what} is too large to show here`),
+        h("p", null, `${plural(fs.length, "file")}, ${kb(fs.reduce((n, f) => n + f.bytes, 0))}: ${m.limit}. Its ${fs.length === 1 ? "file" : "files"} on GitHub:`), fileList(lib, fs)), source);
       return el;
     }
     const files = page?.reply?.files;
     if (!files) {
-      el.append(h("div", { class: "vf" }, h("div", { class: "vf-box" }, loading())), source);
+      el.append(h("div", { class: `vf vf-${sec.id === "data" ? "erd" : "likec4"}` }, h("div", { class: "vf-box" }, loading(m))), source);
       return el;
     }
-    const v = c4Frame(key, lib, fs, files, r.item);
+    const v = sec.id === "data" ? erdFrame(key, lib, fs, files) : c4Frame(key, lib, fs, files, r.item);
     el.append(v.el, source);
     el.viewer = v;
     return el;
   }
-  const loading = () => h("div", { class: "vf-veil" }, h("div", { class: "vf-load" }, h("b", null, "Drawing the model…"),
-    h("span", null, "The first time on this device, the viewer downloads (2.5 MB)."), h("div", { class: "skel" }, h("i"), h("i"), h("i"))));
+  const loading = (m) => h("div", { class: "vf-veil" }, h("div", { class: "vf-load" }, h("b", null, `Drawing the ${m.what}…`),
+    h("span", null, `The first time on this device, the viewer downloads (${m.size}).`), h("div", { class: "skel" }, h("i"), h("i"), h("i"))));
+  /** In place of a frame that drew nothing: why, the viewer's errors by line, the files on GitHub, and Try again. */
+  const failCard = (lib, index, m, why, errors) => h("div", { class: "vf-fail" }, h("b", null, `This ${m.what} couldn't be drawn here.`), why,
+    errors.length ? h("ul", { class: "errs" }, errors.map((x) => errLine(lib, index, x))) : null,
+    h("p", { class: "muted" }, `Its ${index.length === 1 ? "file" : plural(index.length, "file")} on GitHub at ${sha7(lib.commit)}:`), fileList(lib, index),
+    h("div", { class: "actions" }, h("button", { type: "button", onclick: () => { drawn.key = null; scheduleRender(); } }, "Try again")));
+  /** Full screen: the bar and the frame fill the screen; Close or Escape leaves. */
+  function fullScreen(wrap, btn, on) {
+    wrap.classList.toggle("full", on);
+    document.body.classList.toggle("vf-lock", on);
+    btn.textContent = on ? "Close" : "Full screen";
+    if (on) btn.focus();
+  }
 
   /**
    * LikeC4's frame and its bar (spec §10): the crumb, what the view is, ↑ Out, the views by kind, Fit and Full screen.
@@ -639,10 +650,10 @@ export function libraryPages(app) {
       if (box.getBoundingClientRect().bottom > innerHeight) wrap.scrollIntoView({ block: "start" });
     } });
     const fit = h("button", { type: "button", onclick: () => post({ t: "fit" }) }, "Fit");
-    const fullB = h("button", { type: "button", class: "vf-full-b", onclick: () => full(!wrap.classList.contains("full")) }, "Full screen");
+    const fullB = h("button", { type: "button", class: "vf-full-b", onclick: () => fullScreen(wrap, fullB, !wrap.classList.contains("full")) }, "Full screen");
     const done = h("button", { type: "button", class: "vf-done", onclick: () => wrap.classList.remove("exploring") }, "Done");
     const iframe = h("iframe", { sandbox: "allow-scripts", src: VENDOR.likec4, title: `${title}'s architecture: a diagram you can zoom and open` });
-    const veil = loading();
+    const veil = loading(MODELS.architecture);
     // On touch a finger on the page scrolls the page; a tap hands the frame the finger until Done.
     const touch = h("button", { type: "button", class: "vf-touch", onclick: () => wrap.classList.add("exploring") },
       h("b", null, "Tap to explore"), h("span", null, "Then pinch to zoom, drag to move, tap a box to open it"));
@@ -696,21 +707,12 @@ export function libraryPages(app) {
     function fail(why, errors) {
       clearTimeout(st.timer);
       st.failed = true;
-      box.replaceWith(h("div", { class: "vf-fail" }, h("b", null, "This model couldn't be drawn here."), h("p", null, why),
-        errors.length ? h("ul", { class: "errs" }, errors.map((x) => errLine(lib, index, x))) : null,
-        h("p", { class: "muted" }, `Its ${plural(index.length, "file")} on GitHub at ${sha7(lib.commit)}:`), fileList(lib, index),
-        h("div", { class: "actions" }, h("button", { type: "button", onclick: () => { drawn.key = null; scheduleRender(); } }, "Try again"))));
+      box.replaceWith(failCard(lib, index, MODELS.architecture, h("p", null, why), errors));
       // Nothing is drawn, so there is nothing for the bar to move.
       bar.hidden = true;
     }
-    function full(on) {
-      wrap.classList.toggle("full", on);
-      document.body.classList.toggle("vf-lock", on);
-      fullB.textContent = on ? "Close" : "Full screen";
-      if (on) fullB.focus();
-    }
     wrap.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && wrap.classList.contains("full")) full(false);
+      if (e.key === "Escape" && wrap.classList.contains("full")) fullScreen(wrap, fullB, false);
     });
     const wait = () => {
       clearTimeout(st.timer);
@@ -764,6 +766,75 @@ export function libraryPages(app) {
     viewers.cur = me;
     wait();
     draw();
+    return me;
+  }
+
+  /**
+   * Liam ERD as is (spec §11; 0017 §7): the frame is handed the DBML once and says ready with its errors and how many
+   * tables it drew. Everything inside is Liam's; the page has the count, Full screen and, on a phone, a hint.
+   */
+  function erdFrame(key, lib, index, files) {
+    const title = overviewHead(lib).title || key;
+    const st = { ready: false, failed: false, timer: 0 };
+    const post = (m) => iframe.contentWindow?.postMessage(m, "*");
+    const count = h("span", { class: "vf-count" });
+    const fullB = h("button", { type: "button", class: "vf-full-b", onclick: () => fullScreen(wrap, fullB, !wrap.classList.contains("full")) }, "Full screen");
+    const seen = (() => { try { return localStorage.getItem(ERD_HINT) === "1"; } catch { return false; } })();
+    const hint = h("p", { class: "vf-hint", hidden: seen || null }, "Pinch to zoom, tap a table for its columns.");
+    const iframe = h("iframe", { sandbox: "allow-scripts", src: VENDOR.erd, title: `${title}'s data model: every table and its relations, in Liam ERD` });
+    const veil = loading(MODELS.data);
+    const box = h("div", { class: "vf-box" }, iframe, veil);
+    const bar = h("div", { class: "vf-bar" }, count, h("span", { class: "vf-btns" }, fullB));
+    const wrap = h("div", { class: "vf vf-erd" }, bar, hint, box);
+    function fail(why, errors) {
+      clearTimeout(st.timer);
+      st.failed = true;
+      box.replaceWith(failCard(lib, index, MODELS.data, why, errors));
+      bar.hidden = hint.hidden = true;
+    }
+    wrap.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && wrap.classList.contains("full")) fullScreen(wrap, fullB, false);
+    });
+    const wait = () => {
+      clearTimeout(st.timer);
+      st.timer = setTimeout(() => { if (!st.ready && wrap.isConnected) fail(h("p", null, "The viewer didn't answer within 15 seconds."), []); }, VIEWER_WAIT_MS);
+    };
+    const me = {
+      el: wrap,
+      win: () => iframe.contentWindow,
+      setFocus() {},
+      // A tap or a pinch in the frame gives it the focus: the hint has done its work, on this device.
+      touched() {
+        if (hint.hidden || document.activeElement !== iframe) return;
+        hint.hidden = true;
+        try { localStorage.setItem(ERD_HINT, "1"); } catch {}
+      },
+      on(d) {
+        if (st.failed) return;
+        if (d.t === "hello") {
+          if (st.ready) {
+            st.ready = false;
+            veil.hidden = false;
+            count.textContent = "";
+          }
+          wait();
+          post({ t: "files", kind: "erd", files });
+        } else if (d.t === "ready") {
+          clearTimeout(st.timer);
+          const errors = errorsOf(d.errors), n = Number.isInteger(d.tables) ? d.tables : 0;
+          // Liam couldn't read what the DBML became: one error, no line (0017 §7). Toad: it shouldn't happen.
+          const unread = errors.find((x) => !x.line && /^The viewer couldn't read the converted model/.test(x.message));
+          if (unread) return fail(h("p", null, h("b", null, "The viewer couldn't read the converted model.")), [{ path: "", line: 0, message: unread.message.replace(/^[^:]*:\s*/, "") }]);
+          // The DBML's own errors: nothing is drawn, never half an ERD.
+          if (errors.length || !n) return fail(h("p", null, "The viewer found errors in it:"), errors);
+          st.ready = true;
+          veil.hidden = true;
+          count.textContent = plural(n, "table");
+        }
+      },
+    };
+    viewers.cur = me;
+    wait();
     return me;
   }
 

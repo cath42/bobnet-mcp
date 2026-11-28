@@ -11,6 +11,7 @@
 //   - Two more projects: "workshop", the sample with its glossary gone, files that break the standard and a model with
 //     an error; and "vitals", whose main has no library/.
 //   - The architecture in the vendored LikeC4 viewer (BOB-234): loading, drilled in, zoomed, an error, no answer.
+//   - The data model in Liam ERD as is (BOB-235): Toolshed's 9 tables, a table opened in Liam's pane, a DBML error.
 //
 //   node test-ui/e2e-bob212.mjs [filter]   (from packages/broker; writes test-ui/shots/bob212-*.png)
 // Prints each check, any page error, any page wider than its viewport, and at 390 the tap targets under 44 px.
@@ -83,6 +84,9 @@ const workshop = fixture("workshop", (work) => {
   // A reference to a component that isn't there: LikeC4 draws the rest, and says so by file and line (BOB-234).
   const views = join(work, "library/architecture/views.c4");
   writeFileSync(views, readFileSync(views, "utf8").replace("toolshed.api.reservations -> toolshed.db", "toolshed.api.reservation -> toolshed.db"));
+  // A ref to a table that isn't there: the DBML's own error at its line, and no ERD (BOB-235).
+  const dbml = join(work, "library/data-model.dbml");
+  writeFileSync(dbml, readFileSync(dbml, "utf8").replace("  shed_id uuid [not null, ref: > shed.id]", "  shed_id uuid [not null, ref: > sheds.id]"));
   mkdirSync(join(work, "library/notes"));
   writeFileSync(join(work, "library/notes/counter-ideas.md"), "# Ideas for the counter\n");
 });
@@ -410,6 +414,50 @@ if (!filter || /arch|^2[1-5]/.test(filter)) {
     await save("25-arch-no-answer");
     await p.unroute("**/vendor/likec4-viewer-*");
     check(csp.length === 0, `at ${width} no content policy refused anything: ${csp.join(" | ")}`);
+    await p.context().close();
+  }
+}
+
+// ---------- the data model: Liam ERD as is, at 1280 by mouse and 390 by touch (BOB-235; spec §11) ----------
+if (!filter || /data|^2[7-9]/.test(filter)) {
+  for (const [width, touch] of [[1280, false], [390, true]]) {
+    const p = await page(width, touch);
+    const csp = [];
+    // Liam asks Google Fonts for IBM Plex; the frame's policy refuses it, and Liam uses the system font (0017 §7).
+    p.on("console", (m) => /Content Security Policy/.test(m.text()) && !m.text().includes("fonts.googleapis.com") && csp.push(m.text().slice(0, 200)));
+    const fr = p.frameLocator(".vf-box iframe");
+    await p.goto(`${BASE}/#project/toolshed/library/data`);
+    await p.waitForSelector(".vf-veil[hidden]", { state: "attached", timeout: 30000 });
+    await fr.locator(".react-flow__node").first().waitFor({ timeout: 20000 });
+    await p.waitForTimeout(1500);
+    const nodes = await fr.locator(".react-flow__node").count();
+    check((await p.textContent(".vf-count")) === "9 tables" && nodes === 9, `at ${width} Liam draws Toolshed's ${nodes} tables, the bar says "${await p.textContent(".vf-count")}"`);
+    check(touch === (await p.isVisible(".vf-hint")), `at ${width} the hint about zooming shows ${touch ? "on touch" : "nowhere"}`);
+    await fullShot(p, join(out, `bob212-27-data-${width}.png`));
+    shots.push("27-data");
+    // A table, clicked or tapped: Liam's own side pane. The page's hint goes once the frame has been touched.
+    const loan = fr.locator(".react-flow__node", { hasText: "loan" }).first();
+    if (touch) await loan.tap(); else await loan.click();
+    await p.waitForTimeout(1200);
+    if (touch) check(!(await p.isVisible(".vf-hint")), "at 390 a tap in the frame drops the hint");
+    await fullShot(p, join(out, `bob212-28-data-table-${width}.png`));
+    shots.push("28-data-table");
+    // Full screen, and Close.
+    await p.click(".vf-full-b");
+    await p.waitForTimeout(400);
+    const box = await p.$eval(".vf-erd .vf-box", (el) => Math.round(el.getBoundingClientRect().height));
+    check(box > (touch ? 700 : 760), `at ${width} Full screen gives the frame ${box} px`);
+    await p.screenshot({ path: join(out, `bob212-28-data-full-${width}.png`) });
+    await p.click(".vf-full-b");
+
+    // A DBML error: Workshop's ref to "sheds", by its line, linked; nothing drawn.
+    await p.goto(`${BASE}/#project/workshop/library/data`);
+    await p.waitForSelector(".vf-fail", { timeout: 30000 });
+    const errs = await p.$$eval(".vf-fail .errs li", (ls) => ls.map((l) => l.textContent));
+    check(errs.length >= 1 && /^data-model\.dbml line 51( ↗)?: /.test(errs[0]), `at ${width} Workshop's DBML error by its line: ${errs[0]}`);
+    await fullShot(p, join(out, `bob212-29-data-error-${width}.png`));
+    shots.push("29-data-error");
+    check(csp.length === 0, `at ${width} no content policy refused anything but Google Fonts: ${csp.join(" | ")}`);
     await p.context().close();
   }
 }

@@ -447,3 +447,88 @@ describe("the architecture (spec §10; ADR 0016 §6, 0017 §7)", () => {
     expect(document.activeElement).toBe(pick);
   });
 });
+
+// ---------- the data model: Liam ERD as is (BOB-235; ADR 0017 §7; spec §11) ----------
+
+describe("the data model (spec §11; ADR 0017 §7)", () => {
+  const DBML = () => SAMPLE_FILES.filter((f) => f.path === "library/data-model.dbml");
+
+  it("frames Liam ERD as is, hands it the DBML once, and shows how many tables it drew, the source line and Full screen", async () => {
+    await at("#project/toolshed/library/data");
+    const el = view().querySelector(".vf-erd .vf-box iframe")!;
+    expect(el.getAttribute("src")!.endsWith(viewerPath("erd"))).toBe(true);
+    expect(el.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(sent("library_page").at(-1)!.op).toMatchObject({ section: "data" });
+    expect(text(".sec-head .secs-pick")).toBe("Section: Data model▾");
+    expect(text(".vf-veil")).toBe("Drawing the data model…The first time on this device, the viewer downloads (1.4 MB).");
+    // Until ready the bar's left is empty, not a placeholder.
+    expect(text(".vf-count")).toBe("");
+    expect(text(".src-line")).toBe("Model: data-model.dbml ↗ · DBML · main at 1c83f2b");
+    expect(hrefs(".src-line a")).toEqual([`${GH}/blob/${COMMIT}/library/data-model.dbml`]);
+    const v = frame();
+    await v.say({ t: "hello" });
+    expect(v.posted).toEqual([{ t: "files", kind: "erd", files: DBML() }]);
+    await v.say({ t: "ready", errors: [], tables: 9 });
+    expect(view().querySelector<HTMLElement>(".vf-veil")!.hidden).toBe(true);
+    expect(text(".vf-count")).toBe("9 tables");
+    // Nothing else crosses: no crumb, no picker, no Fit; the bar's one control is the page's Full screen.
+    expect(view().querySelector(".vf-erd .vf-crumb, .vf-erd .vf-pick")).toBeNull();
+    expect(texts(".vf-erd .vf-bar button")).toEqual(["Full screen"]);
+    const full = view().querySelector<HTMLButtonElement>(".vf-full-b")!;
+    await click(full);
+    expect(view().querySelector(".vf-erd")!.classList.contains("full")).toBe(true);
+    expect(full.textContent).toBe("Close");
+    await key(full, "Escape");
+    expect(view().querySelector(".vf-erd")!.classList.contains("full")).toBe(false);
+    // The library's staleness is the page's head, as on every section.
+    expect(text(".p-tabs .fresh")).toMatch(/^As of main at 1c83f2b/);
+  });
+
+  it("lists the DBML's errors by line, linked, in place of the frame: no half-drawn ERD", async () => {
+    await at("#project/toolshed/library/data");
+    const v = frame();
+    await v.say({ t: "hello" });
+    await v.say({ t: "ready", errors: [{ path: "library/data-model.dbml", line: 51, message: "Table 'sheds' does not exist in Schema 'public'" }], tables: 0 });
+    expect(view().querySelector(".vf-box")).toBeNull();
+    expect(text(".vf-fail b")).toBe("This data model couldn't be drawn here.");
+    expect(texts(".vf-fail p")[0]).toBe("The viewer found errors in it:");
+    expect(texts(".vf-fail .errs li")).toEqual(["data-model.dbml line 51 ↗: Table 'sheds' does not exist in Schema 'public'"]);
+    expect(hrefs(".vf-fail .errs a")).toEqual([`${GH}/blob/${COMMIT}/library/data-model.dbml#L51`]);
+    expect(texts(".vf-fail .files li")).toEqual([expect.stringMatching(/^data-model\.dbml ↗ \d+ KB$/)]);
+    expect(texts(".vf-fail p")[1]).toBe("Its file on GitHub at 1c83f2b:");
+    expect(view().querySelector<HTMLElement>(".vf-erd .vf-bar")!.hidden).toBe(true);
+  });
+
+  it("says when Liam can't read the converted model: one error, no line", async () => {
+    await at("#project/toolshed/library/data");
+    const v = frame();
+    await v.say({ t: "hello" });
+    await v.say({ t: "ready", errors: [{ path: "library/data-model.dbml", line: 0, message: "The viewer couldn't read the converted model: syntax error at or near \"(\"" }], tables: 0 });
+    expect(text(".vf-fail p b")).toBe("The viewer couldn't read the converted model.");
+    expect(texts(".vf-fail .errs li")).toEqual(['syntax error at or near "("']);
+    expect(texts(".vf-fail button")).toEqual(["Try again"]);
+  });
+
+  it("says a data model over 512 KB is too large, with its file on GitHub, and draws no frame", async () => {
+    const l = libraryOf("toolshed", files) as { index: { files: Array<{ section: string; too_large?: true }> } };
+    for (const f of l.index.files) if (f.section === "data") f.too_large = true;
+    lib["toolshed"] = l as unknown as Record<string, unknown>;
+    await at("#project/toolshed/library/data");
+    expect(view().querySelector("iframe")).toBeNull();
+    expect(text(".vf-fail b")).toBe("This data model is too large to show here");
+    expect(text(".vf-fail p")).toMatch(/^1 file, \d+ KB: a file shows here up to 512 KB\. Its file on GitHub:$/);
+    expect(hrefs(".vf-fail .files a")).toEqual([`${GH}/blob/${COMMIT}/library/data-model.dbml`]);
+  });
+
+  it("drops the hint about zooming once the frame has been touched, on this device", async () => {
+    await at("#project/toolshed/library/data");
+    expect(text(".vf-hint")).toBe("Pinch to zoom, tap a table for its columns.");
+    const v = frame();
+    v.el.focus();
+    window.dispatchEvent(new Event("blur"));
+    await settle(20);
+    expect(view().querySelector<HTMLElement>(".vf-hint")!.hidden).toBe(true);
+    await at("#project/toolshed/library/data");
+    expect(view().querySelector<HTMLElement>(".vf-hint")!.hidden).toBe(true);
+  });
+});
