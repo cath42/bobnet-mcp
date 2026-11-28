@@ -1643,6 +1643,7 @@ a.cref .ct { text-decoration: underline; }
 .vf-fail b { font-size: 15px; }
 .vf-fail p { margin: 0; }
 .vf-fail .actions { display: flex; gap: 8px; }
+@media (pointer: coarse), (max-width: 760px) { .vf-fail .actions button { min-height: 44px; } }
 .errs, .vf-fail .files { margin: 0; padding-left: 18px; font-size: 13.5px; display: grid; gap: 2px; }
 .errs { color: var(--warn); }
 .errs a, .vf-fail .files a { color: var(--accent); }

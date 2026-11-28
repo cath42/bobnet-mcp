@@ -12,6 +12,9 @@
 //     an error; and "vitals", whose main has no library/.
 //   - The architecture in the vendored LikeC4 viewer (BOB-234): loading, drilled in, zoomed, an error, no answer.
 //   - The data model in Liam ERD as is (BOB-235): Toolshed's 9 tables, a table opened in Liam's pane, a DBML error.
+//   - The sections at 1024 too (the tablet: the rail, "On this page" folded, 3 tiles across), and Workshop again with
+//     a GitHub remote, as library.test.ts's fixture has: the sha, the problems' lines, the paths and the source line
+//     linked (BOB-244).
 //
 //   node test-ui/e2e-bob212.mjs [filter]   (from packages/broker; writes test-ui/shots/bob212-*.png)
 // Prints each check, any page error, any page wider than its viewport, and at 390 the tap targets under 44 px.
@@ -78,6 +81,9 @@ const copySample = (work) => cpSync(join(SAMPLE, "library"), join(work, "library
 const toolshed = fixture("toolshed", copySample);
 const workshop = fixture("workshop", (work) => {
   copySample(work);
+  // Its own title and tagline, so its pages don't read "Toolshed" (Daisy, review A's fixture note).
+  const overview = join(work, "library/overview.md");
+  writeFileSync(overview, readFileSync(overview, "utf8").replace("title: Toolshed", "title: Workshop").replace(/^tagline: .*$/m, "tagline: Benches and tools by the hour, in a shared workshop").replace("# Toolshed", "# Workshop"));
   rmSync(join(work, "library/glossary.md"));
   const adr = join(work, "library/decisions/0001-reservations-hold-for-24-hours.md");
   writeFileSync(adr, readFileSync(adr, "utf8").replace("status: accepted", "status: decided").replace("## Options", "## Choices"));
@@ -219,7 +225,7 @@ async function shot(p, name, hash, wait = null) {
     // The library's own controls; links inside a sentence (prose, a meta or source line, a field's value) aren't targets,
     // and a pill's 44 px is its hit area, checked on its own below.
     const small = await p.evaluate(() => [...document.querySelectorAll("#view .p-tabs a, #view .lib a, #view .lib button, #view .lib input, #view .lib summary, #pm-btn")]
-      .filter((el) => el.offsetParent && el.getBoundingClientRect().height > 0 && el.getBoundingClientRect().height < 44 && !el.closest(".doc, .probs, .lib-rail .foot, .doc-meta, .fresh, .src-line, .uc-f dd, .ux-v, .adr-list .t, .lib-how, .nw-card p, .files, .uc-links"))
+      .filter((el) => el.offsetParent && el.getBoundingClientRect().height > 0 && el.getBoundingClientRect().height < 44 && !el.closest(".doc, .probs, .lib-rail .foot, .doc-meta, .fresh, .src-line, .uc-f dd, .ux-v, .adr-list .t, .lib-how, .nw-card p, .files, .errs, .uc-links"))
       .map((el) => `${el.tagName.toLowerCase()} "${el.textContent.trim().slice(0, 24)}" ${Math.round(el.getBoundingClientRect().height)}px`));
     if (small.length) console.log(`  ${name} at ${w}: under 44 px: ${[...new Set(small)].slice(0, 8).join("; ")}`);
   }
@@ -247,9 +253,10 @@ const SECTIONS = [
   ["16-work-tab", "#project/toolshed"],
   ["20-overview-rows", "#overview"],
 ];
-for (const [width, touch] of [[1280, false], [390, true]]) {
+for (const [width, touch] of [[1280, false], [1024, false], [390, true]]) {
   const p = await page(width, touch);
-  for (const [name, hash] of SECTIONS) await shot(p, name, hash, { "03-architecture": ".vf-crumb b", "16-work-tab": ".p-tabs", "20-overview-rows": ".prow .plib" }[name] ?? null);
+  // The overview waits for its text: on a phone ".lib" is there while the section still reads "Reading…" (review A).
+  for (const [name, hash] of SECTIONS) await shot(p, name, hash, { "02-overview": ".doc", "03-architecture": ".vf-crumb b", "16-work-tab": ".p-tabs", "20-overview-rows": ".prow .plib" }[name] ?? null);
   // The Projects menu, open.
   if (!filter || "17-menu".includes(filter)) {
     await p.goto(`${BASE}/#project/toolshed/library`);
@@ -481,6 +488,41 @@ check(Boolean(await page2.$(".dia .dia-view img")), "and shows the change withou
 await page2.screenshot({ path: join(out, "bob212-19-after-sync-1280.png"), fullPage: true });
 const p390 = await page(390, true);
 await shot(p390, "19-after-sync", "#project/toolshed/library/usecases/0002", ".dia .dia-view img");
+
+// ---------- Workshop with a GitHub remote: every link the page draws to GitHub (BOB-244; spec §4, §5, §8, §10, §11.1) ----------
+if (!filter || "30-github".includes(filter)) {
+  // The fixture's remote is a local path, so a sync sends no GitHub repo; this one says it has library.test.ts's. A new
+  // commit, as a library is replaced only by a newer one.
+  const GH = "https://github.com/cath42/toolshed";
+  const ghSync = new LibrarySync({ log: quiet, send: (op) => sup.boardOp("supervisor", op.op === "library_sync" ? { ...op, github: GH } : op) });
+  await new Promise((r) => setTimeout(r, 1100));
+  const at = workshop.push({ "README.md": "# workshop\n\nIts library is in library/.\n" }, "README: where the library is");
+  await ghSync.syncAll([workshop.project]);
+  const gl = await readLib("workshop");
+  check(gl.commit === at && gl.github === GH, `workshop at ${at.slice(0, 7)} with its GitHub repo: ${gl.github}`);
+  for (const [width, touch] of [[1280, false], [390, true]]) {
+    const p = await page(width, touch);
+    const hrefs = async (sel) => p.$$eval(sel, (as) => as.map((a) => [a.textContent.trim(), a.getAttribute("href")]));
+    // The home: the sha, the problems by file and line, the rail's foot.
+    await shot(p, "30-github-home", "#project/workshop/library", ".probs");
+    const fresh = await hrefs(".fresh a[href^='https://github.com/']");
+    check(fresh.some(([t, h]) => t === at.slice(0, 7) && h === `${GH}/commit/${at}`), `at ${width} the sha links its commit: ${JSON.stringify(fresh[0])}`);
+    const probs = await hrefs(".probs a");
+    check(probs.some(([t, h]) => / line 2 ↗$/.test(t) && h === `${GH}/blob/${at}/library/decisions/0001-reservations-hold-for-24-hours.md#L2`), `at ${width} a problem links its file's line: ${JSON.stringify(probs.find(([t]) => / line 2 ↗$/.test(t)))}`);
+    const foot = await hrefs(".lib-rail .foot a");
+    check(foot.some(([t, h]) => t === "library/ on GitHub ↗" && h === `${GH}/tree/${at}/library`), `at ${width} the rail's foot: ${JSON.stringify(foot[0])}`);
+    // A card: its path.
+    await shot(p, "30-github-card", "#project/workshop/library/decisions/0001", ".head-box");
+    const all = await hrefs("#view a[href^='https://github.com/']");
+    check(all.some(([t, h]) => t.endsWith("0001-reservations-hold-for-24-hours.md ↗") && h === `${GH}/blob/${at}/library/decisions/0001-reservations-hold-for-24-hours.md`), `at ${width} the card's path links its file`);
+    await shot(p, "30-github-data", "#project/workshop/library/data", ".vf-fail");
+    const src = await hrefs(".src-line a");
+    check(src.length === 1 && src[0][0] === "data-model.dbml ↗" && src[0][1] === `${GH}/blob/${at}/library/data-model.dbml`, `at ${width} the source line links the model: ${JSON.stringify(src[0])}`);
+    const errs = await hrefs(".vf-fail .errs a");
+    check(errs.some(([t, h]) => t === "data-model.dbml line 51 ↗" && h.endsWith("/library/data-model.dbml#L51")), `at ${width} the DBML error links its line: ${JSON.stringify(errs[0])}`);
+    await p.context().close();
+  }
+}
 
 await browser.close();
 owner.stop();
