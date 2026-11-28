@@ -55,3 +55,17 @@ The requirement, as a check the prototype must visibly pass before it goes back 
 - Evidence before the ask: screenshots at 1280 and 390 showing one entity expanded among collapsed ones, then a
   second one expanded too. Mario looks at them.
 Everything else from v4 stands (the standard, ADR 0017, Toolshed, the entity card, the C4 views). Menu A/B/C still open.
+
+## The viewer: a framework or our own? (Casper, 2026-11-27, in Mario's session)
+
+Casper on v5: "Is that a custom build? I wanted to try and stick to some good frameworks". Mario: the formats are all
+open standards (DBML, LikeC4/C4, ADRs, arc42-lite); the LikeC4 viewer is off the shelf; the ERD viewer is a thin layer
+of ours on React Flow + dagre + @dbml/parse, because Liam shows columns for all tables or none. Recommendation: keep the
+standard at the source so the viewer can be swapped later, and first run a short, time-boxed check of off-the-shelf
+DBML viewers (Azimutt, ChartDB, drawDB, others) against his needs; use one if it passes, else keep the thin layer.
+
+Casper: "Agreed, keep the standard with an open standard as the data model foundation so the viewer can be replaced
+later if needed. Let's go with that please"
+
+So: DBML stays the data model's foundation; the viewer is replaceable. Toad runs the time-boxed check; Q-23 stays open
+until it is done.
